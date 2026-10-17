@@ -8,6 +8,8 @@ import (
 	"sync"
 
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
@@ -80,12 +82,12 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 	// delivery, and a dead process takes every other session with it. The panic
 	// is recorded as the run's failure and settlement runs as usual, so the
 	// caller is answered instead of abandoned.
-	phase := phaseSetup
+	phase := outcome.PhaseSetup
 	plan, ending := func() (plan runPlan, ending *execEnding) {
 		defer func() {
 			if r := recover(); r != nil {
 				s.logPanickedRun(execCtx, spec, phase, r)
-				obs.declare(panickedRunCause(r), runStopped(execCtx))
+				obs.declare(panickedRunCause(r), outcome.RunStopped(execCtx))
 			}
 		}()
 
@@ -93,9 +95,9 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 		plan, setupErr = spec.Setup(execCtx, setupReq)
 		if setupErr != nil {
 			if isHookRefusal(setupErr) {
-				obs.declareHook(setupErr, runStopped(execCtx))
+				obs.declareHook(setupErr, outcome.RunStopped(execCtx))
 			} else {
-				obs.declare(setupErr, runStopped(execCtx))
+				obs.declare(setupErr, outcome.RunStopped(execCtx))
 			}
 			return plan, nil
 		}
@@ -118,11 +120,11 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 			// consumerDone for a goroutine that is gone.
 			defer func() {
 				if r := recover(); r != nil {
-					s.logPanickedRun(execCtx, spec, phaseExecution, r)
+					s.logPanickedRun(execCtx, spec, outcome.PhaseExecution, r)
 					stopExec(panickedRunCause(r))
 				}
 			}()
-			s.consume(execCtx, spec, obs, assets, pub, queue, stopExec, func() bool { return runStopped(execCtx) }, events)
+			s.consume(execCtx, spec, obs, assets, pub, queue, stopExec, func() bool { return outcome.RunStopped(execCtx) }, events)
 		}()
 		// The producer is offered events and the consumer is collected
 		// afterwards, whether or not the producer returned normally.
@@ -131,7 +133,7 @@ func (s *Service) drive(ctx context.Context, spec runSpec) runResult {
 			<-consumerDone
 		}()
 
-		phase = phaseExecution
+		phase = outcome.PhaseExecution
 		done := plan.Exec.execute(idleCtx, func(ev native.StreamEvent) {
 			// The watchdog is fed on the producer's side, before the event is
 			// offered to the consumer: it measures silence between events the
@@ -167,7 +169,7 @@ func panickedRunCause(r any) error {
 
 // logPanickedRun records a recovered panic with the stack that caused it. A
 // panic is always a bug, and the stack is the only thing that says which.
-func (s *Service) logPanickedRun(ctx context.Context, spec runSpec, phase runPhase, r any) {
+func (s *Service) logPanickedRun(ctx context.Context, spec runSpec, phase outcome.RunPhase, r any) {
 	if s == nil || s.logger == nil {
 		return
 	}
@@ -195,15 +197,15 @@ func (s *Service) logStoppedCommitFailure(ctx context.Context, spec runSpec, err
 		slog.Any("error", err))
 }
 
-func phaseName(phase runPhase) string {
+func phaseName(phase outcome.RunPhase) string {
 	switch phase {
-	case phaseSetup:
+	case outcome.PhaseSetup:
 		return "setup"
-	case phaseExecution:
+	case outcome.PhaseExecution:
 		return "execution"
-	case phaseCommit:
+	case outcome.PhaseCommit:
 		return "commit"
-	case phasePublish:
+	case outcome.PhasePublish:
 		return "publish"
 	default:
 		return "unknown"
@@ -220,7 +222,7 @@ func (s *Service) settleRun(
 	pub *runPublisherSet,
 	obs *runObserver,
 	queue *deliveryQueue,
-	phase runPhase,
+	phase outcome.RunPhase,
 	ending *execEnding,
 ) runResult {
 	facts := obs.facts(runCtx, phase)
@@ -232,22 +234,22 @@ func (s *Service) settleRun(
 	// that knows where the failure came from. A bare cause is named from the
 	// stage it was reported in. Either way the failure counts as declared, so
 	// the stop and ownership rules see it in the right order.
-	var named *RunFailure
+	var named *outcome.RunFailure
 	if ending != nil {
 		named = ending.Failure
 		if ending.Cause != nil && named == nil {
-			code, args := runFailureCode(ending.Cause, ending.Phase, false)
-			named = &RunFailure{Code: code, Args: args, Cause: ending.Cause, Phase: ending.Phase}
+			code, args := outcome.RunFailureCode(ending.Cause, ending.Phase, false)
+			named = &outcome.RunFailure{Code: code, Args: args, Cause: ending.Cause, Phase: ending.Phase}
 		}
 	}
 	if named != nil && facts.Declared == nil {
 		facts.Declared = named.Cause
 		facts.Phase = named.Phase
-		facts.StoppedAtDeclare = runStopped(runCtx)
+		facts.StoppedAtDeclare = outcome.RunStopped(runCtx)
 	}
-	end, failure := nameRunEnd(facts)
-	if named != nil && end == endFailed {
-		end, failure = endFailed, named
+	end, failure := outcome.NameRunEnd(facts)
+	if named != nil && end == outcome.EndFailed {
+		end, failure = outcome.EndFailed, named
 	}
 
 	// A lost run writes no history: another owner names its outcome. A stop
@@ -255,9 +257,9 @@ func (s *Service) settleRun(
 	// saw, so the executor writes that.
 	var summary commitSummary
 	switch {
-	case end == endOwnershipLost:
+	case end == outcome.EndOwnershipLost:
 		// Another owner names a lost run.
-	case end == endStopped:
+	case end == outcome.EndStopped:
 		if ending != nil && ending.CommitStopped != nil {
 			var err error
 			summary, err = ending.CommitStopped(context.WithoutCancel(runCtx))
@@ -269,24 +271,24 @@ func (s *Service) settleRun(
 			}
 		}
 	case ending != nil && ending.Commit != nil:
-		row := wantsFailureRow(spec.Input, end, failure, facts.Hook, spec.Replacement != nil)
+		row := outcome.WantsFailureRow(spec.Input, end, failure, facts.Hook, spec.Replacement != nil)
 		summary, facts.Commit = ending.Commit(context.WithoutCancel(runCtx), failure, row)
 		if facts.Commit != nil {
 			// The write failed, and that failure is now the run's: it cannot be
 			// resumed from a state that was never written. This deliberately
 			// does not re-read stopping — a stop found now would contradict the
 			// failure row that was just written.
-			end, failure = nameRunEnd(facts)
+			end, failure = outcome.NameRunEnd(facts)
 		}
-	case failure != nil && wantsFailureRow(spec.Input, end, failure, facts.Hook, spec.Replacement != nil):
+	case failure != nil && outcome.WantsFailureRow(spec.Input, end, failure, facts.Hook, spec.Replacement != nil):
 		// A run that failed before it had an executor to commit through — its
 		// Setup, or its plan's context — still owes the failure its history.
 		// The row carries the origin when the user-message hook is why it is
 		// there, which is what lets a later retry recognize the turn.
-		persisted, err := s.persistFailureRow(context.WithoutCancel(runCtx), spec.Req, resolvedContext{}, *failure, failureOrigin(facts.Hook))
+		persisted, err := s.persistFailureRow(context.WithoutCancel(runCtx), spec.Req, runreq.ResolvedContext{}, *failure, failureOrigin(facts.Hook))
 		if err != nil {
-			facts.Commit = runtimeHistoryError(err)
-			end, failure = nameRunEnd(facts)
+			facts.Commit = outcome.RuntimeHistoryError(err)
+			end, failure = outcome.NameRunEnd(facts)
 		} else {
 			summary.Persisted = persisted
 		}
@@ -299,24 +301,24 @@ func (s *Service) settleRun(
 	// row and the run's outcome describe the same ending. A run another owner
 	// ended has none, and a parked run has not ended: the continuation that
 	// resumes it writes the row.
-	if plan.Lifecycle != nil && end != endOwnershipLost && end != endParked {
+	if plan.Lifecycle != nil && end != outcome.EndOwnershipLost && end != outcome.EndParked {
 		plan.Lifecycle(lifecycleCause(end, failure))
 	}
 
 	// Publishing follows the history write: a subscriber must not see a run
 	// complete before its output is durable.
-	if end != endOwnershipLost {
+	if end != outcome.EndOwnershipLost {
 		if pubErr := s.publishRunOutcome(runCtx, pub, queue, obs, ending, end, failure, facts.Commit); pubErr != nil {
 			// The run's own terminal publication was refused. Ownership loss
 			// is the one refusal that changes the outcome: another owner names
 			// this run, so nothing may be written for it.
-			if ownershipLost(pubErr) {
-				end, failure = endOwnershipLost, nil
+			if outcome.OwnershipLost(pubErr) {
+				end, failure = outcome.EndOwnershipLost, nil
 			} else if failure == nil {
-				end, failure = endFailed, &RunFailure{
-					Code:  codeFromError(pubErr, phasePublish, false),
+				end, failure = outcome.EndFailed, &outcome.RunFailure{
+					Code:  outcome.CodeFromError(pubErr, outcome.PhasePublish, false),
 					Args:  apperror.ArgsOf(pubErr),
-					Cause: pubErr, Phase: phasePublish,
+					Cause: pubErr, Phase: outcome.PhasePublish,
 				}
 			}
 		}
@@ -333,7 +335,7 @@ func (s *Service) settleRun(
 	// produced. The two lists overlap, and linking the same asset twice is an
 	// upsert on its message and content hash.
 	if reported := reportedRunAssets(spec.Delivery); len(reported) > 0 {
-		s.LinkOutboundAssets(context.WithoutCancel(runCtx), spec.Req.BotID, spec.Req.ThreadID, outboundAssetRefsToMessageRefs(reported))
+		s.LinkOutboundAssets(context.WithoutCancel(runCtx), spec.Req.BotID, spec.Req.ThreadID, runreq.OutboundAssetRefsToMessageRefs(reported))
 	}
 	spec.Delivery.Settle()
 	terminal := s.finishDrivenRun(runCtx, spec.Run, end, failure)
@@ -364,12 +366,12 @@ func (s *Service) publishRunOutcome(
 	queue *deliveryQueue,
 	obs *runObserver,
 	ending *execEnding,
-	end runEnd,
-	failure *RunFailure,
+	end outcome.RunEnd,
+	failure *outcome.RunFailure,
 	commitErr error,
 ) error {
 	if failure != nil && obs.publishedFailure != string(failure.Code) {
-		if err := s.emitRunEvent(runCtx, pub, queue, failureStreamEvent(*failure)); err != nil {
+		if err := s.emitRunEvent(runCtx, pub, queue, outcome.FailureStreamEvent(*failure)); err != nil {
 			return err
 		}
 	}
@@ -389,7 +391,7 @@ func (s *Service) publishRunOutcome(
 // stampRunTerminal states how the run ended on its terminal event. The marker
 // is what tells the session runtime the outcome was named by the run's owner,
 // so it does not re-derive one from the last error its stream saw.
-func stampRunTerminal(terminal native.StreamEvent, end runEnd, failure *RunFailure) native.StreamEvent {
+func stampRunTerminal(terminal native.StreamEvent, end outcome.RunEnd, failure *outcome.RunFailure) native.StreamEvent {
 	terminal.OwnerNamed = true
 	if failure != nil {
 		terminal.Code = string(failure.Code)
@@ -405,11 +407,11 @@ func stampRunTerminal(terminal native.StreamEvent, end runEnd, failure *RunFailu
 		return terminal
 	}
 	switch end {
-	case endCompleted:
+	case outcome.EndCompleted:
 		terminal.EndReason = event.EndCompleted
-	case endParked:
+	case outcome.EndParked:
 		terminal.EndReason = event.EndAwaitingDecision
-	case endStopped:
+	case outcome.EndStopped:
 		terminal.EndReason = event.EndCanceled
 	}
 	return terminal
@@ -445,14 +447,14 @@ func failureOrigin(hook bool) string {
 
 // lifecycleCause is what the run's context lifecycle records: the failure's own
 // cause when there is one, and otherwise the reason the run ended.
-func lifecycleCause(end runEnd, failure *RunFailure) error {
+func lifecycleCause(end outcome.RunEnd, failure *outcome.RunFailure) error {
 	if failure != nil {
 		return failure.Cause
 	}
 	switch end {
-	case endStopped:
-		return errRunStopped
-	case endOwnershipLost:
+	case outcome.EndStopped:
+		return outcome.ErrRunStopped
+	case outcome.EndOwnershipLost:
 		return sessionruntime.ErrRunOwnershipLost
 	default:
 		return nil
@@ -462,7 +464,7 @@ func lifecycleCause(end runEnd, failure *RunFailure) error {
 // publicRunFailure is the failure as the delivery end reports it: a public
 // error whose text is its code, marked as already recorded because the run's
 // own result record carries it, or nothing when the run did not fail.
-func publicRunFailure(f *RunFailure) error {
+func publicRunFailure(f *outcome.RunFailure) error {
 	if f == nil {
 		return nil
 	}
@@ -472,28 +474,10 @@ func publicRunFailure(f *RunFailure) error {
 // reportedRunAssets are the asset references the delivery end collected on the
 // caller's behalf, if it collects any. A delivery end that has none is not
 // asked for them.
-func reportedRunAssets(delivery RunDelivery) []OutboundAssetRef {
+func reportedRunAssets(delivery RunDelivery) []runreq.OutboundAssetRef {
 	reporter, ok := delivery.(reportedAssetsSource)
 	if !ok {
 		return nil
 	}
 	return reporter.reportedAssets()
-}
-
-// endString names a runEnd for a log line.
-func (e runEnd) String() string {
-	switch e {
-	case endCompleted:
-		return "completed"
-	case endParked:
-		return "parked"
-	case endStopped:
-		return "stopped"
-	case endFailed:
-		return "failed"
-	case endOwnershipLost:
-		return "ownership_lost"
-	default:
-		return "unknown"
-	}
 }

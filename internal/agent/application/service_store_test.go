@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/settings"
@@ -18,7 +20,7 @@ import (
 func TestBuildInteractionMetadataIncludesForwardConversation(t *testing.T) {
 	t.Parallel()
 
-	meta := buildInteractionMetadata(ChatRequest{
+	meta := buildInteractionMetadata(runreq.ChatRequest{
 		SourceReplyToMessageID:    "reply-1",
 		ReplySender:               "Original Sender",
 		ReplyPreview:              "quoted text",
@@ -49,8 +51,8 @@ func TestBuildInteractionMetadataIncludesForwardConversation(t *testing.T) {
 func TestBuildInteractionMetadataIncludesRequestedSkills(t *testing.T) {
 	t.Parallel()
 
-	meta := buildInteractionMetadata(ChatRequest{
-		RequestedSkills: []RequestedSkillContext{
+	meta := buildInteractionMetadata(runreq.ChatRequest{
+		RequestedSkills: []runreq.RequestedSkillContext{
 			{
 				Name:           "writer",
 				SourceKind:     "managed",
@@ -102,11 +104,11 @@ func TestBuildInteractionMetadataIncludesRequestedSkills(t *testing.T) {
 func TestBuildInteractionMetadataIncludesPublicSkillActivation(t *testing.T) {
 	t.Parallel()
 
-	meta := buildInteractionMetadata(ChatRequest{
-		UserMessageKind: UserMessageKindSkillActivation,
-		SkillActivation: &SkillActivation{
+	meta := buildInteractionMetadata(runreq.ChatRequest{
+		UserMessageKind: runreq.UserMessageKindSkillActivation,
+		SkillActivation: &runreq.SkillActivation{
 			Prompt: "do it",
-			Skills: []SkillActivationSkill{{
+			Skills: []runreq.SkillActivationSkill{{
 				Name:        "writer",
 				DisplayName: "Writer",
 				Description: "short safe description",
@@ -114,7 +116,7 @@ func TestBuildInteractionMetadataIncludesPublicSkillActivation(t *testing.T) {
 				State:       "effective",
 			}},
 		},
-		RequestedSkills: []RequestedSkillContext{{
+		RequestedSkills: []runreq.RequestedSkillContext{{
 			Name:           "writer",
 			SourceKind:     "managed",
 			OpaqueSourceID: "opaque-source",
@@ -124,7 +126,7 @@ func TestBuildInteractionMetadataIncludesPublicSkillActivation(t *testing.T) {
 		}},
 	})
 
-	if meta["user_message_kind"] != UserMessageKindSkillActivation {
+	if meta["user_message_kind"] != runreq.UserMessageKindSkillActivation {
 		t.Fatalf("user_message_kind = %#v", meta["user_message_kind"])
 	}
 	public, ok := meta["skill_activation"].(map[string]any)
@@ -152,19 +154,19 @@ func TestBuildInteractionMetadataIncludesPublicSkillActivation(t *testing.T) {
 }
 
 type batchRecordingMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	batchInputs []messagepkg.PersistInput
 }
 
 type lifecycleRecordingMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	messageIDs []string
 }
 
 func (s *lifecycleRecordingMessageService) Persist(_ context.Context, input messagepkg.PersistInput) (messagepkg.Message, error) {
-	s.persisted = append(s.persisted, input)
+	s.Persisted = append(s.Persisted, input)
 	return messagepkg.Message{
-		ID:       s.messageIDs[len(s.persisted)-1],
+		ID:       s.messageIDs[len(s.Persisted)-1],
 		Role:     input.Role,
 		Metadata: input.Metadata,
 	}, nil
@@ -184,24 +186,24 @@ func TestStoreMessagesUsesToolTailBatch(t *testing.T) {
 		logger:         slog.New(slog.DiscardHandler),
 	}
 
-	persisted := resolver.storeMessages(context.Background(), ChatRequest{
+	persisted := resolver.storeMessages(context.Background(), runreq.ChatRequest{
 		BotID:       storeRoundBotID,
 		ThreadID:    "33333333-3333-3333-3333-333333333333",
 		Query:       "hello",
 		SessionType: "chat",
 		RuntimeType: "model",
-	}, []ModelMessage{
-		{Role: "user", Content: newTextContent("hello")},
-		{Role: "assistant", Content: newTextContent("call tool")},
-		{Role: "tool", Content: newTextContent("tool result")},
-		{Role: "assistant", Content: newTextContent("done")},
+	}, []runreq.ModelMessage{
+		{Role: "user", Content: runreq.NewTextContent("hello")},
+		{Role: "assistant", Content: runreq.NewTextContent("call tool")},
+		{Role: "tool", Content: runreq.NewTextContent("tool result")},
+		{Role: "assistant", Content: runreq.NewTextContent("done")},
 	}, "", storeRoundOptions{})
 
 	if len(messages.batchInputs) != 4 {
 		t.Fatalf("batch inputs = %d, want 4", len(messages.batchInputs))
 	}
-	if len(messages.persisted) != 0 {
-		t.Fatalf("fallback Persist called %d times, want 0", len(messages.persisted))
+	if len(messages.Persisted) != 0 {
+		t.Fatalf("fallback Persist called %d times, want 0", len(messages.Persisted))
 	}
 	if len(persisted) != 4 {
 		t.Fatalf("persisted messages = %d, want 4", len(persisted))
@@ -225,13 +227,13 @@ func TestBuildPersistInputsKeepsAttachmentOnlyUserDisplayTextEmpty(t *testing.T)
 		Time:             time.Date(2026, 8, 20, 17, 37, 14, 0, time.UTC),
 	}, "")
 
-	inputs, err := service.buildPersistInputs(context.Background(), ChatRequest{
+	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{
 		BotID:    storeRoundBotID,
 		ThreadID: "33333333-3333-3333-3333-333333333333",
 		Query:    headerified,
-	}, []ModelMessage{
-		{Role: "user", Content: newTextContent(headerified)},
-		{Role: "assistant", Content: newTextContent("nice picture")},
+	}, []runreq.ModelMessage{
+		{Role: "user", Content: runreq.NewTextContent(headerified)},
+		{Role: "assistant", Content: runreq.NewTextContent("nice picture")},
 	}, "", storeRoundOptions{})
 	if err != nil {
 		t.Fatalf("buildPersistInputs() error = %v", err)
@@ -269,10 +271,10 @@ func TestBuildPersistInputsLiftsToolCallDiffsToRowMetadata(t *testing.T) {
 		t.Fatalf("marshal parts: %v", err)
 	}
 
-	inputs, err := service.buildPersistInputs(context.Background(), ChatRequest{
+	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{
 		BotID:    storeRoundBotID,
 		ThreadID: "33333333-3333-3333-3333-333333333333",
-	}, []ModelMessage{
+	}, []runreq.ModelMessage{
 		{Role: "assistant", Content: parts},
 	}, "", storeRoundOptions{})
 	if err != nil {
@@ -329,14 +331,14 @@ func TestStoreRoundPersistsLifecycleMetadataOnLastAssistant(t *testing.T) {
 		logger:         slog.New(slog.DiscardHandler),
 	}
 
-	err := service.storeRoundWithOptions(context.Background(), ChatRequest{
+	err := service.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
 		BotID:    "bot-1",
 		ThreadID: "session-1",
 		Query:    "hello",
-	}, []ModelMessage{
-		{Role: "user", Content: newTextContent("hello")},
-		{Role: "assistant", Content: newTextContent("first")},
-		{Role: "assistant", Content: newTextContent("final")},
+	}, []runreq.ModelMessage{
+		{Role: "user", Content: runreq.NewTextContent("hello")},
+		{Role: "assistant", Content: runreq.NewTextContent("first")},
+		{Role: "assistant", Content: runreq.NewTextContent("final")},
 	}, "model-1", storeRoundOptions{
 		SkipMemory:       true,
 		ContextLifecycle: holder,
@@ -347,13 +349,13 @@ func TestStoreRoundPersistsLifecycleMetadataOnLastAssistant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("storeRoundWithOptions() error = %v", err)
 	}
-	if len(messages.persisted) != 3 {
-		t.Fatalf("persisted messages = %d, want 3", len(messages.persisted))
+	if len(messages.Persisted) != 3 {
+		t.Fatalf("persisted messages = %d, want 3", len(messages.Persisted))
 	}
-	if _, ok := messages.persisted[1].Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
-		t.Fatalf("first assistant received lifecycle metadata: %#v", messages.persisted[1].Metadata)
+	if _, ok := messages.Persisted[1].Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
+		t.Fatalf("first assistant received lifecycle metadata: %#v", messages.Persisted[1].Metadata)
 	}
-	finalMeta := messages.persisted[2].Metadata
+	finalMeta := messages.Persisted[2].Metadata
 	if finalMeta["existing"] != "kept" {
 		t.Fatalf("existing metadata was not preserved: %#v", finalMeta)
 	}
@@ -392,31 +394,31 @@ func TestStoreRoundLogsSkippedLifecycleMetadataReason(t *testing.T) {
 	tests := []struct {
 		name       string
 		holder     *contextfrag.LifecycleHolder
-		messages   []ModelMessage
+		messages   []runreq.ModelMessage
 		wantReason string
 	}{
 		{
 			name:       "missing lifecycle",
-			messages:   []ModelMessage{{Role: "assistant", Content: newTextContent("done")}},
+			messages:   []runreq.ModelMessage{{Role: "assistant", Content: runreq.NewTextContent("done")}},
 			wantReason: "missing_lifecycle",
 		},
 		{
 			name:       "missing snapshot",
 			holder:     contextfrag.NewLifecycleHolder(),
-			messages:   []ModelMessage{{Role: "assistant", Content: newTextContent("done")}},
+			messages:   []runreq.ModelMessage{{Role: "assistant", Content: runreq.NewTextContent("done")}},
 			wantReason: "missing_snapshot",
 		},
 		{
 			name:       "missing assistant",
 			holder:     lifecycleHolderWithManifest(),
-			messages:   []ModelMessage{{Role: "user", Content: newTextContent("hello")}},
+			messages:   []runreq.ModelMessage{{Role: "user", Content: runreq.NewTextContent("hello")}},
 			wantReason: "missing_assistant",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var logs bytes.Buffer
-			messages := &recordingMessageService{}
+			messages := &agenttest.RecordingMessages{}
 			service := &Service{
 				messageService: messages,
 				logger: slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{
@@ -424,7 +426,7 @@ func TestStoreRoundLogsSkippedLifecycleMetadataReason(t *testing.T) {
 				})),
 			}
 
-			err := service.storeRoundWithOptions(context.Background(), ChatRequest{
+			err := service.storeRoundWithOptions(context.Background(), runreq.ChatRequest{
 				BotID:    "bot-1",
 				ThreadID: "session-1",
 			}, tt.messages, "model-1", storeRoundOptions{

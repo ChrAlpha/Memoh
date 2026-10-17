@@ -2,7 +2,6 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,8 +9,8 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
-	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -28,13 +27,13 @@ type storeRoundOptions struct {
 	ContextLifecycle                  *contextfrag.LifecycleHolder
 }
 
-func (s *Service) storeRoundWithOptions(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) error {
+func (s *Service) storeRoundWithOptions(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts storeRoundOptions) error {
 	_, err := s.storeRoundWithOptionsResult(ctx, req, messages, modelID, opts)
 	return err
 }
 
-func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) ([]messagepkg.Message, error) {
-	fullRound := make([]ModelMessage, 0, len(messages))
+func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts storeRoundOptions) ([]messagepkg.Message, error) {
+	fullRound := make([]runreq.ModelMessage, 0, len(messages))
 
 	// When the user message was already persisted by a channel adapter, skip
 	// the duplicate from the round. Otherwise keep it so that user + assistant
@@ -48,16 +47,16 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 		fullRound = append(fullRound, m)
 	}
 	if !opts.AllowPendingToolCalls {
-		fullRound = repairToolCallClosures(fullRound, syntheticToolClosureError)
+		fullRound = runreq.RepairToolCallClosures(fullRound, runreq.SyntheticToolClosureError)
 	}
 
 	// Filter out empty assistant messages (content: []) that result from LLM
 	// returning no useful output (e.g., context window overflow). These provide
 	// no value and pollute the conversation history, causing subsequent turns
 	// to also produce empty responses.
-	filtered := make([]ModelMessage, 0, len(fullRound))
+	filtered := make([]runreq.ModelMessage, 0, len(fullRound))
 	for _, m := range fullRound {
-		if m.Role == "assistant" && isEmptyAssistantMessage(m) && !opts.AllowEmptyAssistantText {
+		if m.Role == "assistant" && runreq.IsEmptyAssistantMessage(m) && !opts.AllowEmptyAssistantText {
 			s.logger.WarnContext(ctx, "skipping empty assistant message in storeRound",
 				slog.String("bot_id", req.BotID),
 			)
@@ -72,7 +71,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 	opts = opts.withContextLifecycleMetadata(s.logger, req, filtered)
 
 	persisted, persistErr := s.storeMessagesResult(ctx, req, filtered, modelID, opts)
-	opts.ContextLifecycle.SetAssistantMessageID(lastPersistedAssistantMessageID(persisted))
+	opts.ContextLifecycle.SetAssistantMessageID(runreq.LastPersistedAssistantMessageID(persisted))
 	if persistErr != nil {
 		return persisted, persistErr
 	}
@@ -94,7 +93,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 	return persisted, nil
 }
 
-func (opts storeRoundOptions) withContextLifecycleMetadata(logger *slog.Logger, req ChatRequest, messages []ModelMessage) storeRoundOptions {
+func (opts storeRoundOptions) withContextLifecycleMetadata(logger *slog.Logger, req runreq.ChatRequest, messages []runreq.ModelMessage) storeRoundOptions {
 	snapshot, ok := opts.ContextLifecycle.Snapshot()
 	if !ok {
 		reason := "missing_snapshot"
@@ -121,7 +120,7 @@ func (opts storeRoundOptions) withContextLifecycleMetadata(logger *slog.Logger, 
 	return opts
 }
 
-func logContextLifecycleMetadataSkipped(logger *slog.Logger, req ChatRequest, reason string, messages int) {
+func logContextLifecycleMetadataSkipped(logger *slog.Logger, req runreq.ChatRequest, reason string, messages int) {
 	if logger == nil {
 		return
 	}
@@ -133,7 +132,7 @@ func logContextLifecycleMetadataSkipped(logger *slog.Logger, req ChatRequest, re
 	)
 }
 
-func lastAssistantMessageIndex(messages []ModelMessage) int {
+func lastAssistantMessageIndex(messages []runreq.ModelMessage) int {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
 			return i
@@ -142,35 +141,7 @@ func lastAssistantMessageIndex(messages []ModelMessage) int {
 	return -1
 }
 
-func lastPersistedAssistantMessageID(messages []messagepkg.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
-			return strings.TrimSpace(messages[i].ID)
-		}
-	}
-	return ""
-}
-
-// isEmptyAssistantMessage returns true if an assistant message has no
-// meaningful content: no text, no tool calls, and no attachments.
-func isEmptyAssistantMessage(m ModelMessage) bool {
-	if len(m.ToolCalls) > 0 {
-		return false
-	}
-	text := strings.TrimSpace(m.TextContent())
-	if text != "" {
-		return false
-	}
-	var plain string
-	if err := json.Unmarshal(m.Content, &plain); err == nil && strings.TrimSpace(plain) == "" {
-		return true
-	}
-	// Check if content is empty array "[]" or null/empty
-	content := strings.TrimSpace(string(m.Content))
-	return content == "" || content == "[]" || content == "null"
-}
-
-func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) []messagepkg.Message {
+func (s *Service) storeMessages(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts storeRoundOptions) []messagepkg.Message {
 	persisted, err := s.storeMessagesResult(ctx, req, messages, modelID, opts)
 	if err != nil {
 		s.logger.WarnContext(ctx, "persist message round failed", slog.Any("error", err))
@@ -178,7 +149,7 @@ func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages [
 	return persisted
 }
 
-func (s *Service) storeMessagesResult(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) ([]messagepkg.Message, error) {
+func (s *Service) storeMessagesResult(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts storeRoundOptions) ([]messagepkg.Message, error) {
 	if s.messageService == nil {
 		return nil, nil
 	}
@@ -224,7 +195,7 @@ func (s *Service) storeMessagesResult(ctx context.Context, req ChatRequest, mess
 	return s.persistMessageInputs(ctx, persistInputs, turnRequestMessageID), nil
 }
 
-func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) ([]messagepkg.PersistInput, error) {
+func (s *Service) buildPersistInputs(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts storeRoundOptions) ([]messagepkg.PersistInput, error) {
 	// Project timing only at the final persistence boundary, after callers have
 	// finished filtering, repairing, or augmenting the rows being stored.
 	opts = opts.withReasoningTimingMetadata(messages)
@@ -250,7 +221,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 	}
 	var outboundAssets []messagepkg.AssetRef
 	if lastAssistantIdx >= 0 {
-		outboundAssets = outboundAssetRefsToMessageRefs(req.OutboundAssetCollector())
+		outboundAssets = runreq.OutboundAssetRefsToMessageRefs(req.OutboundAssetCollector())
 	}
 
 	turnRequestMessageID := ""
@@ -260,7 +231,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 	persistInputs := make([]messagepkg.PersistInput, 0, len(messages))
 	originalQueryAvailable := !req.UserMessagePersisted && !req.ReusePersistedUserMessage
 	for i, msg := range messages {
-		msg = normalizeUserMessageContent(msg)
+		msg = runreq.NormalizeUserMessageContent(msg)
 
 		// Prune tool results at store time to reduce DB bloat.
 		// This prevents ~10KB+ tool outputs from being stored verbatim.
@@ -302,7 +273,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 			// query; steered user messages retain their own text. Internal model
 			// feedback bypasses this user-message path based on its source.
 			ownText := strings.TrimSpace(msg.TextContent())
-			isOriginalSkillActivation := req.UserMessageKind == UserMessageKindSkillActivation &&
+			isOriginalSkillActivation := req.UserMessageKind == runreq.UserMessageKindSkillActivation &&
 				strings.TrimSpace(req.Query) == "" &&
 				ownText == "" &&
 				i == 0
@@ -316,7 +287,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 				turnID = req.TurnID
 				turnPosition = req.TurnPosition
 				switch {
-				case strings.TrimSpace(req.UserVisibleText) != "" || req.UserMessageKind == UserMessageKindSkillActivation:
+				case strings.TrimSpace(req.UserVisibleText) != "" || req.UserMessageKind == runreq.UserMessageKindSkillActivation:
 					displayText = strings.TrimSpace(req.UserVisibleText)
 				case req.RawQuery != "":
 					displayText = req.RawQuery
@@ -329,7 +300,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 				// back on, so without this the wrapper itself became the user
 				// bubble. Real user text is left untouched.
 				displayText = strings.TrimSpace(turnpkg.UnwrapUserMessageEnvelope(displayText))
-				assets = chatAttachmentsToAssetRefs(req.Attachments)
+				assets = runreq.ChatAttachmentsToAssetRefs(req.Attachments)
 				persistMeta = mergeMetadata(meta, buildInteractionMetadata(req))
 			} else {
 				displayText = ownText
@@ -381,7 +352,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 	return persistInputs, nil
 }
 
-func workspaceTargetMetadata(target *WorkspaceTarget) map[string]any {
+func workspaceTargetMetadata(target *runreq.WorkspaceTarget) map[string]any {
 	if target == nil || strings.TrimSpace(target.TargetID) == "" {
 		return nil
 	}
@@ -394,7 +365,7 @@ func workspaceTargetMetadata(target *WorkspaceTarget) map[string]any {
 	}
 }
 
-func (s *Service) persistSessionWorkspaceTarget(ctx context.Context, req ChatRequest) error {
+func (s *Service) persistSessionWorkspaceTarget(ctx context.Context, req runreq.ChatRequest) error {
 	if s == nil || s.sessionService == nil || req.WorkspaceTarget == nil || strings.TrimSpace(req.ThreadID) == "" {
 		return nil
 	}
@@ -437,7 +408,7 @@ func (s *Service) persistMessageInputs(ctx context.Context, inputs []messagepkg.
 	return persisted
 }
 
-func (s *Service) persistSessionRuntimeSnapshot(ctx context.Context, req ChatRequest) (string, string) {
+func (s *Service) persistSessionRuntimeSnapshot(ctx context.Context, req runreq.ChatRequest) (string, string) {
 	sessionMode := strings.TrimSpace(req.SessionType)
 	runtimeType := strings.TrimSpace(req.RuntimeType)
 	if sessionMode != "" && runtimeType != "" {
@@ -462,64 +433,7 @@ func (s *Service) persistSessionRuntimeSnapshot(ctx context.Context, req ChatReq
 	return sessionMode, runtimeType
 }
 
-// outboundAssetRefsToMessageRefs converts outbound asset refs from the streaming
-// collector into message-level asset refs for persistence.
-func outboundAssetRefsToMessageRefs(refs []OutboundAssetRef) []messagepkg.AssetRef {
-	if len(refs) == 0 {
-		return nil
-	}
-	result := make([]messagepkg.AssetRef, 0, len(refs))
-	for _, ref := range refs {
-		contentHash := strings.TrimSpace(ref.ContentHash)
-		if contentHash == "" {
-			continue
-		}
-		role := ref.Role
-		if strings.TrimSpace(role) == "" {
-			role = "attachment"
-		}
-		result = append(result, messagepkg.AssetRef{
-			ContentHash: contentHash,
-			Role:        role,
-			Ordinal:     ref.Ordinal,
-			Mime:        ref.Mime,
-			SizeBytes:   ref.SizeBytes,
-			StorageKey:  ref.StorageKey,
-			Name:        ref.Name,
-			Metadata:    ref.Metadata,
-		})
-	}
-	return result
-}
-
-// chatAttachmentsToAssetRefs converts ChatAttachment slice to message AssetRef slice.
-// Only attachments that carry a content_hash are included.
-func chatAttachmentsToAssetRefs(attachments []ChatAttachment) []messagepkg.AssetRef {
-	if len(attachments) == 0 {
-		return nil
-	}
-	refs := make([]messagepkg.AssetRef, 0, len(attachments))
-	for i, att := range attachments {
-		contentHash := strings.TrimSpace(att.ContentHash)
-		if contentHash == "" {
-			continue
-		}
-		ref := messagepkg.AssetRef{
-			ContentHash: contentHash,
-			Role:        "attachment",
-			Ordinal:     i,
-			Mime:        strings.TrimSpace(att.Mime),
-			SizeBytes:   att.Size,
-			Name:        strings.TrimSpace(att.Name),
-			Metadata:    att.Metadata,
-		}
-		ref.StorageKey = attachmentpkg.MetadataString(att.Metadata, attachmentpkg.MetadataKeyStorageKey)
-		refs = append(refs, ref)
-	}
-	return refs
-}
-
-func buildRouteMetadata(req ChatRequest) map[string]any {
+func buildRouteMetadata(req runreq.ChatRequest) map[string]any {
 	if strings.TrimSpace(req.RouteID) == "" && strings.TrimSpace(req.CurrentChannel) == "" {
 		return nil
 	}
@@ -533,7 +447,7 @@ func buildRouteMetadata(req ChatRequest) map[string]any {
 	return meta
 }
 
-func buildInteractionMetadata(req ChatRequest) map[string]any {
+func buildInteractionMetadata(req runreq.ChatRequest) map[string]any {
 	meta := map[string]any{}
 	reply := map[string]any{}
 	if v := strings.TrimSpace(req.SourceReplyToMessageID); v != "" {
@@ -586,7 +500,7 @@ func buildInteractionMetadata(req ChatRequest) map[string]any {
 	return meta
 }
 
-func publicSkillActivationMetadata(activation *SkillActivation) map[string]any {
+func publicSkillActivationMetadata(activation *runreq.SkillActivation) map[string]any {
 	if activation == nil {
 		return nil
 	}
@@ -624,7 +538,7 @@ func publicSkillActivationMetadata(activation *SkillActivation) map[string]any {
 	return out
 }
 
-func publicRequestedSkillMetadata(items []RequestedSkillContext) []map[string]any {
+func publicRequestedSkillMetadata(items []runreq.RequestedSkillContext) []map[string]any {
 	if len(items) == 0 {
 		return nil
 	}
@@ -655,7 +569,7 @@ func publicRequestedSkillMetadata(items []RequestedSkillContext) []map[string]an
 	return out
 }
 
-func chatAttachmentMetadata(attachments []ChatAttachment) []map[string]any {
+func chatAttachmentMetadata(attachments []runreq.ChatAttachment) []map[string]any {
 	if len(attachments) == 0 {
 		return nil
 	}
@@ -686,7 +600,7 @@ func mergeMetadata(base, extra map[string]any) map[string]any {
 	return merged
 }
 
-func (s *Service) resolvePersistSenderIDs(ctx context.Context, req ChatRequest) (string, string) {
+func (s *Service) resolvePersistSenderIDs(ctx context.Context, req runreq.ChatRequest) (string, string) {
 	channelIdentityID := strings.TrimSpace(req.SourceChannelIdentityID)
 	userID := strings.TrimSpace(req.UserID)
 

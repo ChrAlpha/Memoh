@@ -130,7 +130,7 @@ func TestChatTurnWithoutTerminalRecordSendsNoRunTerminal(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			service, admitter := newAdmittedTurnTestService()
-			admitter.finishErr = finishErr
+			admitter.FinishErr = finishErr
 			handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s", IdempotencyKey: "m"})
 			if err != nil {
 				t.Fatal(err)
@@ -149,7 +149,7 @@ func TestChatTurnWithoutTerminalRecordSendsNoRunTerminal(t *testing.T) {
 // The terminal record the finish write returns is what run_terminal carries.
 func TestChatTurnRunTerminalCarriesFinishRecord(t *testing.T) {
 	service, admitter := newAdmittedTurnTestService()
-	admitter.terminal = sessionruntime.TerminalRun{RunID: "run-1", State: "lost", ErrorCode: "runtime_owner_lease_expired"}
+	admitter.Terminal = sessionruntime.TerminalRun{RunID: "run-1", State: "lost", ErrorCode: "runtime_owner_lease_expired"}
 	handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s", IdempotencyKey: "m"})
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestChatTurnRunTerminalCarriesFinishRecord(t *testing.T) {
 // does not wait for it to read one.
 func TestCanceledChatTurnSendsNoRunTerminal(t *testing.T) {
 	service, admitter := newAdmittedTurnTestService()
-	admitter.terminal = sessionruntime.TerminalRun{RunID: "run-1", State: "aborted"}
+	admitter.Terminal = sessionruntime.TerminalRun{RunID: "run-1", State: "aborted"}
 	handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "t", Mode: turn.ModeChat, BotID: "b", ThreadID: "s", IdempotencyKey: "m"})
 	if err != nil {
 		t.Fatal(err)

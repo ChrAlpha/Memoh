@@ -6,6 +6,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/settings"
@@ -34,7 +35,7 @@ func TestSelectChatModelSessionMemoryLevel(t *testing.T) {
 	botSettings := settings.Settings{ChatModelID: botModel.ID.String()}
 
 	// Session memory beats the bot default.
-	got, _, err := resolver.selectChatModel(ctx, ChatRequest{
+	got, _, err := resolver.selectChatModel(ctx, runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000613",
 		ThreadID: "00000000-0000-0000-0000-000000000614",
 	}, botSettings, prefModel.ID.String())
@@ -46,7 +47,7 @@ func TestSelectChatModelSessionMemoryLevel(t *testing.T) {
 	}
 
 	// The request's own model beats session memory.
-	got, _, err = resolver.selectChatModel(ctx, ChatRequest{
+	got, _, err = resolver.selectChatModel(ctx, runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000613",
 		ThreadID: "00000000-0000-0000-0000-000000000614",
 		Model:    "gpt-bot",

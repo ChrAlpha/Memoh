@@ -7,6 +7,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -29,7 +30,7 @@ type contextRequest struct {
 	Purpose contextPurpose
 	// Chat carries the retry/edit cutoff, the required row, and the persisted
 	// current row. It is zero for a continuation.
-	Chat     ChatRequest
+	Chat     runreq.ChatRequest
 	Fallback historyfrag.ScopeFallback
 	// Scope is the summary scope; Scope.SessionID is the session being read.
 	Scope contextfrag.Scope
@@ -39,7 +40,7 @@ type contextRequest struct {
 }
 
 type assembledContext struct {
-	Messages []ModelMessage
+	Messages []runreq.ModelMessage
 	Records  []historyfrag.HistoryRecord
 	// EstimatedTokens is the estimate for Messages, markers included.
 	EstimatedTokens int
@@ -52,7 +53,7 @@ type assembledContext struct {
 	Truncated bool
 }
 
-func chatContextRequest(purpose contextPurpose, req ChatRequest, budget int) contextRequest {
+func chatContextRequest(purpose contextPurpose, req runreq.ChatRequest, budget int) contextRequest {
 	return contextRequest{
 		Purpose:  purpose,
 		Chat:     req,
@@ -90,7 +91,7 @@ func (s *Service) assembleContext(ctx context.Context, r contextRequest) (assemb
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	compactable := totalCompactableHistoryTokens(loaded)
 	annotated := injectWorkspaceTransitionRecords(loaded)
-	messages := make([]ModelMessage, 0, len(annotated))
+	messages := make([]runreq.ModelMessage, 0, len(annotated))
 	for _, record := range annotated {
 		messages = append(messages, record.ModelMessage)
 	}

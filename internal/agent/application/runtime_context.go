@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	native "github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/contextview"
 	"github.com/felinics/memoh/internal/prune"
@@ -34,7 +35,7 @@ type runtimeContextRenderInput struct {
 	ConversationType          string
 	ConversationName          string
 	ReplyTarget               string
-	Attachments               []ChatAttachment
+	Attachments               []runreq.ChatAttachment
 	Files                     []native.SystemFile
 	MemoryText                string
 	MemoryHookText            string
@@ -42,7 +43,7 @@ type runtimeContextRenderInput struct {
 	PlatformIdentitiesSection string
 }
 
-func (s *Service) buildRuntimeContextSections(ctx context.Context, req ChatRequest, agentID, projectPath string) ([]contextview.RuntimeSection, *contextfrag.MemoryRecallTrace) {
+func (s *Service) buildRuntimeContextSections(ctx context.Context, req runreq.ChatRequest, agentID, projectPath string) ([]contextview.RuntimeSection, *contextfrag.MemoryRecallTrace) {
 	timezoneName, timezoneLocation := s.resolveTimezone(ctx, req.BotID, req.UserID)
 
 	var files []native.SystemFile
@@ -108,7 +109,7 @@ func (s *Service) runtimeContextBudgetDefault(ctx context.Context, botID string)
 	if err != nil {
 		return 0
 	}
-	chatModel, _, err := s.selectChatModel(ctx, ChatRequest{BotID: botID}, botSettings, "")
+	chatModel, _, err := s.selectChatModel(ctx, runreq.ChatRequest{BotID: botID}, botSettings, "")
 	if err != nil {
 		return 0
 	}
@@ -117,7 +118,7 @@ func (s *Service) runtimeContextBudgetDefault(ctx context.Context, botID string)
 
 func runtimeContextAgentID(runtimeType string, metadata map[string]any) string {
 	if strings.TrimSpace(runtimeType) == string(runtimekind.ACPAgent) {
-		return firstNonEmpty(metadataString(metadata, "acp_agent_id"), runtimeType)
+		return runreq.FirstNonEmpty(runreq.MetadataString(metadata, "acp_agent_id"), runtimeType)
 	}
 	return strings.TrimSpace(runtimeType)
 }
@@ -411,7 +412,7 @@ func renderRuntimeMetadataSection(pairs [][2]string) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderRuntimeAttachmentsSection(attachments []ChatAttachment) string {
+func renderRuntimeAttachmentsSection(attachments []runreq.ChatAttachment) string {
 	if len(attachments) == 0 {
 		return ""
 	}

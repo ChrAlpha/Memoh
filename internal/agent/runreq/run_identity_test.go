@@ -1,4 +1,4 @@
-package application
+package runreq
 
 import (
 	"testing"
@@ -9,14 +9,14 @@ import (
 func TestRunIDForChatRequestPreservesAdmittedIdentity(t *testing.T) {
 	const admittedRunID = "2a9737fa-af25-4a69-b305-c416aca891e1"
 
-	if got := runIDForChatRequest(admittedRunID); got != admittedRunID {
+	if got := RunID(admittedRunID); got != admittedRunID {
 		t.Fatalf("runIDForChatRequest() = %q, want admitted run ID %q", got, admittedRunID)
 	}
 }
 
 func TestRunIDForChatRequestMintsUUIDWhenNoAdmissionExists(t *testing.T) {
-	first := runIDForChatRequest("")
-	second := runIDForChatRequest(" \t")
+	first := RunID("")
+	second := RunID(" \t")
 
 	if _, err := uuid.Parse(first); err != nil {
 		t.Fatalf("runIDForChatRequest() = %q, want UUID: %v", first, err)

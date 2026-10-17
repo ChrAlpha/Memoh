@@ -1,4 +1,4 @@
-package application
+package runreq
 
 import (
 	"strings"
@@ -65,7 +65,7 @@ func TestSDKMessagesToModelMessages_NeverPersistsFilePartBytes(t *testing.T) {
 			sdk.FilePart{Data: payload, MediaType: "application/pdf", Filename: "big.pdf"},
 		},
 	}}
-	converted := sdkMessagesToModelMessages(msgs)
+	converted := SDKMessagesToModelMessages(msgs)
 	require.Len(t, converted, 1)
 	assert.NotContains(t, string(converted[0].Content), payload[:64])
 	assert.Contains(t, string(converted[0].Content), "big.pdf")

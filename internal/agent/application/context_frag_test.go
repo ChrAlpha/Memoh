@@ -9,6 +9,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -19,7 +20,7 @@ import (
 func TestBuildContextFragScopePreservesIMTopology(t *testing.T) {
 	t.Parallel()
 
-	scope := buildContextFragScope(ChatRequest{
+	scope := buildContextFragScope(runreq.ChatRequest{
 		BotID:                     "bot-1",
 		ChatID:                    "chat-1",
 		ThreadID:                  "sess-1",
@@ -70,7 +71,7 @@ func TestBuildContextFragScopePreservesIMTopology(t *testing.T) {
 func TestBuildContextFragScopeDoesNotInferDirectedReplyFromAnyReplyID(t *testing.T) {
 	t.Parallel()
 
-	scope := buildContextFragScope(ChatRequest{
+	scope := buildContextFragScope(runreq.ChatRequest{
 		BotID:                  "bot-1",
 		ChatID:                 "chat-1",
 		ThreadID:               "sess-1",

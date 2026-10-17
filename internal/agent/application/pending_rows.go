@@ -8,6 +8,7 @@ import (
 	"time"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -49,8 +50,8 @@ func (s *Service) persistPrecedingMessages(ctx context.Context, cmd turn.StartTu
 // precedingRequest is the request the earlier message would have been, said in
 // the place the batch's command is: what is the message's own is its own, where
 // it was said is the command's.
-func precedingRequest(cmd turn.StartTurnCommand, earlier turn.PrecedingMessage) ChatRequest {
-	return ChatRequest{
+func precedingRequest(cmd turn.StartTurnCommand, earlier turn.PrecedingMessage) runreq.ChatRequest {
+	return runreq.ChatRequest{
 		BotID:                     cmd.BotID,
 		ChatID:                    cmd.ChatID,
 		ThreadID:                  cmd.ThreadID,
@@ -123,8 +124,8 @@ func (s *Service) precedingUserRow(ctx context.Context, cmd turn.StartTurnComman
 		MentionsMe:         req.MentionsBot,
 		RepliesToMe:        req.RepliesToBot,
 	}, text)
-	content, err := historyfrag.MarshalStoredModelMessage(normalizeUserMessageContent(ModelMessage{
-		Role: "user", Content: newTextContent(header),
+	content, err := historyfrag.MarshalStoredModelMessage(runreq.NormalizeUserMessageContent(runreq.ModelMessage{
+		Role: "user", Content: runreq.NewTextContent(header),
 	}))
 	if err != nil {
 		return messagepkg.UserRow{}, fmt.Errorf("marshal an earlier message of a batch: %w", err)
@@ -147,7 +148,7 @@ func (s *Service) precedingUserRow(ctx context.Context, cmd turn.StartTurnComman
 			Role:                    "user",
 			Content:                 content,
 			Metadata:                mergeMetadata(buildRouteMetadata(req), buildInteractionMetadata(req)),
-			Assets:                  chatAttachmentsToAssetRefs(req.Attachments),
+			Assets:                  runreq.ChatAttachmentsToAssetRefs(req.Attachments),
 			DisplayText:             displayText,
 			SessionMode:             sessionMode,
 			RuntimeType:             runtimeType,

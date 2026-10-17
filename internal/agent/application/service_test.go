@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/server"
@@ -47,9 +48,9 @@ func TestPrepareGatewayAttachments_InlineAssetToBase64(t *testing.T) {
 			},
 		},
 	}
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID: "bot-1",
-		Attachments: []ChatAttachment{
+		Attachments: []runreq.ChatAttachment{
 			{
 				Type:        "image",
 				ContentHash: "asset-1",
@@ -86,9 +87,9 @@ func TestPrepareRuntimeImagesInlineStoredAsset(t *testing.T) {
 			},
 		},
 	}
-	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), ChatRequest{
+	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
-		Attachments: []ChatAttachment{{
+		Attachments: []runreq.ChatAttachment{{
 			Type:        "image",
 			ContentHash: "asset-1",
 			Name:        "screenshot.png",
@@ -108,8 +109,8 @@ func TestPrepareRuntimeImagesInlineStoredAsset(t *testing.T) {
 
 func TestPrepareGatewayAttachments_DataURLFromURLFieldIsNativeInline(t *testing.T) {
 	resolver := &Service{logger: slog.Default()}
-	req := ChatRequest{
-		Attachments: []ChatAttachment{
+	req := runreq.ChatRequest{
+		Attachments: []runreq.ChatAttachment{
 			{
 				Type: "image",
 				URL:  "data:image/png;base64,AAAA",
@@ -134,8 +135,8 @@ func TestPrepareGatewayAttachments_DataURLFromURLFieldIsNativeInline(t *testing.
 
 func TestPrepareGatewayAttachments_PublicURLFromURLFieldIsNativePublic(t *testing.T) {
 	resolver := &Service{logger: slog.Default()}
-	req := ChatRequest{
-		Attachments: []ChatAttachment{
+	req := runreq.ChatRequest{
+		Attachments: []runreq.ChatAttachment{
 			{
 				Type: "image",
 				URL:  "https://example.com/demo.png",
@@ -167,8 +168,8 @@ func TestRouteAndMergeAttachments_ImagePathOnlyFallsBackToFile(t *testing.T) {
 			},
 		},
 	}
-	req := ChatRequest{
-		Attachments: []ChatAttachment{
+	req := runreq.ChatRequest{
+		Attachments: []runreq.ChatAttachment{
 			{
 				Type: "image",
 				Path: "/data/.memoh/media/image/demo.png",
@@ -197,11 +198,11 @@ func TestRouteAndMergeAttachments_ImagePathOnlyFallsBackToFile(t *testing.T) {
 
 func TestPrepareGatewayAttachments_IncludesReplyAttachments(t *testing.T) {
 	resolver := &Service{logger: slog.Default()}
-	req := ChatRequest{
-		Attachments: []ChatAttachment{
+	req := runreq.ChatRequest{
+		Attachments: []runreq.ChatAttachment{
 			{Type: "image", URL: "https://example.com/current.png"},
 		},
-		ReplyAttachments: []ChatAttachment{
+		ReplyAttachments: []runreq.ChatAttachment{
 			{Type: "image", URL: "https://example.com/reply.png"},
 		},
 	}
@@ -229,9 +230,9 @@ func TestPrepareGatewayAttachments_ResolvesStoredFileAccessPath(t *testing.T) {
 			},
 		},
 	}
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID: "bot-1",
-		Attachments: []ChatAttachment{{
+		Attachments: []runreq.ChatAttachment{{
 			Type:        "file",
 			Mime:        "application/pdf",
 			ContentHash: "asset-pdf",
@@ -266,15 +267,15 @@ func TestPrepareACPAttachments_UsesFileAndReplyReferences(t *testing.T) {
 			},
 		},
 	}
-	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), ChatRequest{
+	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
-		Attachments: []ChatAttachment{{
+		Attachments: []runreq.ChatAttachment{{
 			Type:        "file",
 			Name:        "spec.pdf",
 			Mime:        "application/pdf",
 			ContentHash: "asset-pdf",
 		}},
-		ReplyAttachments: []ChatAttachment{{
+		ReplyAttachments: []runreq.ChatAttachment{{
 			Type: "image",
 			Name: "old.png",
 			URL:  "https://example.com/old.png",
@@ -305,9 +306,9 @@ func TestPrepareACPAttachments_PreservesLongPasteFile(t *testing.T) {
 			},
 		},
 	}
-	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), ChatRequest{
+	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
-		Attachments: []ChatAttachment{{
+		Attachments: []runreq.ChatAttachment{{
 			Type:        "file",
 			Name:        "pasted-text.txt",
 			Mime:        "text/plain",
@@ -336,9 +337,9 @@ func TestPrepareACPAttachments_FallsBackWhenStoredImageCannotInline(t *testing.T
 			},
 		},
 	}
-	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), ChatRequest{
+	prepared, err := resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1",
-		Attachments: []ChatAttachment{{
+		Attachments: []runreq.ChatAttachment{{
 			Type:        "image",
 			Name:        "large.png",
 			ContentHash: "asset-image",
@@ -358,13 +359,13 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 	tests := []struct {
 		name     string
 		resolver *Service
-		input    ChatAttachment
+		input    runreq.ChatAttachment
 		wantCode apperror.Code
 	}{
 		{
 			name:     "invalid image base64",
 			resolver: &Service{logger: slog.Default()},
-			input: ChatAttachment{
+			input: runreq.ChatAttachment{
 				Type:   "image",
 				Name:   "broken.png",
 				Base64: "data:image/png;base64,not-valid***",
@@ -381,7 +382,7 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 					},
 				},
 			},
-			input: ChatAttachment{
+			input: runreq.ChatAttachment{
 				Type:        "file",
 				Name:        "missing.pdf",
 				ContentHash: "missing",
@@ -392,9 +393,9 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := tt.resolver.prepareRuntimeAttachments(context.Background(), ChatRequest{
+			_, err := tt.resolver.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 				BotID:       "bot-1",
-				Attachments: []ChatAttachment{tt.input},
+				Attachments: []runreq.ChatAttachment{tt.input},
 			})
 			problem, _ := server.ProblemFrom(err, "")
 			if apperror.CodeOf(err) != tt.wantCode || problem.Status != 400 {
@@ -417,9 +418,9 @@ func TestPrepareGatewayAttachments_DetectsImageMimeWhenOctetStream(t *testing.T)
 			},
 		},
 	}
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID: "bot-1",
-		Attachments: []ChatAttachment{
+		Attachments: []runreq.ChatAttachment{
 			{
 				Type:        "image",
 				ContentHash: "asset-2",
@@ -451,8 +452,8 @@ func TestRouteAndMergeAttachments_DropsUnsupportedInlineWithoutFallbackPath(t *t
 			},
 		},
 	}
-	req := ChatRequest{
-		Attachments: []ChatAttachment{
+	req := runreq.ChatRequest{
+		Attachments: []runreq.ChatAttachment{
 			{
 				Type:   "video",
 				Base64: "AAAA",
@@ -502,12 +503,12 @@ func TestEncodeReaderAsDataURL_RejectsOversizedPayload(t *testing.T) {
 
 func TestOutboundAssetRefsToMessageRefs(t *testing.T) {
 	t.Parallel()
-	refs := []OutboundAssetRef{
+	refs := []runreq.OutboundAssetRef{
 		{ContentHash: "a1", Role: "attachment", Ordinal: 0},
 		{ContentHash: "", Role: "attachment", Ordinal: 1},
 		{ContentHash: "a2", Ordinal: 2},
 	}
-	result := outboundAssetRefsToMessageRefs(refs)
+	result := runreq.OutboundAssetRefsToMessageRefs(refs)
 	if len(result) != 2 {
 		t.Fatalf("expected 2 refs, got %d", len(result))
 	}
@@ -521,7 +522,7 @@ func TestOutboundAssetRefsToMessageRefs(t *testing.T) {
 
 func TestOutboundAssetRefsToMessageRefs_Empty(t *testing.T) {
 	t.Parallel()
-	result := outboundAssetRefsToMessageRefs(nil)
+	result := runreq.OutboundAssetRefsToMessageRefs(nil)
 	if result != nil {
 		t.Fatalf("expected nil, got %v", result)
 	}
@@ -537,7 +538,7 @@ func TestSanitizeMessagesNormalizesUserMultipartImageBytes(t *testing.T) {
 		t.Fatalf("marshal content: %v", err)
 	}
 
-	cleaned := sanitizeMessages([]ModelMessage{{
+	cleaned := runreq.SanitizeMessages([]runreq.ModelMessage{{
 		Role:    "user",
 		Content: content,
 	}})
@@ -573,7 +574,7 @@ func TestSanitizeMessagesKeepsAssistantMultipartMessages(t *testing.T) {
 		t.Fatalf("marshal content: %v", err)
 	}
 
-	cleaned := sanitizeMessages([]ModelMessage{{
+	cleaned := runreq.SanitizeMessages([]runreq.ModelMessage{{
 		Role:    "assistant",
 		Content: content,
 	}})
@@ -586,7 +587,7 @@ func TestSanitizeMessagesKeepsAssistantMultipartMessages(t *testing.T) {
 }
 
 func TestNormalizeImagePartsToDataURL_ConvertsIndexedObject(t *testing.T) {
-	msg := ModelMessage{
+	msg := runreq.ModelMessage{
 		Role: "user",
 		Content: json.RawMessage(`[
 			{"type":"text","text":"hello"},
@@ -594,7 +595,7 @@ func TestNormalizeImagePartsToDataURL_ConvertsIndexedObject(t *testing.T) {
 		]`),
 	}
 
-	normalized, changed := normalizeImagePartsToDataURL(msg)
+	normalized, changed := runreq.NormalizeImagePartsToDataURL(msg)
 	if !changed {
 		t.Fatal("expected message to be normalized")
 	}
@@ -620,12 +621,12 @@ func TestNormalizeImagePartsToDataURL_LeavesStringImageUntouched(t *testing.T) {
 	original := `[
 		{"type":"image","image":"data:image/png;base64,AAAA","mediaType":"image/png"}
 	]`
-	msg := ModelMessage{
+	msg := runreq.ModelMessage{
 		Role:    "user",
 		Content: json.RawMessage(original),
 	}
 
-	normalized, changed := normalizeImagePartsToDataURL(msg)
+	normalized, changed := runreq.NormalizeImagePartsToDataURL(msg)
 	if changed {
 		t.Fatal("expected no normalization for string image")
 	}

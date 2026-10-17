@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -48,8 +49,8 @@ func r4bExternalDiscuss(t *testing.T, env discussEnv) (*discussProcess, *recordi
 	`, env.sessionID, `{"runtime_owner_account_id":"`+env.ownerID+`"}`); err != nil {
 		t.Fatal(err)
 	}
-	proc.svc.sessionService = &fakeBackgroundSessionService{
-		getFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
+	proc.svc.sessionService = &agenttest.Sessions{
+		GetFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
 			return sessionpkg.Thread{
 				ID: id, BotID: env.botID, Type: sessionpkg.TypeDiscuss,
 				SessionMode: sessionpkg.TypeDiscuss, RuntimeType: sessionpkg.RuntimeACPAgent,

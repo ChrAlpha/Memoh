@@ -30,7 +30,7 @@ func (m *resumeTurnMessages) GetVisibleHistoryTurnRequestMessageIDByTurn(context
 func resumeProviderRequests(t *testing.T, turnID string) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
-	fixture.service.allowedTeam = driveTeamID
+	setAllowedTeam(fixture.service, driveTeamID)
 	history := &resumeTurnMessages{
 		driveHistoryMessages: driveHistoryMessages{history: []messagepkg.Message{
 			admissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),

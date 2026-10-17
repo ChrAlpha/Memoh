@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"strings"
+
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 // A discuss run reads the batch it answers from history, which is what a
@@ -21,7 +23,7 @@ const (
 // runtime owns its context still reads history the same way a native run does,
 // so the batch, its sender attribution and any summary covering it arrive as
 // one context rather than as a message of its own.
-func (s *Service) discussExternalPrompt(ctx context.Context, req ChatRequest) (string, error) {
+func (s *Service) discussExternalPrompt(ctx context.Context, req runreq.ChatRequest) (string, error) {
 	assembled, err := s.assembleContext(ctx, chatContextRequest(contextPurposeRun, req, 0))
 	if err != nil {
 		return "", err

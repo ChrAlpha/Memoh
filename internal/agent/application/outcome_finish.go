@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/errs"
 )
@@ -14,15 +15,15 @@ import (
 // none either: the session runtime keeps a run whose projection waits on a
 // decision only when it is not told an ending, and a status, even
 // waiting_decision, stops the run's commands so no answer could resume it.
-func runEndToStatus(end runEnd) string {
+func runEndToStatus(end outcome.RunEnd) string {
 	switch end {
-	case endCompleted:
+	case outcome.EndCompleted:
 		return sessionruntime.RunStatusCompleted
-	case endParked:
+	case outcome.EndParked:
 		return ""
-	case endStopped:
+	case outcome.EndStopped:
 		return sessionruntime.RunStatusAborted
-	case endOwnershipLost:
+	case outcome.EndOwnershipLost:
 		return ""
 	default:
 		return sessionruntime.RunStatusErrored
@@ -39,21 +40,21 @@ func runEndToStatus(end runEnd) string {
 // The lifecycle write is part of this, not a callback the entry supplies: it
 // has to be staged before the terminal write and completed after it, and two
 // callers ordering that themselves is how the two orders drift apart.
-func (s *Service) finishDrivenRun(ctx context.Context, run admittedRun, end runEnd, f *RunFailure) sessionruntime.TerminalRun {
-	if s == nil || s.sessionRuntime == nil || run.Handle.FencingToken <= 0 || end == endOwnershipLost {
+func (s *Service) finishDrivenRun(ctx context.Context, run admittedRun, end outcome.RunEnd, f *outcome.RunFailure) sessionruntime.TerminalRun {
+	if s == nil || s.sessionRuntime == nil || run.Handle.FencingToken <= 0 || end == outcome.EndOwnershipLost {
 		return sessionruntime.TerminalRun{}
 	}
 	status := runEndToStatus(end)
-	outcome := RunOutcome{Status: status}
+	result := outcome.RunOutcome{Status: status}
 	var code string
 	var args map[string]string
 	if f != nil {
-		outcome.Cause = f.Public()
+		result.Cause = f.Public()
 		code = string(f.Code)
 		args = f.Args
 	}
 	cause := lifecycleCause(end, f)
-	writeCtx := withRunOutcome(context.WithoutCancel(ctx), run.Handle.RunID, outcome, run.Mode)
+	writeCtx := outcome.WithRunOutcomeInMode(context.WithoutCancel(ctx), run.Handle.RunID, result, run.Mode)
 	writeCtx, cancel := context.WithTimeout(writeCtx, terminalWriteTimeout)
 	defer cancel()
 	terminal, err := s.sessionRuntime.FinishRunWithFailure(writeCtx, run.Handle, status, code, args)

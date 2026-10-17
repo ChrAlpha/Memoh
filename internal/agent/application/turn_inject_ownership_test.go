@@ -19,17 +19,17 @@ import (
 // only then does the run end for its caller.
 func TestRunEndStopsDirectInjectBeforeSessionFinishes(t *testing.T) {
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
-	fixture.admitter.finishStarted = make(chan struct{})
-	fixture.admitter.finishRelease = make(chan struct{})
+	fixture.admitter.FinishStarted = make(chan struct{})
+	fixture.admitter.FinishRelease = make(chan struct{})
 	var releaseOnce sync.Once
 	releaseFinish := func() {
-		releaseOnce.Do(func() { close(fixture.admitter.finishRelease) })
+		releaseOnce.Do(func() { close(fixture.admitter.FinishRelease) })
 	}
 	t.Cleanup(releaseFinish)
 
 	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "inject-ownership-1"})
 	select {
-	case <-fixture.admitter.finishStarted:
+	case <-fixture.admitter.FinishStarted:
 	case <-time.After(5 * time.Second):
 		t.Fatal("durable finisher did not start")
 	}
@@ -49,7 +49,7 @@ func TestRunEndStopsDirectInjectBeforeSessionFinishes(t *testing.T) {
 	}
 	releaseFinish()
 	collectEvents(t, handle)
-	if got := fixture.admitter.awaitFinish(t).status; got != sessionruntime.RunStatusCompleted {
+	if got := fixture.admitter.AwaitFinish(t).Status; got != sessionruntime.RunStatusCompleted {
 		t.Fatalf("finish status = %q, want completed", got)
 	}
 	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "too late"}); err == nil {

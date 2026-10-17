@@ -8,6 +8,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
 )
@@ -57,8 +58,8 @@ func (n *BackgroundTaskNotifications) Handle(ctx context.Context, evt background
 	if sess.BotID != evt.BotID || sess.ID != strings.TrimSpace(evt.SessionID) || !session.IsUserFacingType(sess.Type) {
 		return errors.New("background task notification session is outside its bot conversation scope")
 	}
-	content, err := historyfrag.MarshalStoredModelMessage(ModelMessage{
-		Role: "assistant", Content: newTextContent(text),
+	content, err := historyfrag.MarshalStoredModelMessage(runreq.ModelMessage{
+		Role: "assistant", Content: runreq.NewTextContent(text),
 	})
 	if err != nil {
 		return fmt.Errorf("encode background task notification: %w", err)

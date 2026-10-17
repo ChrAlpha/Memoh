@@ -13,6 +13,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
@@ -228,7 +229,7 @@ func queueMutationError(err error) error {
 		return apperror.New(apperror.CodeQueueItemNotPending, nil)
 	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
 		return apperror.New(apperror.CodeQueueCapacityExceeded, nil)
-	case errors.Is(err, application.ErrQueueItemNotEditable):
+	case errors.Is(err, runreq.ErrQueueItemNotEditable):
 		return apperror.New(apperror.CodeQueueItemNotEditable, nil)
 	default:
 		return err
@@ -601,11 +602,11 @@ func (h *SessionQueueHandler) PromoteFollowUpToSteer(c echo.Context) error {
 }
 
 func steerQueueItemResponseFrom(item sessionruntime.SteerItem) steerQueueItemResponse {
-	return steerQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: application.QueuePayloadText(item.Payload), TargetRunID: item.TargetRunID}
+	return steerQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: runreq.QueuePayloadText(item.Payload), TargetRunID: item.TargetRunID}
 }
 
 func followUpQueueItemResponseFrom(item sessionruntime.FollowUpItem) followUpQueueItemResponse {
-	return followUpQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: application.QueuePayloadText(item.Payload), EnqueuedDuringRunID: item.EnqueuedDuringRunID}
+	return followUpQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: runreq.QueuePayloadText(item.Payload), EnqueuedDuringRunID: item.EnqueuedDuringRunID}
 }
 
 func mapQueueItems[T any, R any](items []T, mapItem func(T) R) []R {

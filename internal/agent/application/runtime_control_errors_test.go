@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/decision/approval"
+	"github.com/felinics/memoh/internal/agent/outcome"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -40,7 +42,7 @@ func TestRuntimeControlErrorMapsSentinels(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := apperror.CodeOf(RuntimeControlError(tc.err)); got != tc.want {
+			if got := apperror.CodeOf(outcome.RuntimeControlError(tc.err)); got != tc.want {
 				t.Fatalf("code = %q, want %q", got, tc.want)
 			}
 		})
@@ -61,7 +63,7 @@ func TestRuntimeControlErrorKeepsRuntimeFailureCodes(t *testing.T) {
 		{"cancelled while unavailable", external.Unavailable(context.Canceled), apperror.CodeExternalRuntimeUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := apperror.CodeOf(RuntimeControlError(fmt.Errorf("control: %w", tc.err))); got != tc.want {
+			if got := apperror.CodeOf(outcome.RuntimeControlError(fmt.Errorf("control: %w", tc.err))); got != tc.want {
 				t.Fatalf("code = %q, want %q", got, tc.want)
 			}
 		})
@@ -70,10 +72,10 @@ func TestRuntimeControlErrorKeepsRuntimeFailureCodes(t *testing.T) {
 
 func TestRuntimeControlErrorKeepsExistingCode(t *testing.T) {
 	existing := fmt.Errorf("wrapped: %w", apperror.New(apperror.CodeRuntimeControlRequestInvalid, nil))
-	if got := RuntimeControlError(existing); !errors.Is(got, existing) {
+	if got := outcome.RuntimeControlError(existing); !errors.Is(got, existing) {
 		t.Fatalf("existing code was re-translated: %v", got)
 	}
-	if RuntimeControlError(nil) != nil {
+	if outcome.RuntimeControlError(nil) != nil {
 		t.Fatal("nil error was translated")
 	}
 }
@@ -104,10 +106,10 @@ func TestSentinelIdentities(t *testing.T) {
 func TestRuntimeControlReportsBusySessionAsTurnBusy(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		prepare func(*scriptedAdmitter)
+		prepare func(*agenttest.ScriptedAdmitter)
 	}{
-		{"admission error", func(a *scriptedAdmitter) { a.admitErr = sessionruntime.ErrSessionBusy }},
-		{"not started", func(a *scriptedAdmitter) { a.started = false }},
+		{"admission error", func(a *agenttest.ScriptedAdmitter) { a.AdmitErr = sessionruntime.ErrSessionBusy }},
+		{"not started", func(a *agenttest.ScriptedAdmitter) { a.Started = false }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc, _, driver, admitter, req := runtimeControlFixture(t)

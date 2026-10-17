@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 )
 
@@ -27,11 +29,11 @@ func TestRuntimeRoundPublishesOnlyCompletedRequestedHead(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			messages := &recordingMessageService{}
+			messages := &agenttest.RecordingMessages{}
 			service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
 			err := service.persistExternalRound(
 				context.Background(),
-				ChatRequest{BotID: "bot-1", ThreadID: "session-1", RunID: "run-1", Query: "inspect"},
+				runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", RunID: "run-1", Query: "inspect"},
 				"codex", "/data/app",
 				external.PromptResult{Text: "partial", PublishHead: tc.publishHead},
 				externalRoundFailure(tc.promptErr), tc.completed, nil, nil,
@@ -39,7 +41,7 @@ func TestRuntimeRoundPublishesOnlyCompletedRequestedHead(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			publication := messages.roundOptions[len(messages.roundOptions)-1].AgentPublication
+			publication := messages.RoundOptions[len(messages.RoundOptions)-1].AgentPublication
 			if (publication != nil) != tc.published {
 				t.Fatalf("publication = %#v", publication)
 			}

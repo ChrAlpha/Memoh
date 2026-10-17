@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -62,7 +63,7 @@ func TestPostgresCompactionLeavesRefusedRowsOutOfTheSummary(t *testing.T) {
 	}
 
 	want := append([]string{"SUMMARY-1"}, withoutRefused(raw)...)
-	if got := stage4Labels(s.assemble(ChatRequest{}).Messages); !slices.Equal(got, want) {
+	if got := stage4Labels(s.assemble(runreq.ChatRequest{}).Messages); !slices.Equal(got, want) {
 		t.Fatalf("context = %v, want %v", got, want)
 	}
 }
@@ -93,7 +94,7 @@ func TestPostgresCompactionIsNotStarvedByRefusedRows(t *testing.T) {
 		t.Fatalf("covered rows = %v, want the conversation compacted", covered)
 	}
 	want := append([]string{"SUMMARY-1"}, withoutRefused(raw)...)
-	if got := stage4Labels(s.assemble(ChatRequest{}).Messages); !slices.Equal(got, want) {
+	if got := stage4Labels(s.assemble(runreq.ChatRequest{}).Messages); !slices.Equal(got, want) {
 		t.Fatalf("context = %v, want %v", got, want)
 	}
 }

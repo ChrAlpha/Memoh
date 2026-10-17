@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/apperror"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -14,13 +16,13 @@ import (
 )
 
 type forkAnchorMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	visibleFrom []messagepkg.Message
 	before      []messagepkg.Message
 }
 
 type replacementOperationMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	latest      messagepkg.HistoryTurn
 	latestErr   error
 	turnByMsg   messagepkg.HistoryTurn
@@ -207,8 +209,8 @@ func TestReplacePersistedTurnMovesForkAnchorMetadata(t *testing.T) {
 	var updated map[string]any
 	resolver := &Service{
 		messageService: messages,
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(context.Context, string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(context.Context, string) (session.Thread, error) {
 				return session.Thread{
 					ID:        "fork-session",
 					CreatedAt: createdAt,
@@ -222,7 +224,7 @@ func TestReplacePersistedTurnMovesForkAnchorMetadata(t *testing.T) {
 					},
 				}, nil
 			},
-			updateMetadataFn: func(_ context.Context, _ string, metadata map[string]any) (session.Thread, error) {
+			UpdateMetadataFn: func(_ context.Context, _ string, metadata map[string]any) (session.Thread, error) {
 				updated = metadata
 				return session.Thread{Metadata: metadata}, nil
 			},
@@ -232,7 +234,7 @@ func TestReplacePersistedTurnMovesForkAnchorMetadata(t *testing.T) {
 
 	if err := resolver.replacePersistedTurn(
 		context.Background(),
-		ChatRequest{ThreadID: "fork-session", TurnID: "turn-new", TurnPosition: int64Pointer(2), HistoryCutoffBeforeMessageID: "assistant-old"},
+		runreq.ChatRequest{ThreadID: "fork-session", TurnID: "turn-new", TurnPosition: int64Pointer(2), HistoryCutoffBeforeMessageID: "assistant-old"},
 		"old-turn",
 		"request-2",
 		"retry",
@@ -264,7 +266,7 @@ func (p *recordingEventPublisher) Publish(event messageevent.Event) {
 func TestReplacePersistedTurnPublishesReplacementMessageEvent(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	events := &recordingEventPublisher{}
 	resolver := &Service{
 		messageService: messages,
@@ -272,7 +274,7 @@ func TestReplacePersistedTurnPublishesReplacementMessageEvent(t *testing.T) {
 		logger:         slog.Default(),
 	}
 
-	err := resolver.replacePersistedTurn(context.Background(), ChatRequest{
+	err := resolver.replacePersistedTurn(context.Background(), runreq.ChatRequest{
 		BotID:        "bot-1",
 		ThreadID:     "session-1",
 		TurnID:       "turn-new",
@@ -284,8 +286,8 @@ func TestReplacePersistedTurnPublishesReplacementMessageEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replace persisted turn: %v", err)
 	}
-	if messages.replacementTurnID != "turn-new" || messages.replacementTurnPosition == nil || *messages.replacementTurnPosition != 2 {
-		t.Fatalf("replacement identity = (%q, %v), want (turn-new, 2)", messages.replacementTurnID, messages.replacementTurnPosition)
+	if messages.ReplacementTurnID != "turn-new" || messages.ReplacementTurnPosition == nil || *messages.ReplacementTurnPosition != 2 {
+		t.Fatalf("replacement identity = (%q, %v), want (turn-new, 2)", messages.ReplacementTurnID, messages.ReplacementTurnPosition)
 	}
 	if len(events.events) != 1 {
 		t.Fatalf("published events = %d, want 1", len(events.events))
@@ -321,8 +323,8 @@ func TestReplacePersistedTurnClearsForkAnchorWhenNoInheritedAssistantRemains(t *
 	var updated map[string]any
 	resolver := &Service{
 		messageService: messages,
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(context.Context, string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(context.Context, string) (session.Thread, error) {
 				return session.Thread{
 					ID:        "fork-session",
 					CreatedAt: createdAt,
@@ -335,7 +337,7 @@ func TestReplacePersistedTurnClearsForkAnchorWhenNoInheritedAssistantRemains(t *
 					},
 				}, nil
 			},
-			updateMetadataFn: func(_ context.Context, _ string, metadata map[string]any) (session.Thread, error) {
+			UpdateMetadataFn: func(_ context.Context, _ string, metadata map[string]any) (session.Thread, error) {
 				updated = metadata
 				return session.Thread{Metadata: metadata}, nil
 			},
@@ -345,7 +347,7 @@ func TestReplacePersistedTurnClearsForkAnchorWhenNoInheritedAssistantRemains(t *
 
 	if err := resolver.replacePersistedTurn(
 		context.Background(),
-		ChatRequest{ThreadID: "fork-session", TurnID: "turn-new", TurnPosition: int64Pointer(2), HistoryCutoffBeforeMessageID: "assistant-old"},
+		runreq.ChatRequest{ThreadID: "fork-session", TurnID: "turn-new", TurnPosition: int64Pointer(2), HistoryCutoffBeforeMessageID: "assistant-old"},
 		"old-turn",
 		"request-1",
 		"retry",

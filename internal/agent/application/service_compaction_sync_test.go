@@ -14,6 +14,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
@@ -133,13 +134,13 @@ func (q lastRunPlanQueries) GetLatestContextLifecycleBySession(context.Context, 
 	})
 }
 
-func syncTestEstimate(service *Service, req ChatRequest) *turnRequestEstimate {
+func syncTestEstimate(service *Service, req runreq.ChatRequest) *turnRequestEstimate {
 	return &turnRequestEstimate{service: service, ctx: context.Background(), sessionID: req.ThreadID}
 }
 
 const syncTestBudget = 1000
 
-func newSyncCompactionFixture(t *testing.T, status string) (*Service, *scriptedCompactionRunner, *stagedHistory, ChatRequest) {
+func newSyncCompactionFixture(t *testing.T, status string) (*Service, *scriptedCompactionRunner, *stagedHistory, runreq.ChatRequest) {
 	t.Helper()
 	service, _ := newControllerPolicyService(t, nil)
 	service.queries = noFrontierQueries{service.queries.(*controllerQueries)}
@@ -150,7 +151,7 @@ func newSyncCompactionFixture(t *testing.T, status string) (*Service, *scriptedC
 	}
 	service.compactionService = runner
 	service.messageService = history
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000453",
 		ThreadID: "00000000-0000-0000-0000-000000000454",
 		RunID:    "run-1",
@@ -158,7 +159,7 @@ func newSyncCompactionFixture(t *testing.T, status string) (*Service, *scriptedC
 	return service, runner, history, req
 }
 
-func assembleForSyncTest(t *testing.T, service *Service, req ChatRequest) assembledContext {
+func assembleForSyncTest(t *testing.T, service *Service, req runreq.ChatRequest) assembledContext {
 	t.Helper()
 	assembled, err := service.assembleContext(context.Background(), chatContextRequest(contextPurposeRun, req, syncTestBudget))
 	if err != nil {
@@ -222,7 +223,7 @@ func TestCompactBeforeTurnCountsTheWholeRequest(t *testing.T) {
 		t.Fatalf("fixture rows alone (%d) already reach the hard share", recordTokens(before))
 	}
 	estimate := syncTestEstimate(service, req)
-	estimate.own = currentUserMessageEstimate(ChatRequest{}, "what now?")
+	estimate.own = currentUserMessageEstimate(runreq.ChatRequest{}, "what now?")
 
 	after, err := service.compactBeforeTurn(context.Background(), req, "", syncTestBudget, before, estimate)
 	if err != nil {

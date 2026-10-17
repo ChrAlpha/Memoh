@@ -14,6 +14,8 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/decision"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	tools "github.com/felinics/memoh/internal/agent/tool"
@@ -45,12 +47,7 @@ type resumeContext struct {
 	DeadlineAt        *time.Time        `json:"deadline_at,omitempty"`
 }
 
-// errResumeUnrecoverable marks an interrupted intent that no later scan can
-// continue. The worker retires it instead of retrying it every pass; failures
-// that may clear (workspace readiness, database errors) stay unwrapped.
-var errResumeUnrecoverable = errors.New("interrupted session cannot resume")
-
-func (s *Service) recordRunResumeContext(ctx context.Context, req ChatRequest) error {
+func (s *Service) recordRunResumeContext(ctx context.Context, req runreq.ChatRequest) error {
 	if s.resumeSecret == "" || s.queries == nil || req.RunID == "" || req.ShutdownResume {
 		return nil
 	}
@@ -59,7 +56,7 @@ func (s *Service) recordRunResumeContext(ctx context.Context, req ChatRequest) e
 		return nil
 	}
 	data := resumeContext{
-		Version: 1, Query: modelQueryText(req), ChatID: req.ChatID,
+		Version: 1, Query: runreq.ModelQueryText(req), ChatID: req.ChatID,
 		UserID: req.UserID, ChannelIdentityID: req.SourceChannelIdentityID,
 		CurrentChannel: req.CurrentChannel, ReplyTarget: req.ReplyTarget,
 		ConversationType: req.ConversationType, Model: req.Model, ReasoningEffort: req.ReasoningEffort,
@@ -121,7 +118,7 @@ func (s *Service) renewResumeCredential(ctx context.Context, botID string, claim
 	}
 	if claims["typ"] == "chat_route" {
 		if claims["bot_id"] != botID || claims["chat_id"] == "" {
-			return "", fmt.Errorf("%w: resume credential scope mismatch", errResumeUnrecoverable)
+			return "", fmt.Errorf("%w: resume credential scope mismatch", runreq.ErrResumeUnrecoverable)
 		}
 	} else {
 		accountID := claims["user_id"]
@@ -133,7 +130,7 @@ func (s *Service) renewResumeCredential(ctx context.Context, botID string, claim
 		}
 		if err := s.accountService.ValidateSession(ctx, accountID); err != nil {
 			if errors.Is(err, accounts.ErrInactiveAccount) {
-				return "", fmt.Errorf("%w: %w", errResumeUnrecoverable, err)
+				return "", fmt.Errorf("%w: %w", runreq.ErrResumeUnrecoverable, err)
 			}
 			return "", err
 		}
@@ -142,7 +139,7 @@ func (s *Service) renewResumeCredential(ctx context.Context, botID string, claim
 			return "", err
 		}
 		if !allowed {
-			return "", fmt.Errorf("%w: resume permission revoked", errResumeUnrecoverable)
+			return "", fmt.Errorf("%w: resume permission revoked", runreq.ErrResumeUnrecoverable)
 		}
 	}
 	renewed := jwt.MapClaims{}
@@ -165,12 +162,12 @@ func (s *Service) StartSessionResume(ctx context.Context) error {
 	if s.queries == nil || s.sessionManager == nil || s.resumeSecret == "" {
 		return nil
 	}
-	scopes := s.sessionResumeScopes()
+	scopes := s.teamScopes
 	first, err := scopes.ListScopePage(ctx, "", 16)
 	if err != nil {
 		return fmt.Errorf("list session resume scopes: %w", err)
 	}
-	if err := validateResumeScopePage(first, ""); err != nil {
+	if err := runreq.ValidateTeamScopePage(first, ""); err != nil {
 		return err
 	}
 	workerCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -200,32 +197,20 @@ func (s *Service) StartSessionResume(ctx context.Context) error {
 }
 
 type sessionResumeScan struct {
-	page        SessionResumeScopePage
+	page        runreq.TeamScopePage
 	loaded      bool
 	scopeCursor string
 	scopeIndex  int
 	runCursor   pgtype.UUID
 }
 
-func validateResumeScopePage(page SessionResumeScopePage, after string) error {
-	if len(page.Scopes) > 16 || (!page.Complete && (page.NextCursor == "" || page.NextCursor == after)) {
-		return errors.New("invalid session resume scope page")
-	}
-	for _, scope := range page.Scopes {
-		if strings.TrimSpace(scope) == "" {
-			return errResumeScopeMismatch
-		}
-	}
-	return nil
-}
-
-func (s *Service) scanInterruptedSessions(ctx context.Context, scopes SessionResumeScopeProvider, scan *sessionResumeScan, slots chan struct{}) error {
+func (s *Service) scanInterruptedSessions(ctx context.Context, scopes runreq.TeamScopes, scan *sessionResumeScan, slots chan struct{}) error {
 	if !scan.loaded {
 		page, err := scopes.ListScopePage(ctx, scan.scopeCursor, 16)
 		if err != nil {
 			return err
 		}
-		if err := validateResumeScopePage(page, scan.scopeCursor); err != nil {
+		if err := runreq.ValidateTeamScopePage(page, scan.scopeCursor); err != nil {
 			return err
 		}
 		scan.page, scan.loaded = page, true
@@ -235,7 +220,7 @@ func (s *Service) scanInterruptedSessions(ctx context.Context, scopes SessionRes
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		scopeCtx, err := bindSessionResumeScope(ctx, scopes, scan.page.Scopes[scan.scopeIndex])
+		scopeCtx, err := runreq.BindTeamScope(ctx, scopes, scan.page.Scopes[scan.scopeIndex])
 		if err != nil {
 			scan.scopeIndex++
 			scan.runCursor = pgtype.UUID{}
@@ -263,13 +248,13 @@ func (s *Service) scanInterruptedSessions(ctx context.Context, scopes SessionRes
 				return ctx.Err()
 			}
 			if row.TeamID.String() != scopes.CurrentScope(scopeCtx) {
-				return errResumeScopeMismatch
+				return runreq.ErrTeamScopeMismatch
 			}
 			select {
 			case slots <- struct{}{}:
 				done, startErr := s.resumeInterruptedSession(scopeCtx, row)
 				switch {
-				case errors.Is(startErr, errResumeUnrecoverable):
+				case errors.Is(startErr, runreq.ErrResumeUnrecoverable):
 					s.retireInterruptedSession(scopeCtx, row, startErr)
 				case startErr != nil:
 					s.logger.WarnContext(scopeCtx, "resume interrupted session deferred", slog.String("run_id", row.RunID.String()), slog.Any("error", startErr))
@@ -322,8 +307,8 @@ func (s *Service) retireInterruptedSession(ctx context.Context, row sqlc.Session
 const resumeInstruction = "The server gracefully shut down during the previous run. Continue the unfinished user task using the saved session history and current workspace. Do not repeat completed work. A tool interrupted before its result was saved may already have produced side effects: inspect files, process/job status and saved output before deciding what to do; do not blindly replay it. Background task handles from the previous process are no longer live; consult subagent session histories and external job receipts. If the task is already complete, report that. Original task: "
 
 func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.SessionRun) (<-chan struct{}, error) {
-	if row.TeamID.String() != s.sessionResumeScopes().CurrentScope(ctx) {
-		return nil, errResumeScopeMismatch
+	if row.TeamID.String() != s.teamScopes.CurrentScope(ctx) {
+		return nil, runreq.ErrTeamScopeMismatch
 	}
 	var input struct {
 		Resume                *resumeContext                             `json:"resume"`
@@ -331,14 +316,14 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		CoverPosition         *int64                                     `json:"cover_position"`
 	}
 	if err := json.Unmarshal(row.InputJson, &input); err != nil {
-		return nil, fmt.Errorf("%w: %w", errResumeUnrecoverable, err)
+		return nil, fmt.Errorf("%w: %w", runreq.ErrResumeUnrecoverable, err)
 	}
 	data := input.Resume
 	if data == nil || data.Version != 1 || data.ChatID == "" {
-		return nil, fmt.Errorf("%w: unsupported resume context", errResumeUnrecoverable)
+		return nil, fmt.Errorf("%w: unsupported resume context", runreq.ErrResumeUnrecoverable)
 	}
 	if data.DeadlineAt != nil && !time.Now().Before(*data.DeadlineAt) {
-		return nil, fmt.Errorf("%w: execution budget expired", errResumeUnrecoverable)
+		return nil, fmt.Errorf("%w: execution budget expired", runreq.ErrResumeUnrecoverable)
 	}
 	decisionContext, err := s.interruptedDecisionContext(ctx, row, input.DecisionContinuations)
 	if err != nil {
@@ -381,13 +366,13 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		cancel()
 		return nil, err
 	}
-	runCtx, admission, _, _, err := s.admitTriggeredRun(runBase, data.SessionType, row.BotID.String(), row.SessionID.String(), "resume:"+row.RunID.String(), payload, nil, errRunStopped, row.RunID.String())
+	runCtx, admission, _, _, err := s.admitTriggeredRun(runBase, data.SessionType, row.BotID.String(), row.SessionID.String(), "resume:"+row.RunID.String(), payload, nil, outcome.ErrRunStopped, row.RunID.String())
 	if err != nil {
 		cancel()
 		if errors.Is(err, ledger.ErrResumeSuperseded) || errors.Is(err, sessionruntime.ErrInvocationConflict) {
 			// A newer turn answered the session, or another worker already
 			// admitted this continuation.
-			return nil, fmt.Errorf("%w: %w", errResumeUnrecoverable, err)
+			return nil, fmt.Errorf("%w: %w", runreq.ErrResumeUnrecoverable, err)
 		}
 		return nil, err
 	}
@@ -395,12 +380,12 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 	// instruction below carries the original task again. Naming the row lets
 	// context assembly drop the history copy so the model sees the task once.
 	// Without a resolvable row (older records, lookup failure) both stay.
-	requestMessageID, lookupErr := s.continuationTurnRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{TurnID: decisionUUIDString(row.TurnID)})
+	requestMessageID, lookupErr := s.continuationTurnRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{TurnID: runreq.PGUUIDString(row.TurnID)})
 	if lookupErr != nil {
 		s.logger.WarnContext(runCtx, "resume request message lookup failed", slog.String("run_id", admission.RunID), slog.Any("error", lookupErr))
 		requestMessageID = ""
 	}
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID: row.BotID.String(), ThreadID: row.SessionID.String(), ChatID: data.ChatID,
 		PersistedUserMessageID: requestMessageID,
 		RunID:                  admission.RunID, RunHandle: admission.Handle, TurnID: admission.TurnID, TurnPosition: &admission.TurnPosition,
@@ -423,9 +408,9 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		},
 		Req:      req,
 		Delivery: noDelivery{},
-		Input:    inputSynthetic,
+		Input:    outcome.InputSynthetic,
 	}
-	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		return s.chatSetup(ctx, req, spec)
 	}
 
@@ -446,7 +431,7 @@ func (s *Service) RecordSubagentResume(ctx context.Context, session tools.Sessio
 	if !ok {
 		return nil
 	}
-	return s.recordRunResumeContext(ctx, ChatRequest{
+	return s.recordRunResumeContext(ctx, runreq.ChatRequest{
 		BotID: session.BotID, ThreadID: sessionID, RunID: handle.RunID,
 		ChatID: session.ChatID, UserID: session.UserID, SourceChannelIdentityID: session.ChannelIdentityID,
 		ChatToken: session.SessionToken, CurrentChannel: session.CurrentPlatform, ReplyTarget: session.ReplyTarget,

@@ -9,8 +9,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -47,7 +49,7 @@ func (f *finishingInputService) Get(context.Context, string) (userinput.Request,
 }
 
 type finishingInputService struct {
-	fakeUserInputService
+	agenttest.UserInput
 	q         *finishDecisionQueries
 	wantFence int64
 	t         *testing.T
@@ -58,7 +60,7 @@ func (f *finishingInputService) Cancel(ctx context.Context, input userinput.Canc
 	if !ok || fence.Token != f.wantFence || fence.BotID != lifecycleTestBotID || fence.SessionID != lifecycleTestSessionID {
 		f.t.Fatalf("cancel received wrong fence: %#v", fence)
 	}
-	f.cancelCalls++
+	f.CancelCalls++
 	f.q.row.Status = userinput.StatusCanceled
 	return userinput.Request{ID: input.RequestID, Status: userinput.StatusCanceled}, nil
 }
@@ -87,12 +89,12 @@ func TestWebAndChannelStopCloseParkedInputWithoutContinuing(t *testing.T) {
 			} else {
 				stopped, err = service.StopTurn(context.Background(), turn.StopCommand{TeamID: "team-1", BotID: handle.BotID, ThreadID: handle.SessionID})
 			}
-			if err != nil || !stopped || input.cancelCalls != 1 || q.row.Status != userinput.StatusCanceled {
-				t.Fatalf("stop = %v, %v; cancel calls=%d status=%s", stopped, err, input.cancelCalls, q.row.Status)
+			if err != nil || !stopped || input.CancelCalls != 1 || q.row.Status != userinput.StatusCanceled {
+				t.Fatalf("stop = %v, %v; cancel calls=%d status=%s", stopped, err, input.CancelCalls, q.row.Status)
 			}
 			// After ownership is released, replay may not publish through the old handle.
-			if err := service.finalizeRuntimeDecisions(context.Background(), handle); !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || input.cancelCalls != 1 {
-				t.Fatalf("cleanup replay: %v, calls=%d", err, input.cancelCalls)
+			if err := service.finalizeRuntimeDecisions(context.Background(), handle); !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || input.CancelCalls != 1 {
+				t.Fatalf("cleanup replay: %v, calls=%d", err, input.CancelCalls)
 			}
 			// The runtime must release the slot as well as the decision row.
 			if _, err := sessiontest.Start(context.Background(), manager, handle.BotID, handle.SessionID,
@@ -110,13 +112,13 @@ func TestRunDecisionCleanupRejectsSuccessorFence(t *testing.T) {
 		RunID: db.ParseUUIDOrEmpty(lifecycleTestRunID), Status: userinput.StatusPending,
 		RuntimeFencingToken: pgtype.Int8{Int64: 8, Valid: true},
 	}}
-	input := &fakeUserInputService{}
+	input := &agenttest.UserInput{}
 	s := &Service{queries: q, userInput: input}
 	err := s.finalizeRuntimeDecisions(context.Background(), sessionruntime.RunHandle{
 		BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, FencingToken: 7,
 	})
-	if !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || input.cancelCalls != 0 {
-		t.Fatalf("successor decision changed: %v, calls=%d", err, input.cancelCalls)
+	if !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || input.CancelCalls != 0 {
+		t.Fatalf("successor decision changed: %v, calls=%d", err, input.CancelCalls)
 	}
 }
 
@@ -195,14 +197,14 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 				Status: toolapproval.StatusRejected, RuntimeFencingToken: pgtype.Int8{Int64: handle.FencingToken, Valid: true},
 				ToolCallID: "approval-call", ToolName: "exec", ToolInput: []byte(`{"command":"pwd"}`),
 			}}
-			input := &fakeUserInputService{target: userinput.Request{ID: q.row.ID.String(), Status: userinput.StatusSubmitted, ToolCallID: "input-call", ToolName: "ask_user", Result: map[string]any{"answers": []any{map[string]any{"question_id": "q1", "text": "chosen answer"}}}}}
+			input := &agenttest.UserInput{Target: userinput.Request{ID: q.row.ID.String(), Status: userinput.StatusSubmitted, ToolCallID: "input-call", ToolName: "ask_user", Result: map[string]any{"answers": []any{map[string]any{"question_id": "q1", "text": "chosen answer"}}}}}
 			service := &Service{queries: q, userInput: input, toolApproval: toolapproval.NewService(nil, q, nil), decisionRuntime: manager}
 			if _, err := manager.HandleAgentEvent(t.Context(), handle, native.StreamEvent{Type: native.EventToolApprovalRequest, ApprovalID: q.approval.ID.String(), ToolCallID: "approval-call", ToolName: "exec", Status: "pending"}); err != nil {
 				t.Fatal(err)
 			}
 			// Close dropped both decision notifications; the application still emits
 			// its failure and abort before calling FinishRun with an empty outcome.
-			for _, ev := range []native.StreamEvent{agentFailureStreamEvent(apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("SECRET"), nil)), {Type: native.EventAbort}} {
+			for _, ev := range []native.StreamEvent{outcome.AgentFailureStreamEvent(apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("SECRET"), nil)), {Type: native.EventAbort}} {
 				if _, err := manager.HandleAgentEvent(t.Context(), handle, ev); err != nil {
 					t.Fatal(err)
 				}
@@ -267,7 +269,7 @@ func TestInlineFinishReconcilesClosedDecisionsAndRetriesPublication(t *testing.T
 				}
 				time.Sleep(10 * time.Millisecond)
 			}
-			if input.cancelCalls != 0 {
+			if input.CancelCalls != 0 {
 				t.Fatal("already submitted answer was cancelled")
 			}
 			if failPublish && calls.Load() < 2 {
@@ -292,11 +294,11 @@ func TestRunDecisionFinishFenceRules(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			q := &finishDecisionQueries{row: sqlc.UserInputRequest{ID: db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"), BotID: db.ParseUUIDOrEmpty(lifecycleTestBotID), SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID), RunID: db.ParseUUIDOrEmpty(lifecycleTestRunID), Status: tt.status, RuntimeFencingToken: pgtype.Int8{Int64: tt.fence, Valid: true}}}
-			input := &fakeUserInputService{target: userinput.Request{ID: q.row.ID.String(), Status: tt.status}}
+			input := &agenttest.UserInput{Target: userinput.Request{ID: q.row.ID.String(), Status: tt.status}}
 			service := &Service{queries: q, userInput: input}
 			err := service.finalizeRuntimeDecisions(t.Context(), sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, FencingToken: 7})
-			if errors.Is(err, sessionruntime.ErrRunOwnershipLost) != tt.wantLost || (err != nil && !tt.wantLost) || input.cancelCalls != 0 {
-				t.Fatalf("fence result: %v, mutations=%d", err, input.cancelCalls)
+			if errors.Is(err, sessionruntime.ErrRunOwnershipLost) != tt.wantLost || (err != nil && !tt.wantLost) || input.CancelCalls != 0 {
+				t.Fatalf("fence result: %v, mutations=%d", err, input.CancelCalls)
 			}
 		})
 	}
@@ -304,15 +306,15 @@ func TestRunDecisionFinishFenceRules(t *testing.T) {
 
 func TestFinishRereadsConcurrentUserDecision(t *testing.T) {
 	q := &finishDecisionQueries{row: sqlc.UserInputRequest{ID: db.ParseUUIDOrEmpty("44444444-4444-4444-8444-444444444444"), BotID: db.ParseUUIDOrEmpty(lifecycleTestBotID), SessionID: db.ParseUUIDOrEmpty(lifecycleTestSessionID), RunID: db.ParseUUIDOrEmpty(lifecycleTestRunID), Status: userinput.StatusPending, RuntimeFencingToken: pgtype.Int8{Int64: 7, Valid: true}}}
-	input := &fakeUserInputService{cancelErr: userinput.ErrAlreadyDecided, target: userinput.Request{ID: q.row.ID.String(), Status: userinput.StatusSubmitted}}
+	input := &agenttest.UserInput{CancelErr: userinput.ErrAlreadyDecided, Target: userinput.Request{ID: q.row.ID.String(), Status: userinput.StatusSubmitted}}
 	service := &Service{queries: q, userInput: input}
 	if err := service.finalizeRuntimeDecisions(t.Context(), sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, FencingToken: 7}); err != nil {
 		t.Fatal(err)
 	}
-	if input.cancelCalls != 1 {
+	if input.CancelCalls != 1 {
 		t.Fatal("pending row was not resolved")
 	}
-	input.target.Status = userinput.StatusPending
+	input.Target.Status = userinput.StatusPending
 	if err := service.finalizeRuntimeDecisions(t.Context(), sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, FencingToken: 7}); err == nil {
 		t.Fatal("unresolved decision allowed finish")
 	}

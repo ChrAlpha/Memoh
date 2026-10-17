@@ -2,10 +2,10 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"sync"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -148,7 +148,7 @@ func (h *externalAgentActivePromptHub) close() {
 func (s *Service) registerExternalAgentActivePrompt(botID, sessionID string) *externalAgentActivePromptHub {
 	botID = strings.TrimSpace(botID)
 	sessionID = strings.TrimSpace(sessionID)
-	key := sessionTurnKey(botID, sessionID)
+	key := runreq.SessionTurnKey(botID, sessionID)
 	hub := newExternalAgentActivePromptHub()
 	previous, replaced := s.externalAgentPromptHubs.Swap(key, hub)
 	if replaced {
@@ -161,7 +161,7 @@ func (s *Service) registerExternalAgentActivePrompt(botID, sessionID string) *ex
 // executing for the session; the registration brackets the driver Prompt
 // exactly, so this is the "driver actually stopped" signal deletion waits on.
 func (s *Service) hasExternalAgentActivePrompt(botID, sessionID string) bool {
-	key := sessionTurnKey(strings.TrimSpace(botID), strings.TrimSpace(sessionID))
+	key := runreq.SessionTurnKey(strings.TrimSpace(botID), strings.TrimSpace(sessionID))
 	_, ok := s.externalAgentPromptHubs.Load(key)
 	return ok
 }
@@ -169,7 +169,7 @@ func (s *Service) hasExternalAgentActivePrompt(botID, sessionID string) bool {
 func (s *Service) unregisterExternalAgentActivePrompt(botID, sessionID string, hub *externalAgentActivePromptHub) {
 	botID = strings.TrimSpace(botID)
 	sessionID = strings.TrimSpace(sessionID)
-	key := sessionTurnKey(botID, sessionID)
+	key := runreq.SessionTurnKey(botID, sessionID)
 	s.externalAgentPromptHubs.CompareAndDelete(key, hub)
 	hub.close()
 }
@@ -177,7 +177,7 @@ func (s *Service) unregisterExternalAgentActivePrompt(botID, sessionID string, h
 func (s *Service) subscribeExternalAgentActivePrompt(botID, sessionID string) (*externalAgentActivePromptSubscription, bool) {
 	botID = strings.TrimSpace(botID)
 	sessionID = strings.TrimSpace(sessionID)
-	key := sessionTurnKey(botID, sessionID)
+	key := runreq.SessionTurnKey(botID, sessionID)
 	value, ok := s.externalAgentPromptHubs.Load(key)
 	if !ok {
 		return nil, false
@@ -185,15 +185,15 @@ func (s *Service) subscribeExternalAgentActivePrompt(botID, sessionID string) (*
 	return value.(*externalAgentActivePromptHub).subscribe()
 }
 
-func forwardExternalAgentActivePrompt(ctx context.Context, sub *externalAgentActivePromptSubscription, eventCh chan<- WSStreamEvent, opts externalAgentActivePromptForwardOptions) error {
+func forwardExternalAgentActivePrompt(ctx context.Context, sub *externalAgentActivePromptSubscription, eventCh chan<- runreq.WSStreamEvent, opts externalAgentActivePromptForwardOptions) error {
 	if sub == nil {
-		return emitApprovalAck(ctx, eventCh)
+		return runreq.EmitApprovalAck(ctx, eventCh)
 	}
 	defer sub.release()
 	if eventCh == nil {
 		return nil
 	}
-	if err := sendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventStart}); err != nil {
+	if err := runreq.SendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventStart}); err != nil {
 		return err
 	}
 	for {
@@ -202,12 +202,12 @@ func forwardExternalAgentActivePrompt(ctx context.Context, sub *externalAgentAct
 			return err
 		}
 		if !ok {
-			return sendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventAbort})
+			return runreq.SendAgentStreamEvent(ctx, eventCh, native.StreamEvent{Type: native.EventAbort})
 		}
 		if opts.skip(ev) {
 			continue
 		}
-		if err := sendAgentStreamEvent(ctx, eventCh, ev); err != nil {
+		if err := runreq.SendAgentStreamEvent(ctx, eventCh, ev); err != nil {
 			return err
 		}
 		if ev.IsTerminal() {
@@ -243,20 +243,4 @@ func sameNonEmpty(a, b string) bool {
 	a = strings.TrimSpace(a)
 	b = strings.TrimSpace(b)
 	return a != "" && b != "" && a == b
-}
-
-func sendAgentStreamEvent(ctx context.Context, eventCh chan<- WSStreamEvent, ev native.StreamEvent) error {
-	if eventCh == nil {
-		return nil
-	}
-	data, err := json.Marshal(ev)
-	if err != nil {
-		return err
-	}
-	select {
-	case eventCh <- data:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
 }

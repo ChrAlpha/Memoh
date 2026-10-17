@@ -7,6 +7,8 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -22,8 +24,8 @@ type nativeStreamer interface {
 type nativeExecutor struct {
 	agent     nativeStreamer
 	cfg       native.RunConfig
-	rc        resolvedContext
-	req       ChatRequest
+	rc        runreq.ResolvedContext
+	req       runreq.ChatRequest
 	committer *agentStepCommitter // nil when steps are not committed as they complete
 	timing    *reasoningTimingTracker
 	replace   *turnReplacement
@@ -48,7 +50,7 @@ func (e *nativeExecutor) execute(ctx context.Context, emit func(native.StreamEve
 		if ev.Type == native.EventToolCallStart {
 			e.toolCalls++
 		}
-		if hasVisibleAgentStreamOutput(ev) {
+		if outcome.HasVisibleAgentStreamOutput(ev) {
 			e.visible = true
 		}
 		e.uncommitted.observe(ev)
@@ -71,7 +73,7 @@ func (e *nativeExecutor) execute(ctx context.Context, emit func(native.StreamEve
 		// A step that failed to persist is the run's failure even when the
 		// stream went on to end cleanly.
 		ending.Cause = e.stepErr
-		ending.Phase = phaseCommit
+		ending.Phase = outcome.PhaseCommit
 	}
 	return ending
 }
@@ -107,7 +109,7 @@ func (e *nativeExecutor) deferred() bool {
 
 // commit writes the ending's history: the failure row or the interrupted step
 // when the run failed, and the run's final messages in every case.
-func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (commitSummary, error) {
+func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (commitSummary, error) {
 	summary := commitSummary{ModelID: e.modelID()}
 	if row && f != nil {
 		persisted, err := e.recordFailure(ctx, *f, summary)
@@ -119,7 +121,7 @@ func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (c
 	if e.committer != nil {
 		tokens := e.inputTokens()
 		if err := e.committer.finish(ctx, tokens); err != nil {
-			return summary, runtimeHistoryError(err)
+			return summary, outcome.RuntimeHistoryError(err)
 		}
 		summary.Persisted = append(summary.Persisted, e.committer.persistedMessages()...)
 		summary.UsageTokens = tokens
@@ -133,7 +135,7 @@ func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (c
 		// snapshot. A run with visible output has nowhere to write it, which is
 		// a history failure rather than a success.
 		if e.visible {
-			return summary, runtimeHistoryError(errors.New("agent terminal event has no persistable snapshot"))
+			return summary, outcome.RuntimeHistoryError(errors.New("agent terminal event has no persistable snapshot"))
 		}
 		return summary, e.postPersist(ctx, summary)
 	}
@@ -147,7 +149,7 @@ func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (c
 	}
 	persisted, err := e.service.persistTerminalSnapshotResult(ctx, e.req, e.rc, snap)
 	if err != nil {
-		return summary, runtimeHistoryError(err)
+		return summary, outcome.RuntimeHistoryError(err)
 	}
 	summary.Persisted = persisted
 	summary.Text = terminalText(snap)
@@ -158,11 +160,11 @@ func (e *nativeExecutor) commit(ctx context.Context, f *RunFailure, row bool) (c
 
 // recordFailure writes the failure into the run's history: the text the failed
 // step showed, or the turn-level failure row when nothing was committed.
-func (e *nativeExecutor) recordFailure(ctx context.Context, f RunFailure, _ commitSummary) ([]messagepkg.Message, error) {
+func (e *nativeExecutor) recordFailure(ctx context.Context, f outcome.RunFailure, _ commitSummary) ([]messagepkg.Message, error) {
 	if e.committer != nil {
 		persisted, err := e.committer.recordFailure(ctx, e.uncommitted.String(), f)
 		if err != nil {
-			return nil, runtimeHistoryError(err)
+			return nil, outcome.RuntimeHistoryError(err)
 		}
 		return persisted, nil
 	}
@@ -183,7 +185,7 @@ func (e *nativeExecutor) postPersist(ctx context.Context, summary commitSummary)
 		return nil
 	}
 	if err := e.replace.PostPersist(ctx, summary.Persisted); err != nil {
-		return runtimeHistoryError(err)
+		return outcome.RuntimeHistoryError(err)
 	}
 	return nil
 }
@@ -197,11 +199,11 @@ func (e *nativeExecutor) inputTokens() int {
 			return tokens
 		}
 	}
-	return e.rc.estimatedTokens
+	return e.rc.EstimatedTokens
 }
 
 func (e *nativeExecutor) modelID() string {
-	return e.rc.model.ID
+	return e.rc.Model.ID
 }
 
 // terminalText is the assistant text the run's final snapshot carries. A

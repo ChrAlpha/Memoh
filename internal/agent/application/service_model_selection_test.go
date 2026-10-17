@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -546,7 +547,7 @@ func TestSelectChatModelFallsBackToSessionLastModel(t *testing.T) {
 	// No request model and no bot default: a resumed turn
 	// (ask_user / tool approval) must fall back to the model that produced
 	// the session's latest round instead of erroring.
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000600",
 		ThreadID: "00000000-0000-0000-0000-000000000603",
 	}
@@ -567,7 +568,7 @@ func TestSelectChatModelWithoutAnyModelStillErrors(t *testing.T) {
 	fake := &modelSelectionFakeQueries{}
 	resolver := newModelSelectionService(t, fake)
 
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000700",
 		ThreadID: "00000000-0000-0000-0000-000000000701",
 	}

@@ -13,6 +13,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	"github.com/felinics/memoh/internal/models"
 )
@@ -38,7 +39,7 @@ const (
 // routeAndMergeAttachments applies CapabilityFallbackPolicy to split
 // request attachments by model input modalities, then merges the results
 // into a single []any for the gateway request.
-func (s *Service) routeAndMergeAttachments(ctx context.Context, model models.GetResponse, req ChatRequest) []any {
+func (s *Service) routeAndMergeAttachments(ctx context.Context, model models.GetResponse, req runreq.ChatRequest) []any {
 	if len(req.Attachments) == 0 && len(req.ReplyAttachments) == 0 {
 		return []any{}
 	}
@@ -83,7 +84,7 @@ func (s *Service) routeAndMergeAttachments(ctx context.Context, model models.Get
 // image is not free — an animated sticker is rasterised, any stored image is
 // read and encoded — and a model without vision routes every one of them to a
 // file reference regardless, so the work is skipped rather than thrown away.
-func (s *Service) prepareGatewayAttachments(ctx context.Context, req ChatRequest, acceptsImages bool) []gatewayAttachment {
+func (s *Service) prepareGatewayAttachments(ctx context.Context, req runreq.ChatRequest, acceptsImages bool) []gatewayAttachment {
 	ctx, cancel := context.WithTimeout(ctx, attachmentPreparationTimeout)
 	defer cancel()
 	attachments := requestAttachmentsForGateway(req)
@@ -172,11 +173,11 @@ func (s *Service) assetAccessPath(ctx context.Context, botID, contentHash string
 	return accessPath, nil
 }
 
-func requestAttachmentsForGateway(req ChatRequest) []ChatAttachment {
+func requestAttachmentsForGateway(req runreq.ChatRequest) []runreq.ChatAttachment {
 	if len(req.ReplyAttachments) == 0 {
 		return req.Attachments
 	}
-	attachments := make([]ChatAttachment, 0, len(req.Attachments)+len(req.ReplyAttachments))
+	attachments := make([]runreq.ChatAttachment, 0, len(req.Attachments)+len(req.ReplyAttachments))
 	attachments = append(attachments, req.Attachments...)
 	attachments = append(attachments, req.ReplyAttachments...)
 	return attachments
@@ -289,7 +290,7 @@ func inlineTextAttachmentPart(ga gatewayAttachment) (sdk.TextPart, bool) {
 // into sdk.ImagePart values for direct vision input. Non-image attachments and
 // media the model cannot parse are skipped; the message text still carries the
 // attachment, so the agent keeps a usable reference to the original.
-func (s *Service) inlineInjectAttachments(ctx context.Context, botID string, atts []ChatAttachment) []sdk.ImagePart {
+func (s *Service) inlineInjectAttachments(ctx context.Context, botID string, atts []runreq.ChatAttachment) []sdk.ImagePart {
 	ctx, cancel := context.WithTimeout(ctx, attachmentPreparationTimeout)
 	defer cancel()
 	var parts []sdk.ImagePart

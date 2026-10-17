@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/application"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -72,7 +73,7 @@ func (stubAgentQueries) ListUserInputsByRun(context.Context, pgtype.UUID) ([]dbs
 
 type (
 	stubAgentMessages  struct{ messagepkg.Service }
-	stubAgentSessions  struct{ application.SessionService }
+	stubAgentSessions  struct{ runreq.SessionService }
 	denyAllPermissions struct{}
 )
 

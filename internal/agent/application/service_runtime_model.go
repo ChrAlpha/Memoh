@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -88,7 +89,7 @@ func (s *Service) runtimeModelState(ctx context.Context, sess session.Thread) (t
 	remembered := strings.TrimSpace(sess.PreferredExternalModelID)
 	catalog, err := provider.ModelCatalog(ctx, external.ModelCatalogRequest{
 		BotID: sess.BotID, BotAgentID: sess.BotAgentID,
-		ProjectPath: metadataString(runtimeSessionMeta(sess), "project_path"),
+		ProjectPath: runreq.MetadataString(runreq.RuntimeSessionMeta(sess), "project_path"),
 		ModelID:     remembered, ResolveDefaults: true,
 	})
 	if err != nil {

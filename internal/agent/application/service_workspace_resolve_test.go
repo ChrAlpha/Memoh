@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/schedule"
 	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
@@ -159,7 +160,7 @@ func TestBindRequestWorkspaceWithoutPrincipalRecordsTargetMetadata(t *testing.T)
 	service.workspaceTargets = kindedTargetResolver{}
 	service.botPermissions = perm
 
-	ctx, req, err := service.bindRequestWorkspace(t.Context(), ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "owner-1"}, nil, true)
+	ctx, req, err := service.bindRequestWorkspace(t.Context(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "owner-1"}, nil, true)
 	if err != nil {
 		t.Fatalf("bindRequestWorkspace: %v", err)
 	}
@@ -201,7 +202,7 @@ func TestNativeSchedulePlanBindsWorkspaceBeforeResolve(t *testing.T) {
 	service := workdirBoundService(remoteWorkdir())
 	service.workspaceTargets = kindedTargetResolver{err: boom}
 
-	_, err := service.nativeSchedulePlan(t.Context(), ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "owner-1"}, schedule.TriggerPayload{OwnerUserID: "owner-1"})
+	_, err := service.nativeSchedulePlan(t.Context(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "owner-1"}, schedule.TriggerPayload{OwnerUserID: "owner-1"})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the workspace resolution failure", err)
 	}

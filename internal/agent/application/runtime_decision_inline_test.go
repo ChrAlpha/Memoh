@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -49,12 +50,12 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 				if canceled {
 					resolved.Status = userinput.StatusCanceled
 				}
-				inputs := &fakeUserInputService{target: request, resolved: resolved}
+				inputs := &agenttest.UserInput{Target: request, Resolved: resolved}
 				var logs bytes.Buffer
 				service := &Service{
 					decisionRuntime: manager, userInput: inputs, logger: slog.New(slog.NewTextHandler(&logs, nil)),
-					botPermissions: &fakeBotPermissionChecker{values: map[string]bool{handle.BotID + ":" + testACPUserInputOwnerID + ":" + bots.PermissionWorkspaceExec: true}},
-					sessionService: &fakeBackgroundSessionService{getFn: func(context.Context, string) (session.Thread, error) {
+					botPermissions: &agenttest.PermissionChecker{Values: map[string]bool{handle.BotID + ":" + testACPUserInputOwnerID + ":" + bots.PermissionWorkspaceExec: true}},
+					sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
 						return session.Thread{
 							ID: handle.SessionID, BotID: handle.BotID, RuntimeType: runtimeType,
 							RuntimeMetadata: map[string]any{"runtime_owner_account_id": testACPUserInputOwnerID},
@@ -80,7 +81,7 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 				if err != nil || !page.Done || page.Length != 0 {
 					t.Fatalf("inline ACK must close immediately without agent events: %+v, %v", page, err)
 				}
-				if inputs.submitCalls+inputs.cancelCalls != 1 {
+				if inputs.SubmitCalls+inputs.CancelCalls != 1 {
 					t.Fatal("answer was not committed exactly once")
 				}
 				// A later native output is still accepted: the ACK must not end the run.

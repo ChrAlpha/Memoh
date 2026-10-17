@@ -10,7 +10,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
@@ -32,8 +34,8 @@ func TestRuntimeNoticesSurviveTerminalAndHistory(t *testing.T) {
 	for _, runtime := range []string{"codex", "claude-code", "acp_agent"} {
 		for _, outcome := range []string{"completed", "failed", "configuration_failure"} {
 			t.Run(runtime+"/"+outcome, func(t *testing.T) {
-				messages := &recordingMessageService{}
-				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+				messages := &agenttest.RecordingMessages{}
+				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 				driver := noticeTestDriver{kind: runtime, prompt: func(_ context.Context, input external.PromptInput) (external.PromptResult, error) {
 					notice := event.StreamEvent{
 						Type: event.RuntimeNotice, NoticeKind: event.NoticeToolsUnavailable, Delta: "public runtime notice",
@@ -52,12 +54,12 @@ func TestRuntimeNoticesSurviveTerminalAndHistory(t *testing.T) {
 					}
 					return result, nil
 				}}
-				ch := make(chan WSStreamEvent, 64)
-				if _, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test"}, ch, make(chan struct{})); err != nil {
+				ch := make(chan runreq.WSStreamEvent, 64)
+				if _, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test"}, ch, make(chan struct{})); err != nil {
 					t.Fatal(err)
 				}
-				if len(messages.deleted) != 0 {
-					t.Fatalf("a notice-bearing round was removed: %v", messages.deleted)
+				if len(messages.Deleted) != 0 {
+					t.Fatalf("a notice-bearing round was removed: %v", messages.Deleted)
 				}
 				assertPersistedRuntimeNotice(t, messages)
 				liveNotices, terminalNotices := 0, 0
@@ -80,11 +82,11 @@ func TestRuntimeNoticesSurviveTerminalAndHistory(t *testing.T) {
 	}
 }
 
-func assertPersistedRuntimeNotice(t *testing.T, messages *recordingMessageService) {
+func assertPersistedRuntimeNotice(t *testing.T, messages *agenttest.RecordingMessages) {
 	t.Helper()
 	var rows []messagepkg.Message
 	count := 0
-	for i, input := range messages.persisted {
+	for i, input := range messages.Persisted {
 		metadata, err := json.Marshal(input.Metadata)
 		if err != nil {
 			t.Fatal(err)
@@ -113,8 +115,8 @@ func assertPersistedRuntimeNotice(t *testing.T, messages *recordingMessageServic
 }
 
 func TestScheduledRuntimeNoticeIsPersistedWithoutInteractiveSubscriber(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(_ context.Context, input external.PromptInput) (external.PromptResult, error) {
 		input.Sink.EmitStreamEvent(event.StreamEvent{Type: event.RuntimeNotice, NoticeKind: event.NoticeToolsUnavailable, Delta: "public runtime notice"})
 		return external.PromptResult{Text: "done", Output: []sdk.Message{sdk.AssistantMessage("done")}, TurnCompleted: true}, nil

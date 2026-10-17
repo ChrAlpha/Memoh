@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
@@ -130,7 +131,7 @@ func (s *stage4Session) persist(role, label string) string {
 	if role == "assistant" {
 		message = sdk.AssistantMessage(text)
 	}
-	content, err := json.Marshal(sdkMessagesToModelMessages([]sdk.Message{message})[0])
+	content, err := json.Marshal(runreq.SDKMessagesToModelMessages([]sdk.Message{message})[0])
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func (s *stage4Session) compactedLabels() (covered, raw []string) {
 	return covered, raw
 }
 
-func (s *stage4Session) assemble(chat ChatRequest) assembledContext {
+func (s *stage4Session) assemble(chat runreq.ChatRequest) assembledContext {
 	s.t.Helper()
 	chat.BotID, chat.ChatID, chat.ThreadID = s.botID, s.botID, s.sessionID
 	assembled, err := s.service.assembleContext(s.ctx, chatContextRequest(contextPurposeRun, chat, 100000))
@@ -230,7 +231,7 @@ func (s *stage4Session) assemble(chat ChatRequest) assembledContext {
 
 // stage4Labels reduces model messages to their label (first word) so an
 // ordering can be compared; a summary keeps its SUMMARY-n marker.
-func stage4Labels(messages []ModelMessage) []string {
+func stage4Labels(messages []runreq.ModelMessage) []string {
 	labels := make([]string, 0, len(messages))
 	for _, message := range messages {
 		text := strings.TrimSpace(message.TextContent())

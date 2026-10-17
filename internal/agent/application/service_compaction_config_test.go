@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -75,7 +76,7 @@ func TestBuildCompactionConfigLeavesSelectionToController(t *testing.T) {
 		queries:       queries,
 	}
 
-	cfg, err := r.buildCompactionConfig(context.Background(), ChatRequest{
+	cfg, err := r.buildCompactionConfig(context.Background(), runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000403",
 		ThreadID: "00000000-0000-0000-0000-000000000404",
 	}, settings.Settings{
@@ -108,25 +109,25 @@ func TestAsyncCompactionInputTokensPrefersRunPressure(t *testing.T) {
 
 	cases := []struct {
 		name          string
-		resolved      resolvedContext
+		resolved      runreq.ResolvedContext
 		providerInput int
 		want          int
 	}{
 		{
 			name:          "run pressure wins over provider usage",
-			resolved:      resolvedContext{pressure: &runPressure{conversation: 4000}},
+			resolved:      runreq.ResolvedContext{Pressure: &runreq.RunPressure{Conversation: 4000}},
 			providerInput: 9000,
 			want:          4000,
 		},
 		{
 			name:          "zero run pressure stays zero",
-			resolved:      resolvedContext{pressure: &runPressure{}},
+			resolved:      runreq.ResolvedContext{Pressure: &runreq.RunPressure{}},
 			providerInput: 9000,
 			want:          0,
 		},
 		{
 			name:          "a run without pressure falls back to provider usage",
-			resolved:      resolvedContext{},
+			resolved:      runreq.ResolvedContext{},
 			providerInput: 9000,
 			want:          9000,
 		},
@@ -167,7 +168,7 @@ func TestBuildCompactionConfigSkipsProviderWithoutOutputLimit(t *testing.T) {
 		queries:       queries,
 	}
 
-	cfg, err := service.buildCompactionConfig(context.Background(), ChatRequest{
+	cfg, err := service.buildCompactionConfig(context.Background(), runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000413",
 		ThreadID: "00000000-0000-0000-0000-000000000414",
 	}, settings.Settings{
@@ -210,7 +211,7 @@ func TestBuildCompactionConfigUsesTurnModelWhenNoOverride(t *testing.T) {
 		queries:       queries,
 	}
 
-	cfg, err := service.buildCompactionConfig(context.Background(), ChatRequest{
+	cfg, err := service.buildCompactionConfig(context.Background(), runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000433",
 		ThreadID: "00000000-0000-0000-0000-000000000434",
 	}, settings.Settings{}, 90000, modelUUID)

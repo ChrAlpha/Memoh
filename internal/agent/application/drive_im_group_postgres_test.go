@@ -8,6 +8,8 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -18,7 +20,7 @@ import (
 // under the session id the fixture's run carries; everything else is the
 // fixture's in-memory service.
 type pgContextMessages struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	db        *messagepkg.DBService
 	sessionID string
 }
@@ -79,7 +81,7 @@ func TestDriveIMGroupRowsFromPostgres(t *testing.T) {
 
 	persist := func(role, externalID, replyTo, text string, content sdk.Message, rowAt time.Time) {
 		t.Helper()
-		modelMessage := sdkMessagesToModelMessages([]sdk.Message{content})[0]
+		modelMessage := runreq.SDKMessagesToModelMessages([]sdk.Message{content})[0]
 		raw, err := json.Marshal(modelMessage)
 		if err != nil {
 			t.Fatal(err)

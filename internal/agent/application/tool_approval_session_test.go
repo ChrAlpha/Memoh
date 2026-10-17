@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -65,8 +66,8 @@ func TestResolveRunConfigReadsRecordedSessionFacts(t *testing.T) {
 
 	recorded := sessionfacts.Preset(sessionmode.Chat)
 	resolver := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
 					ID:          sessionID,
 					Type:        session.TypeDiscuss,
@@ -222,8 +223,8 @@ func TestResolveRunConfigSessionTypeUsesStoredSessionType(t *testing.T) {
 	t.Parallel()
 
 	resolver := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				if sessionID != "session-1" {
 					t.Fatalf("unexpected session id: %s", sessionID)
 				}
@@ -241,8 +242,8 @@ func TestResolveRunConfigSessionTypeFallsBackToChat(t *testing.T) {
 	t.Parallel()
 
 	resolver := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(context.Context, string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(context.Context, string) (session.Thread, error) {
 				return session.Thread{}, errors.New("db unavailable")
 			},
 		},
@@ -257,8 +258,8 @@ func TestResolveRunConfigSkipsModelResolutionForACPRuntime(t *testing.T) {
 	t.Parallel()
 
 	resolver := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				if sessionID != "session-1" {
 					t.Fatalf("unexpected session id: %s", sessionID)
 				}

@@ -18,7 +18,9 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -73,8 +75,8 @@ func (*directLifecycleQueries) ListCompactionArtifactLineageBySession(
 type directLifecycleFixture struct {
 	service    *Service
 	lifecycles *synchronizedLifecycleStore
-	messages   *recordingMessageService
-	runtime    *lifecycleTurnAdmitter
+	messages   *agenttest.RecordingMessages
+	runtime    *agenttest.LifecycleAdmitter
 	started    chan struct{}
 	// cancelled and release belong to directLifecycleModelHoldOnCancel: the
 	// model call signals cancelled when its request context ends, then holds
@@ -115,7 +117,7 @@ func (r *modelRequestRecorder) recorded() []string {
 
 type synchronizedLifecycleStore struct {
 	mu    sync.Mutex
-	store recordingContextLifecycleStore
+	store agenttest.RecordingLifecycleStore
 }
 
 func (s *synchronizedLifecycleStore) CreateContextLifecycle(
@@ -124,7 +126,7 @@ func (s *synchronizedLifecycleStore) CreateContextLifecycle(
 ) (sqlc.CreateContextLifecycleRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.store.existing != nil {
+	if s.store.Existing != nil {
 		return sqlc.CreateContextLifecycleRow{}, &pgconn.PgError{Code: "23505"}
 	}
 	return s.store.CreateContextLifecycle(ctx, arg)
@@ -155,11 +157,11 @@ func (s *synchronizedLifecycleStore) UpdateAbortedContextLifecycleSnapshot(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row, err := s.store.UpdateAbortedContextLifecycleSnapshot(ctx, arg)
-	if err == nil && s.store.existing != nil {
-		s.store.existing.Snapshot = append([]byte(nil), arg.Snapshot...)
-		for i := range s.store.creates {
-			if s.store.creates[i].RunID == arg.RunID {
-				s.store.creates[i].Snapshot = append([]byte(nil), arg.Snapshot...)
+	if err == nil && s.store.Existing != nil {
+		s.store.Existing.Snapshot = append([]byte(nil), arg.Snapshot...)
+		for i := range s.store.Creates {
+			if s.store.Creates[i].RunID == arg.RunID {
+				s.store.Creates[i].Snapshot = append([]byte(nil), arg.Snapshot...)
 			}
 		}
 	}
@@ -196,8 +198,8 @@ func (s *synchronizedLifecycleStore) ListTerminalSessionRunsNeedingContextLifecy
 func (s *synchronizedLifecycleStore) creates() []sqlc.CreateContextLifecycleParams {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	creates := make([]sqlc.CreateContextLifecycleParams, len(s.store.creates))
-	copy(creates, s.store.creates)
+	creates := make([]sqlc.CreateContextLifecycleParams, len(s.store.Creates))
+	copy(creates, s.store.Creates)
 	for i := range creates {
 		creates[i].Snapshot = append([]byte(nil), creates[i].Snapshot...)
 	}
@@ -339,8 +341,8 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 		t.Fatalf("httptest transport = %T, want *http.Transport", server.Client().Transport)
 	}
 	lifecycles := &synchronizedLifecycleStore{}
-	messages := &recordingMessageService{}
-	runtime := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+	messages := &agenttest.RecordingMessages{}
+	runtime := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	service := &Service{
 		agent:             native.New(native.Deps{Logger: logger}),
 		modelsService:     models.NewService(logger, queries),
@@ -376,7 +378,7 @@ func assertDirectLifecycle(
 		t.Fatalf("lifecycle creates = %d, want 1", len(creates))
 	}
 	row := creates[0]
-	if got := pgUUIDString(row.RunID); got != wantRunID {
+	if got := runreq.PGUUIDString(row.RunID); got != wantRunID {
 		t.Fatalf("lifecycle run ID = %q, want %q", got, wantRunID)
 	}
 	if row.Status != wantStatus {
@@ -421,10 +423,10 @@ func TestAdmittedStreamPersistsCompletedLifecycleAfterAssistant(t *testing.T) {
 
 	startDirectLifecycleTurn(t, fixture)
 
-	if len(fixture.messages.persisted) == 0 {
+	if len(fixture.messages.Persisted) == 0 {
 		t.Fatal("the run did not persist its assistant response")
 	}
-	runID := fixture.messages.persisted[len(fixture.messages.persisted)-1].RunID
+	runID := fixture.messages.Persisted[len(fixture.messages.Persisted)-1].RunID
 	if runID != lifecycleTestRunID {
 		t.Fatalf("persisted run ID = %q, want the admitted run %q", runID, lifecycleTestRunID)
 	}
@@ -480,15 +482,15 @@ func TestAdmittedStreamCancellationPersistsAbortedLifecycle(t *testing.T) {
 	}
 
 	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusAborted, "")
-	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusAborted {
-		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.finishes)
+	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusAborted {
+		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.Finishes)
 	}
 }
 
 func TestAdmittedStreamWithholdsTerminalWhenHistoryPersistenceFails(t *testing.T) {
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 	persistErr := errors.New("history unavailable")
-	fixture.messages.roundPersistErr = persistErr
+	fixture.messages.RoundPersistErr = persistErr
 
 	var publishedMu sync.Mutex
 	var published []native.StreamEvent
@@ -517,8 +519,8 @@ func TestAdmittedStreamWithholdsTerminalWhenHistoryPersistenceFails(t *testing.T
 	for range handle.Errs() {
 	}
 
-	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusErrored {
-		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.finishes)
+	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusErrored {
+		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.Finishes)
 	}
 	publishedMu.Lock()
 	defer publishedMu.Unlock()
@@ -573,11 +575,11 @@ func TestAdmittedStreamCallerContextEndingIsAStop(t *testing.T) {
 		t.Fatal("the run did not finish after its caller went away")
 	}
 
-	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusAborted {
-		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.finishes)
+	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusAborted {
+		t.Fatalf("runtime finishes = %#v, want one aborted finish", fixture.runtime.Finishes)
 	}
-	if fixture.runtime.finishes[0].message != "" {
-		t.Fatalf("finish message = %q, want none for a stop", fixture.runtime.finishes[0].message)
+	if fixture.runtime.Finishes[0].Message != "" {
+		t.Fatalf("finish message = %q, want none for a stop", fixture.runtime.Finishes[0].Message)
 	}
 	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusAborted, "")
 }

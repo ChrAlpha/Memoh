@@ -6,6 +6,7 @@ import (
 	"time"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 const stage4KeepTokens = 600
@@ -31,7 +32,7 @@ func TestStage4CompactedSessionAssemblesSummaryThenBoundaryRows(t *testing.T) {
 	s.compact(stage4KeepTokens)
 	covered, raw := requireStage4Split(t, s)
 
-	assembled := s.assemble(ChatRequest{})
+	assembled := s.assemble(runreq.ChatRequest{})
 	want := append([]string{"SUMMARY-1"}, raw...)
 	if got := stage4Labels(assembled.Messages); !slices.Equal(got, want) {
 		t.Fatalf("context = %v, want %v (covered rows %v must not appear)", got, want, covered)
@@ -43,7 +44,7 @@ func TestStage4CompactedSessionAssemblesSummaryThenBoundaryRows(t *testing.T) {
 	s.persistConversation("b", 8)
 	s.compact(stage4KeepTokens)
 	covered, raw = requireStage4Split(t, s)
-	assembled = s.assemble(ChatRequest{})
+	assembled = s.assemble(runreq.ChatRequest{})
 	want = append([]string{"SUMMARY-1", "SUMMARY-2"}, raw...)
 	if got := stage4Labels(assembled.Messages); !slices.Equal(got, want) {
 		t.Fatalf("context with two summaries = %v, want %v (covered rows %v)", got, want, covered)
@@ -53,7 +54,7 @@ func TestStage4CompactedSessionAssemblesSummaryThenBoundaryRows(t *testing.T) {
 	s.persistConversation("c", 8)
 	s.compact(stage4KeepTokens)
 	covered, raw = requireStage4Split(t, s)
-	assembled = s.assemble(ChatRequest{})
+	assembled = s.assemble(runreq.ChatRequest{})
 	want = append([]string{"SUMMARY-3"}, raw...)
 	if got := stage4Labels(assembled.Messages); !slices.Equal(got, want) {
 		t.Fatalf("context after the summaries were superseded = %v, want %v (covered rows %v)", got, want, covered)
@@ -80,7 +81,7 @@ func TestStage4ContextHasNoTimeWindow(t *testing.T) {
 	}
 
 	want := append([]string{"SUMMARY-1"}, raw...)
-	if got := stage4Labels(s.assemble(ChatRequest{}).Messages); !slices.Equal(got, want) {
+	if got := stage4Labels(s.assemble(runreq.ChatRequest{}).Messages); !slices.Equal(got, want) {
 		t.Fatalf("context 25 hours later = %v, want %v", got, want)
 	}
 }
@@ -100,7 +101,7 @@ func TestStage4RetryCutoffKeepsSummaryAndDropsLaterRows(t *testing.T) {
 	s.persist("user", "later-question")
 	s.persist("assistant", "later-answer")
 
-	got := stage4Labels(s.assemble(ChatRequest{
+	got := stage4Labels(s.assemble(runreq.ChatRequest{
 		HistoryCutoffBeforeMessageID: answer,
 		RequiredHistoryMessageID:     ask,
 	}).Messages)
@@ -119,7 +120,7 @@ func TestStage4ResumedRequestHasTheOriginalUserRowOnce(t *testing.T) {
 	original := s.persist("user", "original-task")
 	s.persist("assistant", "partial-work")
 
-	resume := ChatRequest{UserMessagePersisted: true, ShutdownResume: true, SkipMemoryExtraction: true, SkipTitleGeneration: true}
+	resume := runreq.ChatRequest{UserMessagePersisted: true, ShutdownResume: true, SkipMemoryExtraction: true, SkipTitleGeneration: true}
 	if got, want := stage4Labels(s.assemble(resume).Messages), []string{"original-task", "partial-work"}; !slices.Equal(got, want) {
 		t.Fatalf("resume context = %v, want %v", got, want)
 	}

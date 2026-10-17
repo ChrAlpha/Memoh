@@ -9,6 +9,7 @@ import (
 	"time"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
@@ -23,7 +24,7 @@ const defaultMemorySearchTimeout = 1200 * time.Millisecond
 type memoryContextLoad struct {
 	MemoryText string
 	HookText   string
-	Message    *ModelMessage
+	Message    *runreq.ModelMessage
 	Trace      *contextfrag.MemoryRecallTrace
 }
 
@@ -55,7 +56,7 @@ func (s *Service) resolveMemoryProviderWithID(ctx context.Context, botID string)
 	return providerID, p
 }
 
-func (s *Service) loadMemoryContext(ctx context.Context, req ChatRequest) memoryContextLoad {
+func (s *Service) loadMemoryContext(ctx context.Context, req runreq.ChatRequest) memoryContextLoad {
 	builtQuery := s.buildMemoryQuery(ctx, req)
 	if strings.TrimSpace(builtQuery.Query) == "" {
 		return memoryContextLoad{}
@@ -116,7 +117,7 @@ func (s *Service) loadMemoryContext(ctx context.Context, req ChatRequest) memory
 			result := &memprovider.BeforeChatResult{
 				ContextText:    cached.ContextText,
 				RetrievalMode:  cached.RetrievalMode,
-				FallbackReason: firstNonEmpty(fallbackReason, cached.FallbackReason),
+				FallbackReason: runreq.FirstNonEmpty(fallbackReason, cached.FallbackReason),
 				ResultCount:    cached.ResultCount,
 				ResultRefs:     cached.ResultRefs,
 			}
@@ -139,7 +140,7 @@ func (s *Service) loadMemoryContext(ctx context.Context, req ChatRequest) memory
 	return s.memoryContextFromResult(ctx, req, builtQuery, cacheKey, result, "miss", strings.TrimSpace(result.FallbackReason))
 }
 
-func (s *Service) memoryContextFromResult(ctx context.Context, req ChatRequest, builtQuery memoryQuery, cacheKey memprovider.MemoryContextCacheKey, result *memprovider.BeforeChatResult, cacheState, fallbackReason string) memoryContextLoad {
+func (s *Service) memoryContextFromResult(ctx context.Context, req runreq.ChatRequest, builtQuery memoryQuery, cacheKey memprovider.MemoryContextCacheKey, result *memprovider.BeforeChatResult, cacheState, fallbackReason string) memoryContextLoad {
 	contextText := ""
 	if result != nil {
 		contextText = strings.TrimSpace(result.ContextText)
@@ -183,7 +184,7 @@ func materializeMemoryContext(memoryText, hookText string) memoryContextLoad {
 	}
 	load := memoryContextLoad{MemoryText: memoryText, HookText: hookText}
 	if combined != "" {
-		load.Message = &ModelMessage{Role: "user", Content: newTextContent(combined)}
+		load.Message = &runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent(combined)}
 	}
 	return load
 }
@@ -237,7 +238,7 @@ func (s *Service) getMemoryContextCache() *memprovider.MemoryContextCache {
 	return s.memoryContextCache
 }
 
-func (*Service) memoryContextCacheKey(ctx context.Context, req ChatRequest, providerID string, p memprovider.Provider, query string) memprovider.MemoryContextCacheKey {
+func (*Service) memoryContextCacheKey(ctx context.Context, req runreq.ChatRequest, providerID string, p memprovider.Provider, query string) memprovider.MemoryContextCacheKey {
 	memoryVersion := ""
 	if versioned, ok := p.(memprovider.MemoryVersionProvider); ok {
 		memoryVersion = versioned.MemoryVersion(ctx, req.BotID)
@@ -260,7 +261,7 @@ func (s *Service) effectiveMemorySearchTimeout() time.Duration {
 
 // storeMemory starts a background unit that hands a persisted round to the
 // bot's memory provider.
-func (s *Service) storeMemory(ctx context.Context, req ChatRequest, persisted []messagepkg.Message) {
+func (s *Service) storeMemory(ctx context.Context, req runreq.ChatRequest, persisted []messagepkg.Message) {
 	botID := strings.TrimSpace(req.BotID)
 	if botID == "" || s.memoryRegistry == nil {
 		return
@@ -271,7 +272,7 @@ func (s *Service) storeMemory(ctx context.Context, req ChatRequest, persisted []
 }
 
 // writeMemory is the body of one memory unit.
-func (s *Service) writeMemory(ctx context.Context, req ChatRequest, botID string, persisted []messagepkg.Message) error {
+func (s *Service) writeMemory(ctx context.Context, req runreq.ChatRequest, botID string, persisted []messagepkg.Message) error {
 	if req.UserMessagePersisted || req.ReusePersistedUserMessage {
 		userMessage, err := s.messageService.GetByIDBySession(ctx, req.ThreadID, req.PersistedUserMessageID)
 		if err != nil {
@@ -341,7 +342,7 @@ func (s *Service) writeMemory(ctx context.Context, req ChatRequest, botID string
 func toProviderMessages(persisted []messagepkg.Message) []memprovider.Message {
 	out := make([]memprovider.Message, 0, len(persisted))
 	for _, stored := range persisted {
-		var msg ModelMessage
+		var msg runreq.ModelMessage
 		if err := json.Unmarshal(stored.Content, &msg); err != nil {
 			continue
 		}

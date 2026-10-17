@@ -1,4 +1,4 @@
-package application
+package outcome
 
 import (
 	"context"
@@ -35,15 +35,15 @@ type runOutcomeValue struct {
 // started from a terminal observation inherits the finished run's context.
 //
 // The run is recorded as one a user is waiting for. A run admitted for
-// nobody in particular carries that through withRunOutcome instead.
+// nobody in particular carries that through WithRunOutcomeInMode instead.
 func WithRunOutcome(ctx context.Context, runID string, outcome RunOutcome) context.Context {
-	return withRunOutcome(ctx, runID, outcome, sessionmode.Chat)
+	return WithRunOutcomeInMode(ctx, runID, outcome, sessionmode.Chat)
 }
 
-// withRunOutcome is WithRunOutcome for a run admitted in mode. A mode no user
+// WithRunOutcomeInMode is WithRunOutcome for a run admitted in mode. A mode no user
 // is in the loop of (schedule, discuss, subagent) records the run as
 // asynchronous.
-func withRunOutcome(ctx context.Context, runID string, outcome RunOutcome, mode string) context.Context {
+func WithRunOutcomeInMode(ctx context.Context, runID string, outcome RunOutcome, mode string) context.Context {
 	return context.WithValue(ctx, runOutcomeKey{}, runOutcomeValue{runID: runID, outcome: outcome, async: !sessionmode.IsInteractive(mode)})
 }
 
@@ -56,7 +56,7 @@ func runOutcomeFrom(ctx context.Context, runID string) runOutcomeValue {
 	return value
 }
 
-// logRunResult writes the one result record of an agent run.
+// LogRunResult writes the one result record of an agent run.
 //
 // It runs on the terminal observer, the one place every way a run ends
 // passes through: its owner's terminal write, a durable retry of that write,
@@ -74,8 +74,8 @@ func runOutcomeFrom(ctx context.Context, runID string) runOutcomeValue {
 // terminal frame is attributed like a request; a run no user is waiting for
 // (schedule, discuss, subagent) is asynchronous, and a client fault in it is
 // this process's fault.
-func (s *Service) logRunResult(ctx context.Context, terminal sessionruntime.TerminalRun) {
-	if s.logger == nil || !terminal.Applied {
+func LogRunResult(ctx context.Context, logger *slog.Logger, terminal sessionruntime.TerminalRun) {
+	if logger == nil || !terminal.Applied {
 		return
 	}
 	owner := runOutcomeFrom(ctx, terminal.RunID)
@@ -93,7 +93,7 @@ func (s *Service) logRunResult(ctx context.Context, terminal sessionruntime.Term
 		slog.String("state", terminal.State),
 		slog.String("error_code", terminal.ErrorCode),
 	}, result.Attrs()...)
-	s.logger.LogAttrs(ctx, result.Level, "agent run", attrs...)
+	logger.LogAttrs(ctx, result.Level, "agent run", attrs...)
 }
 
 // runResultError is the failure a run's result record reports: none for a run
@@ -108,7 +108,7 @@ func runResultError(terminal sessionruntime.TerminalRun, cause error) error {
 	}
 	code := apperror.Code(terminal.ErrorCode)
 	if cause != nil {
-		if code == "" || publicFailureCode(cause) == code {
+		if code == "" || PublicFailureCode(cause) == code {
 			return cause
 		}
 		return apperror.Wrap(code, cause, nil)

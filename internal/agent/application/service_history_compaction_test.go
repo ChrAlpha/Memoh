@@ -8,9 +8,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
@@ -18,17 +20,17 @@ func TestReplaceCompactedHistoryRecordsPreservesOnlyRequiredSourceGroupAcrossRes
 	t.Parallel()
 
 	records := []historyfrag.HistoryRecord{
-		historyRecord("a-1", ModelMessage{Role: "user", Content: newTextContent("a required")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("a-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("a required")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "artifact-a"
 			record.Required = true
 		}),
-		historyRecord("a-2", ModelMessage{Role: "assistant", Content: newTextContent("a peer")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("a-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("a peer")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "artifact-a"
 		}),
-		historyRecord("b-1", ModelMessage{Role: "user", Content: newTextContent("b old")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("b-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("b old")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "artifact-b"
 		}),
-		historyRecord("b-2", ModelMessage{Role: "assistant", Content: newTextContent("b old reply")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("b-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("b old reply")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "artifact-b"
 		}),
 	}
@@ -59,20 +61,20 @@ func TestReplaceCompactedHistoryRecordsFoldsFusedParentsAroundMustKeepIsland(t *
 		return record
 	}
 	records := []historyfrag.HistoryRecord{
-		timed(historyRecord("a-1", ModelMessage{Role: "user", Content: newTextContent("a question")}, func(record *historyfrag.HistoryRecord) {
+		timed(historyRecord("a-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("a question")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = parentAID
 		}), base.Add(time.Minute)),
-		timed(historyRecord("a-2", ModelMessage{Role: "assistant", Content: newTextContent("a answer")}, func(record *historyfrag.HistoryRecord) {
+		timed(historyRecord("a-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("a answer")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = parentAID
 		}), base.Add(2*time.Minute)),
-		timed(historyRecord("island-call", ModelMessage{Role: "assistant", Content: newTextContent("ask you something")}, func(record *historyfrag.HistoryRecord) {
+		timed(historyRecord("island-call", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("ask you something")}, func(record *historyfrag.HistoryRecord) {
 			record.Required = true
 		}), base.Add(3*time.Minute)),
-		timed(historyRecord("island-result", ModelMessage{Role: "tool", Content: newTextContent("answered")}, nil), base.Add(4*time.Minute)),
-		timed(historyRecord("b-1", ModelMessage{Role: "user", Content: newTextContent("b question")}, func(record *historyfrag.HistoryRecord) {
+		timed(historyRecord("island-result", runreq.ModelMessage{Role: "tool", Content: runreq.NewTextContent("answered")}, nil), base.Add(4*time.Minute)),
+		timed(historyRecord("b-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("b question")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = parentBID
 		}), base.Add(5*time.Minute)),
-		timed(historyRecord("b-2", ModelMessage{Role: "assistant", Content: newTextContent("b answer")}, func(record *historyfrag.HistoryRecord) {
+		timed(historyRecord("b-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("b answer")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = parentBID
 		}), base.Add(6*time.Minute)),
 	}
@@ -119,7 +121,7 @@ func TestResolveCatalogArtifactRejectsDurableCoverageHashMismatch(t *testing.T) 
 	t.Parallel()
 
 	owner := compaction.ArtifactOwner{BotID: "bot-1", SessionID: "session-1", SessionIDKnown: true}
-	record := historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent("edited")}, func(record *historyfrag.HistoryRecord) {
+	record := historyRecord("row-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("edited")}, func(record *historyfrag.HistoryRecord) {
 		record.BotID = owner.BotID
 		record.SessionID = owner.SessionID
 		record.SessionIDKnown = true
@@ -155,7 +157,7 @@ func TestResolveCatalogArtifactRejectsDurableCoverageMetadataMismatch(t *testing
 	t.Parallel()
 
 	owner := compaction.ArtifactOwner{BotID: "bot-1", SessionID: "session-1", SessionIDKnown: true}
-	record := historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent("unchanged")}, func(record *historyfrag.HistoryRecord) {
+	record := historyRecord("row-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("unchanged")}, func(record *historyfrag.HistoryRecord) {
 		record.BotID = owner.BotID
 		record.SessionID = owner.SessionID
 		record.SessionIDKnown = true
@@ -192,12 +194,12 @@ func TestReplaceCompactedMessagesRejectsArtifactWhenAnyLoadedSourceConflicts(t *
 	recordAID := "00000000-0000-0000-0000-000000000501"
 	recordBID := "00000000-0000-0000-0000-000000000502"
 	records := []historyfrag.HistoryRecord{
-		historyRecord(recordAID, ModelMessage{Role: "user", Content: newTextContent("raw a")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord(recordAID, runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("raw a")}, func(record *historyfrag.HistoryRecord) {
 			record.SessionID = sessionID
 			record.SessionIDKnown = true
 			record.CompactID = artifactID
 		}),
-		historyRecord(recordBID, ModelMessage{Role: "assistant", Content: newTextContent("edited raw b")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord(recordBID, runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("edited raw b")}, func(record *historyfrag.HistoryRecord) {
 			record.SessionID = sessionID
 			record.SessionIDKnown = true
 			record.CompactID = artifactID
@@ -209,7 +211,7 @@ func TestReplaceCompactedMessagesRejectsArtifactWhenAnyLoadedSourceConflicts(t *
 	if err != nil {
 		t.Fatalf("marshal stale coverage: %v", err)
 	}
-	queries := &recordingCompactionLogQueries{logs: []sqlc.BotHistoryMessageCompact{{
+	queries := &agenttest.RecordingCompactionLog{Logs: []sqlc.BotHistoryMessageCompact{{
 		ID:        mustPGUUID(t, artifactID),
 		SessionID: mustPGUUID(t, sessionID),
 		Status:    "ok",
@@ -230,7 +232,7 @@ func TestReplaceCompactedMessagesRejectsArtifactForStaleCoverageFallback(t *test
 	sessionID := "00000000-0000-0000-0000-00000000f502"
 	artifactID := "00000000-0000-0000-0000-00000000c502"
 	recordID := "00000000-0000-0000-0000-000000000503"
-	record := historyRecord(recordID, ModelMessage{Role: "user", Content: newTextContent("edited raw")}, func(record *historyfrag.HistoryRecord) {
+	record := historyRecord(recordID, runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("edited raw")}, func(record *historyfrag.HistoryRecord) {
 		record.SessionID = sessionID
 		record.SessionIDKnown = true
 	})
@@ -240,7 +242,7 @@ func TestReplaceCompactedMessagesRejectsArtifactForStaleCoverageFallback(t *test
 	if err != nil {
 		t.Fatalf("marshal stale coverage: %v", err)
 	}
-	queries := &recordingCompactionLogQueries{logs: []sqlc.BotHistoryMessageCompact{{
+	queries := &agenttest.RecordingCompactionLog{Logs: []sqlc.BotHistoryMessageCompact{{
 		ID:        mustPGUUID(t, artifactID),
 		SessionID: mustPGUUID(t, sessionID),
 		Status:    "ok",
@@ -257,7 +259,7 @@ func TestReplaceCompactedMessagesRejectsArtifactForStaleCoverageFallback(t *test
 func TestRecordArtifactOwnerPreservesKnownNullSession(t *testing.T) {
 	t.Parallel()
 
-	record := historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent("sessionless")}, func(record *historyfrag.HistoryRecord) {
+	record := historyRecord("row-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("sessionless")}, func(record *historyfrag.HistoryRecord) {
 		record.SessionID = ""
 		record.SessionIDKnown = true
 	})
@@ -275,8 +277,8 @@ func TestReplaceRecentCompactedMessagesKeepsArtifactResolutionOwnerBound(t *test
 	session2 := "00000000-0000-0000-0000-00000000f202"
 	artifactID := "00000000-0000-0000-0000-00000000c201"
 	corruptRawID := "00000000-0000-0000-0000-000000000201"
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{{
 			ID:        mustPGUUID(t, artifactID),
 			BotID:     mustPGUUID(t, botID),
 			SessionID: mustPGUUID(t, session2),
@@ -286,13 +288,13 @@ func TestReplaceRecentCompactedMessagesKeepsArtifactResolutionOwnerBound(t *test
 		}},
 	}
 	records := []historyfrag.HistoryRecord{
-		historyRecord(corruptRawID, ModelMessage{Role: "user", Content: newTextContent("session one raw")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord(corruptRawID, runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("session one raw")}, func(record *historyfrag.HistoryRecord) {
 			record.BotID = botID
 			record.SessionID = session1
 			record.SessionIDKnown = true
 			record.CompactID = artifactID
 		}),
-		historyRecord("session-two-trigger", ModelMessage{Role: "user", Content: newTextContent("session two raw")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("session-two-trigger", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("session two raw")}, func(record *historyfrag.HistoryRecord) {
 			record.BotID = botID
 			record.SessionID = session2
 			record.SessionIDKnown = true
@@ -328,19 +330,19 @@ func TestReplaceRecentCompactedMessagesLoadsEveryKnownNullSessionGroup(t *testin
 		Summary:  "summary b",
 		Coverage: persistedCoverage(t, recordBID),
 	}
-	queries := &recordingCompactionLogQueries{
-		byID: map[pgtype.UUID]sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		ByID: map[pgtype.UUID]sqlc.BotHistoryMessageCompact{
 			artifactA.ID: artifactA,
 			artifactB.ID: artifactB,
 		},
 	}
 	records := []historyfrag.HistoryRecord{
-		historyRecord(recordAID, ModelMessage{Role: "user", Content: newTextContent("raw a")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord(recordAID, runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("raw a")}, func(record *historyfrag.HistoryRecord) {
 			record.BotID = botID
 			record.SessionIDKnown = true
 			record.CompactID = artifactAID
 		}),
-		historyRecord(recordBID, ModelMessage{Role: "assistant", Content: newTextContent("raw b")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord(recordBID, runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("raw b")}, func(record *historyfrag.HistoryRecord) {
 			record.BotID = botID
 			record.SessionIDKnown = true
 			record.CompactID = artifactBID
@@ -352,8 +354,8 @@ func TestReplaceRecentCompactedMessagesLoadsEveryKnownNullSessionGroup(t *testin
 	if gotTexts := recordTexts(got); !reflect.DeepEqual(gotTexts, want) {
 		t.Fatalf("known-null compact groups = %#v, want %#v", gotTexts, want)
 	}
-	if len(queries.getCalls) != 2 {
-		t.Fatalf("point-loaded compact groups = %d, want 2: %#v", len(queries.getCalls), queries.getCalls)
+	if len(queries.GetCalls) != 2 {
+		t.Fatalf("point-loaded compact groups = %d, want 2: %#v", len(queries.GetCalls), queries.GetCalls)
 	}
 }
 
@@ -386,9 +388,9 @@ func TestPrependMissingCompactionSummariesMergesAtAnchorPositions(t *testing.T) 
 		return record
 	}
 	messages := []historyfrag.HistoryRecord{
-		timed(historyRecord("m-1", ModelMessage{Role: "user", Content: newTextContent("first")}, nil), base.Add(10*time.Minute)),
-		timed(historyRecord("m-2", ModelMessage{Role: "assistant", Content: newTextContent("second")}, nil), base.Add(20*time.Minute)),
-		timed(historyRecord("m-3", ModelMessage{Role: "user", Content: newTextContent("third")}, nil), base.Add(30*time.Minute)),
+		timed(historyRecord("m-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("first")}, nil), base.Add(10*time.Minute)),
+		timed(historyRecord("m-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("second")}, nil), base.Add(20*time.Minute)),
+		timed(historyRecord("m-3", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("third")}, nil), base.Add(30*time.Minute)),
 	}
 	summaries := []historyfrag.HistoryRecord{
 		anchoredSummaryRecord("artifact-early", "early span", base.Add(time.Minute), scope),
@@ -413,9 +415,9 @@ func TestPrependMissingCompactionSummariesDoesNotSplitToolExchanges(t *testing.T
 		return record
 	}
 	messages := []historyfrag.HistoryRecord{
-		timed(historyRecord("m-call", ModelMessage{Role: "assistant", Content: newTextContent("calling")}, nil), base.Add(10*time.Minute)),
-		timed(historyRecord("m-result", ModelMessage{Role: "tool", Content: newTextContent("result")}, nil), base.Add(20*time.Minute)),
-		timed(historyRecord("m-after", ModelMessage{Role: "user", Content: newTextContent("after")}, nil), base.Add(30*time.Minute)),
+		timed(historyRecord("m-call", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("calling")}, nil), base.Add(10*time.Minute)),
+		timed(historyRecord("m-result", runreq.ModelMessage{Role: "tool", Content: runreq.NewTextContent("result")}, nil), base.Add(20*time.Minute)),
+		timed(historyRecord("m-after", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("after")}, nil), base.Add(30*time.Minute)),
 	}
 	summaries := []historyfrag.HistoryRecord{
 		anchoredSummaryRecord("artifact-between", "between call and result", base.Add(15*time.Minute), scope),
@@ -439,7 +441,7 @@ func TestPrependMissingCompactionSummariesKeepsUnanchoredSummariesFirst(t *testi
 		return record
 	}
 	messages := []historyfrag.HistoryRecord{
-		timed(historyRecord("m-1", ModelMessage{Role: "user", Content: newTextContent("first")}, nil), base.Add(10*time.Minute)),
+		timed(historyRecord("m-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("first")}, nil), base.Add(10*time.Minute)),
 	}
 	summaries := []historyfrag.HistoryRecord{
 		anchoredSummaryRecord("artifact-legacy", "legacy summary", time.UnixMilli(0), scope),

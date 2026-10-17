@@ -6,6 +6,8 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -21,11 +23,11 @@ func scheduleLifecycleService(
 	pool acpPrompter,
 	messages messagepkg.Service,
 	lifecycles contextLifecycleStore,
-) (*Service, *lifecycleTurnAdmitter) {
+) (*Service, *agenttest.LifecycleAdmitter) {
 	t.Helper()
 	service := newACPLifecycleService(t, pool, messages, lifecycles)
 	registerACPPool(service, pool)
-	runtime := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+	runtime := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	service.sessionRuntime = runtime
 	return service, runtime
 }
@@ -43,7 +45,7 @@ func runScheduledExternal(ctx context.Context, t *testing.T, service *Service, d
 	if service.sessionRuntime == nil {
 		// The entry writes the run's terminal state, which needs an admitted
 		// run: a schedule fire never runs without one.
-		service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+		service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	}
 	return service.TriggerSchedule(ctx, lifecycleTestBotID, payload, "")
 }
@@ -55,12 +57,12 @@ func runScheduledACP(ctx context.Context, service *Service, payload schedule.Tri
 
 // historyRows is what survives in history: the rows written, less the ones
 // removed.
-func historyRows(messages *recordingMessageService) int {
+func historyRows(messages *agenttest.RecordingMessages) int {
 	deleted := 0
-	for _, ids := range messages.deleted {
+	for _, ids := range messages.Deleted {
 		deleted += len(ids)
 	}
-	return len(messages.persisted) - deleted
+	return len(messages.Persisted) - deleted
 }
 
 // scheduleSessionDriver registers a test driver under the runtime type the
@@ -87,12 +89,12 @@ func TestScheduleSetupCarriesTheAdmittedTurnIdentity(t *testing.T) {
 	t.Parallel()
 
 	pool := &recordingACPPrompter{}
-	service, _ := scheduleLifecycleService(t, pool, &recordingMessageService{}, &recordingContextLifecycleStore{})
+	service, _ := scheduleLifecycleService(t, pool, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
 	driver := &incompleteScheduleDriver{}
 	position := int64(7)
 	spec := runSpec{
 		Run: admittedRun{Handle: sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: lifecycleTestRunID, TurnID: "turn-9", FencingToken: 1}, TurnID: "turn-9", TurnPosition: &position},
-		Req: ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID},
+		Req: runreq.ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID},
 	}
 	setup := service.scheduleSetup(spec, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1", SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
@@ -117,11 +119,11 @@ func TestScheduleSetupCarriesTheAdmittedTurnIdentity(t *testing.T) {
 func TestScheduledExternalWritesTheLeadingUserMessageBeforePrompting(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	var rolesAtPrompt []string
 	driver := noticeTestDriver{kind: "codex", prompt: func(_ context.Context, _ external.PromptInput) (external.PromptResult, error) {
-		for _, input := range messages.persisted {
+		for _, input := range messages.Persisted {
 			rolesAtPrompt = append(rolesAtPrompt, input.Role)
 		}
 		return external.PromptResult{TurnCompleted: true}, nil
@@ -147,8 +149,8 @@ func TestScheduledExternalWritesTheLeadingUserMessageBeforePrompting(t *testing.
 func TestScheduledExternalKeepsTheLeadingUserMessageWhenTheRoundFailsToWrite(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{roundPersistErr: errors.New("history unavailable")}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{RoundPersistErr: errors.New("history unavailable")}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{TurnCompleted: true}, nil
 	}}
@@ -158,9 +160,9 @@ func TestScheduledExternalKeepsTheLeadingUserMessageWhenTheRoundFailsToWrite(t *
 		SessionID: lifecycleTestSessionID, Command: "inspect", OwnerUserID: "user-1",
 	})
 
-	for _, deleted := range messages.deleted {
+	for _, deleted := range messages.Deleted {
 		if len(deleted) != 0 {
-			t.Fatalf("deleted rows = %v, want the leading user message kept after a failed round write", messages.deleted)
+			t.Fatalf("deleted rows = %v, want the leading user message kept after a failed round write", messages.Deleted)
 		}
 	}
 }

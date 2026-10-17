@@ -7,7 +7,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -16,9 +18,9 @@ import (
 func TestCheckpointDistinguishesUserAbortFromRevokedOwner(t *testing.T) {
 	for _, cause := range []error{context.Canceled, sessionruntime.ErrRunOwnershipLost} {
 		t.Run(cause.Error(), func(t *testing.T) {
-			store := &recordingStepPersister{recordingMessageService: &recordingMessageService{}}
+			store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 			owner, cancel := context.WithCancelCause(context.Background())
-			committer := &agentStepCommitter{service: &Service{}, persister: store, ownerContext: owner, req: ChatRequest{BotID: "bot", ThreadID: "session", RunID: "run", UserMessagePersisted: true}, rc: resolvedContext{runConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}}}
+			committer := &agentStepCommitter{service: &Service{}, persister: store, ownerContext: owner, req: runreq.ChatRequest{BotID: "bot", ThreadID: "session", RunID: "run", UserMessagePersisted: true}, rc: runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}}}
 			cancel(cause)
 			err := committer.interrupt(context.WithoutCancel(owner), 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("partial")}})
 			if errors.Is(cause, sessionruntime.ErrRunOwnershipLost) {
@@ -33,7 +35,7 @@ func TestCheckpointDistinguishesUserAbortFromRevokedOwner(t *testing.T) {
 }
 
 func TestSubagentRejectsRevokedCheckpointWithDetachedCallback(t *testing.T) {
-	store := &recordingStepPersister{recordingMessageService: &recordingMessageService{}}
+	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	service := &Service{messageService: store}
 	owner, cancel := context.WithCancelCause(subagentRunContext("bot", "session", 9))
 	_, checkpoint := service.SubagentStepCommit(owner, "bot", "session", "model", "request", nil, nil)

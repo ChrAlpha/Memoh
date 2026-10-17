@@ -13,6 +13,8 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -49,11 +51,11 @@ func TestPersistExternalRoundFailureCode(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			messages := &recordingMessageService{}
+			messages := &agenttest.RecordingMessages{}
 			service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
 			if err := service.persistExternalRound(
 				context.Background(),
-				ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "run"},
+				runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "run"},
 				"codex",
 				"/data/app",
 				external.PromptResult{},
@@ -64,10 +66,10 @@ func TestPersistExternalRoundFailureCode(t *testing.T) {
 			); err != nil {
 				t.Fatalf("persistExternalRound() error = %v", err)
 			}
-			if len(messages.persisted) != 2 {
-				t.Fatalf("persisted %d messages, want user + assistant", len(messages.persisted))
+			if len(messages.Persisted) != 2 {
+				t.Fatalf("persisted %d messages, want user + assistant", len(messages.Persisted))
 			}
-			meta := messages.persisted[1].Metadata
+			meta := messages.Persisted[1].Metadata
 			if got, _ := meta["error_code"].(string); got != tc.wantCode {
 				t.Fatalf("error_code = %q, want %q", got, tc.wantCode)
 			}
@@ -90,14 +92,14 @@ func TestPersistExternalRoundFailureCode(t *testing.T) {
 // code. The live failure event, the terminal event and the history marker all
 // carry that code, and the outcome names it for the run's terminal write.
 func TestStreamRuntimeExternalAgentFailureCarriesOneCode(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("partial")}},
 			apperror.New(apperror.CodeACPRuntimeBusy, nil)
 	}}
-	ch := make(chan WSStreamEvent, 64)
-	outcome, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
+	ch := make(chan runreq.WSStreamEvent, 64)
+	outcome, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
 	}, ch, make(chan struct{}))
 	if err != nil {
@@ -119,7 +121,7 @@ func TestStreamRuntimeExternalAgentFailureCarriesOneCode(t *testing.T) {
 	if outcome.Status != "errored" || outcome.ErrorCode() != want {
 		t.Fatalf("outcome = %q / %q, want errored / %q", outcome.Status, outcome.ErrorCode(), want)
 	}
-	if got, _ := messages.persisted[len(messages.persisted)-1].Metadata["error_code"].(string); got != want {
+	if got, _ := messages.Persisted[len(messages.Persisted)-1].Metadata["error_code"].(string); got != want {
 		t.Fatalf("history error_code = %q, want %q", got, want)
 	}
 }
@@ -128,13 +130,13 @@ func TestStreamRuntimeExternalAgentFailureCarriesOneCode(t *testing.T) {
 // runtime that failed, so one query over the records finds every External
 // Agent failure whatever code it took.
 func TestStreamRuntimeFailureNamesItsRuntime(t *testing.T) {
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, &recordingMessageService{}, &recordingContextLifecycleStore{})
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("partial")}}, errors.New("driver exit")
 	}}
-	outcome, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
+	outcome, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
-	}, make(chan WSStreamEvent, 64), make(chan struct{}))
+	}, make(chan runreq.WSStreamEvent, 64), make(chan struct{}))
 	if err != nil {
 		t.Fatalf("streamExternalWebSend() error = %v", err)
 	}
@@ -148,14 +150,14 @@ func TestStreamRuntimeFailureNamesItsRuntime(t *testing.T) {
 // failure block after it. The failure reaches the stream as one error event
 // and adds no text to the round.
 func TestStreamRuntimeFailureKeepsPartialOutputUnchanged(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("partial answer")}},
 			apperror.New(apperror.CodeACPRuntimeBusy, nil)
 	}}
-	ch := make(chan WSStreamEvent, 64)
-	if _, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
+	ch := make(chan runreq.WSStreamEvent, 64)
+	if _, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "test",
 	}, ch, make(chan struct{})); err != nil {
 		t.Fatalf("streamExternalWebSend() error = %v", err)
@@ -179,7 +181,7 @@ func TestStreamRuntimeFailureKeepsPartialOutputUnchanged(t *testing.T) {
 	}
 	var texts []string
 	var historyCode string
-	for _, turn := range historyTurns(t, messages.persisted) {
+	for _, turn := range historyTurns(t, messages.Persisted) {
 		if turn.Role != "assistant" {
 			continue
 		}
@@ -209,8 +211,8 @@ func TestScheduledRuntimeFailureRoundHasNoFailureText(t *testing.T) {
 		{name: "partial output", output: []sdk.Message{sdk.AssistantMessage("partial answer")}, wantText: "partial answer"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			messages := &recordingMessageService{}
-			service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+			messages := &agenttest.RecordingMessages{}
+			service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 			driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 				return external.PromptResult{Output: tc.output}, apperror.New(apperror.CodeACPRuntimeBusy, nil)
 			}}
@@ -220,7 +222,7 @@ func TestScheduledRuntimeFailureRoundHasNoFailureText(t *testing.T) {
 			}); apperror.CodeOf(err) != apperror.CodeACPRuntimeBusy {
 				t.Fatalf("schedule error = %v, want %s", err, apperror.CodeACPRuntimeBusy)
 			}
-			last := messages.persisted[len(messages.persisted)-1]
+			last := messages.Persisted[len(messages.Persisted)-1]
 			if last.Role != "assistant" || persistedText(t, last.Content) != tc.wantText {
 				t.Fatalf("last persisted = %s %q, want assistant %q", last.Role, persistedText(t, last.Content), tc.wantText)
 			}
@@ -235,7 +237,7 @@ func TestScheduledRuntimeFailureRoundHasNoFailureText(t *testing.T) {
 // serves it. A scheduled External Agent failure therefore reads as its code
 // alone, while the agent's own words stay behind it for the result record.
 func TestScheduledRuntimeFailureTextIsItsCode(t *testing.T) {
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, &recordingMessageService{}, &recordingContextLifecycleStore{})
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{Output: []sdk.Message{sdk.AssistantMessage("partial")}}, errors.New("SECRET stderr tail")
 	}}
@@ -256,13 +258,13 @@ func TestScheduledRuntimeFailureTextIsItsCode(t *testing.T) {
 // failure row is written. The failure reaches the client as its error frame
 // under the runtime's own code, and the frame carries no text.
 func TestWebSendRefusedByRuntimeHandsTheDraftBack(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
 	}}
-	ch := make(chan WSStreamEvent, 64)
-	outcome, err := service.streamExternalWebSend(context.Background(), driver, ChatRequest{
+	ch := make(chan runreq.WSStreamEvent, 64)
+	outcome, err := service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "inspect",
 	}, ch, make(chan struct{}))
 	if err != nil {
@@ -284,18 +286,18 @@ func TestWebSendRefusedByRuntimeHandsTheDraftBack(t *testing.T) {
 	if frameCode != want {
 		t.Fatalf("frame code = %q, want %q", frameCode, want)
 	}
-	if len(messages.persisted) != 1 || messages.persisted[0].Role != "user" || len(messages.deleted) != 1 {
-		t.Fatalf("persisted = %+v deleted = %v, want only the user message, then removed", messages.persisted, messages.deleted)
+	if len(messages.Persisted) != 1 || messages.Persisted[0].Role != "user" || len(messages.Deleted) != 1 {
+		t.Fatalf("persisted = %+v deleted = %v, want only the user message, then removed", messages.Persisted, messages.Deleted)
 	}
 }
 
 // A send an IM channel started has left the sender's hands, so the same
 // refusal keeps the user's message and records the failure under its code.
 func TestStartTurnRefusedByRuntimeKeepsTheSendWithItsFailure(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
-	service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
-	service.allowedTeam = driveTeamID
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
+	service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+	setAllowedTeam(service, driveTeamID)
 	registerExternalDrivers(service, noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
 	}})
@@ -317,13 +319,13 @@ func TestStartTurnRefusedByRuntimeKeepsTheSendWithItsFailure(t *testing.T) {
 	}
 	drainDriveHandle(t, handle)
 
-	if len(messages.deleted) != 0 {
-		t.Fatalf("deleted = %v, want the user's message kept", messages.deleted)
+	if len(messages.Deleted) != 0 {
+		t.Fatalf("deleted = %v, want the user's message kept", messages.Deleted)
 	}
-	if len(messages.persisted) != 2 || messages.persisted[0].Role != "user" {
-		t.Fatalf("persisted = %+v, want the user turn and its failure row", messages.persisted)
+	if len(messages.Persisted) != 2 || messages.Persisted[0].Role != "user" {
+		t.Fatalf("persisted = %+v, want the user turn and its failure row", messages.Persisted)
 	}
-	if got, _ := messages.persisted[1].Metadata["error_code"].(string); got != string(apperror.CodeAgentDependencyMissing) {
+	if got, _ := messages.Persisted[1].Metadata["error_code"].(string); got != string(apperror.CodeAgentDependencyMissing) {
 		t.Fatalf("history error_code = %q, want %q", got, apperror.CodeAgentDependencyMissing)
 	}
 }
@@ -350,11 +352,11 @@ func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
 	for _, cancellation := range cancellations {
 		for _, entry := range []string{"im", "web"} {
 			t.Run(entry+"/"+cancellation.name, func(t *testing.T) {
-				messages := &recordingMessageService{}
-				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
-				admitter := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+				messages := &agenttest.RecordingMessages{}
+				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
+				admitter := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 				service.sessionRuntime = admitter
-				service.allowedTeam = driveTeamID
+				setAllowedTeam(service, driveTeamID)
 				started := make(chan struct{})
 				driver := noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(ctx context.Context, _ external.PromptInput) (external.PromptResult, error) {
 					close(started)
@@ -382,30 +384,30 @@ func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
 					done := make(chan struct{})
 					go func() {
 						defer close(done)
-						_, _ = service.streamExternalWebSend(context.Background(), driver, ChatRequest{
+						_, _ = service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
 							BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: lifecycleTestRunID, Query: "inspect",
-						}, make(chan WSStreamEvent, 64), abort)
+						}, make(chan runreq.WSStreamEvent, 64), abort)
 					}()
 					awaitStarted(t, started)
 					close(abort)
 					awaitEntryReturned(t, done)
 				}
 
-				if len(messages.persisted) != 1 || messages.persisted[0].Role != "user" {
-					t.Fatalf("persisted = %+v, want only the user message", messages.persisted)
+				if len(messages.Persisted) != 1 || messages.Persisted[0].Role != "user" {
+					t.Fatalf("persisted = %+v, want only the user message", messages.Persisted)
 				}
-				if _, failed := messages.persisted[0].Metadata["error_code"]; failed {
-					t.Fatalf("user message metadata = %#v, want no failure", messages.persisted[0].Metadata)
+				if _, failed := messages.Persisted[0].Metadata["error_code"]; failed {
+					t.Fatalf("user message metadata = %#v, want no failure", messages.Persisted[0].Metadata)
 				}
 				wantDeleted := 0
 				if entry == "web" {
 					wantDeleted = 1
 				}
-				if len(messages.deleted) != wantDeleted {
-					t.Fatalf("deleted = %v, want %d batches: an IM message stays, a Web draft goes back", messages.deleted, wantDeleted)
+				if len(messages.Deleted) != wantDeleted {
+					t.Fatalf("deleted = %v, want %d batches: an IM message stays, a Web draft goes back", messages.Deleted, wantDeleted)
 				}
-				if len(admitter.finishes) != 1 || admitter.finishes[0].status != sessionruntime.RunStatusAborted || admitter.finishes[0].message != "" {
-					t.Fatalf("terminal writes = %+v, want one aborted run with no failure code", admitter.finishes)
+				if len(admitter.Finishes) != 1 || admitter.Finishes[0].Status != sessionruntime.RunStatusAborted || admitter.Finishes[0].Message != "" {
+					t.Fatalf("terminal writes = %+v, want one aborted run with no failure code", admitter.Finishes)
 				}
 			})
 		}

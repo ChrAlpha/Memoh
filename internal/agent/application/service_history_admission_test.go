@@ -11,6 +11,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -36,7 +37,7 @@ func TestAssembleContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	prepared, err := svc.assembleContext(context.Background(), chatContextRequest(contextPurposeRun, ChatRequest{BotID: "bot-1", ThreadID: "session-1"}, 100000))
+	prepared, err := svc.assembleContext(context.Background(), chatContextRequest(contextPurposeRun, runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1"}, 100000))
 	if err != nil {
 		t.Fatalf("assembleContext failed: %v", err)
 	}
@@ -63,7 +64,7 @@ func TestAssembleContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
 // metadata undecoded.
 func admissionHistoryMessage(t *testing.T, id string, message sdk.Message, metadata map[string]any) messagepkg.Message {
 	t.Helper()
-	content, err := json.Marshal(sdkMessagesToModelMessages([]sdk.Message{message})[0])
+	content, err := json.Marshal(runreq.SDKMessagesToModelMessages([]sdk.Message{message})[0])
 	if err != nil {
 		t.Fatal(err)
 	}

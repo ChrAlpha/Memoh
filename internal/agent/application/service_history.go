@@ -11,6 +11,7 @@ import (
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
@@ -18,12 +19,12 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 		return records
 	}
 	result := make([]historyfrag.HistoryRecord, 0, len(records)+2)
-	var previous *WorkspaceTarget
+	var previous *runreq.WorkspaceTarget
 	for _, record := range records {
 		if current := workspaceTargetFromMetadata(record.Metadata); current != nil && !sameWorkspaceTarget(previous, current) {
 			text := renderWorkspaceTransition(previous, current)
 			result = append(result, historyfrag.HistoryRecord{
-				ModelMessage: ModelMessage{Role: "system", Content: newTextContent(text)},
+				ModelMessage: runreq.ModelMessage{Role: "system", Content: runreq.NewTextContent(text)},
 				Synthetic:    true,
 			})
 			previous = current
@@ -33,7 +34,7 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 	return result
 }
 
-func renderWorkspaceTransition(previous, current *WorkspaceTarget) string {
+func renderWorkspaceTransition(previous, current *runreq.WorkspaceTarget) string {
 	if current == nil || strings.TrimSpace(current.TargetID) == "" {
 		return ""
 	}
@@ -59,7 +60,7 @@ func renderWorkspaceTransition(previous, current *WorkspaceTarget) string {
 	)
 }
 
-func sameWorkspaceTarget(left, right *WorkspaceTarget) bool {
+func sameWorkspaceTarget(left, right *runreq.WorkspaceTarget) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
@@ -67,7 +68,7 @@ func sameWorkspaceTarget(left, right *WorkspaceTarget) bool {
 		strings.TrimSpace(left.Kind) == strings.TrimSpace(right.Kind)
 }
 
-func workspaceTargetFromMetadata(metadata map[string]any) *WorkspaceTarget {
+func workspaceTargetFromMetadata(metadata map[string]any) *runreq.WorkspaceTarget {
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -75,10 +76,10 @@ func workspaceTargetFromMetadata(metadata map[string]any) *WorkspaceTarget {
 	if !ok {
 		return nil
 	}
-	target := &WorkspaceTarget{
-		TargetID: strings.TrimSpace(readAnyString(raw["target_id"])),
-		Kind:     strings.TrimSpace(readAnyString(raw["kind"])),
-		Name:     strings.TrimSpace(readAnyString(raw["name"])),
+	target := &runreq.WorkspaceTarget{
+		TargetID: strings.TrimSpace(runreq.ReadAnyString(raw["target_id"])),
+		Kind:     strings.TrimSpace(runreq.ReadAnyString(raw["kind"])),
+		Name:     strings.TrimSpace(runreq.ReadAnyString(raw["name"])),
 	}
 	if target.TargetID == "" {
 		return nil
@@ -89,12 +90,12 @@ func workspaceTargetFromMetadata(metadata map[string]any) *WorkspaceTarget {
 	return target
 }
 
-func (s *Service) currentWorkspaceContextMessage(ctx context.Context, req ChatRequest) *ModelMessage {
+func (s *Service) currentWorkspaceContextMessage(ctx context.Context, req runreq.ChatRequest) *runreq.ModelMessage {
 	current := req.WorkspaceTarget
 	if current == nil || strings.TrimSpace(current.TargetID) == "" {
 		return nil
 	}
-	var previous *WorkspaceTarget
+	var previous *runreq.WorkspaceTarget
 	if s != nil && s.sessionService != nil && strings.TrimSpace(req.ThreadID) != "" {
 		if sess, err := s.sessionService.Get(ctx, req.ThreadID); err == nil {
 			if raw, ok := sess.Metadata["workspace_target"].(map[string]any); ok {
@@ -106,11 +107,11 @@ func (s *Service) currentWorkspaceContextMessage(ctx context.Context, req ChatRe
 	if text == "" {
 		return nil
 	}
-	message := ModelMessage{Role: "system", Content: newTextContent(text)}
+	message := runreq.ModelMessage{Role: "system", Content: runreq.NewTextContent(text)}
 	return &message
 }
 
-func historyScopeFallbackFromChatRequest(req ChatRequest) historyfrag.ScopeFallback {
+func historyScopeFallbackFromChatRequest(req runreq.ChatRequest) historyfrag.ScopeFallback {
 	return historyfrag.ScopeFallback{
 		ChatID:           strings.TrimSpace(req.ChatID),
 		ConversationType: strings.TrimSpace(req.ConversationType),
@@ -138,7 +139,7 @@ func historyScopeFallbackFromToolApprovalRequest(req toolapproval.Request) histo
 // the window from that row. A required row refused at admission is not in the
 // context by the same rule as any other row, so the run fails as for a row that
 // is not visible.
-func (s *Service) ensureRequiredHistoryMessage(ctx context.Context, messages []historyfrag.HistoryRecord, req ChatRequest) ([]historyfrag.HistoryRecord, error) {
+func (s *Service) ensureRequiredHistoryMessage(ctx context.Context, messages []historyfrag.HistoryRecord, req runreq.ChatRequest) ([]historyfrag.HistoryRecord, error) {
 	messageID := strings.TrimSpace(req.RequiredHistoryMessageID)
 	if messageID == "" || s.messageService == nil || strings.TrimSpace(req.ThreadID) == "" {
 		return messages, nil
@@ -229,7 +230,7 @@ func compactionSummaryScope(botID, chatID, sessionID, conversationType, conversa
 // dedupePersistedCurrentUserMessage removes the current user row from history
 // when the request already persisted it. The row id is authoritative; the
 // external message id only identifies rows of requests that carry no id.
-func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req ChatRequest) []historyfrag.HistoryRecord {
+func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req runreq.ChatRequest) []historyfrag.HistoryRecord {
 	if !req.UserMessagePersisted || len(messages) == 0 {
 		return messages
 	}
@@ -273,7 +274,7 @@ func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req
 	return messages
 }
 
-func estimateMessageTokens(msg ModelMessage) int {
+func estimateMessageTokens(msg runreq.ModelMessage) int {
 	text := msg.TextContent()
 	if len(text) == 0 {
 		data, _ := json.Marshal(msg.Content)

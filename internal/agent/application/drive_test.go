@@ -13,7 +13,10 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
@@ -31,7 +34,7 @@ type scriptedExecutor struct {
 	events   []native.StreamEvent
 	terminal *native.StreamEvent
 	cause    error
-	phase    runPhase
+	phase    outcome.RunPhase
 	deferred bool
 	// commitErr, when set, is what the ending's history write returns.
 	commitErr error
@@ -69,9 +72,9 @@ func (e *scriptedExecutor) execute(ctx context.Context, emit func(native.StreamE
 		ending.Cause = c
 	}
 	if ending.Phase == 0 {
-		ending.Phase = phaseExecution
+		ending.Phase = outcome.PhaseExecution
 	}
-	ending.Commit = func(_ context.Context, _ *RunFailure, row bool) (commitSummary, error) {
+	ending.Commit = func(_ context.Context, _ *outcome.RunFailure, row bool) (commitSummary, error) {
 		if e.commitRows != nil {
 			*e.commitRows = append(*e.commitRows, row)
 		}
@@ -132,7 +135,7 @@ func (d *recordingDelivery) snapshot() ([]RunEvent, []RunEnded, int) {
 
 // ---------------------------------------------------------------- table cases
 
-func newDriveService(pub *recordingTurnEventPublisher, admitter turnAdmitter) *Service {
+func newDriveService(pub *recordingTurnEventPublisher, admitter runreq.TurnAdmitter) *Service {
 	svc := &Service{logger: slog.New(slog.DiscardHandler)}
 	if pub != nil {
 		svc.publishTurnEvent = pub.publish
@@ -156,9 +159,9 @@ func scheduledSpec(exec runExecutor, delivery RunDelivery) runSpec {
 		},
 		Req:        triggerStreamRequest(),
 		Delivery:   delivery,
-		Input:      inputSynthetic,
+		Input:      outcome.InputSynthetic,
 		Unattended: true,
-		Setup: func(context.Context, ChatRequest) (runPlan, error) {
+		Setup: func(context.Context, runreq.ChatRequest) (runPlan, error) {
 			return runPlan{Exec: exec, Req: triggerStreamRequest()}, nil
 		},
 	}
@@ -173,12 +176,12 @@ func TestDriveCompletesAndDeliversTheTerminalLast(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, delivery))
 
-	if result.End != endCompleted {
+	if result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want completed (failure %v)", result.End, result.Failure)
 	}
 	if failure := publicRunFailure(result.Failure); failure != nil {
@@ -222,9 +225,9 @@ func TestDrivePublishesTheTerminalAfterTheHistoryWrite(t *testing.T) {
 			order = append(order, "terminal-published")
 		}
 	}}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	spec := scheduledSpec(exec, &recordingDelivery{})
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{Exec: &markedExecutor{inner: exec, order: &order}}, nil
 	}
 
@@ -243,7 +246,7 @@ type markedExecutor struct {
 func (m *markedExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
 	ending := m.inner.execute(ctx, emit)
 	commit := ending.Commit
-	ending.Commit = func(ctx context.Context, f *RunFailure, row bool) (commitSummary, error) {
+	ending.Commit = func(ctx context.Context, f *outcome.RunFailure, row bool) (commitSummary, error) {
 		*m.order = append(*m.order, "history-written")
 		return commit(ctx, f, row)
 	}
@@ -259,11 +262,11 @@ func TestDriveWithholdsTheTerminalWhenTheHistoryWriteFails(t *testing.T) {
 	terminal := scheduleTerminalEvent(t, "must not look complete")
 	exec := &scriptedExecutor{terminal: &terminal, commitErr: errors.New("history unavailable")}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 
-	if result.End != endFailed {
+	if result.End != outcome.EndFailed {
 		t.Fatalf("end = %s, want failed", result.End)
 	}
 	if result.Failure == nil || result.Failure.Code != apperror.CodeSessionHistoryInconsistent {
@@ -284,7 +287,7 @@ func TestDriveUnadmittedRunDeliversWithoutPublishing(t *testing.T) {
 	terminal := scheduleTerminalEvent(t, "done")
 	exec := &scriptedExecutor{terminal: &terminal}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 	spec := scheduledSpec(exec, delivery)
 	spec.Run.Handle.FencingToken = 0
@@ -313,19 +316,19 @@ func TestDrivePublicationRefusalFailsTheRun(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{errAt: 1, err: errors.New("projection refused")}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, delivery))
 
-	if result.End != endFailed || result.Failure == nil {
+	if result.End != outcome.EndFailed || result.Failure == nil {
 		t.Fatalf("result = %#v, want a named failure", result)
 	}
 	if result.Failure.Code != apperror.CodeSessionPublishFailed {
 		t.Fatalf("failure code = %q, want %s", result.Failure.Code, apperror.CodeSessionPublishFailed)
 	}
-	if result.Failure.Cause == nil || !errors.Is(result.Failure.Cause, errRunStopped) {
-		if errors.Is(result.Failure.Cause, errRunStopped) {
+	if result.Failure.Cause == nil || !errors.Is(result.Failure.Cause, outcome.ErrRunStopped) {
+		if errors.Is(result.Failure.Cause, outcome.ErrRunStopped) {
 			t.Fatal("a refused publication must not read as a stop")
 		}
 	}
@@ -344,13 +347,13 @@ func TestDriveOwnershipLossWritesNothing(t *testing.T) {
 	terminal := scheduleTerminalEvent(t, "done")
 	exec := &scriptedExecutor{terminal: &terminal}
 	pub := &recordingTurnEventPublisher{errAt: 1, err: sessionruntime.ErrRunOwnershipLost}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(pub, admitter)
 	delivery := &recordingDelivery{}
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, delivery))
 
-	if result.End != endOwnershipLost {
+	if result.End != outcome.EndOwnershipLost {
 		t.Fatalf("end = %s, want ownership_lost", result.End)
 	}
 	for _, ev := range pub.published() {
@@ -358,8 +361,8 @@ func TestDriveOwnershipLossWritesNothing(t *testing.T) {
 			t.Fatalf("published %#v after ownership loss", ev)
 		}
 	}
-	if len(admitter.finishes) != 0 {
-		t.Fatalf("terminal writes = %#v, want none after ownership loss", admitter.finishes)
+	if len(admitter.Finishes) != 0 {
+		t.Fatalf("terminal writes = %#v, want none after ownership loss", admitter.Finishes)
 	}
 	if _, ended, _ := delivery.snapshot(); len(ended) != 1 || ended[0].State != "" {
 		t.Fatalf("Ended = %#v, want one empty state", ended)
@@ -374,17 +377,17 @@ func TestDriveStopEndsWithoutAFailure(t *testing.T) {
 	terminal := native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndCanceled}
 	exec := &scriptedExecutor{terminal: &terminal}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 
 	// The entry stops the run by ending its context with the stop marker: the
 	// run names the ending from that, not from a channel of its own.
 	runCtx, stop := context.WithCancelCause(context.Background())
-	stop(errRunStopped)
+	stop(outcome.ErrRunStopped)
 
 	result := svc.drive(runCtx, scheduledSpec(exec, delivery))
 
-	if result.End != endStopped {
+	if result.End != outcome.EndStopped {
 		t.Fatalf("end = %s, want stopped (failure %#v)", result.End, result.Failure)
 	}
 	events, ended, _ := delivery.snapshot()
@@ -414,14 +417,14 @@ func TestDriveStopKeepsWhatTheUserSaw(t *testing.T) {
 		lost       bool
 		stoppedErr error
 		noHook     bool
-		wantEnd    runEnd
+		wantEnd    outcome.RunEnd
 		wantWrites int
 	}{
-		{name: "stopped run writes once", terminal: stopped, stopped: true, wantEnd: endStopped, wantWrites: 1},
-		{name: "failed write leaves a stop", terminal: stopped, stopped: true, stoppedErr: errors.New("database down"), wantEnd: endStopped, wantWrites: 1},
-		{name: "executor with nothing left to write", terminal: stopped, stopped: true, noHook: true, wantEnd: endStopped},
-		{name: "completed run is not asked", terminal: completed, wantEnd: endCompleted},
-		{name: "lost run is not asked", terminal: completed, lost: true, wantEnd: endOwnershipLost},
+		{name: "stopped run writes once", terminal: stopped, stopped: true, wantEnd: outcome.EndStopped, wantWrites: 1},
+		{name: "failed write leaves a stop", terminal: stopped, stopped: true, stoppedErr: errors.New("database down"), wantEnd: outcome.EndStopped, wantWrites: 1},
+		{name: "executor with nothing left to write", terminal: stopped, stopped: true, noHook: true, wantEnd: outcome.EndStopped},
+		{name: "completed run is not asked", terminal: completed, wantEnd: outcome.EndCompleted},
+		{name: "lost run is not asked", terminal: completed, lost: true, wantEnd: outcome.EndOwnershipLost},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -438,11 +441,11 @@ func TestDriveStopKeepsWhatTheUserSaw(t *testing.T) {
 			if tc.lost {
 				pub = &recordingTurnEventPublisher{errAt: 1, err: sessionruntime.ErrRunOwnershipLost}
 			}
-			svc := newDriveService(pub, &scriptedAdmitter{started: true})
+			svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 			delivery := &recordingDelivery{}
 			runCtx, stop := context.WithCancelCause(context.Background())
 			if tc.stopped {
-				stop(errRunStopped)
+				stop(outcome.ErrRunStopped)
 			}
 			defer stop(nil)
 
@@ -457,7 +460,7 @@ func TestDriveStopKeepsWhatTheUserSaw(t *testing.T) {
 			if tc.stopped && len(commits) != 0 {
 				t.Fatalf("a stop called Commit %v, want only the stopped write", commits)
 			}
-			if tc.wantEnd != endStopped {
+			if tc.wantEnd != outcome.EndStopped {
 				return
 			}
 			if result.Failure != nil {
@@ -490,10 +493,10 @@ func TestNameRunEndTable(t *testing.T) {
 
 	cases := []struct {
 		name       string
-		facts      endingFacts
-		wantEnd    runEnd
+		facts      outcome.EndingFacts
+		wantEnd    outcome.RunEnd
 		wantCode   apperror.Code
-		input      inputOwnership
+		input      outcome.InputOwnership
 		hook       bool
 		replacing  bool
 		wantRow    bool
@@ -501,116 +504,116 @@ func TestNameRunEndTable(t *testing.T) {
 	}{
 		{
 			name:    "clean terminal completes",
-			facts:   endingFacts{Phase: phaseExecution, Terminal: &terminalCompleted},
-			wantEnd: endCompleted,
-			input:   inputAccepted,
+			facts:   outcome.EndingFacts{Phase: outcome.PhaseExecution, Terminal: &terminalCompleted},
+			wantEnd: outcome.EndCompleted,
+			input:   outcome.InputAccepted,
 			wantRow: false,
 		},
 		{
 			name:    "deferred parks",
-			facts:   endingFacts{Phase: phaseExecution, Terminal: &terminalCompleted, Deferred: true},
-			wantEnd: endParked,
-			input:   inputAccepted,
+			facts:   outcome.EndingFacts{Phase: outcome.PhaseExecution, Terminal: &terminalCompleted, Deferred: true},
+			wantEnd: outcome.EndParked,
+			input:   outcome.InputAccepted,
 			wantRow: false,
 		},
 		{
 			name:       "stopped before the first failure",
-			facts:      endingFacts{Phase: phaseExecution, Terminal: &terminalAbort, Declared: providerErr, StoppedAtDeclare: true},
-			wantEnd:    endStopped,
-			input:      inputAccepted,
+			facts:      outcome.EndingFacts{Phase: outcome.PhaseExecution, Terminal: &terminalAbort, Declared: providerErr, StoppedAtDeclare: true},
+			wantEnd:    outcome.EndStopped,
+			input:      outcome.InputAccepted,
 			wantRow:    false,
 			stoppedCtx: true,
 		},
 		{
 			name:       "failed before the stop keeps its name",
-			facts:      endingFacts{Phase: phaseExecution, Terminal: &terminalAbort, Declared: providerErr, StoppedAtDeclare: false},
-			wantEnd:    endFailed,
+			facts:      outcome.EndingFacts{Phase: outcome.PhaseExecution, Terminal: &terminalAbort, Declared: providerErr, StoppedAtDeclare: false},
+			wantEnd:    outcome.EndFailed,
 			wantCode:   apperror.CodeAgentProviderAuthFailed,
-			input:      inputAccepted,
+			input:      outcome.InputAccepted,
 			wantRow:    true,
 			stoppedCtx: true,
 		},
 		{
 			name:     "loop guard has its own code",
-			facts:    endingFacts{Phase: phaseExecution, Terminal: &terminalLoop},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseExecution, Terminal: &terminalLoop},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeAgentLoopDetected,
-			input:    inputAccepted,
+			input:    outcome.InputAccepted,
 			wantRow:  true,
 		},
 		{
 			name:     "abort without a reason fails unnamed",
-			facts:    endingFacts{Phase: phaseExecution, Terminal: &terminalFailed},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseExecution, Terminal: &terminalFailed},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeRuntimeRunFailed,
-			input:    inputAccepted,
+			input:    outcome.InputAccepted,
 			wantRow:  true,
 		},
 		{
 			name:     "no terminal and nothing declared",
-			facts:    endingFacts{Phase: phaseExecution},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseExecution},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeRuntimeRunFailed,
-			input:    inputAccepted,
+			input:    outcome.InputAccepted,
 			wantRow:  true,
 		},
 		{
 			name:     "hook refusal leaves a row for a held input",
-			facts:    endingFacts{Phase: phaseSetup, Declared: errors.New("hook denied")},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseSetup, Declared: errors.New("hook denied")},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeHookUserMessageFailed,
-			input:    inputHeld,
+			input:    outcome.InputHeld,
 			hook:     true,
 			wantRow:  true,
 		},
 		{
 			name:     "setup failure hands a held input back",
-			facts:    endingFacts{Phase: phaseSetup, Declared: errors.New("resolve failed")},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseSetup, Declared: errors.New("resolve failed")},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeRuntimeRunFailed,
-			input:    inputHeld,
+			input:    outcome.InputHeld,
 			wantRow:  false,
 		},
 		{
 			name:     "setup failure keeps an accepted input",
-			facts:    endingFacts{Phase: phaseSetup, Declared: errors.New("resolve failed")},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseSetup, Declared: errors.New("resolve failed")},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeRuntimeRunFailed,
-			input:    inputAccepted,
+			input:    outcome.InputAccepted,
 			wantRow:  true,
 		},
 		{
 			name:     "synthetic input never writes history",
-			facts:    endingFacts{Phase: phaseExecution, Declared: providerErr},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseExecution, Declared: providerErr},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeAgentProviderAuthFailed,
-			input:    inputSynthetic,
+			input:    outcome.InputSynthetic,
 			wantRow:  false,
 		},
 		{
 			name:      "a replacement turn keeps only named codes",
-			facts:     endingFacts{Phase: phaseExecution, Declared: providerErr},
-			wantEnd:   endFailed,
+			facts:     outcome.EndingFacts{Phase: outcome.PhaseExecution, Declared: providerErr},
+			wantEnd:   outcome.EndFailed,
 			wantCode:  apperror.CodeAgentProviderAuthFailed,
-			input:     inputAccepted,
+			input:     outcome.InputAccepted,
 			replacing: true,
 			wantRow:   true,
 		},
 		{
 			name:      "a replacement turn drops an unnamed failure",
-			facts:     endingFacts{Phase: phaseExecution, Declared: errors.New("boom")},
-			wantEnd:   endFailed,
+			facts:     outcome.EndingFacts{Phase: outcome.PhaseExecution, Declared: errors.New("boom")},
+			wantEnd:   outcome.EndFailed,
 			wantCode:  apperror.CodeRuntimeRunFailed,
-			input:     inputAccepted,
+			input:     outcome.InputAccepted,
 			replacing: true,
 			wantRow:   false,
 		},
 		{
 			name:     "a failed history write ends a parked run",
-			facts:    endingFacts{Phase: phaseCommit, Terminal: &terminalCompleted, Deferred: true, Commit: errors.New("write failed")},
-			wantEnd:  endFailed,
+			facts:    outcome.EndingFacts{Phase: outcome.PhaseCommit, Terminal: &terminalCompleted, Deferred: true, Commit: errors.New("write failed")},
+			wantEnd:  outcome.EndFailed,
 			wantCode: apperror.CodeSessionHistoryInconsistent,
-			input:    inputAccepted,
+			input:    outcome.InputAccepted,
 			wantRow:  false,
 		},
 	}
@@ -622,13 +625,13 @@ func TestNameRunEndTable(t *testing.T) {
 			if tc.stoppedCtx {
 				var cancel context.CancelCauseFunc
 				ctx, cancel = context.WithCancelCause(context.Background())
-				cancel(errRunStopped)
+				cancel(outcome.ErrRunStopped)
 				defer cancel(nil)
 			}
 			facts := tc.facts
 			facts.RunCtx = ctx
 			facts.Hook = tc.hook
-			end, failure := nameRunEnd(facts)
+			end, failure := outcome.NameRunEnd(facts)
 			if end != tc.wantEnd {
 				t.Fatalf("end = %s, want %s", end, tc.wantEnd)
 			}
@@ -640,7 +643,7 @@ func TestNameRunEndTable(t *testing.T) {
 					t.Fatalf("code = %q, want %q", failure.Code, tc.wantCode)
 				}
 			}
-			row := wantsFailureRow(tc.input, end, failure, tc.hook, tc.replacing)
+			row := outcome.WantsFailureRow(tc.input, end, failure, tc.hook, tc.replacing)
 			if row != tc.wantRow {
 				t.Fatalf("wantsFailureRow = %v, want %v", row, tc.wantRow)
 			}
@@ -648,19 +651,19 @@ func TestNameRunEndTable(t *testing.T) {
 	}
 }
 
-// wantsFailureRow over every ownership and phase combination, so a table that
+// outcome.WantsFailureRow over every ownership and phase combination, so a table that
 // grew a case cannot silently change another.
 func TestWantsFailureRowTable(t *testing.T) {
 	t.Parallel()
 
-	phases := []runPhase{phaseSetup, phaseExecution, phaseCommit, phasePublish}
-	owned := []inputOwnership{inputHeld, inputAccepted, inputSynthetic}
+	phases := []outcome.RunPhase{outcome.PhaseSetup, outcome.PhaseExecution, outcome.PhaseCommit, outcome.PhasePublish}
+	owned := []outcome.InputOwnership{outcome.InputHeld, outcome.InputAccepted, outcome.InputSynthetic}
 
 	for _, o := range owned {
 		for _, phase := range phases {
 			for _, replacing := range []bool{false, true} {
-				f := &RunFailure{Code: apperror.CodeAgentProviderAuthFailed, Phase: phase}
-				got := wantsFailureRow(o, endFailed, f, false, replacing)
+				f := &outcome.RunFailure{Code: apperror.CodeAgentProviderAuthFailed, Phase: phase}
+				got := outcome.WantsFailureRow(o, outcome.EndFailed, f, false, replacing)
 				want := expectedRow(o, phase, replacing)
 				if got != want {
 					t.Fatalf("ownership %d phase %d replacing %v: wantsFailureRow = %v, want %v",
@@ -670,30 +673,30 @@ func TestWantsFailureRowTable(t *testing.T) {
 		}
 	}
 	// Only a failure leaves a row.
-	if wantsFailureRow(inputAccepted, endCompleted, nil, false, false) {
+	if outcome.WantsFailureRow(outcome.InputAccepted, outcome.EndCompleted, nil, false, false) {
 		t.Fatal("a completed run left a failure row")
 	}
-	if wantsFailureRow(inputAccepted, endParked, nil, false, false) {
+	if outcome.WantsFailureRow(outcome.InputAccepted, outcome.EndParked, nil, false, false) {
 		t.Fatal("a parked run left a failure row")
 	}
 }
 
 // expectedRow states the rule independently of the implementation.
-func expectedRow(o inputOwnership, phase runPhase, replacing bool) bool {
+func expectedRow(o outcome.InputOwnership, phase outcome.RunPhase, replacing bool) bool {
 	switch o {
-	case inputSynthetic:
+	case outcome.InputSynthetic:
 		return false
-	case inputHeld:
+	case outcome.InputHeld:
 		if replacing {
 			return false
 		}
-		return phase == phaseExecution || phase == phasePublish
+		return phase == outcome.PhaseExecution || phase == outcome.PhasePublish
 	default:
 		if replacing {
 			// Only codes the history whitelist names.
-			return phase == phaseExecution
+			return phase == outcome.PhaseExecution
 		}
-		return phase != phaseCommit
+		return phase != outcome.PhaseCommit
 	}
 }
 
@@ -708,13 +711,13 @@ func TestDriveGoesOnAfterTheDeliveryEndLeaves(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(pub, admitter)
 	delivery := &recordingDelivery{goneAt: 2}
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, delivery))
 
-	if result.End != endCompleted {
+	if result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want the run to finish with its caller gone", result.End)
 	}
 	events, ended, _ := delivery.snapshot()
@@ -748,7 +751,7 @@ func TestDriveSlowDeliveryDoesNotBlockPublication(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	release := make(chan struct{})
 	delivery := &recordingDelivery{release: release}
 
@@ -769,7 +772,7 @@ func TestDriveSlowDeliveryDoesNotBlockPublication(t *testing.T) {
 	}
 	close(release)
 	result := <-done
-	if result.End != endCompleted {
+	if result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want completed", result.End)
 	}
 }
@@ -783,9 +786,9 @@ func TestDriveCleanupRunsEvenAfterOwnershipLoss(t *testing.T) {
 	cleaned := false
 	exec := &scriptedExecutor{terminal: &terminal}
 	pub := &recordingTurnEventPublisher{errAt: 1, err: sessionruntime.ErrRunOwnershipLost}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	spec := scheduledSpec(exec, &recordingDelivery{})
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{Exec: &cleanupExecutor{inner: exec, cleaned: &cleaned}}, nil
 	}
 
@@ -817,7 +820,7 @@ func TestDriveCarriesFailureArgsToEveryConsumer(t *testing.T) {
 	cause := apperror.Wrap(apperror.CodeAgentDependencyMissing, errors.New("missing"), args)
 	exec := &scriptedExecutor{cause: cause}
 	pub := &recordingTurnEventPublisher{}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(pub, admitter)
 	delivery := &recordingDelivery{}
 
@@ -848,11 +851,11 @@ func TestDriveCarriesFailureArgsToEveryConsumer(t *testing.T) {
 	if ended[0].ErrorArgs["dep_id"] != "codex" {
 		t.Fatalf("Ended args = %#v, want them carried", ended[0].ErrorArgs)
 	}
-	if len(admitter.finishes) != 1 {
-		t.Fatalf("terminal writes = %#v, want one", admitter.finishes)
+	if len(admitter.Finishes) != 1 {
+		t.Fatalf("terminal writes = %#v, want one", admitter.Finishes)
 	}
-	if admitter.finishes[0].args["dep_id"] != "codex" {
-		t.Fatalf("terminal write args = %#v, want them carried", admitter.finishes[0].args)
+	if admitter.Finishes[0].Args["dep_id"] != "codex" {
+		t.Fatalf("terminal write args = %#v, want them carried", admitter.Finishes[0].Args)
 	}
 }
 
@@ -864,7 +867,7 @@ func TestDriveDeliveredFailureKeepsTheCausePrivate(t *testing.T) {
 	cause := errors.New("SECRET provider boom")
 	exec := &scriptedExecutor{cause: cause}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, delivery))
@@ -894,7 +897,7 @@ func TestDriveTerminalIsOwnerNamed(t *testing.T) {
 	terminal := native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndCanceled}
 	exec := &scriptedExecutor{terminal: &terminal}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 
 	svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 
@@ -918,19 +921,19 @@ func TestDriveSetupFailureNamesTheSetupPhase(t *testing.T) {
 	t.Parallel()
 
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 	spec := scheduledSpec(nil, delivery)
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{}, errors.New("resolve failed")
 	}
 
 	result := svc.drive(context.Background(), spec)
 
-	if result.End != endFailed || result.Failure == nil {
+	if result.End != outcome.EndFailed || result.Failure == nil {
 		t.Fatalf("result = %#v, want a named failure", result)
 	}
-	if result.Failure.Phase != phaseSetup {
+	if result.Failure.Phase != outcome.PhaseSetup {
 		t.Fatalf("failure phase = %d, want the setup phase", result.Failure.Phase)
 	}
 	if _, ended, _ := delivery.snapshot(); len(ended) != 1 {
@@ -944,15 +947,15 @@ func TestDriveSetupFailureNamesTheSetupPhase(t *testing.T) {
 func TestDriveHookRefusalLeavesAMarkedFailureRow(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	svc.messageService = messages
 	delivery := &recordingDelivery{}
 	spec := scheduledSpec(nil, delivery)
-	spec.Req = ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
-	spec.Input = inputHeld
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec.Req = runreq.ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
+	spec.Input = outcome.InputHeld
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{}, apperror.Wrap(apperror.CodeHookUserMessageFailed, errors.New("policy refused"), nil)
 	}
 
@@ -961,10 +964,10 @@ func TestDriveHookRefusalLeavesAMarkedFailureRow(t *testing.T) {
 	if result.Failure == nil || result.Failure.Code != apperror.CodeHookUserMessageFailed {
 		t.Fatalf("failure = %#v, want the hook's code", result.Failure)
 	}
-	if len(messages.persisted) != 2 {
-		t.Fatalf("persisted %d rows, want the user row and the failure row", len(messages.persisted))
+	if len(messages.Persisted) != 2 {
+		t.Fatalf("persisted %d rows, want the user row and the failure row", len(messages.Persisted))
 	}
-	for i, row := range messages.persisted {
+	for i, row := range messages.Persisted {
 		if got, _ := row.Metadata[messagepkg.HistoryFailureOriginMetadataKey].(string); got != messagepkg.HistoryFailureOriginUserMessageHook {
 			t.Fatalf("row %d origin = %#v, want %q", i, row.Metadata[messagepkg.HistoryFailureOriginMetadataKey], messagepkg.HistoryFailureOriginUserMessageHook)
 		}
@@ -976,23 +979,23 @@ func TestDriveHookRefusalLeavesAMarkedFailureRow(t *testing.T) {
 func TestDriveNonHookSetupFailureWritesNoRow(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
-	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	messages := &agenttest.RecordingMessages{}
+	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	svc.messageService = messages
 	spec := scheduledSpec(nil, &recordingDelivery{})
-	spec.Req = ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
-	spec.Input = inputHeld
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec.Req = runreq.ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "hello"}
+	spec.Input = outcome.InputHeld
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{}, errors.New("resolve failed")
 	}
 
 	result := svc.drive(context.Background(), spec)
 
-	if result.End != endFailed {
+	if result.End != outcome.EndFailed {
 		t.Fatalf("end = %s, want failed", result.End)
 	}
-	if len(messages.persisted) != 0 {
-		t.Fatalf("persisted %#v, want nothing for a held input the composer restores", messages.persisted)
+	if len(messages.Persisted) != 0 {
+		t.Fatalf("persisted %#v, want nothing for a held input the composer restores", messages.Persisted)
 	}
 }
 
@@ -1010,13 +1013,13 @@ func TestDrivePublicationRefusalCancelsExecution(t *testing.T) {
 		commitRows: &rows,
 	}
 	pub := &recordingTurnEventPublisher{errAt: 1, err: errors.New("projection refused")}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	spec := scheduledSpec(exec, &recordingDelivery{})
-	spec.Input = inputAccepted
+	spec.Input = outcome.InputAccepted
 
 	result := svc.drive(context.Background(), spec)
 
-	if result.End != endFailed || result.Failure == nil {
+	if result.End != outcome.EndFailed || result.Failure == nil {
 		t.Fatalf("result = %#v, want a named failure", result)
 	}
 	if result.Failure.Code != apperror.CodeSessionPublishFailed {
@@ -1026,7 +1029,7 @@ func TestDrivePublicationRefusalCancelsExecution(t *testing.T) {
 	if !errors.As(result.Failure.Cause, &refused) {
 		t.Fatalf("failure cause = %v, want it wrapped in publishRefused", result.Failure.Cause)
 	}
-	if errors.Is(result.Failure.Cause, errRunStopped) || errors.Is(result.Failure.Cause, context.Canceled) {
+	if errors.Is(result.Failure.Cause, outcome.ErrRunStopped) || errors.Is(result.Failure.Cause, context.Canceled) {
 		t.Fatalf("failure cause = %v, want neither the stop marker nor a bare cancellation", result.Failure.Cause)
 	}
 	if len(rows) != 1 || !rows[0] {
@@ -1044,7 +1047,7 @@ func TestDriveDeliveredPayloadIsThePublicEvent(t *testing.T) {
 		events:   []native.StreamEvent{{Type: native.EventTextDelta, Delta: "hello"}},
 		terminal: &terminal,
 	}
-	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 
 	svc.drive(context.Background(), scheduledSpec(exec, delivery))
@@ -1101,8 +1104,8 @@ func TestRunObserverCleanTerminalClearsAnEarlierError(t *testing.T) {
 
 // continuationRequest is the request a continuation resumes as: the turn's
 // request message is already in history.
-func continuationRequest() ChatRequest {
-	return ChatRequest{
+func continuationRequest() runreq.ChatRequest {
+	return runreq.ChatRequest{
 		BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 		UserMessagePersisted: true, PersistedUserMessageID: "request-message",
 	}
@@ -1115,7 +1118,7 @@ func continuationRequest() ChatRequest {
 func TestDriveDecisionContinuationNamesTheProviderFailure(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{
 		agent:          native.New(native.Deps{Logger: slog.New(slog.DiscardHandler)}),
 		logger:         slog.New(slog.DiscardHandler),
@@ -1127,11 +1130,11 @@ func TestDriveDecisionContinuationNamesTheProviderFailure(t *testing.T) {
 		Messages: []sdk.Message{sdk.UserMessage("continue after the decision")},
 		Identity: native.SessionContext{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID},
 	}
-	eventCh := make(chan WSStreamEvent, 64)
+	eventCh := make(chan runreq.WSStreamEvent, 64)
 
 	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 		Req: req,
-		Setup: func(ctx context.Context, _ ChatRequest) (runPlan, error) {
+		Setup: func(ctx context.Context, _ runreq.ChatRequest) (runPlan, error) {
 			return service.nativeContinuationPlan(ctx, req, cfg, "model-1")
 		},
 	}, eventCh)
@@ -1165,12 +1168,12 @@ func TestDriveDecisionContinuationNamesTheProviderFailure(t *testing.T) {
 
 // failureRows is the one assistant failure row a continuation left. A
 // continuation writes no user row: the turn's request message is in history.
-func failureRows(t *testing.T, messages *recordingMessageService) messagepkg.PersistInput {
+func failureRows(t *testing.T, messages *agenttest.RecordingMessages) messagepkg.PersistInput {
 	t.Helper()
-	if len(messages.persisted) != 1 || messages.persisted[0].Role != "assistant" {
-		t.Fatalf("persisted %#v, want one assistant failure row", messages.persisted)
+	if len(messages.Persisted) != 1 || messages.Persisted[0].Role != "assistant" {
+		t.Fatalf("persisted %#v, want one assistant failure row", messages.Persisted)
 	}
-	row := messages.persisted[0]
+	row := messages.Persisted[0]
 	if row.TurnRequestMessageID != "request-message" {
 		t.Fatalf("failure row turn request = %q, want the parked turn's request message", row.TurnRequestMessageID)
 	}
@@ -1183,12 +1186,12 @@ func failureRows(t *testing.T, messages *recordingMessageService) messagepkg.Per
 func TestDriveDecisionContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
 
 	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 		Req: continuationRequest(),
-		Setup: func(context.Context, ChatRequest) (runPlan, error) {
+		Setup: func(context.Context, runreq.ChatRequest) (runPlan, error) {
 			return runPlan{}, errors.New("SECRET tool result store unavailable")
 		},
 	}, nil)
@@ -1207,20 +1210,20 @@ func TestDriveDecisionContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 func TestDriveDecisionContinuationTargetGoneWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
 
 	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 		Req: continuationRequest(),
-		Setup: func(context.Context, ChatRequest) (runPlan, error) {
+		Setup: func(context.Context, runreq.ChatRequest) (runPlan, error) {
 			return runPlan{}, sessionruntime.ErrCommandTargetNotActive
 		},
 	}, nil)
 	if err != nil {
 		t.Fatalf("continuation error = %v, want none for a run another owner holds", err)
 	}
-	if len(messages.persisted) != 0 {
-		t.Fatalf("persisted %#v, want nothing", messages.persisted)
+	if len(messages.Persisted) != 0 {
+		t.Fatalf("persisted %#v, want nothing", messages.Persisted)
 	}
 }
 
@@ -1242,7 +1245,7 @@ func (f fixedStream) Stream(context.Context, native.RunConfig) <-chan native.Str
 func TestDriveDecisionContinuationSnapshotWithoutOutputWritesOneRow(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
 	snapshot, err := json.Marshal([]sdk.Message{sdk.UserMessage("continue after the decision")})
 	if err != nil {
@@ -1262,7 +1265,7 @@ func TestDriveDecisionContinuationSnapshotWithoutOutputWritesOneRow(t *testing.T
 
 	_ = service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 		Req:   continuationRequest(),
-		Setup: func(context.Context, ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil },
+		Setup: func(context.Context, runreq.ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil },
 	}, nil)
 
 	row := failureRows(t, messages)
@@ -1277,14 +1280,14 @@ func TestDriveDecisionContinuationCallerLeavingIsAStop(t *testing.T) {
 	t.Parallel()
 
 	ctx, leave := context.WithCancel(context.Background())
-	eventCh := make(chan WSStreamEvent)
+	eventCh := make(chan runreq.WSStreamEvent)
 	var commits []bool
 	exec := runFuncExecutor(func(ctx context.Context, _ func(native.StreamEvent)) execEnding {
 		leave()
 		<-ctx.Done()
 		return execEnding{
 			Terminal: &native.StreamEvent{Type: native.EventAgentAbort},
-			Commit: func(_ context.Context, _ *RunFailure, row bool) (commitSummary, error) {
+			Commit: func(_ context.Context, _ *outcome.RunFailure, row bool) (commitSummary, error) {
 				commits = append(commits, row)
 				return commitSummary{}, nil
 			},
@@ -1294,7 +1297,7 @@ func TestDriveDecisionContinuationCallerLeavingIsAStop(t *testing.T) {
 
 	err := service.driveUnroutedContinuation(ctx, decisionContinuation{
 		Req:   continuationRequest(),
-		Setup: func(context.Context, ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil },
+		Setup: func(context.Context, runreq.ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil },
 	}, eventCh)
 	if err != nil {
 		t.Fatalf("continuation error = %v, want none", err)
@@ -1320,10 +1323,10 @@ var (
 func TestSetupReceivesTheRequestWithTheDriversAssetCollector(t *testing.T) {
 	t.Parallel()
 
-	var seen ChatRequest
-	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	var seen runreq.ChatRequest
+	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	spec := scheduledSpec(nil, &recordingDelivery{})
-	spec.Setup = func(_ context.Context, req ChatRequest) (runPlan, error) {
+	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (runPlan, error) {
 		seen = req
 		return runPlan{Exec: &scriptedExecutor{}, Req: triggerStreamRequest()}, nil
 	}
@@ -1370,7 +1373,7 @@ func TestDriveStopDoesNotTurnPendingPublicationsIntoFailures(t *testing.T) {
 	t.Parallel()
 
 	pub := &ctxCancelledPublisher{}
-	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	svc.publishTurnEvent = pub.publish
 
 	release := make(chan struct{})
@@ -1388,7 +1391,7 @@ func TestDriveStopDoesNotTurnPendingPublicationsIntoFailures(t *testing.T) {
 
 	done := make(chan runResult, 1)
 	go func() { done <- svc.drive(runCtx, spec) }()
-	stop(errRunStopped)
+	stop(outcome.ErrRunStopped)
 	close(release)
 
 	result := <-done
@@ -1396,7 +1399,7 @@ func TestDriveStopDoesNotTurnPendingPublicationsIntoFailures(t *testing.T) {
 	if refusals := pub.refusals(); refusals != 0 {
 		t.Fatalf("publication refused %d time(s) because the execution context was cancelled", refusals)
 	}
-	if result.End == endFailed && result.Failure != nil && result.Failure.Code == apperror.CodeSessionPublishFailed {
+	if result.End == outcome.EndFailed && result.Failure != nil && result.Failure.Code == apperror.CodeSessionPublishFailed {
 		t.Fatalf("a stopped run ended as a publication failure: %#v", result.Failure)
 	}
 }
@@ -1416,13 +1419,13 @@ func (e *panickingExecutor) execute(_ context.Context, _ func(native.StreamEvent
 func TestDriveContainsAPanicInTheProducer(t *testing.T) {
 	t.Parallel()
 
-	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 	spec := scheduledSpec(&panickingExecutor{panicValue: "boom"}, delivery)
 
 	result := svc.drive(context.Background(), spec)
 
-	if result.End != endFailed || result.Failure == nil {
+	if result.End != outcome.EndFailed || result.Failure == nil {
 		t.Fatalf("result = %#v, want a named failure for the panicking run", result)
 	}
 	if result.Failure.Code != apperror.CodeInternal {
@@ -1440,16 +1443,16 @@ func TestDriveContainsAPanicInTheProducer(t *testing.T) {
 func TestDriveContainsAPanicInSetup(t *testing.T) {
 	t.Parallel()
 
-	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{}
 	spec := scheduledSpec(nil, delivery)
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		panic("setup boom")
 	}
 
 	result := svc.drive(context.Background(), spec)
 
-	if result.End != endFailed || result.Failure == nil {
+	if result.End != outcome.EndFailed || result.Failure == nil {
 		t.Fatalf("result = %#v, want a named failure for a panicking setup", result)
 	}
 	if result.Failure.Code != apperror.CodeInternal {
@@ -1470,26 +1473,26 @@ func TestDriveIMStartTurnSetupFailureLeavesTheUserMessageAndRow(t *testing.T) {
 
 	for _, tc := range []struct {
 		name     string
-		input    inputOwnership
+		input    outcome.InputOwnership
 		wantRows int
 	}{
-		{name: "IM", input: inputAccepted, wantRows: 2},
-		{name: "Web send", input: inputHeld, wantRows: 0},
-		{name: "schedule", input: inputSynthetic, wantRows: 0},
+		{name: "IM", input: outcome.InputAccepted, wantRows: 2},
+		{name: "Web send", input: outcome.InputHeld, wantRows: 0},
+		{name: "schedule", input: outcome.InputSynthetic, wantRows: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			messages := &recordingMessageService{}
-			svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+			messages := &agenttest.RecordingMessages{}
+			svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 			svc.messageService = messages
 			spec := scheduledSpec(nil, &recordingDelivery{})
-			spec.Req = ChatRequest{
+			spec.Req = runreq.ChatRequest{
 				BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",
 				Query: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
 			}
 			spec.Input = tc.input
-			spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+			spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 				return runPlan{}, apperror.Wrap(apperror.CodeAgentProviderAuthFailed, errors.New("401"), nil)
 			}
 
@@ -1498,17 +1501,17 @@ func TestDriveIMStartTurnSetupFailureLeavesTheUserMessageAndRow(t *testing.T) {
 			if result.Failure == nil || result.Failure.Code != apperror.CodeAgentProviderAuthFailed {
 				t.Fatalf("failure = %#v, want the provider's code", result.Failure)
 			}
-			if len(messages.persisted) != tc.wantRows {
-				t.Fatalf("persisted %d rows, want %d", len(messages.persisted), tc.wantRows)
+			if len(messages.Persisted) != tc.wantRows {
+				t.Fatalf("persisted %d rows, want %d", len(messages.Persisted), tc.wantRows)
 			}
 			if tc.wantRows == 0 {
 				return
 			}
-			if messages.persisted[0].Role != "user" {
-				t.Fatalf("first row = %#v, want the user's own message", messages.persisted[0])
+			if messages.Persisted[0].Role != "user" {
+				t.Fatalf("first row = %#v, want the user's own message", messages.Persisted[0])
 			}
-			if got, _ := messages.persisted[1].Metadata[messagepkg.HistoryErrorCodeMetadataKey].(string); got != string(apperror.CodeAgentProviderAuthFailed) {
-				t.Fatalf("failure row metadata = %#v, want the provider's code", messages.persisted[1].Metadata)
+			if got, _ := messages.Persisted[1].Metadata[messagepkg.HistoryErrorCodeMetadataKey].(string); got != string(apperror.CodeAgentProviderAuthFailed) {
+				t.Fatalf("failure row metadata = %#v, want the provider's code", messages.Persisted[1].Metadata)
 			}
 		})
 	}
@@ -1524,13 +1527,13 @@ func TestDriveLinksTheAssetsTheDeliveryEndReports(t *testing.T) {
 	terminal := scheduleTerminalEvent(t, "done")
 	exec := &scriptedExecutor{terminal: &terminal}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	messages := &linkingMessageService{
 		assistant: messagepkg.Message{ID: "assistant-1", SessionID: "session-1", Role: "assistant", Content: []byte("hi")},
 	}
 	svc.messageService = messages
 	delivery := &reportedAssetsDelivery{}
-	delivery.assets = []OutboundAssetRef{{ContentHash: "hash:voice", Role: "attachment"}}
+	delivery.assets = []runreq.OutboundAssetRef{{ContentHash: "hash:voice", Role: "attachment"}}
 
 	svc.drive(context.Background(), scheduledSpec(exec, delivery))
 
@@ -1555,7 +1558,7 @@ func TestDriveLinksNothingWithoutReportedAssets(t *testing.T) {
 
 	terminal := scheduleTerminalEvent(t, "done")
 	exec := &scriptedExecutor{terminal: &terminal}
-	svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+	svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 	messages := &linkingMessageService{
 		assistant: messagepkg.Message{ID: "assistant-1", SessionID: "session-1", Role: "assistant", Content: []byte("hi")},
 	}
@@ -1563,7 +1566,7 @@ func TestDriveLinksNothingWithoutReportedAssets(t *testing.T) {
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 
-	if result.End != endCompleted {
+	if result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want completed", result.End)
 	}
 	if len(messages.linked) != 0 {
@@ -1574,11 +1577,11 @@ func TestDriveLinksNothingWithoutReportedAssets(t *testing.T) {
 // reportedAssetsDelivery is a caller whose outbound path collected assets.
 type reportedAssetsDelivery struct {
 	recordingDelivery
-	assets []OutboundAssetRef
+	assets []runreq.OutboundAssetRef
 }
 
-func (d *reportedAssetsDelivery) reportedAssets() []OutboundAssetRef {
-	return append([]OutboundAssetRef(nil), d.assets...)
+func (d *reportedAssetsDelivery) reportedAssets() []runreq.OutboundAssetRef {
+	return append([]runreq.OutboundAssetRef(nil), d.assets...)
 }
 
 func (d *reportedAssetsDelivery) Deliver(ctx context.Context, ev RunEvent) bool {
@@ -1588,7 +1591,7 @@ func (d *reportedAssetsDelivery) Deliver(ctx context.Context, ev RunEvent) bool 
 // linkingMessageService records what the run linked to the reply, and answers
 // the one lookup LinkOutboundAssets makes with a written assistant row.
 type linkingMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	assistant messagepkg.Message
 	linked    [][]messagepkg.AssetRef
 }
@@ -1617,10 +1620,10 @@ func (s *linkingMessageService) LinkAssets(_ context.Context, _ string, assets [
 // the entry's own.
 func webEntrySpecs(svc *Service, admission *WebAdmission, delivery RunDelivery) map[string]runSpec {
 	return map[string]runSpec{
-		"send": svc.webRunSpec(admission, ChatRequest{
+		"send": svc.webRunSpec(admission, runreq.ChatRequest{
 			BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",
 			Query: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
-		}, delivery, inputHeld),
+		}, delivery, outcome.InputHeld),
 		"retry": svc.retryRunSpec(admission, RetryLatestMessageInput{
 			BotID: "bot-1", SessionID: "session-1", TargetTurnID: "old-turn",
 		}, delivery),
@@ -1635,30 +1638,30 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 
 	for _, tc := range []struct {
 		entry   string
-		phase   runPhase
+		phase   outcome.RunPhase
 		code    apperror.Code
 		hook    bool
 		wantRow bool
 	}{
-		{entry: "send", phase: phaseSetup, code: apperror.CodeAgentProviderAuthFailed},
-		{entry: "send", phase: phaseSetup, code: apperror.CodeHookUserMessageFailed, hook: true, wantRow: true},
-		{entry: "send", phase: phaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
-		{entry: "send", phase: phasePublish, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
-		{entry: "retry", phase: phaseSetup, code: apperror.CodeAgentProviderAuthFailed},
-		{entry: "edit", phase: phaseSetup, code: apperror.CodeAgentProviderAuthFailed},
-		{entry: "retry", phase: phaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
-		{entry: "edit", phase: phaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
-		{entry: "retry", phase: phaseExecution, code: apperror.CodeInternal},
-		{entry: "edit", phase: phaseExecution, code: apperror.CodeInternal},
-		{entry: "retry", phase: phaseCommit, code: apperror.CodeAgentProviderAuthFailed},
-		{entry: "edit", phase: phaseCommit, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "send", phase: outcome.PhaseSetup, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "send", phase: outcome.PhaseSetup, code: apperror.CodeHookUserMessageFailed, hook: true, wantRow: true},
+		{entry: "send", phase: outcome.PhaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "send", phase: outcome.PhasePublish, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "retry", phase: outcome.PhaseSetup, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "edit", phase: outcome.PhaseSetup, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "retry", phase: outcome.PhaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "edit", phase: outcome.PhaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
+		{entry: "retry", phase: outcome.PhaseExecution, code: apperror.CodeInternal},
+		{entry: "edit", phase: outcome.PhaseExecution, code: apperror.CodeInternal},
+		{entry: "retry", phase: outcome.PhaseCommit, code: apperror.CodeAgentProviderAuthFailed},
+		{entry: "edit", phase: outcome.PhaseCommit, code: apperror.CodeAgentProviderAuthFailed},
 	} {
 		name := tc.entry + " " + phaseName(tc.phase) + " " + string(tc.code)
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			messages := &recordingMessageService{}
-			svc := newDriveService(&recordingTurnEventPublisher{}, &scriptedAdmitter{started: true})
+			messages := &agenttest.RecordingMessages{}
+			svc := newDriveService(&recordingTurnEventPublisher{}, &agenttest.ScriptedAdmitter{Started: true})
 			svc.messageService = messages
 			admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
 				BotID: "bot-1", SessionID: "session-1", InvocationID: name,
@@ -1673,7 +1676,7 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 			var commits []bool
 			spec := webEntrySpecs(svc, admission, &recordingDelivery{})[tc.entry]
 			req := spec.Req
-			spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+			spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 				if tc.hook {
 					return runPlan{}, apperror.New(apperror.CodeHookUserMessageFailed, nil)
 				}
@@ -1687,17 +1690,17 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 			}
 
 			result := svc.drive(admission.ctx, spec)
-			admission.stop(errRunStopped)
+			admission.stop(outcome.ErrRunStopped)
 			admission.endActive()
 
-			if result.End != endFailed || result.Failure == nil || result.Failure.Code != tc.code {
+			if result.End != outcome.EndFailed || result.Failure == nil || result.Failure.Code != tc.code {
 				t.Fatalf("result = %#v, want failed %s", result, tc.code)
 			}
 			if tc.hook {
 				// The hook's refusal is a setup failure the driver writes
 				// itself: the user has to be shown why the send was refused.
-				if len(messages.persisted) != 2 || messages.persisted[1].Metadata[messagepkg.HistoryFailureOriginMetadataKey] != messagepkg.HistoryFailureOriginUserMessageHook {
-					t.Fatalf("persisted %#v, want the hook-refused pair", messages.persisted)
+				if len(messages.Persisted) != 2 || messages.Persisted[1].Metadata[messagepkg.HistoryFailureOriginMetadataKey] != messagepkg.HistoryFailureOriginUserMessageHook {
+					t.Fatalf("persisted %#v, want the hook-refused pair", messages.Persisted)
 				}
 				return
 			}

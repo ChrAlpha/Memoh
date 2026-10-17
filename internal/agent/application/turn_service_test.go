@@ -5,13 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
-	"slices"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -21,172 +19,13 @@ import (
 	"github.com/felinics/memoh/internal/contextview"
 )
 
-// scriptedAdmitter stands in for the session runtime so these tests can exercise
-// what this package owns: the translation of an admission answer into the turn
-// port's vocabulary, and the terminal write a finished run must produce. The
-// answers themselves are scripted because their correctness is established where
-// admission is implemented, not here.
-type scriptedAdmitter struct {
-	mu sync.Mutex
-
-	// admitErr, when set, is what Admit returns instead of an admission.
-	admitErr error
-	// started reports whether the admission owns execution. False models a
-	// replay of a run owned elsewhere or already finished.
-	started bool
-
-	// terminal and finishErr are what FinishRunWithErrorCode returns.
-	terminal  sessionruntime.TerminalRun
-	finishErr error
-
-	inputs     []sessionruntime.AdmitInput
-	finishes   []recordedFinish
-	published  []native.StreamEvent
-	publishErr error
-
-	// finishStarted and finishRelease, when non-nil, hold the terminal write
-	// open: a test observes the run in its finishing window, between the last
-	// event and the durable record.
-	finishStarted chan struct{}
-	finishRelease chan struct{}
-}
-
-type recordedFinish struct {
-	handle  sessionruntime.RunHandle
-	status  string
-	message string
-	args    map[string]string
-}
-
-func newScriptedAdmitter() *scriptedAdmitter {
-	return &scriptedAdmitter{started: true}
-}
-
-func (a *scriptedAdmitter) Admit(_ context.Context, in sessionruntime.AdmitInput) (sessionruntime.Admission, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.inputs = append(a.inputs, in)
-	if a.admitErr != nil {
-		return sessionruntime.Admission{}, a.admitErr
-	}
-	runID := "run-" + strconv.Itoa(len(a.inputs))
-	if !a.started {
-		return sessionruntime.Admission{RunID: runID, Replay: true}, nil
-	}
-	return sessionruntime.Admission{
-		RunID:        runID,
-		TurnID:       "turn-" + strconv.Itoa(len(a.inputs)),
-		TurnPosition: int64(len(a.inputs) - 1),
-		Started:      true,
-		Handle: sessionruntime.RunHandle{
-			BotID:        in.BotID,
-			SessionID:    in.SessionID,
-			RunID:        runID,
-			FencingToken: int64(len(a.inputs)),
-		},
-	}, nil
-}
-
-func (a *scriptedAdmitter) FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, message string) (sessionruntime.TerminalRun, error) {
-	return a.FinishRunWithFailure(ctx, handle, status, message, nil)
-}
-
-func (a *scriptedAdmitter) FinishRunWithFailure(_ context.Context, handle sessionruntime.RunHandle, status, message string, args map[string]string) (sessionruntime.TerminalRun, error) {
-	if a.finishStarted != nil {
-		close(a.finishStarted)
-	}
-	if a.finishRelease != nil {
-		<-a.finishRelease
-	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: message, args: args})
-	if a.finishErr != nil {
-		return a.terminal, a.finishErr
-	}
-	if a.terminal.RunID != "" {
-		return a.terminal, nil
-	}
-	// A real write records the run it ended; the double reports the same, so a
-	// caller that reads the record sees what it wrote.
-	return sessionruntime.TerminalRun{
-		RunID:        handle.RunID,
-		BotID:        handle.BotID,
-		SessionID:    handle.SessionID,
-		FencingToken: handle.FencingToken,
-		State:        terminalStateForStatus(status),
-		ErrorCode:    message,
-		ErrorArgs:    args,
-		Applied:      true,
-	}, nil
-}
-
-// terminalStateForStatus names the durable state a live status ends as.
-func terminalStateForStatus(status string) string {
-	switch status {
-	case sessionruntime.RunStatusCompleted:
-		return "completed"
-	case sessionruntime.RunStatusAborted:
-		return "aborted"
-	case sessionruntime.RunStatusErrored:
-		return "failed"
-	default:
-		return ""
-	}
-}
-
-func (*scriptedAdmitter) MarkInlineDecisionRun(string, string, string) {}
-
-func (a *scriptedAdmitter) PublishAgentEvent(
-	_ context.Context,
-	_ sessionruntime.RunHandle,
-	event native.StreamEvent,
-) error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.published = append(a.published, event)
-	return a.publishErr
-}
-
-func (a *scriptedAdmitter) admitted() []sessionruntime.AdmitInput {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return slices.Clone(a.inputs)
-}
-
-// publishedEvents returns what the run published to the session projection.
-func (a *scriptedAdmitter) publishedEvents() []native.StreamEvent {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return slices.Clone(a.published)
-}
-
-// awaitFinish waits for the run's terminal write, which happens in the pump's
-// defer stack and so can trail the closing of the handle's channels.
-func (a *scriptedAdmitter) awaitFinish(t *testing.T) recordedFinish {
-	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		a.mu.Lock()
-		finishes := slices.Clone(a.finishes)
-		a.mu.Unlock()
-		if len(finishes) > 0 {
-			return finishes[len(finishes)-1]
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("run ended without a terminal write: the thread's slot is never released")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}
-
 func newTurnTestService() *Service {
 	service, _ := newAdmittedTurnTestService()
 	return service
 }
 
-func newAdmittedTurnTestService() (*Service, *scriptedAdmitter) {
-	admitter := newScriptedAdmitter()
+func newAdmittedTurnTestService() (*Service, *agenttest.ScriptedAdmitter) {
+	admitter := agenttest.NewScriptedAdmitter()
 	return &Service{
 		logger:           slog.New(slog.DiscardHandler),
 		sessionRuntime:   admitter,
@@ -201,20 +40,20 @@ func newAdmittedTurnTestService() (*Service, *scriptedAdmitter) {
 // asserts what a chat run did needs the real one.
 type chatTurnFixture struct {
 	fixture  directLifecycleFixture
-	admitter *scriptedAdmitter
+	admitter *agenttest.ScriptedAdmitter
 }
 
 func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFixture {
 	t.Helper()
 	fixture := newDirectLifecycleFixture(t, mode)
-	admitter := newScriptedAdmitter()
+	admitter := agenttest.NewScriptedAdmitter()
 	fixture.service.sessionRuntime = admitter
 	fixture.service.publishTurnEvent = admitter.PublishAgentEvent
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
 	// The chat path reads the session for the facts a run executes under, the
 	// same way a hosted service does.
-	fixture.service.sessionService = &fakeBackgroundSessionService{
-		getFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
+	fixture.service.sessionService = &agenttest.Sessions{
+		GetFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
 			return sessionpkg.Thread{
 				ID: sessionID, BotID: lifecycleTestBotID, Type: sessionpkg.TypeChat,
 				SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,
@@ -330,7 +169,7 @@ func TestStartTurnStreamsEvents(t *testing.T) {
 	if !strings.Contains(string(events[len(events)-1].Payload), turn.RunStateCompleted) {
 		t.Fatalf("last event = %s, want the completed run_terminal", events[len(events)-1].Payload)
 	}
-	if got := fixture.admitter.awaitFinish(t).status; got != sessionruntime.RunStatusCompleted {
+	if got := fixture.admitter.AwaitFinish(t).Status; got != sessionruntime.RunStatusCompleted {
 		t.Fatalf("finish status = %q, want %q", got, sessionruntime.RunStatusCompleted)
 	}
 }
@@ -344,7 +183,7 @@ func TestStartTurnPublishesNativeEventsBeforeCleanFinish(t *testing.T) {
 	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "native-events-1"})
 	collectEvents(t, handle)
 
-	published := fixture.admitter.publishedEvents()
+	published := fixture.admitter.PublishedEvents()
 	if len(published) == 0 {
 		t.Fatal("the run published nothing to the session projection")
 	}
@@ -360,7 +199,7 @@ func TestStartTurnPublishesNativeEventsBeforeCleanFinish(t *testing.T) {
 	if !sawDelta || !sawEnd {
 		t.Fatalf("published events = %#v, want the runtime's output and its terminal", published)
 	}
-	if got := fixture.admitter.awaitFinish(t).status; got != sessionruntime.RunStatusCompleted {
+	if got := fixture.admitter.AwaitFinish(t).Status; got != sessionruntime.RunStatusCompleted {
 		t.Fatalf("finish status = %q, want %q", got, sessionruntime.RunStatusCompleted)
 	}
 }
@@ -375,7 +214,7 @@ func TestStartTurnPublishesNativeEventsBeforeCleanFinish(t *testing.T) {
 func TestStartTurnFailsWhenRuntimeEventPublicationFails(t *testing.T) {
 	fixture := newChatTurnFixture(t, directLifecycleModelHoldOnCancel)
 	publishErr := errors.New("private runtime publication failure")
-	fixture.admitter.publishErr = publishErr
+	fixture.admitter.PublishErr = publishErr
 
 	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "publish-fail-1"})
 	var publicErr error
@@ -397,7 +236,7 @@ func TestStartTurnFailsWhenRuntimeEventPublicationFails(t *testing.T) {
 		}
 	}
 	fixture.releaseModel(t)
-	if got := fixture.admitter.awaitFinish(t).status; got != sessionruntime.RunStatusErrored {
+	if got := fixture.admitter.AwaitFinish(t).Status; got != sessionruntime.RunStatusErrored {
 		t.Fatalf("publication failure status = %q, want %q", got, sessionruntime.RunStatusErrored)
 	}
 	if got := apperror.CodeOf(publicErr); got != apperror.CodeSessionPublishFailed {
@@ -463,12 +302,12 @@ func TestCancelWaitsForStreamCleanupBeforeFinalizingRun(t *testing.T) {
 	fixture.stopRun(t, handle)
 	fixture.releaseModel(t)
 	collectEvents(t, handle)
-	finish := fixture.admitter.awaitFinish(t)
-	if finish.status != sessionruntime.RunStatusAborted {
-		t.Fatalf("finish status = %q, want %q", finish.status, sessionruntime.RunStatusAborted)
+	finish := fixture.admitter.AwaitFinish(t)
+	if finish.Status != sessionruntime.RunStatusAborted {
+		t.Fatalf("finish status = %q, want %q", finish.Status, sessionruntime.RunStatusAborted)
 	}
-	if finish.message != "" {
-		t.Fatalf("aborted run recorded code %q, want none: a stop is not a failure", finish.message)
+	if finish.Message != "" {
+		t.Fatalf("aborted run recorded code %q, want none: a stop is not a failure", finish.Message)
 	}
 }
 
@@ -607,7 +446,7 @@ func TestBoundaryValuesPassThrough(t *testing.T) {
 
 func TestStartTurnRejectsForeignTeam(t *testing.T) {
 	a := newTurnTestService()
-	a.allowedTeam = "team-home"
+	setAllowedTeam(a, "team-home")
 	_, err := a.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "team-other", Mode: turn.ModeChat})
 	if !errors.Is(err, turn.ErrTeamNotServed) {
 		t.Fatalf("err = %v, want ErrTeamNotServed", err)
@@ -629,7 +468,7 @@ func TestStartTurnAdmitsUnderTheIdempotencyKey(t *testing.T) {
 	}
 	drainHandle(h)
 
-	admitted := admitter.admitted()
+	admitted := admitter.Admitted()
 	if len(admitted) != 1 {
 		t.Fatalf("admissions = %d, want 1", len(admitted))
 	}
@@ -658,7 +497,7 @@ func TestStartTurnMintsInvocationIDWhenKeyIsAbsent(t *testing.T) {
 		}
 		drainHandle(h)
 	}
-	admitted := admitter.admitted()
+	admitted := admitter.Admitted()
 	if len(admitted) != 2 {
 		t.Fatalf("admissions = %d, want 2", len(admitted))
 	}
@@ -690,8 +529,8 @@ func TestStartTurnTranslatesAdmissionRejections(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a, admitter := newAdmittedTurnTestService()
-			admitter.admitErr = tc.admitErr
-			admitter.started = tc.started
+			admitter.AdmitErr = tc.admitErr
+			admitter.Started = tc.started
 			if _, err := a.StartTurn(context.Background(), cmd); !errors.Is(err, tc.want) {
 				t.Fatalf("StartTurn() error = %v, want %v", err, tc.want)
 			}
@@ -759,8 +598,8 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 		fixture := newChatTurnFixture(t, directLifecycleModelFailure)
 		handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "records-error-1"})
 		collectEvents(t, handle)
-		if got := fixture.admitter.awaitFinish(t); got.status != sessionruntime.RunStatusErrored {
-			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusErrored)
+		if got := fixture.admitter.AwaitFinish(t); got.Status != sessionruntime.RunStatusErrored {
+			t.Fatalf("status = %q, want %q", got.Status, sessionruntime.RunStatusErrored)
 		}
 	})
 
@@ -774,8 +613,8 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 		// A cancelled run and a clean one both end with their channels closed;
 		// only the run's own context tells them apart, and the state written
 		// for the run is the driver's reading of it.
-		if got := fixture.admitter.awaitFinish(t); got.status != sessionruntime.RunStatusAborted {
-			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusAborted)
+		if got := fixture.admitter.AwaitFinish(t); got.Status != sessionruntime.RunStatusAborted {
+			t.Fatalf("status = %q, want %q", got.Status, sessionruntime.RunStatusAborted)
 		}
 	})
 
@@ -783,11 +622,11 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 		fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
 		handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "records-complete-1"})
 		collectEvents(t, handle)
-		got := fixture.admitter.awaitFinish(t)
-		if got.status != sessionruntime.RunStatusCompleted {
-			t.Fatalf("status = %q, want %q", got.status, sessionruntime.RunStatusCompleted)
+		got := fixture.admitter.AwaitFinish(t)
+		if got.Status != sessionruntime.RunStatusCompleted {
+			t.Fatalf("status = %q, want %q", got.Status, sessionruntime.RunStatusCompleted)
 		}
-		if got.handle.FencingToken == 0 {
+		if got.Handle.FencingToken == 0 {
 			t.Fatal("terminal write carried no fencing token: a superseded owner could close this run")
 		}
 	})

@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -39,7 +40,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 		Fence:         abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	lifecycles := &recordingContextLifecycleStore{}
+	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: lifecycles}
 	service.bindSessionRuntime(manager)
 
@@ -131,7 +132,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 	if durable.State != ledger.StateAborted || durable.ErrorCode != "" {
 		t.Fatalf("durable run = %#v, want aborted terminal", durable)
 	}
-	if len(lifecycles.terminalUpserts) != 1 || lifecycles.terminalUpserts[0].Status != contextLifecycleStatusAborted {
-		t.Fatalf("lifecycle terminal = %#v, want aborted", lifecycles.terminalUpserts)
+	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != contextLifecycleStatusAborted {
+		t.Fatalf("lifecycle terminal = %#v, want aborted", lifecycles.TerminalUpserts)
 	}
 }

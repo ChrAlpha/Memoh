@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
@@ -37,7 +39,7 @@ func TestRuntimeDecisionTerminalWithoutRecoverableSnapshotPersistsMinimalLifecyc
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager, handle := newWaitingDecisionRuntime(t)
-			lifecycles := &recordingContextLifecycleStore{}
+			lifecycles := &agenttest.RecordingLifecycleStore{}
 			service := continuationService(manager)
 			service.contextLifecycles = lifecycles
 			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
@@ -84,13 +86,13 @@ func TestStaleDecisionContinuationDoesNotRecoverLifecycleFromAssistantMetadata(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	lifecycles := &recordingContextLifecycleStore{metadata: metadata}
+	lifecycles := &agenttest.RecordingLifecycleStore{Metadata: metadata}
 	service := continuationService(manager)
 	service.contextLifecycles = lifecycles
 	stale := decisionCommand(handle, "stale")
 	stale.Generation += "-stale"
 
-	continueDecision(t, service, manager, stale, func(context.Context, ChatRequest) (runPlan, error) {
+	continueDecision(t, service, manager, stale, func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		t.Fatal("stale continuation unexpectedly ran")
 		return runPlan{}, nil
 	})

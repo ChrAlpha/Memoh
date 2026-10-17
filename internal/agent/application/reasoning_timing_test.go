@@ -8,6 +8,8 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/step"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -161,7 +163,7 @@ func TestReasoningTimingTrackerOmitsUnmeasuredEmptyReasoning(t *testing.T) {
 func TestStoreRoundAttachesReasoningTimingAfterPersistedUserIsSkipped(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -173,13 +175,13 @@ func TestStoreRoundAttachesReasoningTimingAfterPersistedUserIsSkipped(t *testing
 			sdk.TextPart{Text: "answer"},
 		},
 	}
-	round := append([]ModelMessage{{Role: "user", Content: newTextContent("hello")}}, sdkMessagesToModelMessages([]sdk.Message{assistant})...)
+	round := append([]runreq.ModelMessage{{Role: "user", Content: runreq.NewTextContent("hello")}}, runreq.SDKMessagesToModelMessages([]sdk.Message{assistant})...)
 	segment := messagepkg.ReasoningTimingSegment{
 		DurationMS: 2000,
 		State:      "completed",
 	}
 
-	_, err := service.storeRoundWithOptionsResult(t.Context(), ChatRequest{
+	_, err := service.storeRoundWithOptionsResult(t.Context(), runreq.ChatRequest{
 		BotID:                "bot-1",
 		ThreadID:             "session-1",
 		Query:                "hello",
@@ -188,10 +190,10 @@ func TestStoreRoundAttachesReasoningTimingAfterPersistedUserIsSkipped(t *testing
 	if err != nil {
 		t.Fatalf("storeRoundWithOptionsResult() error = %v", err)
 	}
-	if len(messages.persisted) != 1 || messages.persisted[0].Role != "assistant" {
-		t.Fatalf("persisted = %#v, want one assistant row", messages.persisted)
+	if len(messages.Persisted) != 1 || messages.Persisted[0].Role != "assistant" {
+		t.Fatalf("persisted = %#v, want one assistant row", messages.Persisted)
 	}
-	segments := messagepkg.ReasoningTimingFromMetadata(messages.persisted[0].Metadata)
+	segments := messagepkg.ReasoningTimingFromMetadata(messages.Persisted[0].Metadata)
 	if len(segments) != 1 || segments[0].DurationMS != 2000 || segments[0].Ordinal != 0 {
 		t.Fatalf("persisted reasoning timing = %#v", segments)
 	}

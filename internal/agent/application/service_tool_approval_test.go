@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -55,7 +56,7 @@ func approvalAuthorityService(grants map[string][]string) *Service {
 		}
 	}
 	return &Service{
-		botPermissions: &fakeBotPermissionChecker{values: values},
+		botPermissions: &agenttest.PermissionChecker{Values: values},
 		queries: runInitiatorQueries{initiators: map[string]string{
 			approvalTestRunID:       approvalTestInitiator,
 			approvalTestLegacyRunID: "",

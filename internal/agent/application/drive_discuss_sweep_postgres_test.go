@@ -7,13 +7,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/team"
 )
 
 // newSweep is a sweep over the process's own service, with the singleton
 // scope the self-hosted deployment has.
 func newSweep(proc *discussProcess) *DiscussSweep {
-	proc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	return NewDiscussSweep(proc.svc)
 }
 
@@ -94,7 +95,7 @@ func TestDiscussSweepVisitsEveryScope(t *testing.T) {
 	env := newDiscussEnv(t, "group")
 	proc := newDiscussProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a", "scope-b", "scope-c"}}
-	proc.svc.resumeScopes = scopes
+	proc.svc.teamScopes = scopes
 	NewDiscussSweep(proc.svc).sweep(context.Background(), time.Now())
 	if got := scopes.visited(); len(got) != 3 || got[0] != "scope-a" || got[2] != "scope-c" {
 		t.Fatalf("scopes visited = %v, want all three in order", got)
@@ -110,7 +111,7 @@ func TestDiscussSweepRunSweepsAtStartAndOnEveryTick(t *testing.T) {
 	env := newDiscussEnv(t, "group")
 	proc := newDiscussProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a"}}
-	proc.svc.resumeScopes = scopes
+	proc.svc.teamScopes = scopes
 	sweep := NewDiscussSweep(proc.svc)
 
 	ticks := make(chan time.Time)
@@ -160,16 +161,16 @@ func (*pagedScopes) CurrentScope(ctx context.Context) string {
 	return scope
 }
 
-func (p *pagedScopes) ListScopePage(_ context.Context, after string, _ int32) (SessionResumeScopePage, error) {
+func (p *pagedScopes) ListScopePage(_ context.Context, after string, _ int32) (runreq.TeamScopePage, error) {
 	next := 0
 	if after != "" {
 		n, err := strconv.Atoi(after)
 		if err != nil {
-			return SessionResumeScopePage{}, err
+			return runreq.TeamScopePage{}, err
 		}
 		next = n
 	}
-	page := SessionResumeScopePage{Scopes: []string{p.scopes[next]}}
+	page := runreq.TeamScopePage{Scopes: []string{p.scopes[next]}}
 	if next+1 >= len(p.scopes) {
 		page.Complete = true
 		return page, nil

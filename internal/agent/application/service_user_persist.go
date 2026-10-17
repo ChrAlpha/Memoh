@@ -6,13 +6,14 @@ import (
 	"strings"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 // ApplyUserMessageHookAndPersistUserTurn applies the normal user-message hook
 // before writing a user turn ahead of agent execution. Web skill activations
 // use this so a denied hook cannot leave a persisted user-only special turn.
-func (s *Service) ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req ChatRequest) (ChatRequest, messagepkg.Message, error) {
+func (s *Service) ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, messagepkg.Message, error) {
 	if req.WorkspaceTarget == nil {
 		var err error
 		ctx, req, err = s.bindRequestWorkspace(ctx, req, userPrincipal(req), false)
@@ -38,7 +39,7 @@ func (s *Service) ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, re
 
 // persistUserTurn writes a user turn before agent execution. It is used after
 // the user-message hook has already accepted the request.
-func (s *Service) persistUserTurn(ctx context.Context, req ChatRequest) (messagepkg.Message, error) {
+func (s *Service) persistUserTurn(ctx context.Context, req runreq.ChatRequest) (messagepkg.Message, error) {
 	if s == nil || s.messageService == nil {
 		return messagepkg.Message{}, errors.New("message service not configured")
 	}
@@ -48,17 +49,17 @@ func (s *Service) persistUserTurn(ctx context.Context, req ChatRequest) (message
 	if strings.TrimSpace(req.ThreadID) == "" {
 		return messagepkg.Message{}, errors.New("session id is required")
 	}
-	modelMessage := ModelMessage{
+	modelMessage := runreq.ModelMessage{
 		Role:    "user",
-		Content: newTextContent(persistedUserTurnText(req)),
+		Content: runreq.NewTextContent(persistedUserTurnText(req)),
 	}
-	modelMessage = normalizeUserMessageContent(modelMessage)
+	modelMessage = runreq.NormalizeUserMessageContent(modelMessage)
 	content, err := historyfrag.MarshalStoredModelMessage(modelMessage)
 	if err != nil {
 		return messagepkg.Message{}, err
 	}
 	displayText := strings.TrimSpace(req.Query)
-	if strings.TrimSpace(req.UserVisibleText) != "" || req.UserMessageKind == UserMessageKindSkillActivation {
+	if strings.TrimSpace(req.UserVisibleText) != "" || req.UserMessageKind == runreq.UserMessageKindSkillActivation {
 		displayText = strings.TrimSpace(req.UserVisibleText)
 	} else if strings.TrimSpace(req.RawQuery) != "" {
 		displayText = strings.TrimSpace(req.RawQuery)
@@ -75,7 +76,7 @@ func (s *Service) persistUserTurn(ctx context.Context, req ChatRequest) (message
 		Role:                    "user",
 		Content:                 content,
 		Metadata:                mergeMetadata(mergeMetadata(buildRouteMetadata(req), buildInteractionMetadata(req)), workspaceTargetMetadata(req.WorkspaceTarget)),
-		Assets:                  chatAttachmentsToAssetRefs(req.Attachments),
+		Assets:                  runreq.ChatAttachmentsToAssetRefs(req.Attachments),
 		EventID:                 req.EventID,
 		DisplayText:             displayText,
 		SessionMode:             sessionMode,
@@ -86,8 +87,8 @@ func (s *Service) persistUserTurn(ctx context.Context, req ChatRequest) (message
 	})
 }
 
-func persistedUserTurnText(req ChatRequest) string {
-	if req.UserMessageKind == UserMessageKindSkillActivation {
+func persistedUserTurnText(req runreq.ChatRequest) string {
+	if req.UserMessageKind == runreq.UserMessageKindSkillActivation {
 		return strings.TrimSpace(req.UserVisibleText)
 	}
 	return req.Query

@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
@@ -26,7 +29,7 @@ func (d stopDuringSetupDriver) Prompt(ctx context.Context, _ external.PromptInpu
 }
 
 // ignoreOutcome keeps the error of a WebSocket stream call.
-func ignoreOutcome(_ RunOutcome, err error) error {
+func ignoreOutcome(_ outcome.RunOutcome, err error) error {
 	return err
 }
 
@@ -34,12 +37,12 @@ func ignoreOutcome(_ RunOutcome, err error) error {
 // cancellation as runtime-unavailable. The turn failed on the idle timeout, not
 // on configuration, so the round is kept with agent.response_timeout.
 func TestIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	service.streamIdleTimeout = 20 * time.Millisecond
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
-	events := make(chan WSStreamEvent, 16)
-	err := ignoreOutcome(service.streamExternalWebSend(context.Background(), driver, ChatRequest{
+	events := make(chan runreq.WSStreamEvent, 16)
+	err := ignoreOutcome(service.streamExternalWebSend(context.Background(), driver, runreq.ChatRequest{
 		BotID:    lifecycleTestBotID,
 		ThreadID: lifecycleTestSessionID,
 		RunID:    lifecycleTestRunID,
@@ -48,8 +51,8 @@ func TestIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	if apperror.CodeOf(err) == apperror.CodeAgentResponseTimeout {
 		t.Fatalf("the idle timeout was answered as a configuration failure: %v", err)
 	}
-	if len(messages.deleted) != 0 || len(messages.persisted) == 0 || messages.persisted[0].Role != "user" {
-		t.Fatalf("persisted = %+v deleted = %v, want the user message kept", messages.persisted, messages.deleted)
+	if len(messages.Deleted) != 0 || len(messages.Persisted) == 0 || messages.Persisted[0].Role != "user" {
+		t.Fatalf("persisted = %+v deleted = %v, want the user message kept", messages.Persisted, messages.Deleted)
 	}
 	var failure string
 	for _, ev := range drainAgentEvents(t, events) {
@@ -64,8 +67,8 @@ func TestIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 
 // The scheduled path keeps the same round for the same reason.
 func TestScheduledIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	service.streamIdleTimeout = 20 * time.Millisecond
 	driver := stopDuringSetupDriver{started: make(chan struct{})}
 	_, err := runScheduledExternal(context.Background(), t, service, driver, schedule.TriggerPayload{
@@ -75,8 +78,8 @@ func TestScheduledIdleTimeoutDuringDriverSetupKeepsAFailedRound(t *testing.T) {
 	if apperror.CodeOf(err) != apperror.CodeAgentResponseTimeout {
 		t.Fatalf("schedule error = %v, want %s", err, apperror.CodeAgentResponseTimeout)
 	}
-	if len(messages.deleted) != 0 || len(messages.persisted) == 0 {
-		t.Fatalf("persisted = %+v deleted = %v, want the failed round kept", messages.persisted, messages.deleted)
+	if len(messages.Deleted) != 0 || len(messages.Persisted) == 0 {
+		t.Fatalf("persisted = %+v deleted = %v, want the failed round kept", messages.Persisted, messages.Deleted)
 	}
 }
 
@@ -96,8 +99,8 @@ func TestScheduledRuntimeConfigurationFailureLeavesNoRound(t *testing.T) {
 		{"control failed", external.Fail(external.FailureControlFailed, errors.New("set mode")), apperror.CodeRuntimeControlFailed, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			messages := &recordingMessageService{}
-			service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+			messages := &agenttest.RecordingMessages{}
+			service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 			driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 				return external.PromptResult{}, tc.err
 			}}
@@ -110,7 +113,7 @@ func TestScheduledRuntimeConfigurationFailureLeavesNoRound(t *testing.T) {
 			}
 			if got := historyRows(messages); (got > 0) != tc.keepRound {
 				t.Fatalf("surviving history rows = %d (persisted = %+v deleted = %v), want round kept = %v",
-					got, messages.persisted, messages.deleted, tc.keepRound)
+					got, messages.Persisted, messages.Deleted, tc.keepRound)
 			}
 		})
 	}
@@ -119,8 +122,8 @@ func TestScheduledRuntimeConfigurationFailureLeavesNoRound(t *testing.T) {
 // A scheduled run that hits its execution budget failed on the budget, even
 // when the runtime reported the stop as being unavailable; the round is kept.
 func TestScheduledExecutionTimeoutIsNotAConfigurationFailure(t *testing.T) {
-	messages := &recordingMessageService{}
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
+	messages := &agenttest.RecordingMessages{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &agenttest.RecordingLifecycleStore{})
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	driver := noticeTestDriver{kind: "codex", prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
@@ -134,7 +137,7 @@ func TestScheduledExecutionTimeoutIsNotAConfigurationFailure(t *testing.T) {
 	if got := apperror.CodeOf(err); got != apperror.CodeScheduleExecutionTimeout {
 		t.Fatalf("schedule error code = %q, want %q: %v", got, apperror.CodeScheduleExecutionTimeout, err)
 	}
-	if len(messages.deleted) != 0 || len(messages.persisted) == 0 {
-		t.Fatalf("persisted = %+v deleted = %v, want the failed round kept", messages.persisted, messages.deleted)
+	if len(messages.Deleted) != 0 || len(messages.Persisted) == 0 {
+		t.Fatalf("persisted = %+v deleted = %v, want the failed round kept", messages.Persisted, messages.Deleted)
 	}
 }

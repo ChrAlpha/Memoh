@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/step"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -200,7 +201,7 @@ func configureNativeReasoningTiming(
 	}
 }
 
-func (opts storeRoundOptions) withReasoningTimingMetadata(messages []ModelMessage) storeRoundOptions {
+func (opts storeRoundOptions) withReasoningTimingMetadata(messages []runreq.ModelMessage) storeRoundOptions {
 	if len(opts.ReasoningTiming) == 0 || len(messages) == 0 {
 		return opts
 	}

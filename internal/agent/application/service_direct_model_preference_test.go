@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agentcredential"
 	"github.com/felinics/memoh/internal/apperror"
@@ -42,7 +43,7 @@ func TestDirectModelPreferenceSurvivesServiceRestart(t *testing.T) {
 			svc := newModelSelectionService(t, fake)
 			svc.externalDrivers = map[string]external.Driver{runtimeType: preferenceCatalogDriver{catalog: catalog}}
 			sess := session.Thread{ID: sid, BotID: "bot", RuntimeType: runtimeType}
-			req, err := svc.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot", Model: "chosen", ReasoningEffort: "high"}, sess)
+			req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "chosen", ReasoningEffort: "high"}, sess)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -60,7 +61,7 @@ func TestDirectModelPreferenceSurvivesServiceRestart(t *testing.T) {
 			sess.PreferredExternalModelID = stored.PreferredExternalModelID.String
 			sess.PreferredReasoningEffort = stored.PreferredReasoningEffort.String
 			fresh := newModelSelectionService(t, &modelSelectionFakeQueries{})
-			resumed, err := fresh.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot"}, sess)
+			resumed, err := fresh.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot"}, sess)
 			if err != nil || resumed.Model != "chosen" || resumed.ReasoningEffort != "high" {
 				t.Fatalf("resume=%+v err=%v", resumed, err)
 			}
@@ -104,7 +105,7 @@ func TestDirectDefaultSelectionReplacesSavedModel(t *testing.T) {
 			sess := session.Thread{ID: sid, BotID: "bot", RuntimeType: tc.runtime, PreferredExternalModelID: "A", PreferredReasoningEffort: "high"}
 			sess.Metadata = map[string]any{"project_path": "/data/old"}
 			sess.RuntimeMetadata = map[string]any{"project_path": "/data/project"}
-			req, err := svc.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot", Model: model, ReasoningEffort: effort}, sess)
+			req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: model, ReasoningEffort: effort}, sess)
 			if err != nil || req.Model != model || req.ReasoningEffort != effort {
 				t.Fatalf("send=%+v err=%v", req, err)
 			}
@@ -118,7 +119,7 @@ func TestDirectDefaultSelectionReplacesSavedModel(t *testing.T) {
 			sess.PreferredExternalModelID = stored.PreferredExternalModelID.String
 			sess.PreferredReasoningEffort = stored.PreferredReasoningEffort.String
 			fresh := newModelSelectionService(t, &modelSelectionFakeQueries{})
-			resumed, err := fresh.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot"}, sess)
+			resumed, err := fresh.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot"}, sess)
 			if err != nil || resumed.Model != model || resumed.ReasoningEffort != effort {
 				t.Fatalf("resume=%+v err=%v", resumed, err)
 			}
@@ -159,7 +160,7 @@ func TestDirectModelPreferencePreservesClaudeResolvedModel(t *testing.T) {
 			svc := newModelSelectionService(t, fake)
 			svc.externalDrivers = map[string]external.Driver{session.RuntimeClaudeCode: preferenceCatalogDriver{catalog: catalog}}
 			sess := session.Thread{ID: "00000000-0000-0000-0000-000000000610", BotID: "bot", RuntimeType: session.RuntimeClaudeCode}
-			req, err := svc.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot", Model: requested, ReasoningEffort: "high"}, sess)
+			req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: requested, ReasoningEffort: "high"}, sess)
 			want := requested
 			if want == "" {
 				want = full
@@ -188,7 +189,7 @@ func TestDirectModelPreferenceRepeatedPairSkipsCatalog(t *testing.T) {
 	svc.externalDrivers = map[string]external.Driver{session.RuntimeCodex: preferenceCatalogDriver{catalog: catalog, calls: &calls}}
 	sess := session.Thread{ID: "00000000-0000-0000-0000-000000000610", BotID: "bot", RuntimeType: session.RuntimeCodex, PreferredExternalModelID: "A", PreferredReasoningEffort: "high"}
 
-	req, err := svc.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
+	req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
 	if err != nil || req.Model != "A" || req.ReasoningEffort != "high" {
 		t.Fatalf("request=%+v err=%v", req, err)
 	}
@@ -200,7 +201,7 @@ func TestDirectModelPreferenceRepeatedPairSkipsCatalog(t *testing.T) {
 	}
 
 	// A changed component goes back through the catalog.
-	req, err = svc.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "medium"}, sess)
+	req, err = svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "medium"}, sess)
 	if err != nil || req.ReasoningEffort != "medium" {
 		t.Fatalf("request=%+v err=%v", req, err)
 	}
@@ -219,7 +220,7 @@ func TestDirectModelPreferenceWriteFailureDoesNotBreakTurn(t *testing.T) {
 	svc.logger = slog.New(slog.DiscardHandler)
 	svc.externalDrivers = map[string]external.Driver{session.RuntimeClaudeCode: preferenceCatalogDriver{catalog: catalog}}
 	sess := session.Thread{ID: "00000000-0000-0000-0000-000000000611", BotID: "bot", RuntimeType: session.RuntimeClaudeCode, PreferredExternalModelID: "previous", PreferredReasoningEffort: "medium"}
-	req, err := svc.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
+	req, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "A", ReasoningEffort: "high"}, sess)
 	if err != nil {
 		t.Fatalf("write-back failure broke the turn: %v", err)
 	}
@@ -254,7 +255,7 @@ func TestDirectModelPreferenceAnswersCatalogFailures(t *testing.T) {
 			svc := newModelSelectionService(t, &modelSelectionFakeQueries{})
 			svc.externalDrivers = map[string]external.Driver{session.RuntimeCodex: failingCatalogDriver{err: tc.err}}
 			sess := session.Thread{ID: "00000000-0000-0000-0000-000000000613", BotID: "bot", RuntimeType: session.RuntimeCodex}
-			_, err := svc.applyDirectModelPreference(context.Background(), ChatRequest{BotID: "bot", Model: "chosen"}, sess)
+			_, err := svc.applyDirectModelPreference(context.Background(), runreq.ChatRequest{BotID: "bot", Model: "chosen"}, sess)
 			if got := apperror.CodeOf(err); got != tc.code {
 				t.Fatalf("code = %q, want %q: %v", got, tc.code, err)
 			}

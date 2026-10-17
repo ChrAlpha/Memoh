@@ -18,7 +18,10 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -76,8 +79,8 @@ func TestTurnSpanCoversTheTurnNotItsSetup(t *testing.T) {
 	inTurn := make(chan struct{})
 	release := make(chan struct{})
 	admission := admitTracingWebRun(t, service)
-	spec := service.webRunSpec(admission, ChatRequest{BotID: "b", ThreadID: "s"}, nil, inputHeld)
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec := service.webRunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, nil, outcome.InputHeld)
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		close(inTurn)
 		<-release
 		return runPlan{}, errors.New("setup ends the turn")
@@ -116,7 +119,7 @@ func TestTurnSpanSeparatesFailureFromCancellation(t *testing.T) {
 		recorder := recordTurnSpans(t)
 		service := newTracingTestService()
 
-		if _, err := streamWebSend(context.Background(), t, service, ChatRequest{BotID: "b", ThreadID: "s"}); err == nil {
+		if _, err := streamWebSend(context.Background(), t, service, runreq.ChatRequest{BotID: "b", ThreadID: "s"}); err == nil {
 			t.Fatal("expected this harness to fail the turn")
 		}
 
@@ -134,14 +137,14 @@ func TestTurnSpanSeparatesFailureFromCancellation(t *testing.T) {
 		service := newTracingTestService()
 		admission := admitTracingWebRun(t, service)
 		exec := &blockingExecutor{started: make(chan struct{})}
-		spec := service.webRunSpec(admission, ChatRequest{BotID: "b", ThreadID: "s"}, newWebTestDelivery(), inputHeld)
-		spec.Setup = func(_ context.Context, req ChatRequest) (runPlan, error) {
+		spec := service.webRunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, newWebTestDelivery(), outcome.InputHeld)
+		spec.Setup = func(_ context.Context, req runreq.ChatRequest) (runPlan, error) {
 			return runPlan{Exec: exec, Req: req}, nil
 		}
 		service.startWebRun(admission, spec)
 		awaitStarted(t, exec.started)
 
-		admission.stop(errRunStopped)
+		admission.stop(outcome.ErrRunStopped)
 
 		span := turnSpan(t, recorder)
 		if got := spanAttr(span, "agent.turn.outcome").AsString(); got != "aborted" {
@@ -161,7 +164,7 @@ func TestTurnSpanCoversTheWebSocketEntryPoint(t *testing.T) {
 	recorder := recordTurnSpans(t)
 	service := newTracingTestService()
 
-	if _, err := streamWebSend(context.Background(), t, service, ChatRequest{BotID: "b", ThreadID: "s"}); err == nil {
+	if _, err := streamWebSend(context.Background(), t, service, runreq.ChatRequest{BotID: "b", ThreadID: "s"}); err == nil {
 		t.Fatal("expected this harness to fail the turn")
 	}
 
@@ -178,7 +181,7 @@ func TestTurnSpanCoversTheWebSocketEntryPoint(t *testing.T) {
 func admitTracingWebRun(t *testing.T, service *Service) *WebAdmission {
 	t.Helper()
 	if service.sessionRuntime == nil {
-		service.sessionRuntime = newScriptedAdmitter()
+		service.sessionRuntime = agenttest.NewScriptedAdmitter()
 	}
 	admission, err := service.AdmitWebRun(context.Background(), WebAdmitInput{
 		BotID: "b", SessionID: "s", InvocationID: "trace-1", Payload: []byte(`{"kind":"message"}`),
@@ -232,7 +235,7 @@ func TestTurnSpanOutcomeSurvivesTheSessionRuntimeCancellingTheRun(t *testing.T) 
 			svc.startWebRun(admission, webTestSpec(svc, admission, delivery, exec))
 			if started != nil {
 				awaitStarted(t, started)
-				admission.stop(errRunStopped)
+				admission.stop(outcome.ErrRunStopped)
 			}
 			delivery.wait(t)
 
@@ -301,11 +304,11 @@ func spanTestEntries() []spanTestEntry {
 				t.Fatalf("AdmitWebRun() error = %v", err)
 			}
 			delivery := newWebTestDelivery()
-			service.RunWebSend(admission, ChatRequest{
+			service.RunWebSend(admission, runreq.ChatRequest{
 				BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 				Query: directLifecyclePrompt,
 			}, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
-			return func() { admission.stop(errRunStopped) }, func() { delivery.wait(t) }
+			return func() { admission.stop(outcome.ErrRunStopped) }, func() { delivery.wait(t) }
 		}},
 		{name: "im_start_turn", start: func(t *testing.T, service *Service) (func(), func()) {
 			handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
@@ -328,12 +331,12 @@ func spanTestEntries() []spanTestEntry {
 			}()
 			// A routed abort reaches the fire through the cancel the admission
 			// registered.
-			admitter := service.sessionRuntime.(*lifecycleTurnAdmitter)
-			return func() { admitter.cancel() }, func() { awaitEntryReturned(t, done) }
+			admitter := service.sessionRuntime.(*agenttest.LifecycleAdmitter)
+			return func() { admitter.Cancel() }, func() { awaitEntryReturned(t, done) }
 		}},
 		{name: "session_resume", start: func(t *testing.T, service *Service) (func(), func()) {
 			const teamID = "00000000-0000-0000-0000-000000000001"
-			service.allowedTeam = teamID
+			setAllowedTeam(service, teamID)
 			raw, err := json.Marshal(map[string]any{"resume": resumeContext{
 				Version: 1, ChatID: lifecycleTestBotID, UserID: "user-1", Query: directLifecyclePrompt, SessionType: sessionmode.Chat,
 			}})
@@ -350,8 +353,8 @@ func spanTestEntries() []spanTestEntry {
 			if err != nil {
 				t.Fatalf("resumeInterruptedSession() error = %v", err)
 			}
-			admitter := service.sessionRuntime.(*lifecycleTurnAdmitter)
-			return func() { admitter.cancel() }, func() { awaitEntryReturned(t, done) }
+			admitter := service.sessionRuntime.(*agenttest.LifecycleAdmitter)
+			return func() { admitter.Cancel() }, func() { awaitEntryReturned(t, done) }
 		}},
 		{name: "decision_continuation", start: func(t *testing.T, service *Service) (func(), func()) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -360,9 +363,9 @@ func spanTestEntries() []spanTestEntry {
 			go func() {
 				defer close(done)
 				_ = service.driveUnroutedContinuation(ctx, decisionContinuation{
-					Req: ChatRequest{BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, Query: directLifecyclePrompt},
-					Setup: func(ctx context.Context, req ChatRequest) (runPlan, error) {
-						return service.externalRunPlan(ctx, req, runSpec{Input: inputAccepted}, service.externalDrivers[session.RuntimeACPAgent])
+					Req: runreq.ChatRequest{BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, Query: directLifecyclePrompt},
+					Setup: func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
+						return service.externalRunPlan(ctx, req, runSpec{Input: outcome.InputAccepted}, service.externalDrivers[session.RuntimeACPAgent])
 					},
 				}, nil)
 			}()
@@ -390,8 +393,8 @@ func TestTurnSpanReportsFailureFromEveryPath(t *testing.T) {
 			t.Run(entry.name+"/"+ending, func(t *testing.T) {
 				recorder := recordTurnSpans(t)
 				driver := &spanTestDriver{outcome: ending, started: make(chan struct{})}
-				service := newACPLifecycleService(t, &recordingACPPrompter{}, &recordingMessageService{}, &recordingContextLifecycleStore{})
-				service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+				service := newACPLifecycleService(t, &recordingACPPrompter{}, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
+				service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 				registerExternalDrivers(service, driver)
 
 				stop, wait := entry.start(t, service)

@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -11,7 +12,7 @@ import (
 func TestExternalSteerClaimsOnlyCurrentRunAndAppliesAfterConfirmation(t *testing.T) {
 	service, handle := newDeferredSteerTestService(t)
 	ctx := t.Context()
-	source := service.runtimeSteering(ChatRequest{RunHandle: handle})
+	source := service.runtimeSteering(runreq.ChatRequest{RunHandle: handle})
 	if err := source.Enable(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestExternalSteerClaimsOnlyCurrentRunAndAppliesAfterConfirmation(t *testing
 	// Round persistence replaces the provisional identity, preserving its
 	// existing anchor instead of adding a second user bubble at the end.
 	service.logger = slog.Default()
-	service.publishRuntimeSteerHistory(ctx, ChatRequest{RunHandle: handle}, []string{item.ID}, []messagepkg.Message{
+	service.publishRuntimeSteerHistory(ctx, runreq.ChatRequest{RunHandle: handle}, []string{item.ID}, []messagepkg.Message{
 		{ID: "original", TurnID: "original-turn", Role: "user", Content: []byte(`[{"type":"text","text":"adjust"}]`)},
 		{ID: "steer", TurnID: "steer-turn", Role: "user", Content: []byte(`[{"type":"text","text":"adjust"}]`)},
 	})

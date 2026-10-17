@@ -8,6 +8,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/schedule"
@@ -165,11 +166,11 @@ func TestIdleTimeoutStopCannotBeRearmed(t *testing.T) {
 func TestScheduleBudgetHasDistinctCause(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(t.Context())
 	cancel(schedule.ErrExecutionTimeout)
-	cause := agentAbortCause(ctx)
+	cause := outcome.AgentAbortCause(ctx)
 	if apperror.CodeOf(cause) != apperror.CodeScheduleExecutionTimeout {
 		t.Fatalf("cause=%v", cause)
 	}
-	if historyFailureCode(publicFailureCode(cause)) != apperror.CodeScheduleExecutionTimeout {
+	if outcome.HistoryFailureCode(outcome.PublicFailureCode(cause)) != apperror.CodeScheduleExecutionTimeout {
 		t.Fatal("budget cause lost in the history marker")
 	}
 }

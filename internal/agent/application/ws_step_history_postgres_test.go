@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -279,7 +280,7 @@ func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, r
 	if stop != nil {
 		delivery.onText = func() { go stop(baseCtx, admission.RunID) }
 	}
-	h.service.RunWebSend(admission, ChatRequest{
+	h.service.RunWebSend(admission, runreq.ChatRequest{
 		BotID:           h.botID,
 		ChatID:          h.botID,
 		ThreadID:        h.sessionID,

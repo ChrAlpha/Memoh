@@ -10,6 +10,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -27,7 +28,7 @@ func (s *stage4Session) persistRefusedPadded(admission messagepkg.Admission, lab
 	metadata := map[string]any{}
 	messagepkg.SetAdmission(metadata, admission)
 	text := label + " " + strings.Repeat("padding ", words)
-	content, err := json.Marshal(sdkMessagesToModelMessages([]sdk.Message{sdk.UserMessage(text)})[0])
+	content, err := json.Marshal(runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.UserMessage(text)})[0])
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -44,7 +45,7 @@ func (s *stage4Session) persistRefusedPadded(admission messagepkg.Admission, lab
 	return row.ID
 }
 
-func (s *stage4Session) assembleFor(purpose contextPurpose, chat ChatRequest, budgetTokens int) (assembledContext, error) {
+func (s *stage4Session) assembleFor(purpose contextPurpose, chat runreq.ChatRequest, budgetTokens int) (assembledContext, error) {
 	s.t.Helper()
 	chat.BotID, chat.ChatID, chat.ThreadID = s.botID, s.botID, s.sessionID
 	return s.service.assembleContext(s.ctx, chatContextRequest(purpose, chat, budgetTokens))
@@ -73,13 +74,13 @@ func TestPostgresContextOmitsRefusedRowsOnEveryReadPath(t *testing.T) {
 	s.persist("user", "last")
 
 	t.Run("run", func(t *testing.T) {
-		got := stage4Labels(s.assemble(ChatRequest{}).Messages)
+		got := stage4Labels(s.assemble(runreq.ChatRequest{}).Messages)
 		if want := []string{"q0", "a0", "ask", "answer", "last"}; !slices.Equal(got, want) {
 			t.Fatalf("run context = %v, want %v", got, want)
 		}
 	})
 	t.Run("continuation", func(t *testing.T) {
-		assembled, err := s.assembleFor(contextPurposeContinuation, ChatRequest{}, 100000)
+		assembled, err := s.assembleFor(contextPurposeContinuation, runreq.ChatRequest{}, 100000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,7 +89,7 @@ func TestPostgresContextOmitsRefusedRowsOnEveryReadPath(t *testing.T) {
 		}
 	})
 	t.Run("memory query", func(t *testing.T) {
-		assembled, err := s.assembleFor(contextPurposeMemoryQuery, ChatRequest{}, 100000)
+		assembled, err := s.assembleFor(contextPurposeMemoryQuery, runreq.ChatRequest{}, 100000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -101,7 +102,7 @@ func TestPostgresContextOmitsRefusedRowsOnEveryReadPath(t *testing.T) {
 	t.Run("retry window re-read", func(t *testing.T) {
 		// One token of budget loads only the newest row, so the request row
 		// is brought back by the window re-read, whose cutoff is the answer.
-		assembled, err := s.assembleFor(contextPurposeRun, ChatRequest{
+		assembled, err := s.assembleFor(contextPurposeRun, runreq.ChatRequest{
 			RequiredHistoryMessageID:     ask,
 			HistoryCutoffBeforeMessageID: answer,
 		}, 1)
@@ -122,7 +123,7 @@ func TestPostgresContextFailsWhenRequiredRowWasRefused(t *testing.T) {
 	refused := s.persistRefused(messagepkg.AdmissionRejectedACL, "refused-acl")
 	s.persist("assistant", "answer")
 
-	_, err := s.assembleFor(contextPurposeRun, ChatRequest{RequiredHistoryMessageID: refused}, 1)
+	_, err := s.assembleFor(contextPurposeRun, runreq.ChatRequest{RequiredHistoryMessageID: refused}, 1)
 	if err == nil || !strings.Contains(err.Error(), "not visible") {
 		t.Fatalf("assembleContext error = %v, want the refused request row reported as not visible", err)
 	}
@@ -137,7 +138,7 @@ func TestPostgresContextBudgetIsNotSpentOnRefusedRows(t *testing.T) {
 	s.persist("user", "q1")
 	s.persistRefusedPadded(messagepkg.AdmissionRejectedACL, "refused-large", 4000)
 
-	assembled, err := s.assembleFor(contextPurposeRun, ChatRequest{}, 2000)
+	assembled, err := s.assembleFor(contextPurposeRun, runreq.ChatRequest{}, 2000)
 	if err != nil {
 		t.Fatal(err)
 	}

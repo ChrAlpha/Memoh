@@ -3,6 +3,8 @@ package application
 import (
 	"strings"
 	"sync"
+
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 type sessionCompactionGate struct {
@@ -171,22 +173,13 @@ func (s *Service) sessionCompactionReaders(gate *sessionCompactionGate, runID st
 	return readers
 }
 
-// sessionTurnKey names the per-session scope of process-local bookkeeping that
-// only makes sense inside one process: a compaction barrier and the ACP prompt
-// hubs. It is deliberately not an admission gate — single-session execution is
-// enforced durably by the session runtime, which is the only thing that can
-// answer for owners in other processes.
-func sessionTurnKey(botID, sessionID string) string {
-	return strings.TrimSpace(botID) + ":" + strings.TrimSpace(sessionID)
-}
-
 func (s *Service) acquireSessionCompactionGate(botID, sessionID string) (*sessionCompactionGate, string) {
 	botID = strings.TrimSpace(botID)
 	sessionID = strings.TrimSpace(sessionID)
 	if s == nil || botID == "" || sessionID == "" {
 		return nil, ""
 	}
-	key := sessionTurnKey(botID, sessionID)
+	key := runreq.SessionTurnKey(botID, sessionID)
 	s.sessionCompactionMu.Lock()
 	defer s.sessionCompactionMu.Unlock()
 	if s.sessionCompactions == nil {

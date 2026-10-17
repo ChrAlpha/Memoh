@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/hooks"
@@ -48,7 +49,7 @@ type runObserver struct {
 	// phase is the stage the declared failure belongs to. A failure a
 	// publication reported is named from its own stage rather than from the
 	// stage the producer was in.
-	phase runPhase
+	phase outcome.RunPhase
 }
 
 // observe records one event from the producer and returns the events to
@@ -70,9 +71,9 @@ func (r *runObserver) observe(ctx context.Context, s *Service, botID string, ass
 	prepared := s.prepareRunEvent(ctx, botID, assets, ev)
 	kept := prepared[:0]
 	for _, out := range prepared {
-		if cause := agentStreamFailure(out); cause != nil {
+		if cause := outcome.AgentStreamFailure(out); cause != nil {
 			r.declare(cause, stopped)
-			code := string(publicFailureCode(cause))
+			code := string(outcome.PublicFailureCode(cause))
 			if code != "" && code == r.publishedFailure {
 				// The stream repeated the failure it already reported.
 				continue
@@ -106,11 +107,11 @@ func (r *runObserver) declareHook(cause error, stopped bool) {
 }
 
 // facts assembles the ending the observer saw.
-func (r *runObserver) facts(runCtx context.Context, phase runPhase) endingFacts {
+func (r *runObserver) facts(runCtx context.Context, phase outcome.RunPhase) outcome.EndingFacts {
 	if r.phase != 0 {
 		phase = r.phase
 	}
-	facts := endingFacts{
+	facts := outcome.EndingFacts{
 		Phase:            phase,
 		RunCtx:           runCtx,
 		Declared:         r.declared,
@@ -172,7 +173,7 @@ func (s *Service) consume(
 // report its ending as a stop.
 func (s *Service) refusePublication(pub *runPublisherSet, obs *runObserver, abort context.CancelCauseFunc, err error) {
 	pub.retire()
-	if ownershipLost(err) {
+	if outcome.OwnershipLost(err) {
 		// Another owner holds this run. It is not a failure of this one, and
 		// naming it as one would write history for a run this process can no
 		// longer speak for.
@@ -183,9 +184,9 @@ func (s *Service) refusePublication(pub *runPublisherSet, obs *runObserver, abor
 		}
 		return
 	}
-	refused := publishRefused{runtimePublishError(err)}
+	refused := publishRefused{outcome.RuntimePublishError(err)}
 	obs.declare(refused, false)
-	obs.phase = phasePublish
+	obs.phase = outcome.PhasePublish
 	if abort != nil {
 		abort(refused)
 	}
@@ -203,7 +204,7 @@ func isHookRefusal(err error) bool {
 // marshalRunEvent renders one event once, so every consumer reads the same
 // bytes; an error event leaves as its code and the catalog detail.
 func marshalRunEvent(ev native.StreamEvent) json.RawMessage {
-	data, err := json.Marshal(publicAgentStreamEvent(ev))
+	data, err := json.Marshal(outcome.PublicAgentStreamEvent(ev))
 	if err != nil {
 		return nil
 	}

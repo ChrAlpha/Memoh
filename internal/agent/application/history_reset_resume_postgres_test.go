@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
@@ -51,7 +52,7 @@ func (h wsStepHistoryHarness) startProcess(t *testing.T) resumeProcess {
 	manager := h.restarted(t)
 	service, _ := newWSStepHistoryService(t, wsStepHistorySuccess, postgresstore.NewQueriesWithPool(h.pool, dbsqlc.New(h.pool)), manager)
 	service.resumeSecret = "history-reset-resume"
-	service.resumeScopes = singletonSessionResumeScopes{teamID: team.DefaultTeamID}
+	service.teamScopes = runreq.SingleTeam(team.DefaultTeamID)
 	service.queries = resumeLedgerQueries{noDecisionQueries: service.queries.(noDecisionQueries), db: dbsqlc.New(h.pool)}
 	return resumeProcess{manager: manager, service: service}
 }
@@ -74,7 +75,7 @@ func (h wsStepHistoryHarness) interruptedTurn(t *testing.T, p resumeProcess, tas
 		t.Fatalf("admit turn = (%+v, %v)", admission, err)
 	}
 	fenced := runtimefence.WithContext(ctx, runtimefence.Fence{BotID: h.botID, SessionID: h.sessionID, Token: admission.Handle.FencingToken})
-	if err := p.service.recordRunResumeContext(fenced, ChatRequest{RunID: admission.RunID, ChatID: h.botID, Query: task}); err != nil {
+	if err := p.service.recordRunResumeContext(fenced, runreq.ChatRequest{RunID: admission.RunID, ChatID: h.botID, Query: task}); err != nil {
 		t.Fatalf("record resume intent: %v", err)
 	}
 	if err := p.manager.InterruptForShutdown(ctx); err != nil {
@@ -96,7 +97,7 @@ func (h wsStepHistoryHarness) resumeScan(t *testing.T, p resumeProcess, runID st
 	t.Helper()
 	ctx := context.Background()
 	scan := sessionResumeScan{}
-	if err := p.service.scanInterruptedSessions(ctx, p.service.sessionResumeScopes(), &scan, make(chan struct{}, 4)); err != nil {
+	if err := p.service.scanInterruptedSessions(ctx, p.service.teamScopes, &scan, make(chan struct{}, 4)); err != nil {
 		t.Fatalf("resume scan: %v", err)
 	}
 	var resumed string

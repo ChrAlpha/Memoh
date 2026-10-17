@@ -11,7 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/outcome"
 	codexruntime "github.com/felinics/memoh/internal/agent/runtime/codex"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -114,7 +114,7 @@ func (h *ExternalAgentCodexHandler) AuthorizeDevice(c echo.Context) error {
 	}
 	start, err := h.driver.StartChatGPTDeviceLogin(c.Request().Context(), botID, botAgentID)
 	if err != nil {
-		if translated := application.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
+		if translated := outcome.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
 			return translated
 		}
 		return apperror.Wrap(
@@ -156,7 +156,7 @@ func (h *ExternalAgentCodexHandler) PollDevice(c echo.Context) error {
 	status := h.driver.PollDeviceLogin(botID, botAgentID, loginID)
 	if status.Status == "success" {
 		if err := h.driver.CompleteChatGPTDeviceLogin(c.Request().Context(), ownerUserID, botID, botAgentID, loginID); err != nil {
-			err = application.ExternalRuntimeError(err)
+			err = outcome.ExternalRuntimeError(err)
 			if apperror.CodeOf(err) != "" {
 				return err
 			}
@@ -256,6 +256,6 @@ func codexUsageError(err error) error {
 	case errors.Is(err, codexruntime.ErrUsageUnavailable):
 		return apperror.Wrap(apperror.CodeAgentCredentialUsageUnavailable, err, nil)
 	default:
-		return application.ExternalRuntimeError(err)
+		return outcome.ExternalRuntimeError(err)
 	}
 }

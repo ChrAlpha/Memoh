@@ -13,6 +13,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -28,7 +29,7 @@ var overHardShare = native.StepContextInput{FixedTokens: 100, Messages: conversa
 // conversationOf is a conversation the estimator prices at about tokens.
 func conversationOf(tokens int) []sdk.Message {
 	text := ""
-	for requestInputTokens(0, []sdk.Message{sdk.UserMessage(text)}) < tokens {
+	for runreq.RequestInputTokens(0, []sdk.Message{sdk.UserMessage(text)}) < tokens {
 		text += "conversation "
 	}
 	return []sdk.Message{sdk.UserMessage(text)}
@@ -219,13 +220,13 @@ func TestBindStepCompactionNeedsCommittedSteps(t *testing.T) {
 	cases := []struct {
 		name      string
 		committer *agentStepCommitter
-		mutate    func(*ChatRequest)
+		mutate    func(*runreq.ChatRequest)
 		want      bool
 	}{
-		{"committed steps", committer, func(*ChatRequest) {}, true},
-		{"steps not committed", nil, func(*ChatRequest) {}, false},
-		{"cutoff without a replacement", committer, func(r *ChatRequest) { r.HistoryCutoffBeforeMessageID = "m-1" }, false},
-		{"retry or edit", committer, func(r *ChatRequest) {
+		{"committed steps", committer, func(*runreq.ChatRequest) {}, true},
+		{"steps not committed", nil, func(*runreq.ChatRequest) {}, false},
+		{"cutoff without a replacement", committer, func(r *runreq.ChatRequest) { r.HistoryCutoffBeforeMessageID = "m-1" }, false},
+		{"retry or edit", committer, func(r *runreq.ChatRequest) {
 			r.HistoryCutoffBeforeMessageID = "m-1"
 			r.TurnReplacement = &messagepkg.TurnReplacement{}
 		}, true},

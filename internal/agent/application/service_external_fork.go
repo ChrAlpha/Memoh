@@ -8,6 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -36,7 +38,7 @@ func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, tur
 	if err != nil {
 		return nil, err
 	}
-	if err := validateSessionBot(botID, sessionID, sess.BotID); err != nil {
+	if err := runreq.ValidateSessionBot(botID, sessionID, sess.BotID); err != nil {
 		return nil, err
 	}
 	if !session.IsDirectRuntime(sess) {
@@ -55,9 +57,9 @@ func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, tur
 	if err != nil {
 		return nil, err
 	}
-	delta, err := forker.ForkThread(ctx, botID, sess.BotAgentID, runtimeSessionMeta(sess), lastTurnID)
+	delta, err := forker.ForkThread(ctx, botID, sess.BotAgentID, runreq.RuntimeSessionMeta(sess), lastTurnID)
 	if err != nil {
-		return nil, ExternalRuntimeError(err)
+		return nil, outcome.ExternalRuntimeError(err)
 	}
 	override := make(map[string]any, len(sess.RuntimeMetadata)+len(delta))
 	for key, value := range sess.RuntimeMetadata {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
@@ -23,7 +24,7 @@ import (
 // are discarded if it fails, so no summary may cover them: it would describe
 // output nobody ever saw. Such a run compacts only the visible history before
 // its cutoff and carries its own messages over from the loop's memory.
-func (s *Service) bindStepCompaction(cfg *native.RunConfig, req ChatRequest, committer *agentStepCommitter) {
+func (s *Service) bindStepCompaction(cfg *native.RunConfig, req runreq.ChatRequest, committer *agentStepCommitter) {
 	if s == nil || committer == nil || s.compactionService == nil || s.settingsService == nil {
 		return
 	}
@@ -42,7 +43,7 @@ func (s *Service) bindStepCompaction(cfg *native.RunConfig, req ChatRequest, com
 		extras:           ephemeralRunMessages(*cfg),
 		request:          unstoredRequestMessage(*cfg, req),
 		inlineParts:      inlineRunParts(*cfg),
-		pressure:         committer.rc.pressure,
+		pressure:         committer.rc.Pressure,
 	}
 	cfg.StepContextCompactor = run.compact
 }
@@ -58,7 +59,7 @@ func (s *Service) SubagentStepCompactor(ctx context.Context, run native.SpawnCom
 	requestMessageID := strings.TrimSpace(run.TurnRequestMessageID)
 	return (&stepCompaction{
 		service: s,
-		req: ChatRequest{
+		req: runreq.ChatRequest{
 			BotID:       run.BotID,
 			ChatID:      run.ChatID,
 			ThreadID:    run.SessionID,
@@ -76,7 +77,7 @@ func (s *Service) SubagentStepCompactor(ctx context.Context, run native.SpawnCom
 type stepCompaction struct {
 	service *Service
 	// req names the run and the thread its steps are committed to.
-	req ChatRequest
+	req runreq.ChatRequest
 	// requestMessageID is the row of the user message the run answers; empty
 	// while it is not stored.
 	requestMessageID func() string
@@ -101,7 +102,7 @@ type stepCompaction struct {
 	inlineParts []sdk.MessagePart
 	// pressure follows the conversation each call sends, so the run's end is
 	// judged by what it grew to; nil when nothing reads it.
-	pressure *runPressure
+	pressure *runreq.RunPressure
 }
 
 // ephemeralRunMessages returns the messages a run adds between the stored
@@ -120,7 +121,7 @@ func ephemeralRunMessages(cfg native.RunConfig) []sdk.Message {
 
 // unstoredRequestMessage is the user's message a run sends from its query,
 // which is stored with the run's first step rather than ahead of it.
-func unstoredRequestMessage(cfg native.RunConfig, req ChatRequest) []sdk.Message {
+func unstoredRequestMessage(cfg native.RunConfig, req runreq.ChatRequest) []sdk.Message {
 	if req.ReusePersistedUserMessage || strings.TrimSpace(cfg.Query) == "" {
 		return nil
 	}
@@ -145,8 +146,8 @@ func inlineRunParts(cfg native.RunConfig) []sdk.MessagePart {
 // first and its summary used. Failure, cooldown, and a rebuilt context no
 // smaller than the current one keep the conversation as it is.
 func (c *stepCompaction) compact(ctx context.Context, input native.StepContextInput) []sdk.Message {
-	c.pressure.observe(input.Messages)
-	current := requestInputTokens(input.FixedTokens, input.Messages)
+	c.pressure.Observe(input.Messages)
+	current := runreq.RequestInputTokens(input.FixedTokens, input.Messages)
 	if compactionNeed(current, c.budget, 0) != compactionSync {
 		return nil
 	}
@@ -209,13 +210,13 @@ func (c *stepCompaction) fixedTokens(input native.StepContextInput) int {
 	case c.requestMessageID() == "":
 		own = append(append([]sdk.Message(nil), c.extras...), c.request...)
 	}
-	return input.FixedTokens + requestInputTokens(0, own)
+	return input.FixedTokens + runreq.RequestInputTokens(0, own)
 }
 
 // adopt records that the loop continues on the rebuilt conversation.
 func (c *stepCompaction) adopt(rebuilt rebuiltConversation) []sdk.Message {
 	c.tailStart = rebuilt.tailStart
-	c.pressure.observe(rebuilt.messages)
+	c.pressure.Observe(rebuilt.messages)
 	return rebuilt.messages
 }
 
@@ -278,7 +279,7 @@ func (c *stepCompaction) rebuild(ctx context.Context, input native.StepContextIn
 		messages = append(messages, request...)
 		rebuilt.messages = messages
 	}
-	rebuilt.tokens = requestInputTokens(input.FixedTokens, rebuilt.messages)
+	rebuilt.tokens = runreq.RequestInputTokens(input.FixedTokens, rebuilt.messages)
 	return rebuilt, true
 }
 
@@ -289,7 +290,7 @@ func (c *stepCompaction) forkContext(ctx context.Context) []sdk.Message {
 	if len(fork) == 0 {
 		return nil
 	}
-	return modelMessagesToSDKMessages(normalizeContextMessages(fork))
+	return runreq.ModelMessagesToSDKMessages(normalizeContextMessages(fork))
 }
 
 // recordIndex is where the row with id sits in the rows, and whether it is
@@ -348,9 +349,9 @@ func containsPart(parts []sdk.MessagePart, want sdk.MessagePart) bool {
 }
 
 func stepMessages(records []historyfrag.HistoryRecord) []sdk.Message {
-	messages := make([]ModelMessage, 0, len(records))
+	messages := make([]runreq.ModelMessage, 0, len(records))
 	for i := range records {
 		messages = append(messages, records[i].ModelMessage)
 	}
-	return modelMessagesToSDKMessages(normalizeContextMessages(messages))
+	return runreq.ModelMessagesToSDKMessages(normalizeContextMessages(messages))
 }

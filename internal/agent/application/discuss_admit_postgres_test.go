@@ -24,7 +24,7 @@ func TestAdmitDiscussPortReportsEveryOutcome(t *testing.T) {
 	alice := env.participant(t, false)
 	held := &discussStep{reached: make(chan struct{}), gate: make(chan struct{})}
 	proc := newDiscussProcess(t, env, held)
-	proc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(proc.svc, team.DefaultTeamID)
 
 	got, err := proc.svc.AdmitDiscuss(ctx, env.admitCommand())
 	if err != nil || got != turn.DiscussNothingPending {
@@ -50,7 +50,7 @@ func TestAdmitDiscussPortReportsEveryOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	otherProc := newDiscussProcess(t, other)
-	otherProc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(otherProc.svc, team.DefaultTeamID)
 	other.write(t, passiveInput{from: other.participant(t, false), externalID: "m1", text: "a message"})
 	got, err = otherProc.svc.AdmitDiscuss(ctx, other.admitCommand())
 	if err != nil || got != turn.DiscussSkipped {
@@ -68,7 +68,7 @@ func TestAdmitDiscussRunOutlivesTheCallerContext(t *testing.T) {
 	alice := env.participant(t, false)
 	held := &discussStep{reached: make(chan struct{}), gate: make(chan struct{}), send: "still here"}
 	proc := newDiscussProcess(t, env, held, &discussStep{})
-	proc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "are you there?"})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -92,7 +92,7 @@ func TestAdmitDiscussPortRefusesWhatItCannotServe(t *testing.T) {
 	}
 	env := newDiscussEnv(t, "group")
 	proc := newDiscussProcess(t, env)
-	proc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	ctx := context.Background()
 
 	other := env.admitCommand()

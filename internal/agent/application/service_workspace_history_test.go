@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/bots"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/workspace"
@@ -28,7 +30,7 @@ func (allowed workspaceRequestPermission) HasBotPermission(_ context.Context, _,
 }
 
 func TestPrepareWorkspaceRequestRequiresWorkspaceRead(t *testing.T) {
-	base := ChatRequest{BotID: "bot-1", WorkspaceTargetID: "computer-b"}
+	base := runreq.ChatRequest{BotID: "bot-1", WorkspaceTargetID: "computer-b"}
 
 	resolver := &Service{workspaceTargets: workspaceRequestTargetService{}}
 	if _, _, err := resolver.bindRequestWorkspace(t.Context(), base, userPrincipal(base), false); err == nil || !strings.Contains(err.Error(), "user id") {
@@ -99,9 +101,9 @@ func TestInjectWorkspaceTransitionRecordsIgnoresLegacyStartingFolderChanges(t *t
 }
 
 func TestWorkspaceTransitionRendererMatchesLiveAndReplay(t *testing.T) {
-	current := &WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
+	current := &runreq.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
 	service := &Service{}
-	live := service.currentWorkspaceContextMessage(t.Context(), ChatRequest{WorkspaceTarget: current})
+	live := service.currentWorkspaceContextMessage(t.Context(), runreq.ChatRequest{WorkspaceTarget: current})
 	if live == nil {
 		t.Fatal("initial live context must include a workspace snapshot")
 	}
@@ -118,10 +120,10 @@ func TestWorkspaceTransitionRendererMatchesLiveAndReplay(t *testing.T) {
 }
 
 func TestCurrentWorkspaceContextMessageOmitsUnchangedTarget(t *testing.T) {
-	current := &WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
+	current := &runreq.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
 	service := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(context.Context, string) (sessionpkg.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(context.Context, string) (sessionpkg.Thread, error) {
 				return sessionpkg.Thread{Metadata: map[string]any{
 					"workspace_target": map[string]any{
 						"target_id": current.TargetID,
@@ -133,7 +135,7 @@ func TestCurrentWorkspaceContextMessageOmitsUnchangedTarget(t *testing.T) {
 		},
 	}
 
-	if got := service.currentWorkspaceContextMessage(t.Context(), ChatRequest{
+	if got := service.currentWorkspaceContextMessage(t.Context(), runreq.ChatRequest{
 		ThreadID:        "session-1",
 		WorkspaceTarget: current,
 	}); got != nil {
@@ -142,11 +144,11 @@ func TestCurrentWorkspaceContextMessageOmitsUnchangedTarget(t *testing.T) {
 }
 
 func TestWorkspaceTransitionRendererMatchesLiveAndReplayAfterChange(t *testing.T) {
-	previous := &WorkspaceTarget{TargetID: "computer-a", Kind: "remote", Name: "Computer A"}
-	current := &WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
+	previous := &runreq.WorkspaceTarget{TargetID: "computer-a", Kind: "remote", Name: "Computer A"}
+	current := &runreq.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
 	service := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(context.Context, string) (sessionpkg.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(context.Context, string) (sessionpkg.Thread, error) {
 				return sessionpkg.Thread{Metadata: map[string]any{
 					"workspace_target": map[string]any{
 						"target_id": previous.TargetID,
@@ -157,7 +159,7 @@ func TestWorkspaceTransitionRendererMatchesLiveAndReplayAfterChange(t *testing.T
 			},
 		},
 	}
-	live := service.currentWorkspaceContextMessage(t.Context(), ChatRequest{
+	live := service.currentWorkspaceContextMessage(t.Context(), runreq.ChatRequest{
 		ThreadID:        "session-1",
 		WorkspaceTarget: current,
 	})
@@ -179,7 +181,7 @@ func TestWorkspaceTransitionRendererMatchesLiveAndReplayAfterChange(t *testing.T
 
 func workspaceHistoryRecord(role, text, targetID, kind, name, path string) historyfrag.HistoryRecord {
 	return historyfrag.HistoryRecord{
-		ModelMessage: ModelMessage{Role: role, Content: newTextContent(text)},
+		ModelMessage: runreq.ModelMessage{Role: role, Content: runreq.NewTextContent(text)},
 		Metadata: map[string]any{
 			"execution_location": map[string]any{
 				"target_id":      targetID,

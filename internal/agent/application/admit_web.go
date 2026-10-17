@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -83,12 +85,12 @@ func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmiss
 	if queued, err := s.queueWebRunBehindInput(ctx, in); queued != nil || err != nil {
 		return queued, err
 	}
-	endActive, err := s.activeTurns.begin()
+	endActive, err := s.activeTurns.Begin()
 	if err != nil {
 		return nil, err
 	}
 	runCtx, stopRun := context.WithCancelCause(context.WithoutCancel(ctx))
-	context.AfterFunc(ctx, func() { stopRun(runContextEnding(context.Cause(ctx))) })
+	context.AfterFunc(ctx, func() { stopRun(outcome.RunContextEnding(context.Cause(ctx))) })
 	builder := in.Admission
 	if builder == nil {
 		builder = func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
@@ -106,7 +108,7 @@ func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmiss
 			Admission: builder,
 			// A routed abort is someone stopping this run, which the driver
 			// names from the marker it leaves.
-			Cancel: func() { stopRun(errRunStopped) },
+			Cancel: func() { stopRun(outcome.ErrRunStopped) },
 			// Revoking ownership cancels with its own cause: a run taken away
 			// must leave no durable trace, which a stopped run does.
 			OwnershipCancel: stopRun,
@@ -115,17 +117,17 @@ func (s *Service) AdmitWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmiss
 	if errors.Is(err, sessionruntime.ErrSessionBusy) && in.QueueTurn != nil && s.queue != nil {
 		// The run in flight took the session between the queue check and the
 		// admission: the send waits for it like every other.
-		stopRun(errRunStopped)
+		stopRun(outcome.ErrRunStopped)
 		endActive()
 		return s.enqueueWebRun(ctx, in)
 	}
 	if err != nil {
-		stopRun(errRunStopped)
+		stopRun(outcome.ErrRunStopped)
 		endActive()
 		return nil, err
 	}
 	if !admission.Started {
-		stopRun(errRunStopped)
+		stopRun(outcome.ErrRunStopped)
 		endActive()
 		return &WebAdmission{
 			RunID:        admission.RunID,
@@ -193,7 +195,7 @@ func (s *Service) enqueueWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmi
 		Key:          sessionruntime.Key{BotID: strings.TrimSpace(in.BotID), SessionID: strings.TrimSpace(in.SessionID)},
 		Origin:       sessionruntime.QueueOriginFollowUp,
 		InvocationID: strings.TrimSpace(in.InvocationID),
-		MergeKey:     firstNonEmpty(cmd.SourceChannelIdentityID, cmd.UserID),
+		MergeKey:     runreq.FirstNonEmpty(cmd.SourceChannelIdentityID, cmd.UserID),
 		Payload:      payload,
 	})
 	switch {
@@ -212,9 +214,9 @@ func (s *Service) enqueueWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmi
 // RunWebSend executes an admitted Web send. The draft is still the
 // submitter's until execution starts: a failure before then writes nothing, so
 // the composer can hand it back without duplicating a turn.
-func (s *Service) RunWebSend(admission *WebAdmission, req ChatRequest, delivery RunDelivery) {
-	spec := s.webRunSpec(admission, req, delivery, inputHeld)
-	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+func (s *Service) RunWebSend(admission *WebAdmission, req runreq.ChatRequest, delivery RunDelivery) {
+	spec := s.webRunSpec(admission, req, delivery, outcome.InputHeld)
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		return s.chatSetup(ctx, req, spec)
 	}
 	s.startWebRun(admission, spec)
@@ -232,7 +234,7 @@ func (s *Service) RunWebEdit(admission *WebAdmission, input EditLatestMessageInp
 
 // webRunSpec is the part of a Web run every Web entry shares: the run
 // admission named, and the request wired to it.
-func (*Service) webRunSpec(admission *WebAdmission, req ChatRequest, delivery RunDelivery, input inputOwnership) runSpec {
+func (*Service) webRunSpec(admission *WebAdmission, req runreq.ChatRequest, delivery RunDelivery, input outcome.InputOwnership) runSpec {
 	position := admission.TurnPosition
 	req.RunID = admission.RunID
 	req.RunHandle = admission.handle
@@ -260,7 +262,7 @@ func (s *Service) startWebRun(admission *WebAdmission, spec runSpec) {
 	releaseCompaction := s.DeferSessionCompaction(spec.Req.BotID, spec.Req.ThreadID, admission.RunID)
 	go func() {
 		defer admission.endActive()
-		defer admission.stop(errRunStopped)
+		defer admission.stop(outcome.ErrRunStopped)
 		defer close(admission.injectCh)
 		defer releaseCompaction()
 		s.drive(admission.ctx, spec)

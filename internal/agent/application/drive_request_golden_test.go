@@ -16,8 +16,10 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -122,7 +124,7 @@ func newDriveRequestFixture(t *testing.T) (directLifecycleFixture, *driveRequest
 		tools.NewAskUserProvider(nil),
 	})
 	fixture.service.agent = agent
-	fixture.service.userInput = &fakeUserInputService{}
+	fixture.service.userInput = &agenttest.UserInput{}
 	// The run offers tools only to a model that can call them.
 	queries := fixture.service.queries.(*directLifecycleQueries)
 	for key, model := range queries.models {
@@ -223,7 +225,7 @@ func driveWebSend(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	withDriveRequestRuntime(t, fixture)
-	if _, err := streamWebSend(context.Background(), t, fixture.service, ChatRequest{
+	if _, err := streamWebSend(context.Background(), t, fixture.service, runreq.ChatRequest{
 		BotID:           lifecycleTestBotID,
 		ChatID:          lifecycleTestBotID,
 		ThreadID:        lifecycleTestSessionID,
@@ -281,7 +283,7 @@ const (
 // followed by the latest turn, whose request and answer a retry or edit
 // replaces, or whose tool call a decision continuation answers.
 type driveHistoryMessages struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	history []messagepkg.Message
 	latest  messagepkg.HistoryTurn
 }
@@ -412,7 +414,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	key := sessionruntime.Key{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID}
-	fixture.service.allowedTeam = driveTeamID
+	setAllowedTeam(fixture.service, driveTeamID)
 
 	queue := &memoryQueuedInputs{}
 	fixture.service.queue = queue
@@ -457,7 +459,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 func driveResume(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
-	fixture.service.allowedTeam = driveTeamID
+	setAllowedTeam(fixture.service, driveTeamID)
 	raw, err := json.Marshal(map[string]any{"resume": resumeContext{
 		Version:           1,
 		Query:             directLifecyclePrompt,
@@ -526,9 +528,9 @@ func driveSchedule(t *testing.T) []sdk.Request {
 
 // runDecisionContinuation runs a decision continuation with the caller's
 // event channel as its end, so the resumed run can still deliver a question.
-func runDecisionContinuation(t *testing.T, run func(chan<- WSStreamEvent) error) {
+func runDecisionContinuation(t *testing.T, run func(chan<- runreq.WSStreamEvent) error) {
 	t.Helper()
-	eventCh := make(chan WSStreamEvent, 64)
+	eventCh := make(chan runreq.WSStreamEvent, 64)
 	drained := make(chan struct{})
 	go func() {
 		defer close(drained)
@@ -567,10 +569,10 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 	cont := fixture.service.toolApprovalContinuation(context.Background(), CommittedToolApprovalResponse{
 		request: approval, input: input, runID: lifecycleTestRunID,
 	}, true)
-	cont.Setup = func(ctx context.Context, runReq ChatRequest) (runPlan, error) {
+	cont.Setup = func(ctx context.Context, runReq runreq.ChatRequest) (runPlan, error) {
 		return fixture.service.storeToolResultAndContinue(ctx, approval, input, result, nil, runReq, true)
 	}
-	runDecisionContinuation(t, func(eventCh chan<- WSStreamEvent) error {
+	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
 		return fixture.service.driveUnroutedContinuation(context.Background(), cont, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
@@ -591,14 +593,14 @@ func driveAskUserContinuation(t *testing.T) []sdk.Request {
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 		Result: map[string]any{"answers": []any{map[string]any{"text": "blue"}}},
 	}
-	fixture.service.userInput = &fakeUserInputService{target: answered, resolved: answered}
+	fixture.service.userInput = &agenttest.UserInput{Target: answered, Resolved: answered}
 	committed, err := fixture.service.CommitUserInputResponse(context.Background(), UserInputResponseInput{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, UserInputID: answered.ID,
 	})
 	if err != nil {
 		t.Fatalf("CommitUserInputResponse() error = %v", err)
 	}
-	runDecisionContinuation(t, func(eventCh chan<- WSStreamEvent) error {
+	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
 		return fixture.service.ContinueCommittedUserInputResponse(context.Background(), committed, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
@@ -667,9 +669,9 @@ func (d *drivePromptRecorder) recorded(t *testing.T) []external.PromptInput {
 // show whether the run can deliver a question.
 func newDrivePromptFixture(t *testing.T) (*Service, *drivePromptRecorder) {
 	t.Helper()
-	service := newACPLifecycleService(t, &recordingACPPrompter{}, &recordingMessageService{}, &recordingContextLifecycleStore{})
-	service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
-	service.userInput = &fakeUserInputService{}
+	service := newACPLifecycleService(t, &recordingACPPrompter{}, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
+	service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+	service.userInput = &agenttest.UserInput{}
 	recorder := &drivePromptRecorder{}
 	registerExternalDrivers(service, recorder)
 	return service, recorder
@@ -707,7 +709,7 @@ func marshalDrivePrompts(t *testing.T, inputs []external.PromptInput) []byte {
 func drivePromptWebSend(t *testing.T) []external.PromptInput {
 	t.Helper()
 	service, recorder := newDrivePromptFixture(t)
-	if _, err := streamWebSend(context.Background(), t, service, ChatRequest{
+	if _, err := streamWebSend(context.Background(), t, service, runreq.ChatRequest{
 		BotID:           lifecycleTestBotID,
 		ChatID:          lifecycleTestBotID,
 		ThreadID:        lifecycleTestSessionID,

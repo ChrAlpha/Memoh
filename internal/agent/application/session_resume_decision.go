@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/decision"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -26,11 +27,11 @@ func (s *Service) interruptedDecisionContext(ctx context.Context, run sqlc.Sessi
 	for _, id := range ids {
 		checkpoint := checkpoints[id]
 		if checkpoint.Phase != "accepted" && checkpoint.Phase != "executing" {
-			return "", fmt.Errorf("%w: unsupported decision continuation phase", errResumeUnrecoverable)
+			return "", fmt.Errorf("%w: unsupported decision continuation phase", runreq.ErrResumeUnrecoverable)
 		}
 		pgID, err := db.ParseUUID(id)
 		if err != nil {
-			return "", fmt.Errorf("%w: invalid decision continuation id", errResumeUnrecoverable)
+			return "", fmt.Errorf("%w: invalid decision continuation id", runreq.ErrResumeUnrecoverable)
 		}
 		record := map[string]any{"kind": checkpoint.Kind, "phase": checkpoint.Phase}
 		switch checkpoint.Kind {
@@ -42,7 +43,7 @@ func (s *Service) interruptedDecisionContext(ctx context.Context, run sqlc.Sessi
 			if approval.BotID != run.BotID || approval.SessionID != run.SessionID || approval.RunID != run.RunID ||
 				!approval.RuntimeFencingToken.Valid || approval.RuntimeFencingToken.Int64 != run.FencingToken ||
 				(approval.Status != "approved" && approval.Status != "rejected") {
-				return "", fmt.Errorf("%w: interrupted approval scope mismatch", errResumeUnrecoverable)
+				return "", fmt.Errorf("%w: interrupted approval scope mismatch", runreq.ErrResumeUnrecoverable)
 			}
 			record["status"], record["tool"], record["input"] = approval.Status, approval.ToolName, json.RawMessage(approval.ToolInput)
 			record["reason"] = approval.DecisionReason
@@ -54,11 +55,11 @@ func (s *Service) interruptedDecisionContext(ctx context.Context, run sqlc.Sessi
 			if input.BotID != run.BotID || input.SessionID != run.SessionID || input.RunID != run.RunID ||
 				!input.RuntimeFencingToken.Valid || input.RuntimeFencingToken.Int64 != run.FencingToken ||
 				(input.Status != "submitted" && input.Status != "canceled") {
-				return "", fmt.Errorf("%w: interrupted user input scope mismatch", errResumeUnrecoverable)
+				return "", fmt.Errorf("%w: interrupted user input scope mismatch", runreq.ErrResumeUnrecoverable)
 			}
 			record["status"], record["result"] = input.Status, json.RawMessage(input.ResultJson)
 		default:
-			return "", fmt.Errorf("%w: unsupported decision continuation kind", errResumeUnrecoverable)
+			return "", fmt.Errorf("%w: unsupported decision continuation kind", runreq.ErrResumeUnrecoverable)
 		}
 		records = append(records, record)
 	}

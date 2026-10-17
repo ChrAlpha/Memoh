@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -145,7 +146,7 @@ func TestStage4RetryKeepsSummariesBeforeTheReplacedTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get replaced turn: %v", err)
 	}
-	content, err := json.Marshal(sdkMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("c-00 " + strings.Repeat("padding ", s.padding))})[0])
+	content, err := json.Marshal(runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("c-00 " + strings.Repeat("padding ", s.padding))})[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +170,7 @@ func TestStage4RetryKeepsSummariesBeforeTheReplacedTurn(t *testing.T) {
 		t.Fatalf("session epoch = %d, want 0: a retry must not advance the epoch", epoch)
 	}
 
-	labels := stage4Labels(s.assemble(ChatRequest{}).Messages)
+	labels := stage4Labels(s.assemble(runreq.ChatRequest{}).Messages)
 	if labels[0] != "SUMMARY-1" {
 		t.Fatalf("next round context = %v, want the first summary leading", labels)
 	}

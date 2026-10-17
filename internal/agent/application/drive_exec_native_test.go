@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
@@ -18,7 +19,7 @@ import (
 func TestNativeReplacementWithoutStepCommitsRewritesTheTurnOnce(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}
 	position := int64(2)
 	req := continuationRequest()
@@ -47,11 +48,11 @@ func TestNativeReplacementWithoutStepCommitsRewritesTheTurnOnce(t *testing.T) {
 	if _, err := ending.Commit(context.Background(), nil, false); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
-	if len(messages.persisted) == 0 {
+	if len(messages.Persisted) == 0 {
 		t.Fatal("the terminal snapshot was not written")
 	}
-	if messages.replaced != 1 || messages.replacementTurnID != "new-turn" {
-		t.Fatalf("ReplaceTurn calls = %d to turn %q, want one to new-turn", messages.replaced, messages.replacementTurnID)
+	if messages.Replaced != 1 || messages.ReplacementTurnID != "new-turn" {
+		t.Fatalf("ReplaceTurn calls = %d to turn %q, want one to new-turn", messages.Replaced, messages.ReplacementTurnID)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
@@ -52,7 +53,7 @@ func TestPrepareWorkspaceRequestRejectsWorkdirTargetConflict(t *testing.T) {
 	service := workdirBoundService(workdir.Resolved{
 		WorkdirID: "p1", TargetID: workspace.WorkspaceTargetNative, Kind: workdir.TargetKindNative, WorkDir: "/data/proj",
 	})
-	req := ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "user-1", WorkspaceTargetID: "computer-b"}
+	req := runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "user-1", WorkspaceTargetID: "computer-b"}
 	if _, _, err := service.bindRequestWorkspace(t.Context(), req, userPrincipal(req), false); !errors.Is(err, ErrWorkspaceTargetWorkdirConflict) {
 		t.Fatalf("error = %v, want ErrWorkspaceTargetWorkdirConflict", err)
 	}
@@ -66,7 +67,7 @@ func TestPrepareWorkspaceRequestInjectsNativeWorkdirTargetWithoutWorkspaceRead(t
 	service := workdirBoundService(workdir.Resolved{
 		WorkdirID: "p1", TargetID: workspace.WorkspaceTargetNative, Kind: workdir.TargetKindNative, WorkDir: "/data/proj",
 	})
-	ctx, got, err := service.bindRequestWorkspace(t.Context(), ChatRequest{BotID: "bot-1", ThreadID: "s1"}, &workspacePrincipal{}, false)
+	ctx, got, err := service.bindRequestWorkspace(t.Context(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1"}, &workspacePrincipal{}, false)
 	if err != nil {
 		t.Fatalf("prepare error = %v", err)
 	}
@@ -85,7 +86,7 @@ func TestPrepareWorkspaceRequestRemoteWorkdirRequiresWorkspaceRead(t *testing.T)
 
 	denied := workdirBoundService(resolved)
 	denied.botPermissions = workspaceRequestPermission(false)
-	req := ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "user-1"}
+	req := runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "user-1"}
 	if _, _, err := denied.bindRequestWorkspace(t.Context(), req, userPrincipal(req), false); err == nil || !strings.Contains(err.Error(), "workspace_read") {
 		t.Fatalf("denied error = %v, want workspace_read denial", err)
 	}
@@ -109,7 +110,7 @@ func TestPrepareWorkspaceRequestAcceptsMatchingExplicitTarget(t *testing.T) {
 		WorkdirID: "p1", TargetID: "computer-b", Kind: workdir.TargetKindRemote, WorkDir: "/Users/alice/code",
 	})
 	service.botPermissions = workspaceRequestPermission(true)
-	req := ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "user-1", WorkspaceTargetID: "computer-b"}
+	req := runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "user-1", WorkspaceTargetID: "computer-b"}
 	if _, _, err := service.bindRequestWorkspace(t.Context(), req, userPrincipal(req), false); err != nil {
 		t.Fatalf("matching explicit target must pass, got %v", err)
 	}
@@ -121,7 +122,7 @@ func TestResolveSessionWorkdirBindingFailsClosed(t *testing.T) {
 	// workdir bindings exist to eliminate.
 	service := workdirBoundService(workdir.Resolved{})
 	service.workdirs = fakeSessionWorkdirResolver{err: errors.New("boom")}
-	if _, _, err := service.bindRequestWorkspace(t.Context(), ChatRequest{BotID: "bot-1", ThreadID: "s1"}, &workspacePrincipal{}, false); err == nil || !strings.Contains(err.Error(), "boom") {
+	if _, _, err := service.bindRequestWorkspace(t.Context(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1"}, &workspacePrincipal{}, false); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("error = %v, want propagated resolution failure", err)
 	}
 }

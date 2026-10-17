@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -46,7 +47,7 @@ func (stubQueries) ListUserInputsByRun(context.Context, pgtype.UUID) ([]sqlc.Use
 
 type (
 	stubMessages struct{ messagepkg.Service }
-	stubSessions struct{ SessionService }
+	stubSessions struct{ runreq.SessionService }
 )
 
 type allowAllBotPermissions struct{}
@@ -194,11 +195,32 @@ func TestNewAcceptsMissingOptionalDependencies(t *testing.T) {
 		service.assetLoader != nil || service.platformIdentities != nil || service.workdirs != nil ||
 		service.compactionService != nil || service.bgManager != nil || service.eventPublisher != nil ||
 		service.outputMedia != nil || service.outputSpeech != nil || service.queue != nil ||
-		service.resumeReady != nil || service.resumeScopes != nil {
+		service.resumeReady != nil {
 		t.Fatal("optional dependencies must stay nil when absent")
 	}
 	if service.clockLocation != time.UTC {
 		t.Fatalf("clock location = %v, want UTC", service.clockLocation)
+	}
+}
+
+func TestNewDefaultsTeamScopesToTheAllowedTeam(t *testing.T) {
+	deps := testDeps(t)
+	deps.AllowedTeam = "team-x"
+	service, err := New(deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if got := service.teamScopes.CurrentScope(context.Background()); got != "team-x" {
+		t.Fatalf("current scope = %q, want the allowed team", got)
+	}
+	custom := runreq.SingleTeam("team-y")
+	deps.TeamScopes = custom
+	service, err = New(deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if service.teamScopes != custom {
+		t.Fatal("provider supplied in Deps was replaced")
 	}
 }
 
@@ -214,7 +236,7 @@ func TestNewCarriesConfigurationAndRuntime(t *testing.T) {
 		t.Fatalf("configuration not carried: team=%q budget=%d", service.allowedTeam, service.contextAbsoluteMaxTokens())
 	}
 	if service.sessionManager != d.SessionRuntime || service.decisionRuntime != d.SessionRuntime ||
-		service.abortRuntime != runtimeAbortController(d.SessionRuntime) || service.sessionRuntime != turnAdmitter(d.SessionRuntime) {
+		service.abortRuntime != runtimeAbortController(d.SessionRuntime) || service.sessionRuntime != runreq.TurnAdmitter(d.SessionRuntime) {
 		t.Fatal("session runtime must back all four runtime fields")
 	}
 }
@@ -318,4 +340,11 @@ func TestTerminalFanoutRunsInOrder(t *testing.T) {
 	if got := strings.Join(order, ","); got != "result,lifecycle,after" {
 		t.Fatalf("order = %s", got)
 	}
+}
+
+// setAllowedTeam moves a built service to another team, including the scope
+// provider New derived from the previous one.
+func setAllowedTeam(s *Service, teamID string) {
+	s.allowedTeam = teamID
+	s.teamScopes = runreq.SingleTeam(teamID)
 }

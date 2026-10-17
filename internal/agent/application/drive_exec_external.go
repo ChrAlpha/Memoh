@@ -11,6 +11,8 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -47,7 +49,7 @@ type externalPlan struct {
 // session and its owner, the model preference, the attachments and the context
 // sections. A failure here is a setup failure: nothing has run, so an input the
 // submitter still holds is handed back rather than written.
-func (s *Service) prepareExternal(ctx context.Context, req ChatRequest, driver external.Driver) (externalPlan, ChatRequest, error) {
+func (s *Service) prepareExternal(ctx context.Context, req runreq.ChatRequest, driver external.Driver) (externalPlan, runreq.ChatRequest, error) {
 	plan := externalPlan{
 		driver:      driver,
 		runtimeType: strings.TrimSpace(driver.RuntimeType()),
@@ -56,13 +58,13 @@ func (s *Service) prepareExternal(ctx context.Context, req ChatRequest, driver e
 	if err != nil {
 		return externalPlan{}, req, err
 	}
-	if err := validateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
+	if err := runreq.ValidateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
 		return externalPlan{}, req, err
 	}
 	plan.sess = sess
-	plan.runtimeMeta = runtimeSessionMeta(sess)
-	plan.projectPath = metadataString(plan.runtimeMeta, "project_path")
-	plan.runtimeOwnerAccountID = metadataString(plan.runtimeMeta, "runtime_owner_account_id")
+	plan.runtimeMeta = runreq.RuntimeSessionMeta(sess)
+	plan.projectPath = runreq.MetadataString(plan.runtimeMeta, "project_path")
+	plan.runtimeOwnerAccountID = runreq.MetadataString(plan.runtimeMeta, "runtime_owner_account_id")
 	if err := s.requireRuntimeOwnerWorkspaceExec(ctx, req.BotID, plan.runtimeOwnerAccountID); err != nil {
 		return externalPlan{}, req, err
 	}
@@ -107,7 +109,7 @@ func (s *Service) prepareExternal(ctx context.Context, req ChatRequest, driver e
 type externalExecutor struct {
 	service *Service
 	plan    externalPlan
-	req     ChatRequest
+	req     runreq.ChatRequest
 	// prompt is what the driver is prompted with; a schedule fire prompts with
 	// the generated schedule prompt rather than the raw command.
 	prompt string
@@ -115,7 +117,7 @@ type externalExecutor struct {
 	unattended bool
 	// input says who holds the run's input, which decides whether the leading
 	// user message may be taken back when the turn leaves nothing to write.
-	input inputOwnership
+	input outcome.InputOwnership
 
 	lifecycle *contextfrag.LifecycleHolder
 	timing    *reasoningTimingTracker
@@ -127,11 +129,11 @@ type externalExecutor struct {
 	// cleaned up whichever way the turn ends.
 	projections projectionTracker
 
-	rc resolvedContext
+	rc runreq.ResolvedContext
 
 	// Written by execute, read by commit after execute returned.
 	result    external.PromptResult
-	failure   *RunFailure
+	failure   *outcome.RunFailure
 	completed bool
 	// roundUnwritable records that this ending has no round to write: the
 	// runtime never accepted the turn, the run was stopped before the runtime
@@ -161,21 +163,21 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 	emit(native.StreamEvent{Type: native.EventStart})
 
 	result, promptErr := e.plan.driver.Prompt(ctx, e.promptInput(ctx, emit))
-	promptErr = runtimeTurnError(e.plan.runtimeType, promptErr)
-	configurationFailure := isRuntimeConfigurationError(promptErr)
-	promptErr = ExternalAgentError(promptErr)
+	promptErr = outcome.RuntimeTurnError(e.plan.runtimeType, promptErr)
+	configurationFailure := outcome.IsRuntimeConfigurationError(promptErr)
+	promptErr = outcome.ExternalAgentError(promptErr)
 	e.notices.apply(&result)
 	switch cause := context.Cause(ctx); {
-	case errors.Is(cause, ErrResponseTimeout), errors.Is(cause, ErrToolTimeout):
+	case errors.Is(cause, outcome.ErrResponseTimeout), errors.Is(cause, outcome.ErrToolTimeout):
 		// Drivers normalize a cancellation into a partial nil-error result so
 		// the application can persist interrupted output. Restore the
 		// watchdog's stable cause here: unlike a user stop, an idle timeout is
 		// a failed turn and must carry its code through history and the
 		// terminal record.
-		promptErr = runtimeTurnError(e.plan.runtimeType, cause)
+		promptErr = outcome.RuntimeTurnError(e.plan.runtimeType, cause)
 		configurationFailure = false
 	case errors.Is(cause, schedule.ErrExecutionTimeout):
-		promptErr = runtimeTurnError(e.plan.runtimeType, agentAbortCause(ctx))
+		promptErr = outcome.RuntimeTurnError(e.plan.runtimeType, outcome.AgentAbortCause(ctx))
 		configurationFailure = false
 	}
 	e.result = result
@@ -183,7 +185,7 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 	// for a round to carry. Whatever the runtime's driver called its
 	// cancellation, the run driver names the ending a stop, because the stop
 	// was raised first.
-	stopped := runStopped(ctx)
+	stopped := outcome.RunStopped(ctx)
 	nothingRan := !runtimeTurnRan(result) && len(result.Notices) == 0
 
 	// Persist the driver-owned session keys before anything else. History must
@@ -201,7 +203,7 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 			if promptErr != nil {
 				anchorErr = errors.Join(promptErr, anchorErr)
 			}
-			e.failure = &RunFailure{Code: apperror.CodeSessionHistoryInconsistent, Cause: anchorErr, Phase: phaseCommit}
+			e.failure = &outcome.RunFailure{Code: apperror.CodeSessionHistoryInconsistent, Cause: anchorErr, Phase: outcome.PhaseCommit}
 			e.roundUnwritable = true
 			return e.ending(emit, native.EventAgentAbort, event.EndCanceled)
 		}
@@ -209,16 +211,16 @@ func (e *externalExecutor) execute(ctx context.Context, emit func(native.StreamE
 
 	switch {
 	case promptErr != nil:
-		phase := phaseExecution
+		phase := outcome.PhaseExecution
 		if configurationFailure && nothingRan {
 			// Nothing ran: the driver refused the turn before it started.
-			phase = phaseSetup
+			phase = outcome.PhaseSetup
 		}
-		code, args := runFailureCode(externalPromptFailure{promptErr}, phase, false)
-		e.failure = &RunFailure{Code: code, Args: args, Cause: promptErr, Phase: phase}
+		code, args := outcome.RunFailureCode(outcome.NewExternalPromptFailure(promptErr), phase, false)
+		e.failure = &outcome.RunFailure{Code: code, Args: args, Cause: promptErr, Phase: phase}
 		// Nothing ran means there is no transcript for a round to carry. A
 		// failure the runtime reported after it started produced one.
-		e.roundUnwritable = phase == phaseSetup || (stopped && nothingRan)
+		e.roundUnwritable = phase == outcome.PhaseSetup || (stopped && nothingRan)
 		return e.ending(emit, native.EventAgentAbort, event.EndFailed)
 	case ctx.Err() != nil || !result.TurnCompleted:
 		// Either the interrupt landed, or the runtime finished in the same
@@ -282,7 +284,7 @@ func (e *externalExecutor) deliver(deliveryCtx context.Context, emit func(native
 // commit writes the run's one round. An External Agent runtime reports a whole
 // turn at once, so this is the run's only history write: the completed round,
 // or the failure row of a turn that wrote none.
-func (e *externalExecutor) commit(ctx context.Context, f *RunFailure, row bool) (commitSummary, error) {
+func (e *externalExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (commitSummary, error) {
 	return e.writeRound(ctx, e.req, f, row)
 }
 
@@ -297,7 +299,7 @@ func (e *externalExecutor) commitStopped(ctx context.Context) (commitSummary, er
 
 // writeRound is the one history write of an External Agent run, for req as the
 // ending wants it written.
-func (e *externalExecutor) writeRound(ctx context.Context, req ChatRequest, f *RunFailure, row bool) (commitSummary, error) {
+func (e *externalExecutor) writeRound(ctx context.Context, req runreq.ChatRequest, f *outcome.RunFailure, row bool) (commitSummary, error) {
 	summary := commitSummary{ModelID: strings.TrimSpace(e.req.Model)}
 	ctx = context.WithoutCancel(ctx)
 	if e.roundUnwritable {
@@ -308,7 +310,7 @@ func (e *externalExecutor) writeRound(ctx context.Context, req ChatRequest, f *R
 		if row && f != nil {
 			persisted, err := e.service.persistFailureRow(ctx, e.req, e.rc, *f, "")
 			if err != nil {
-				return summary, runtimeHistoryError(err)
+				return summary, outcome.RuntimeHistoryError(err)
 			}
 			summary.Persisted = persisted
 		}
@@ -334,7 +336,7 @@ func (e *externalExecutor) writeRound(ctx context.Context, req ChatRequest, f *R
 		case runtimeRoundRolledBack:
 			e.rollback(ctx)
 		}
-		return summary, runtimeHistoryError(err)
+		return summary, outcome.RuntimeHistoryError(err)
 	}
 	if e.result.Usage != nil {
 		summary.Usage, _ = json.Marshal(e.result.Usage)
@@ -365,7 +367,7 @@ func (e *externalExecutor) rollback(ctx context.Context) {
 func (e *externalExecutor) cleanup(ctx context.Context) {
 	e.service.cancelPendingRuntimeApprovals(ctx, e.req, "tool approval cancelled: the turn ended before a decision arrived")
 	e.cleanupProjections(ctx)
-	if e.roundUnwritable && e.input != inputAccepted && e.plan.leadingUser != nil {
+	if e.roundUnwritable && e.input != outcome.InputAccepted && e.plan.leadingUser != nil {
 		e.service.cleanupReplacementMessages(ctx, []messagepkg.Message{*e.plan.leadingUser})
 	}
 }
@@ -404,14 +406,14 @@ func (e *externalExecutor) promptInput(ctx context.Context, emit func(native.Str
 		Images:                   e.plan.prepared.Images,
 		AttachmentReferences:     e.plan.prepared.References,
 		CanFallbackImagesToFiles: e.plan.prepared.CanFallbackImagesToFiles,
-		ModelID:                  firstNonEmpty(strings.TrimSpace(e.req.RuntimeModelID), strings.TrimSpace(e.req.Model)),
+		ModelID:                  runreq.FirstNonEmpty(strings.TrimSpace(e.req.RuntimeModelID), strings.TrimSpace(e.req.Model)),
 		ReasoningEffort:          strings.TrimSpace(e.req.ReasoningEffort),
-		SessionMode:              firstNonEmpty(e.req.SessionType, sessionmode.Chat),
+		SessionMode:              runreq.FirstNonEmpty(e.req.SessionType, sessionmode.Chat),
 		CurrentPlatform:          e.req.CurrentChannel,
 		ReplyTarget:              e.req.ReplyTarget,
 		ConversationType:         e.req.ConversationType,
 		Command:                  e.req.AgentCommand,
-		CommandArgs:              strings.TrimSpace(strings.TrimPrefix(firstNonEmpty(e.req.RawQuery, e.req.Query), "/"+e.req.AgentCommand)),
+		CommandArgs:              strings.TrimSpace(strings.TrimPrefix(runreq.FirstNonEmpty(e.req.RawQuery, e.req.Query), "/"+e.req.AgentCommand)),
 		ForceFreshRuntime:        e.req.ForceFreshRuntime,
 		RuntimeMetadata:          e.plan.runtimeMeta,
 		RuntimeOwnerAccountID:    e.plan.runtimeOwnerAccountID,

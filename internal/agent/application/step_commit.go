@@ -11,6 +11,8 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -27,8 +29,8 @@ import (
 type agentStepCommitter struct {
 	ownerContext    context.Context
 	service         *Service
-	req             ChatRequest
-	rc              resolvedContext
+	req             runreq.ChatRequest
+	rc              runreq.ResolvedContext
 	persister       messagepkg.AgentStepPersister
 	reasoningTiming *reasoningTimingTracker
 	queueStep       *queueStepCoordinator
@@ -37,7 +39,7 @@ type agentStepCommitter struct {
 	turnRequestMessageID string
 	persisted            []messagepkg.Message
 	memoryPersisted      []messagepkg.Message
-	messages             []ModelMessage
+	messages             []runreq.ModelMessage
 	nextStep             int // In-process ordering guard, not a durable replay cursor.
 	finalized            bool
 	replacementFinalized bool
@@ -46,7 +48,7 @@ type agentStepCommitter struct {
 	checkpointed bool
 }
 
-func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc resolvedContext) *agentStepCommitter {
+func (s *Service) newAgentStepCommitter(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext) *agentStepCommitter {
 	if s == nil || s.messageService == nil || strings.TrimSpace(req.RunID) == "" ||
 		strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" ||
 		(req.SkipHistoryTurn && req.TurnReplacement == nil) {
@@ -114,7 +116,7 @@ func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 		// carries whatever input the claim admitted, so the loop continues
 		// with the new input instead of restarting the run.
 		cfg.OnSteer = func(ctx context.Context, index int, record *step.Record) (native.StepDirective, error) {
-			return c.persist(ctx, index, record, stepSteered, RunFailure{})
+			return c.persist(ctx, index, record, stepSteered, outcome.RunFailure{})
 		}
 	}
 }
@@ -122,7 +124,7 @@ func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 // withOutputTruncatedNotice records the truncation notice on the assistant row
 // of a final step the model cut off at its output limit, so history shows it
 // the way the live stream did.
-func withOutputTruncatedNotice(opts storeRoundOptions, record *step.Record, messages []ModelMessage) storeRoundOptions {
+func withOutputTruncatedNotice(opts storeRoundOptions, record *step.Record, messages []runreq.ModelMessage) storeRoundOptions {
 	if record.Result.FinishReason != sdk.FinishReasonLength || len(record.Result.ToolCalls) > 0 {
 		return opts
 	}
@@ -156,17 +158,17 @@ const (
 )
 
 func (c *agentStepCommitter) commit(ctx context.Context, stepIndex int, record *step.Record) (native.StepDirective, error) {
-	return c.persist(ctx, stepIndex, record, stepCompleted, RunFailure{})
+	return c.persist(ctx, stepIndex, record, stepCompleted, outcome.RunFailure{})
 }
 
 func (c *agentStepCommitter) interrupt(ctx context.Context, stepIndex int, record *step.Record) error {
-	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, RunFailure{})
+	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, outcome.RunFailure{})
 	return err
 }
 
 // persist writes one step. failure, when it names a code, is the failure that
 // ended the run on an interrupted step and is recorded on its assistant rows.
-func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record *step.Record, mode stepCommitMode, failure RunFailure) (native.StepDirective, error) {
+func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record *step.Record, mode stepCommitMode, failure outcome.RunFailure) (native.StepDirective, error) {
 	interrupted := mode != stepCompleted
 	if c == nil || record == nil {
 		return native.StepDirective{}, errors.New("agent step is missing")
@@ -176,7 +178,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		return native.StepDirective{}, ownershipErr
 	}
 	ctx = persistCtx
-	messages := sdkMessagesWithOrigins(record.Messages, native.InternalFeedbackIndexes(ctx))
+	messages := runreq.SDKMessagesWithOrigins(record.Messages, native.InternalFeedbackIndexes(ctx))
 	timingState := "completed"
 	if interrupted {
 		timingState = "interrupted"
@@ -202,7 +204,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		return native.StepDirective{}, nil
 	}
 	if (hasAssistantOutput || mode == stepSteered) && stepIndex == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
-		messages = prependTurnUserMessage(c.req, messages)
+		messages = runreq.PrependTurnUserMessage(c.req, messages)
 	}
 	storeReq := c.req
 	// Outbound assets are linked once after the stream closes; including the
@@ -210,7 +212,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	storeReq.OutboundAssetCollector = nil
 	opts := storeRoundOptions{
 		AllowPendingToolCalls: record.Deferred != nil,
-		ContextLifecycle:      c.rc.runConfig.ContextLifecycle,
+		ContextLifecycle:      c.rc.RunConfig.ContextLifecycle,
 		ReasoningTiming:       reasoningTiming,
 	}
 	if interrupted {
@@ -231,7 +233,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		err    error
 	)
 	if len(messages) > 0 {
-		inputs, err = c.service.buildPersistInputs(context.WithoutCancel(ctx), storeReq, messages, c.rc.model.ID, opts)
+		inputs, err = c.service.buildPersistInputs(context.WithoutCancel(ctx), storeReq, messages, c.rc.Model.ID, opts)
 		if err != nil {
 			return fail(err)
 		}
@@ -249,24 +251,24 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		if mode == stepSteered {
 			kind = queueStepSteered
 		}
-		outcome, commitErr := c.queueStep.commit(
+		result, commitErr := c.queueStep.commit(
 			stepCtx, kind, agentStep, c.persisted,
 		)
-		if !outcome.historyCommitted {
+		if !result.historyCommitted {
 			return fail(commitErr)
 		}
 		// History is already durable even if later queue coordination failed.
 		// Record that prefix below before returning the error; a cleanup must
 		// not lose it or write the same step again.
 		queueErr = commitErr
-		persisted = outcome.persisted
-		c.replacementFinalized = outcome.replacementFinalized
+		persisted = result.persisted
+		c.replacementFinalized = result.replacementFinalized
 		if queueErr == nil {
-			c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, outcome)
-			if outcome.claimedSteer != nil {
-				if text := QueuePayloadText(outcome.claimedSteer.Payload); text != "" {
+			c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, result)
+			if result.claimedSteer != nil {
+				if text := runreq.QueuePayloadText(result.claimedSteer.Payload); text != "" {
 					dir.NextInputs = []native.DirectiveInput{{
-						ID:   string(outcome.claimedSteer.ID),
+						ID:   string(result.claimedSteer.ID),
 						Text: text,
 					}}
 				}
@@ -279,7 +281,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		return fail(err)
 	}
 	if len(persisted) > 0 {
-		c.rc.runConfig.ContextLifecycle.SetAssistantMessageID(lastPersistedAssistantMessageID(persisted))
+		c.rc.RunConfig.ContextLifecycle.SetAssistantMessageID(runreq.LastPersistedAssistantMessageID(persisted))
 	}
 	c.nextStep++
 	for _, message := range persisted {
@@ -289,7 +291,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	}
 	c.persisted = append(c.persisted, persisted...)
 	if len(persisted) > 0 {
-		c.rc.pressure.add(record.Messages)
+		c.rc.Pressure.Add(record.Messages)
 	}
 	if mode == stepInterrupted && len(persisted) > 0 {
 		c.checkpointed = true
@@ -342,11 +344,11 @@ func (c *agentStepCommitter) stampSteerTurn(inputs []messagepkg.PersistInput) {
 	}
 }
 
-func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int, outcome queueStepOutcome) {
+func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int, result queueStepOutcome) {
 	if c == nil || c.service == nil || c.service.sessionManager == nil {
 		return
 	}
-	projected := chatview.ConvertMessagesToUITurns(outcome.persisted)
+	projected := chatview.ConvertMessagesToUITurns(result.persisted)
 	userTurns := make([]chatview.UITurn, 0, len(projected))
 	for _, turn := range projected {
 		if strings.EqualFold(strings.TrimSpace(turn.Role), "user") {
@@ -355,7 +357,7 @@ func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepInde
 	}
 	update := sessionruntime.QueueUserTurnUpdate{
 		PersistedTurns:     userTurns,
-		AppliedSteerItemID: strings.TrimSpace(outcome.appliedSteerItemID),
+		AppliedSteerItemID: strings.TrimSpace(result.appliedSteerItemID),
 	}
 	if update.AppliedSteerItemID != "" && len(userTurns) > 0 {
 		// A queue claim is the only mid-run user input admitted by this adapter.
@@ -364,13 +366,13 @@ func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepInde
 		applied := userTurns[len(userTurns)-1]
 		update.AppliedSteerTurn = &applied
 	}
-	if outcome.claimedSteer != nil {
-		update.ClaimedSteerItemID = string(outcome.claimedSteer.ID)
-		update.ClaimedSteerText = QueuePayloadText(outcome.claimedSteer.Payload)
-		update.ClaimedSteerTimestamp = outcome.claimedSteer.CreatedAt
-		if outcome.claimedSteerTurn != nil {
-			update.ClaimedSteerTurnID = outcome.claimedSteerTurn.TurnID
-			update.ClaimedSteerTurnPosition = outcome.claimedSteerTurn.Position
+	if result.claimedSteer != nil {
+		update.ClaimedSteerItemID = string(result.claimedSteer.ID)
+		update.ClaimedSteerText = runreq.QueuePayloadText(result.claimedSteer.Payload)
+		update.ClaimedSteerTimestamp = result.claimedSteer.CreatedAt
+		if result.claimedSteerTurn != nil {
+			update.ClaimedSteerTurnID = result.claimedSteerTurn.TurnID
+			update.ClaimedSteerTurnPosition = result.claimedSteerTurn.Position
 		}
 		// Anchor after the step that just committed. Its step_end marker was
 		// emitted by the native loop before the commit barrier ran, so the wait
@@ -394,7 +396,7 @@ func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepInde
 // step commits, and a run with committed steps keeps them as they are. A model
 // call the runtime already checkpointed is not written again. It returns the
 // rows the failure row wrote; a checkpoint joins the committed steps.
-func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText string, f RunFailure) ([]messagepkg.Message, error) {
+func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText string, f outcome.RunFailure) ([]messagepkg.Message, error) {
 	if c == nil || f.Code == "" {
 		return nil, nil
 	}
@@ -433,7 +435,7 @@ func (c *agentStepCommitter) finish(ctx context.Context, inputTokens int) error 
 	}
 	persisted := append([]messagepkg.Message(nil), c.persisted...)
 	memoryPersisted := append([]messagepkg.Message(nil), c.memoryPersisted...)
-	messages := append([]ModelMessage(nil), c.messages...)
+	messages := append([]runreq.ModelMessage(nil), c.messages...)
 	if len(persisted) == 0 {
 		c.finalized = true
 	}
@@ -449,7 +451,7 @@ func (c *agentStepCommitter) finish(ctx context.Context, inputTokens int) error 
 	c.finalized = true
 	c.mu.Unlock()
 	if c.req.OutboundAssetCollector != nil {
-		c.service.LinkOutboundAssets(ctx, c.req.BotID, c.req.ThreadID, outboundAssetRefsToMessageRefs(c.req.OutboundAssetCollector()))
+		c.service.LinkOutboundAssets(ctx, c.req.BotID, c.req.ThreadID, runreq.OutboundAssetRefsToMessageRefs(c.req.OutboundAssetCollector()))
 	}
 	if !c.req.SkipMemoryExtraction && len(memoryPersisted) == len(messages) && len(memoryPersisted) > 0 {
 		c.service.storeMemory(ctx, c.req, memoryPersisted)
@@ -494,7 +496,7 @@ func (t *uncommittedStepText) String() string {
 // detached cleanup context. User abort checkpoints may outlive cancellation;
 // a revoked owner must never write in the reaper's grace window.
 func stepPersistenceContext(ctx, owner context.Context) (context.Context, error) {
-	if runOwnershipLost(ctx) || runOwnershipLost(owner) {
+	if outcome.RunOwnershipLost(ctx) || outcome.RunOwnershipLost(owner) {
 		return nil, sessionruntime.ErrRunOwnershipLost
 	}
 	return context.WithoutCancel(ctx), nil

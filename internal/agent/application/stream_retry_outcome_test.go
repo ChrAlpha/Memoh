@@ -197,7 +197,7 @@ func TestChatTurnRetrySuccessReportsNoError(t *testing.T) {
 	}
 	assertOrdered(t, got.types, "retry", "agent_end")
 	assertCount(t, got.types, "error", 0)
-	if len(fixture.messages.persisted) == 0 {
+	if len(fixture.messages.Persisted) == 0 {
 		t.Fatal("the recovered answer was not stored")
 	}
 	assertStrings(t, "turn error codes", got.errCodes, nil)

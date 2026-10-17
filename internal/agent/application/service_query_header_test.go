@@ -2,6 +2,8 @@ package application
 
 import (
 	"testing"
+
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 // TestUserQueryNeedsHeader pins the attachment-only regression fix: a message
@@ -14,24 +16,24 @@ func TestUserQueryNeedsHeader(t *testing.T) {
 
 	cases := []struct {
 		name        string
-		req         ChatRequest
+		req         runreq.ChatRequest
 		attachments int
 		want        bool
 	}{
-		{name: "text message", req: ChatRequest{Query: "hello"}, want: true},
-		{name: "text with attachments", req: ChatRequest{Query: "look"}, attachments: 1, want: true},
-		{name: "attachment only", req: ChatRequest{}, attachments: 2, want: true},
-		{name: "empty message", req: ChatRequest{}, want: false},
-		{name: "whitespace query no attachments", req: ChatRequest{Query: "  "}, want: false},
+		{name: "text message", req: runreq.ChatRequest{Query: "hello"}, want: true},
+		{name: "text with attachments", req: runreq.ChatRequest{Query: "look"}, attachments: 1, want: true},
+		{name: "attachment only", req: runreq.ChatRequest{}, attachments: 2, want: true},
+		{name: "empty message", req: runreq.ChatRequest{}, want: false},
+		{name: "whitespace query no attachments", req: runreq.ChatRequest{Query: "  "}, want: false},
 		{
 			name:        "no-prompt skill activation with attachments",
-			req:         ChatRequest{UserMessageKind: UserMessageKindSkillActivation},
+			req:         runreq.ChatRequest{UserMessageKind: runreq.UserMessageKindSkillActivation},
 			attachments: 1,
 			want:        false,
 		},
 		{
 			name: "skill activation with prompt",
-			req:  ChatRequest{Query: "do it", UserMessageKind: UserMessageKindSkillActivation},
+			req:  runreq.ChatRequest{Query: "do it", UserMessageKind: runreq.UserMessageKindSkillActivation},
 			want: true,
 		},
 	}

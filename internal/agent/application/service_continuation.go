@@ -6,6 +6,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
@@ -41,7 +42,7 @@ func (s *Service) prepareContinuationRunConfig(
 	if err != nil {
 		return native.RunConfig{}, err
 	}
-	messages := sanitizeMessages(assembled.Messages)
+	messages := runreq.SanitizeMessages(assembled.Messages)
 	retained := assembled.Records
 	historyEstimates := make([]int, len(messages))
 	for i := range messages {
@@ -58,7 +59,7 @@ func (s *Service) prepareContinuationRunConfig(
 	// keeps the fragments faithful to history while the outgoing messages stay
 	// provider-valid. Applies to every continuation path that resumes after a
 	// deferred tool call.
-	base.Messages = modelMessagesToSDKMessages(repairToolCallClosures(nonNilModelMessages(messages), syntheticToolClosureError))
+	base.Messages = runreq.ModelMessagesToSDKMessages(runreq.RepairToolCallClosures(runreq.NonNilModelMessages(messages), runreq.SyntheticToolClosureError))
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil
 	base.Query = ""

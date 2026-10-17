@@ -25,7 +25,10 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -185,14 +188,14 @@ func TestCharacterizeNativeStreamErrorClassification(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			cause := agentStreamFailure(tc.event)
+			cause := outcome.AgentStreamFailure(tc.event)
 			if got := string(apperror.CodeOf(cause)); got != tc.code {
 				t.Fatalf("lifecycle code = %q, want %q", got, tc.code)
 			}
-			if got := string(historyFailureCode(publicFailureCode(cause))); got != tc.historyCode {
+			if got := string(outcome.HistoryFailureCode(outcome.PublicFailureCode(cause))); got != tc.historyCode {
 				t.Fatalf("history failure code = %q, want %q", got, tc.historyCode)
 			}
-			public := publicAgentStreamEvent(tc.event)
+			public := outcome.PublicAgentStreamEvent(tc.event)
 			if public.Code != tc.code {
 				t.Fatalf("public event code = %q, want %q", public.Code, tc.code)
 			}
@@ -215,7 +218,7 @@ func TestCharacterizeNativeStreamErrorClassification(t *testing.T) {
 func TestCharacterizeFailureEventForNonAppErrorCause(t *testing.T) {
 	t.Parallel()
 	for _, cause := range []error{errors.New("SECRET provider response"), context.Canceled} {
-		data, err := json.Marshal(agentFailureStreamEvent(cause))
+		data, err := json.Marshal(outcome.AgentFailureStreamEvent(cause))
 		if err != nil {
 			t.Fatalf("marshal: %v", err)
 		}
@@ -223,9 +226,9 @@ func TestCharacterizeFailureEventForNonAppErrorCause(t *testing.T) {
 			t.Fatalf("failure event for %v = %s, want %s", cause, data, want)
 		}
 	}
-	// The history marker is not written for such a cause: historyFailureCode
+	// The history marker is not written for such a cause: outcome.HistoryFailureCode
 	// only accepts the codes it lists.
-	if got := historyFailureCode(publicFailureCode(errors.New("SECRET provider response"))); got != "" {
+	if got := outcome.HistoryFailureCode(outcome.PublicFailureCode(errors.New("SECRET provider response"))); got != "" {
 		t.Fatalf("history failure code = %q, want none", got)
 	}
 }
@@ -235,17 +238,17 @@ func TestCharacterizeFailureEventForNonAppErrorCause(t *testing.T) {
 func TestCharacterizeHistoryFailureMarker(t *testing.T) {
 	t.Parallel()
 	for _, code := range []apperror.Code{apperror.CodeAgentProviderOverloaded, apperror.CodeAgentResponseInterrupted} {
-		messages := &recordingMessageService{}
+		messages := &agenttest.RecordingMessages{}
 		service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
 		if _, err := service.persistTurnFailure(context.Background(),
-			ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"},
-			resolvedContext{}, code); err != nil {
+			runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"},
+			runreq.ResolvedContext{}, code); err != nil {
 			t.Fatalf("persistTurnFailure: %v", err)
 		}
-		if len(messages.persisted) != 2 || messages.persisted[0].Role != "user" || messages.persisted[1].Role != "assistant" {
-			t.Fatalf("persisted = %#v, want user + assistant", messages.persisted)
+		if len(messages.Persisted) != 2 || messages.Persisted[0].Role != "user" || messages.Persisted[1].Role != "assistant" {
+			t.Fatalf("persisted = %#v, want user + assistant", messages.Persisted)
 		}
-		metadata := messages.persisted[1].Metadata
+		metadata := messages.Persisted[1].Metadata
 		if metadata["agent_step_interrupted"] != true || metadata["error_code"] != string(code) {
 			t.Fatalf("assistant metadata = %#v, want interrupted with error_code %q", metadata, code)
 		}
@@ -262,7 +265,7 @@ func TestCharacterizeHistoryFailureMarker(t *testing.T) {
 // assistant message in history.
 func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *testing.T) {
 	t.Parallel()
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
 	partial := terminalSnapshot{
 		sdkMessages:   []sdk.Message{sdk.AssistantMessage("partial answer")},
@@ -270,28 +273,28 @@ func TestCharacterizeHistoryPartialOutputDropsFailureCode_CurrentBehavior(t *tes
 		failureCode:   apperror.CodeAgentProviderOverloaded,
 	}
 	if _, err := service.persistTerminalSnapshotResult(context.Background(),
-		ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, resolvedContext{}, partial); err != nil {
+		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, runreq.ResolvedContext{}, partial); err != nil {
 		t.Fatalf("persistTerminalSnapshotResult: %v", err)
 	}
 
-	if len(messages.persisted) != 2 {
-		t.Fatalf("persisted = %#v, want user + assistant", messages.persisted)
+	if len(messages.Persisted) != 2 {
+		t.Fatalf("persisted = %#v, want user + assistant", messages.Persisted)
 	}
-	metadata := messages.persisted[1].Metadata
+	metadata := messages.Persisted[1].Metadata
 	if _, has := metadata[messagepkg.HistoryErrorCodeMetadataKey]; has {
 		t.Fatalf("assistant metadata = %#v, current behavior stores no error_code", metadata)
 	}
 
 	// Without visible output the same partial snapshot becomes the failure marker.
-	hidden := &recordingMessageService{}
+	hidden := &agenttest.RecordingMessages{}
 	service = &Service{messageService: hidden, logger: slog.New(slog.DiscardHandler)}
 	partial.visibleOutput = false
 	if _, err := service.persistTerminalSnapshotResult(context.Background(),
-		ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, resolvedContext{}, partial); err != nil {
+		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "hello"}, runreq.ResolvedContext{}, partial); err != nil {
 		t.Fatalf("persistTerminalSnapshotResult: %v", err)
 	}
-	if len(hidden.persisted) != 2 || hidden.persisted[1].Metadata["error_code"] != "agent.provider_overloaded" {
-		t.Fatalf("persisted without visible output = %#v, want failure marker", hidden.persisted)
+	if len(hidden.Persisted) != 2 || hidden.Persisted[1].Metadata["error_code"] != "agent.provider_overloaded" {
+		t.Fatalf("persisted without visible output = %#v, want failure marker", hidden.Persisted)
 	}
 }
 
@@ -343,7 +346,7 @@ func TestCharacterizeTurnRunFinisherCodes_CurrentBehavior(t *testing.T) {
 			if err != nil {
 				t.Fatalf("admit: %v", err)
 			}
-			service.turnRunFinisher(context.Background(), admission, sessionmode.Chat)(RunOutcome{Status: tc.status, Cause: tc.cause})
+			service.turnRunFinisher(context.Background(), admission, sessionmode.Chat)(outcome.RunOutcome{Status: tc.status, Cause: tc.cause})
 			run, err := runs.Get(context.Background(), admission.RunID)
 			if err != nil {
 				t.Fatalf("load run: %v", err)
@@ -408,8 +411,8 @@ func TestCharacterizeDecisionContinuationFailureColumns(t *testing.T) {
 				stop()
 			}
 			service.driveRoutedContinuation(runCtx, command, handle, decisionContinuation{
-				Req: ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
-				Setup: func(context.Context, ChatRequest) (runPlan, error) {
+				Req: runreq.ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
+				Setup: func(context.Context, runreq.ChatRequest) (runPlan, error) {
 					return runPlan{}, tc.cause
 				},
 			})

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -19,11 +20,11 @@ import (
 func TestStepCommitterStartsAtRequestStepOffset(t *testing.T) {
 	service, handle := newDeferredSteerTestService(t, sessionruntime.NewMemoryBackend())
 	ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: handle.BotID, SessionID: handle.SessionID, Token: handle.FencingToken})
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle,
 		UserMessagePersisted: true, PersistedUserMessageID: "user", StepIndexOffset: 2,
 	}
-	committer := service.newAgentStepCommitter(ctx, req, resolvedContext{runConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
+	committer := service.newAgentStepCommitter(ctx, req, runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
 	if committer == nil {
 		t.Fatal("missing fenced step committer")
 	}

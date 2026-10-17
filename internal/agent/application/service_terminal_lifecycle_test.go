@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
@@ -41,7 +42,7 @@ func TestContextLifecycleStatusForTerminalRunUsesDurableGenericOutcomes(t *testi
 }
 
 func TestTerminalLifecycleCandidateClassificationDoesNotInheritCodeAcrossStatusChange(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 	minimal := minimalContextLifecycleSnapshot()
 	service.stageContextLifecycleCandidate(
@@ -71,10 +72,10 @@ func TestTerminalLifecycleCandidateClassificationDoesNotInheritCodeAcrossStatusC
 		context.Background(),
 		lifecycleTerminalRun(14, "completed", ""),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFallback || upsert.ErrorCode.Valid {
 		t.Fatalf("candidate terminal = (%q, %#v), want fallback without inherited error code", upsert.Status, upsert.ErrorCode)
 	}
@@ -96,7 +97,7 @@ func TestTerminalLifecycleReconciliationPrefersCompatibleCandidateStatus(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &recordingContextLifecycleStore{existing: &sqlc.GetContextLifecycleByRunIDRow{
+	store := &agenttest.RecordingLifecycleStore{Existing: &sqlc.GetContextLifecycleByRunIDRow{
 		RunID:     runUUID,
 		BotID:     botUUID,
 		SessionID: sessionUUID,
@@ -123,10 +124,10 @@ func TestTerminalLifecycleReconciliationPrefersCompatibleCandidateStatus(t *test
 		context.Background(),
 		lifecycleTerminalRun(15, "failed", "runtime_run_failed"),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFailedBudget ||
 		!upsert.ErrorCode.Valid || upsert.ErrorCode.String != string(apperror.CodeContextProtectedOverflow) {
 		t.Fatalf("candidate terminal = (%q, %#v), want failed_budget with protected-overflow code", upsert.Status, upsert.ErrorCode)
@@ -213,7 +214,7 @@ func TestTerminalLifecycleReconciliationUsesCompatibleExistingThenDurableGeneric
 			if tt.existingCode != "" {
 				code = pgtype.Text{String: tt.existingCode, Valid: true}
 			}
-			store := &recordingContextLifecycleStore{existing: &sqlc.GetContextLifecycleByRunIDRow{
+			store := &agenttest.RecordingLifecycleStore{Existing: &sqlc.GetContextLifecycleByRunIDRow{
 				RunID:     runUUID,
 				BotID:     botUUID,
 				SessionID: sessionUUID,
@@ -227,10 +228,10 @@ func TestTerminalLifecycleReconciliationUsesCompatibleExistingThenDurableGeneric
 				lifecycleTerminalRun(16, tt.state, tt.runErrorCode),
 			)
 
-			if len(store.terminalUpserts) != 1 {
-				t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+			if len(store.TerminalUpserts) != 1 {
+				t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 			}
-			upsert := store.terminalUpserts[0]
+			upsert := store.TerminalUpserts[0]
 			if upsert.Status != tt.wantStatus || upsert.ErrorCode.String != tt.wantErrorCode ||
 				upsert.ErrorCode.Valid != (tt.wantErrorCode != "") {
 				t.Fatalf("reconciled terminal = (%q, %#v), want (%q, %q)", upsert.Status, upsert.ErrorCode, tt.wantStatus, tt.wantErrorCode)
@@ -252,7 +253,7 @@ func TestTerminalLifecycleReconciliationRejectsIncompatibleCandidateCode(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &recordingContextLifecycleStore{existing: &sqlc.GetContextLifecycleByRunIDRow{
+	store := &agenttest.RecordingLifecycleStore{Existing: &sqlc.GetContextLifecycleByRunIDRow{
 		RunID:     runUUID,
 		BotID:     botUUID,
 		SessionID: sessionUUID,
@@ -277,17 +278,17 @@ func TestTerminalLifecycleReconciliationRejectsIncompatibleCandidateCode(t *test
 		context.Background(),
 		lifecycleTerminalRun(17, "completed", ""),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFallback || upsert.ErrorCode.Valid || upsert.ReplaceErrorCode {
 		t.Fatalf("reconciled terminal = (%q, %#v, replace=%t), want fallback without candidate code authority", upsert.Status, upsert.ErrorCode, upsert.ReplaceErrorCode)
 	}
 }
 
 func TestTerminalLifecycleCandidateWaitsForAuthoritativeFence(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 	snapshot := lifecycleRichSnapshot(t)
 	ctx := lifecycleFencedContext(7)
@@ -303,20 +304,20 @@ func TestTerminalLifecycleCandidateWaitsForAuthoritativeFence(t *testing.T) {
 	) {
 		t.Fatal("admitted lifecycle candidate was not staged")
 	}
-	if len(store.terminalUpserts) != 0 {
-		t.Fatalf("candidate wrote before durable terminal: %#v", store.terminalUpserts)
+	if len(store.TerminalUpserts) != 0 {
+		t.Fatalf("candidate wrote before durable terminal: %#v", store.TerminalUpserts)
 	}
 
 	run := lifecycleTerminalRun(7, "completed", "")
 	service.reconcileTerminalContextLifecycle(context.Background(), run)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	assertLifecycleSnapshot(t, store.terminalUpserts[0].Snapshot, snapshot)
-	if !store.terminalUpserts[0].ReplaceSnapshot {
+	assertLifecycleSnapshot(t, store.TerminalUpserts[0].Snapshot, snapshot)
+	if !store.TerminalUpserts[0].ReplaceSnapshot {
 		t.Fatal("authoritative candidate did not replace the minimal snapshot")
 	}
-	if !store.terminalUpsertBound {
+	if !store.TerminalUpsertBound {
 		t.Fatal("terminal observer write was not bounded")
 	}
 	if _, ok := service.contextLifecycleCandidateFor(run); ok {
@@ -324,13 +325,13 @@ func TestTerminalLifecycleCandidateWaitsForAuthoritativeFence(t *testing.T) {
 	}
 
 	service.reconcileTerminalContextLifecycle(context.Background(), run)
-	if len(store.terminalUpserts) != 2 || store.terminalUpserts[1].ReplaceSnapshot {
-		t.Fatalf("duplicate terminal replay = %#v, want idempotent preserved snapshot", store.terminalUpserts)
+	if len(store.TerminalUpserts) != 2 || store.TerminalUpserts[1].ReplaceSnapshot {
+		t.Fatalf("duplicate terminal replay = %#v, want idempotent preserved snapshot", store.TerminalUpserts)
 	}
 }
 
 func TestTerminalLifecycleCandidateOwnsErrorCodeIndependently(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 	snapshot := lifecycleRichSnapshot(t)
 	service.stageContextLifecycleCandidate(
@@ -347,10 +348,10 @@ func TestTerminalLifecycleCandidateOwnsErrorCodeIndependently(t *testing.T) {
 		context.Background(),
 		lifecycleTerminalRun(8, "failed", "runtime_run_failed"),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if !upsert.ReplaceSnapshot || !upsert.ReplaceErrorCode {
 		t.Fatalf("candidate authorities = snapshot:%t error_code:%t, want both true", upsert.ReplaceSnapshot, upsert.ReplaceErrorCode)
 	}
@@ -360,7 +361,7 @@ func TestTerminalLifecycleCandidateOwnsErrorCodeIndependently(t *testing.T) {
 }
 
 func TestTerminalLifecycleMinimalCandidateOwnsOnlyErrorCode(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 	snapshot := minimalContextLifecycleSnapshot()
 	service.stageContextLifecycleCandidate(
@@ -377,10 +378,10 @@ func TestTerminalLifecycleMinimalCandidateOwnsOnlyErrorCode(t *testing.T) {
 		context.Background(),
 		lifecycleTerminalRun(10, "failed", "runtime_run_failed"),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.ReplaceSnapshot || !upsert.ReplaceErrorCode {
 		t.Fatalf("minimal candidate authorities = snapshot:%t error_code:%t, want false/true", upsert.ReplaceSnapshot, upsert.ReplaceErrorCode)
 	}
@@ -390,7 +391,7 @@ func TestTerminalLifecycleMinimalCandidateOwnsOnlyErrorCode(t *testing.T) {
 }
 
 func TestTerminalLifecycleIgnoresStaleFenceCandidate(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 	snapshot := lifecycleRichSnapshot(t)
 	service.stageContextLifecycleCandidate(
@@ -407,20 +408,20 @@ func TestTerminalLifecycleIgnoresStaleFenceCandidate(t *testing.T) {
 		context.Background(),
 		lifecycleTerminalRun(4, "failed", "runtime_run_failed"),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
 	var got contextfrag.LifecycleSnapshot
-	if err := json.Unmarshal(store.terminalUpserts[0].Snapshot, &got); err != nil {
+	if err := json.Unmarshal(store.TerminalUpserts[0].Snapshot, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Counts != (contextfrag.ManifestCounts{}) || got.AssistantMessageID != "" {
 		t.Fatalf("stale candidate snapshot was used: %#v", got)
 	}
-	if code := store.terminalUpserts[0].ErrorCode; !code.Valid || code.String != "runtime_run_failed" {
+	if code := store.TerminalUpserts[0].ErrorCode; !code.Valid || code.String != "runtime_run_failed" {
 		t.Fatalf("terminal error code = %#v, want stable ledger code", code)
 	}
-	if store.terminalUpserts[0].ReplaceErrorCode {
+	if store.TerminalUpserts[0].ReplaceErrorCode {
 		t.Fatal("stale-fence candidate was granted error-code authority")
 	}
 	service.contextLifecycleCandidatesMu.Lock()
@@ -432,7 +433,7 @@ func TestTerminalLifecycleIgnoresStaleFenceCandidate(t *testing.T) {
 }
 
 func TestTerminalLifecycleRetainsCandidateAcrossTransientStoreFailure(t *testing.T) {
-	store := &recordingContextLifecycleStore{terminalUpsertErr: errors.New("database unavailable")}
+	store := &agenttest.RecordingLifecycleStore{TerminalUpsertErr: errors.New("database unavailable")}
 	service := &Service{contextLifecycles: store}
 	snapshot := lifecycleRichSnapshot(t)
 	run := lifecycleTerminalRun(9, "completed", "")
@@ -454,15 +455,15 @@ func TestTerminalLifecycleRetainsCandidateAcrossTransientStoreFailure(t *testing
 		t.Fatalf("persistence failure count = %d, want 1", got)
 	}
 
-	store.terminalUpsertErr = nil
+	store.TerminalUpsertErr = nil
 	service.reconcileTerminalContextLifecycle(context.Background(), run)
 	if _, ok := service.contextLifecycleCandidateFor(run); ok {
 		t.Fatal("candidate remained after retry succeeded")
 	}
-	if len(store.terminalUpserts) != 2 {
-		t.Fatalf("terminal upsert attempts = %d, want 2", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 2 {
+		t.Fatalf("terminal upsert attempts = %d, want 2", len(store.TerminalUpserts))
 	}
-	assertLifecycleSnapshot(t, store.terminalUpserts[1].Snapshot, snapshot)
+	assertLifecycleSnapshot(t, store.TerminalUpserts[1].Snapshot, snapshot)
 }
 
 func TestTerminalLifecycleReconcilerRepairsCrashGapWithBoundedRead(t *testing.T) {
@@ -472,10 +473,10 @@ func TestTerminalLifecycleReconcilerRepairsCrashGapWithBoundedRead(t *testing.T)
 		t.Fatal(err)
 	}
 	const assistantID = "44444444-4444-4444-8444-444444444444"
-	store := &recordingContextLifecycleStore{
-		assistantID: flowTestUUID(assistantID),
-		metadata:    metadata,
-		terminalRows: []sqlc.ListTerminalSessionRunsNeedingContextLifecycleRow{{
+	store := &agenttest.RecordingLifecycleStore{
+		AssistantID: flowTestUUID(assistantID),
+		Metadata:    metadata,
+		TerminalRows: []sqlc.ListTerminalSessionRunsNeedingContextLifecycleRow{{
 			RunID:        flowTestUUID(lifecycleTestRunID),
 			BotID:        flowTestUUID(lifecycleTestBotID),
 			SessionID:    flowTestUUID(lifecycleTestSessionID),
@@ -489,13 +490,13 @@ func TestTerminalLifecycleReconcilerRepairsCrashGapWithBoundedRead(t *testing.T)
 	if err := service.reconcileTerminalContextLifecycles(context.Background()); err != nil {
 		t.Fatalf("reconcileTerminalContextLifecycles() error = %v", err)
 	}
-	if store.terminalListCalls != 1 || store.terminalListLimit != contextLifecycleReconciliationBatchSize || !store.terminalListBound {
-		t.Fatalf("reconciliation list = calls:%d limit:%d bounded:%t", store.terminalListCalls, store.terminalListLimit, store.terminalListBound)
+	if store.TerminalListCalls != 1 || store.TerminalListLimit != contextLifecycleReconciliationBatchSize || !store.TerminalListBound {
+		t.Fatalf("reconciliation list = calls:%d limit:%d bounded:%t", store.TerminalListCalls, store.TerminalListLimit, store.TerminalListBound)
 	}
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFailedProvider || !upsert.ErrorCode.Valid || upsert.ErrorCode.String != "provider.stable" {
 		t.Fatalf("reconciled terminal = (%q, %#v)", upsert.Status, upsert.ErrorCode)
 	}
@@ -510,14 +511,14 @@ func TestTerminalLifecycleReconcilerRepairsCrashGapWithBoundedRead(t *testing.T)
 		t.Fatalf("recovered assistant message ID = %q, want %q", recovered.AssistantMessageID, assistantID)
 	}
 
-	store.terminalListErr = errors.New("query unavailable")
+	store.TerminalListErr = errors.New("query unavailable")
 	if err := service.reconcileTerminalContextLifecycles(context.Background()); err == nil {
 		t.Fatal("reconciliation query error was swallowed")
 	}
 }
 
 func TestTerminalLifecycleReconcilerHonorsShorterDeadline(t *testing.T) {
-	store := &recordingContextLifecycleStore{terminalListWait: true}
+	store := &agenttest.RecordingLifecycleStore{TerminalListWait: true}
 	service := &Service{contextLifecycles: store}
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
 	defer cancel()
@@ -530,7 +531,7 @@ func TestTerminalLifecycleReconcilerHonorsShorterDeadline(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("bounded reconciliation took %s", elapsed)
 	}
-	if !store.terminalListBound {
+	if !store.TerminalListBound {
 		t.Fatal("blocking reconciliation query did not receive a deadline")
 	}
 }
@@ -592,17 +593,17 @@ func TestTerminalLifecycleRepairRecoversFallbackFromAssistantMetadata(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &recordingContextLifecycleStore{metadata: meta}
+	store := &agenttest.RecordingLifecycleStore{Metadata: meta}
 	service := &Service{contextLifecycles: store}
 
 	service.reconcileTerminalContextLifecycle(
 		context.Background(),
 		lifecycleTerminalRun(31, "completed", ""),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFallback || upsert.ErrorCode.Valid {
 		t.Fatalf("repaired terminal = (%q, %#v), want fallback recovered from metadata", upsert.Status, upsert.ErrorCode)
 	}
@@ -620,17 +621,17 @@ func TestTerminalLifecycleRepairRecoversFailedBudgetFromRecoveredMutations(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &recordingContextLifecycleStore{metadata: meta}
+	store := &agenttest.RecordingLifecycleStore{Metadata: meta}
 	service := &Service{contextLifecycles: store}
 
 	service.reconcileTerminalContextLifecycle(
 		context.Background(),
 		lifecycleTerminalRun(32, "failed", "runtime_run_failed"),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFailedBudget ||
 		!upsert.ErrorCode.Valid || upsert.ErrorCode.String != string(apperror.CodeContextBudgetUnsatisfied) {
 		t.Fatalf("repaired terminal = (%q, %#v), want failed_budget from recovered mutations", upsert.Status, upsert.ErrorCode)
@@ -638,17 +639,17 @@ func TestTerminalLifecycleRepairRecoversFailedBudgetFromRecoveredMutations(t *te
 }
 
 func TestTerminalLifecycleRepairClassifiesBudgetErrorCodeWithoutSnapshot(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 
 	service.reconcileTerminalContextLifecycle(
 		context.Background(),
 		lifecycleTerminalRun(33, "failed", string(apperror.CodeContextBudgetUnsatisfied)),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFailedBudget ||
 		!upsert.ErrorCode.Valid || upsert.ErrorCode.String != string(apperror.CodeContextBudgetUnsatisfied) {
 		t.Fatalf("repaired terminal = (%q, %#v), want failed_budget from run error code", upsert.Status, upsert.ErrorCode)
@@ -668,7 +669,7 @@ func TestTerminalLifecycleRepairKeepsRicherExistingOverMinimalCandidate(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &recordingContextLifecycleStore{existing: &sqlc.GetContextLifecycleByRunIDRow{
+	store := &agenttest.RecordingLifecycleStore{Existing: &sqlc.GetContextLifecycleByRunIDRow{
 		RunID:     runUUID,
 		BotID:     botUUID,
 		SessionID: sessionUUID,
@@ -691,10 +692,10 @@ func TestTerminalLifecycleRepairKeepsRicherExistingOverMinimalCandidate(t *testi
 		context.Background(),
 		lifecycleTerminalRun(34, "completed", ""),
 	)
-	if len(store.terminalUpserts) != 1 {
-		t.Fatalf("terminal upserts = %d, want 1", len(store.terminalUpserts))
+	if len(store.TerminalUpserts) != 1 {
+		t.Fatalf("terminal upserts = %d, want 1", len(store.TerminalUpserts))
 	}
-	upsert := store.terminalUpserts[0]
+	upsert := store.TerminalUpserts[0]
 	if upsert.Status != contextLifecycleStatusFallback {
 		t.Fatalf("repaired terminal status = %q, want richer existing fallback preserved", upsert.Status)
 	}

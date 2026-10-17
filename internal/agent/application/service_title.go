@@ -11,6 +11,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -73,19 +74,11 @@ Examples of the rules (do not copy their content):
 
 User: `
 
-// SessionService is the interface the application service uses for session metadata updates.
-type SessionService interface {
-	Get(ctx context.Context, sessionID string) (session.Thread, error)
-	UpdateTitle(ctx context.Context, sessionID, title string) (session.Thread, error)
-	UpdateMetadata(ctx context.Context, sessionID string, metadata map[string]any) (session.Thread, error)
-	MergeRuntimeMetadata(ctx context.Context, sessionID, runtimeType string, delta map[string]any) (session.Thread, error)
-}
-
 // maybeGenerateSessionTitle starts a background unit that gives the session
 // an auto-generated title if it has none yet. It is fired when a user
 // message is received so the title appears as early as possible without
 // blocking the chat flow.
-func (s *Service) maybeGenerateSessionTitle(ctx context.Context, req ChatRequest, userQuery string) {
+func (s *Service) maybeGenerateSessionTitle(ctx context.Context, req runreq.ChatRequest, userQuery string) {
 	if req.SkipTitleGeneration {
 		return
 	}
@@ -103,7 +96,7 @@ func (s *Service) maybeGenerateSessionTitle(ctx context.Context, req ChatRequest
 }
 
 // generateSessionTitle is the body of one title unit.
-func (s *Service) generateSessionTitle(ctx context.Context, req ChatRequest, sessionID, userQuery string) error {
+func (s *Service) generateSessionTitle(ctx context.Context, req runreq.ChatRequest, sessionID, userQuery string) error {
 	sess, err := s.sessionService.Get(ctx, sessionID)
 	if err != nil {
 		return errs.Wrap(err, "get session")
@@ -184,7 +177,7 @@ func shouldGenerateSessionTitle(sess session.Thread) bool {
 		return false
 	}
 
-	agentID := metadataString(sess.Metadata, "acp_agent_id")
+	agentID := runreq.MetadataString(sess.Metadata, "acp_agent_id")
 	normalized := acpprofile.NormalizeAgentID(agentID)
 	if normalized == "" {
 		return false
@@ -403,7 +396,7 @@ func fallbackSessionTitle(userQuery string) string {
 // otherwise stay untitled, then publishes it so clients replace the
 // "Untitled" placeholder immediately. No-op when the prompt yields no usable
 // text.
-func (s *Service) applyFallbackTitle(ctx context.Context, req ChatRequest, sessionID, userQuery string) {
+func (s *Service) applyFallbackTitle(ctx context.Context, req runreq.ChatRequest, sessionID, userQuery string) {
 	title := fallbackSessionTitle(userQuery)
 	if title == "" {
 		return

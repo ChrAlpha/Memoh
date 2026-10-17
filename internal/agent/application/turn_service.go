@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
-	"github.com/felinics/memoh/internal/apperror"
 )
 
 var _ turn.Service = (*Service)(nil)
@@ -43,8 +44,8 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	// cause so a lost owner lease can stop execution with a reason, instead of a
 	// superseded owner racing the fence it can no longer pass.
 	runCtx, stopRun := context.WithCancelCause(context.WithoutCancel(ctx))
-	context.AfterFunc(ctx, func() { stopRun(runContextEnding(context.Cause(ctx))) })
-	cancel := func() { stopRun(errRunStopped) }
+	context.AfterFunc(ctx, func() { stopRun(outcome.RunContextEnding(context.Cause(ctx))) })
+	cancel := func() { stopRun(outcome.ErrRunStopped) }
 
 	injectCh := make(chan turn.InjectMessage, 16)
 	admission, err := s.admitTurnRun(runCtx, cmd, cancel, stopRun, injectCh)
@@ -75,13 +76,13 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		},
 		Req:      req,
 		Delivery: handle,
-		Input:    inputAccepted,
+		Input:    outcome.InputAccepted,
 	}
 	// The caller's own context is this run's stop signal: an inbound consumer
 	// that went away, a transport that closed, or the channel's own /stop. The
 	// driver names the ending from the run context's own cause, so this one
 	// carries no separate stop channel.
-	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		return s.chatSetup(ctx, req, spec)
 	}
 
@@ -113,23 +114,6 @@ func (s *Service) admitAfterQueue(ctx context.Context, cmd turn.StartTurnCommand
 		return fmt.Errorf("%w: thread %s has queued input", turn.ErrSessionBusy, cmd.ThreadID)
 	}
 	return nil
-}
-
-func runtimeHistoryError(err error) error {
-	if err == nil || apperror.CodeOf(err) != "" {
-		return err
-	}
-	return apperror.Wrap(apperror.CodeSessionHistoryInconsistent, err, nil)
-}
-
-// runtimePublishError names a failure to publish the run's live state to the
-// Session Runtime. History is not involved (Redis down, run ownership lost),
-// so it must not read as a history fault.
-func runtimePublishError(err error) error {
-	if err == nil || apperror.CodeOf(err) != "" {
-		return err
-	}
-	return apperror.Wrap(apperror.CodeSessionPublishFailed, err, nil)
 }
 
 // RespondToolApproval resumes a turn deferred on tool approval.

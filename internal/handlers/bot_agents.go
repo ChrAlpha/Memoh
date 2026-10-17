@@ -9,7 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -76,7 +76,7 @@ func (h *BotAgentsHandler) ListModels(c echo.Context) error {
 		// and friends) keeps its own code and args; wrapping it as
 		// runtime-unavailable would lose both and hide the install task from
 		// the web.
-		if translated := application.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
+		if translated := outcome.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
 			return translated
 		}
 		return apperror.Wrap(apperror.CodeExternalRuntimeUnavailable, err, map[string]string{"runtime": agent.Runtime})
@@ -212,7 +212,7 @@ func (h *BotAgentsHandler) Delete(c echo.Context) error {
 	}
 	botAgentID := strings.TrimSpace(c.Param("id"))
 	err = h.service.Delete(c.Request().Context(), botID, botAgentID, func(agent botagents.BotAgent) error {
-		purgeErr := application.ExternalRuntimeError(h.runtimes.PurgeBotAgentAuth(c.Request().Context(), agent.Runtime, botID, botAgentID))
+		purgeErr := outcome.ExternalRuntimeError(h.runtimes.PurgeBotAgentAuth(c.Request().Context(), agent.Runtime, botID, botAgentID))
 		if purgeErr != nil && apperror.CodeOf(purgeErr) == "" {
 			return apperror.Wrap(apperror.CodeAgentCredentialMaterializationFailed, purgeErr, nil)
 		}

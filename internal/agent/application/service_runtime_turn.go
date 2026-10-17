@@ -9,12 +9,12 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
-	"github.com/felinics/memoh/internal/errs"
 )
 
 // externalDriverMap indexes out-of-process runtime drivers (codex,
@@ -48,7 +48,7 @@ type runtimeDispatch struct {
 
 // resolveRuntimeDispatch decides which runtime executes a request's turn:
 // the in-process model runtime, the ACP pool, or a direct external driver.
-func (s *Service) resolveRuntimeDispatch(ctx context.Context, req ChatRequest) (runtimeDispatch, error) {
+func (s *Service) resolveRuntimeDispatch(ctx context.Context, req runreq.ChatRequest) (runtimeDispatch, error) {
 	if s == nil || s.sessionService == nil || strings.TrimSpace(req.ThreadID) == "" {
 		return runtimeDispatch{kind: dispatchNative}, nil
 	}
@@ -56,7 +56,7 @@ func (s *Service) resolveRuntimeDispatch(ctx context.Context, req ChatRequest) (
 	if err != nil {
 		return runtimeDispatch{}, err
 	}
-	if err := validateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
+	if err := runreq.ValidateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
 		return runtimeDispatch{}, err
 	}
 	runtimeType := ""
@@ -73,19 +73,6 @@ func (s *Service) resolveRuntimeDispatch(ctx context.Context, req ChatRequest) (
 		return runtimeDispatch{}, apperror.New(apperror.CodeExternalRuntimeUnavailable, map[string]string{"runtime": runtimeType})
 	}
 	return runtimeDispatch{kind: dispatchExternal, driver: driver}, nil
-}
-
-// runtimeSessionMeta overlays session metadata with runtime metadata
-// (runtime wins), giving drivers one merged view of their keys.
-func runtimeSessionMeta(sess session.Thread) map[string]any {
-	out := make(map[string]any, len(sess.Metadata)+len(sess.RuntimeMetadata))
-	for key, value := range sess.Metadata {
-		out[key] = value
-	}
-	for key, value := range sess.RuntimeMetadata {
-		out[key] = value
-	}
-	return out
 }
 
 // abortSettleWait bounds how long AbortSessionRuns waits for the aborted run
@@ -159,7 +146,7 @@ func activeRuntimeRunStatus(status string) bool {
 // the next prompt restarts from the durable head) gets the callback for
 // completed turns; every other case keeps the runtime session and logs the
 // ghost turn.
-func (s *Service) handleRuntimeRoundRollback(ctx context.Context, driver external.Driver, req ChatRequest, runtimeType string, turnCompleted bool) {
+func (s *Service) handleRuntimeRoundRollback(ctx context.Context, driver external.Driver, req runreq.ChatRequest, runtimeType string, turnCompleted bool) {
 	if turnCompleted {
 		if handler, ok := driver.(external.RoundRollbackHandler); ok {
 			handler.OnRoundRolledBack(context.WithoutCancel(ctx), req.BotID, req.ThreadID)
@@ -169,20 +156,12 @@ func (s *Service) handleRuntimeRoundRollback(ctx context.Context, driver externa
 	s.logRuntimeRoundDivergence(req, runtimeType)
 }
 
-func (s *Service) logRuntimeRoundDivergence(req ChatRequest, runtimeType string) {
+func (s *Service) logRuntimeRoundDivergence(req runreq.ChatRequest, runtimeType string) {
 	s.logger.Warn("external runtime remembers a round the visible history lost",
 		slog.String("session_id", req.ThreadID),
 		slog.String("run_id", req.RunID),
 		slog.String("runtime", runtimeType),
 	)
-}
-
-// runtimeTurnError marks err as the failure of a turn runtimeType ran. Every
-// External Agent failure carries its runtime under the same key, so one query
-// over the result records finds them whichever agent failed and whatever code
-// the failure took.
-func runtimeTurnError(runtimeType string, err error) error {
-	return errs.WrapWithDepth(1, err, "external agent turn", slog.String("runtime", runtimeType))
 }
 
 // runtimeTurnRan reports evidence that the runtime accepted the turn. "Nothing

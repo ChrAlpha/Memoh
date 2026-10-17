@@ -7,11 +7,12 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -25,165 +26,6 @@ const (
 	lifecycleTestBotID     = "22222222-2222-4222-8222-222222222222"
 	lifecycleTestSessionID = "33333333-3333-4333-8333-333333333333"
 )
-
-type recordingContextLifecycleStore struct {
-	creates             []sqlc.CreateContextLifecycleParams
-	createErr           error
-	existing            *sqlc.GetContextLifecycleByRunIDRow
-	getErr              error
-	getCalls            int
-	updates             []sqlc.UpdateAbortedContextLifecycleSnapshotParams
-	updateErr           error
-	assistantID         pgtype.UUID
-	metadata            []byte
-	metadataErr         error
-	upserts             []sqlc.UpsertAbortedContextLifecycleParams
-	upsertErr           error
-	terminalUpserts     []sqlc.UpsertTerminalContextLifecycleParams
-	terminalUpsertErr   error
-	terminalUpsertBound bool
-	terminalRows        []sqlc.ListTerminalSessionRunsNeedingContextLifecycleRow
-	terminalListErr     error
-	terminalListCalls   int
-	terminalListLimit   int32
-	terminalListBound   bool
-	terminalListWait    bool
-}
-
-func (s *recordingContextLifecycleStore) CreateContextLifecycle(
-	_ context.Context,
-	arg sqlc.CreateContextLifecycleParams,
-) (sqlc.CreateContextLifecycleRow, error) {
-	s.creates = append(s.creates, arg)
-	if s.createErr != nil {
-		return sqlc.CreateContextLifecycleRow{}, s.createErr
-	}
-	created := sqlc.GetContextLifecycleByRunIDRow{
-		RunID: arg.RunID, BotID: arg.BotID, SessionID: arg.SessionID,
-		Status: arg.Status, ErrorCode: arg.ErrorCode, Snapshot: arg.Snapshot,
-	}
-	s.existing = &created
-	return sqlc.CreateContextLifecycleRow{
-		RunID: arg.RunID, BotID: arg.BotID, SessionID: arg.SessionID,
-		Status: arg.Status, ErrorCode: arg.ErrorCode,
-	}, nil
-}
-
-type lifecycleTurnAdmitter struct {
-	admission sessionruntime.Admission
-	cancel    context.CancelFunc
-	finishes  []recordedFinish
-	finishErr error
-}
-
-func (a *lifecycleTurnAdmitter) Admit(
-	_ context.Context,
-	input sessionruntime.AdmitInput,
-) (sessionruntime.Admission, error) {
-	a.cancel = input.Execution.Cancel
-	return a.admission, nil
-}
-
-func (a *lifecycleTurnAdmitter) FinishRunWithErrorCode(ctx context.Context, handle sessionruntime.RunHandle, status, code string) (sessionruntime.TerminalRun, error) {
-	return a.FinishRunWithFailure(ctx, handle, status, code, nil)
-}
-
-func (a *lifecycleTurnAdmitter) FinishRunWithFailure(
-	_ context.Context,
-	handle sessionruntime.RunHandle,
-	status, code string,
-	args map[string]string,
-) (sessionruntime.TerminalRun, error) {
-	a.finishes = append(a.finishes, recordedFinish{handle: handle, status: status, message: code, args: args})
-	return sessionruntime.TerminalRun{}, a.finishErr
-}
-
-func (s *recordingContextLifecycleStore) GetContextLifecycleByRunID(
-	_ context.Context,
-	_ pgtype.UUID,
-) (sqlc.GetContextLifecycleByRunIDRow, error) {
-	s.getCalls++
-	if s.getErr != nil {
-		return sqlc.GetContextLifecycleByRunIDRow{}, s.getErr
-	}
-	if s.existing == nil {
-		return sqlc.GetContextLifecycleByRunIDRow{}, pgx.ErrNoRows
-	}
-	return *s.existing, nil
-}
-
-func (s *recordingContextLifecycleStore) GetLatestAssistantContextLifecycleMetadataByRunID(
-	_ context.Context,
-	_ pgtype.UUID,
-) ([]byte, error) {
-	return s.metadata, s.metadataErr
-}
-
-func (s *recordingContextLifecycleStore) GetLatestAssistantContextLifecycleByRunID(
-	_ context.Context,
-	_ pgtype.UUID,
-) (sqlc.GetLatestAssistantContextLifecycleByRunIDRow, error) {
-	if s.metadataErr != nil {
-		return sqlc.GetLatestAssistantContextLifecycleByRunIDRow{}, s.metadataErr
-	}
-	if s.metadata == nil {
-		return sqlc.GetLatestAssistantContextLifecycleByRunIDRow{}, pgx.ErrNoRows
-	}
-	return sqlc.GetLatestAssistantContextLifecycleByRunIDRow{
-		ID:       s.assistantID,
-		Metadata: s.metadata,
-	}, nil
-}
-
-func (s *recordingContextLifecycleStore) UpdateAbortedContextLifecycleSnapshot(
-	_ context.Context,
-	arg sqlc.UpdateAbortedContextLifecycleSnapshotParams,
-) (sqlc.UpdateAbortedContextLifecycleSnapshotRow, error) {
-	s.updates = append(s.updates, arg)
-	return sqlc.UpdateAbortedContextLifecycleSnapshotRow{}, s.updateErr
-}
-
-func (s *recordingContextLifecycleStore) UpsertAbortedContextLifecycle(
-	_ context.Context,
-	arg sqlc.UpsertAbortedContextLifecycleParams,
-) (sqlc.UpsertAbortedContextLifecycleRow, error) {
-	s.upserts = append(s.upserts, arg)
-	return sqlc.UpsertAbortedContextLifecycleRow{}, s.upsertErr
-}
-
-func (s *recordingContextLifecycleStore) UpsertTerminalContextLifecycle(
-	ctx context.Context,
-	arg sqlc.UpsertTerminalContextLifecycleParams,
-) (sqlc.UpsertTerminalContextLifecycleRow, error) {
-	_, s.terminalUpsertBound = ctx.Deadline()
-	s.terminalUpserts = append(s.terminalUpserts, arg)
-	if s.terminalUpsertErr != nil {
-		return sqlc.UpsertTerminalContextLifecycleRow{}, s.terminalUpsertErr
-	}
-	upserted := sqlc.GetContextLifecycleByRunIDRow{
-		RunID: arg.RunID, BotID: arg.BotID, SessionID: arg.SessionID,
-		Status: arg.Status, ErrorCode: arg.ErrorCode, Snapshot: arg.Snapshot,
-	}
-	s.existing = &upserted
-	return sqlc.UpsertTerminalContextLifecycleRow{
-		RunID: arg.RunID, BotID: arg.BotID, SessionID: arg.SessionID,
-		Status: arg.Status, ErrorCode: arg.ErrorCode,
-	}, nil
-}
-
-func (s *recordingContextLifecycleStore) ListTerminalSessionRunsNeedingContextLifecycle(
-	ctx context.Context,
-	batchSize int32,
-) ([]sqlc.ListTerminalSessionRunsNeedingContextLifecycleRow, error) {
-	s.terminalListCalls++
-	s.terminalListLimit = batchSize
-	_, s.terminalListBound = ctx.Deadline()
-	if s.terminalListWait {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}
-	return append([]sqlc.ListTerminalSessionRunsNeedingContextLifecycleRow(nil), s.terminalRows...), s.terminalListErr
-}
 
 func lifecycleTestRunConfig(mutations ...contextfrag.MutationRecord) native.RunConfig {
 	ledger := contextfrag.NewMutationLedger()
@@ -212,19 +54,19 @@ func lifecycleTestRunConfig(mutations ...contextfrag.MutationRecord) native.RunC
 }
 
 func TestContextLifecycleTerminalWritesAdmittedRunExactlyOnce(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 	terminal := service.contextLifecycleTerminal(context.Background(), lifecycleTestRunConfig())
 
 	terminal(nil)
 	terminal(apperror.New(apperror.CodeWorkspaceUnreachable, nil))
 
-	if len(store.creates) != 1 {
-		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.creates))
+	if len(store.Creates) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.Creates))
 	}
-	got := store.creates[0]
-	if pgUUIDString(got.RunID) != lifecycleTestRunID {
-		t.Fatalf("persisted run ID = %q, want %q", pgUUIDString(got.RunID), lifecycleTestRunID)
+	got := store.Creates[0]
+	if runreq.PGUUIDString(got.RunID) != lifecycleTestRunID {
+		t.Fatalf("persisted run ID = %q, want %q", runreq.PGUUIDString(got.RunID), lifecycleTestRunID)
 	}
 	if got.Status != contextLifecycleStatusCompleted || got.ErrorCode.Valid {
 		t.Fatalf("terminal = (%q, %#v), want completed without error code", got.Status, got.ErrorCode)
@@ -339,14 +181,14 @@ func TestContextLifecycleTerminalClassifiesTerminalState(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := &recordingContextLifecycleStore{}
+			store := &agenttest.RecordingLifecycleStore{}
 			service := &Service{contextLifecycles: store}
 			service.contextLifecycleTerminal(tt.ctx, lifecycleTestRunConfig(tt.mutations...))(tt.cause)
 
-			if len(store.creates) != 1 {
-				t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.creates))
+			if len(store.Creates) != 1 {
+				t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.Creates))
 			}
-			got := store.creates[0]
+			got := store.Creates[0]
 			if got.Status != tt.status || got.ErrorCode.String != tt.errorCode || got.ErrorCode.Valid != (tt.errorCode != "") {
 				t.Fatalf("terminal classification = (%q, %#v), want (%q, %q)", got.Status, got.ErrorCode, tt.status, tt.errorCode)
 			}
@@ -355,7 +197,7 @@ func TestContextLifecycleTerminalClassifiesTerminalState(t *testing.T) {
 }
 
 func TestEnsureTerminalContextLifecycleCreatesMinimalFallbackOnlyWhenMissing(t *testing.T) {
-	store := &recordingContextLifecycleStore{}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: store}
 	cause := apperror.New(apperror.CodeWorkspaceUnreachable, nil)
 
@@ -367,10 +209,10 @@ func TestEnsureTerminalContextLifecycleCreatesMinimalFallbackOnlyWhenMissing(t *
 		cause,
 	)
 
-	if store.getCalls != 1 || len(store.creates) != 1 {
-		t.Fatalf("fallback calls = get %d, create %d; want 1, 1", store.getCalls, len(store.creates))
+	if store.GetCalls != 1 || len(store.Creates) != 1 {
+		t.Fatalf("fallback calls = get %d, create %d; want 1, 1", store.GetCalls, len(store.Creates))
 	}
-	row := store.creates[0]
+	row := store.Creates[0]
 	if row.Status != contextLifecycleStatusFailedProvider || row.ErrorCode.String != string(apperror.CodeWorkspaceUnreachable) {
 		t.Fatalf("fallback terminal = (%q, %#v)", row.Status, row.ErrorCode)
 	}
@@ -382,7 +224,7 @@ func TestEnsureTerminalContextLifecycleCreatesMinimalFallbackOnlyWhenMissing(t *
 		t.Fatalf("minimal fallback snapshot = %#v", snapshot)
 	}
 
-	store.creates = nil
+	store.Creates = nil
 	runUUID, botUUID, sessionUUID, err := parseContextLifecycleIDs(
 		lifecycleTestRunID,
 		lifecycleTestBotID,
@@ -391,7 +233,7 @@ func TestEnsureTerminalContextLifecycleCreatesMinimalFallbackOnlyWhenMissing(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.existing = &sqlc.GetContextLifecycleByRunIDRow{RunID: runUUID, BotID: botUUID, SessionID: sessionUUID}
+	store.Existing = &sqlc.GetContextLifecycleByRunIDRow{RunID: runUUID, BotID: botUUID, SessionID: sessionUUID}
 	service.EnsureTerminalContextLifecycle(
 		context.Background(),
 		lifecycleTestRunID,
@@ -399,13 +241,13 @@ func TestEnsureTerminalContextLifecycleCreatesMinimalFallbackOnlyWhenMissing(t *
 		lifecycleTestSessionID,
 		cause,
 	)
-	if len(store.creates) != 0 {
-		t.Fatalf("existing authoritative lifecycle was replaced: %#v", store.creates)
+	if len(store.Creates) != 0 {
+		t.Fatalf("existing authoritative lifecycle was replaced: %#v", store.Creates)
 	}
 }
 
 func TestContextLifecycleStoreFailureIsCountedAndDoesNotEscape(t *testing.T) {
-	store := &recordingContextLifecycleStore{createErr: errors.New("database unavailable")}
+	store := &agenttest.RecordingLifecycleStore{CreateErr: errors.New("database unavailable")}
 	service := &Service{contextLifecycles: store}
 
 	service.contextLifecycleTerminal(context.Background(), lifecycleTestRunConfig())(nil)
@@ -424,9 +266,9 @@ func TestAuthoritativeSnapshotReplacesOnlyRecoveredAbortedFallback(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := &recordingContextLifecycleStore{
-		createErr: &pgconn.PgError{Code: "23505"},
-		existing: &sqlc.GetContextLifecycleByRunIDRow{
+	store := &agenttest.RecordingLifecycleStore{
+		CreateErr: &pgconn.PgError{Code: "23505"},
+		Existing: &sqlc.GetContextLifecycleByRunIDRow{
 			RunID: runUUID, BotID: botUUID, SessionID: sessionUUID,
 			Status: contextLifecycleStatusAborted,
 		},
@@ -435,8 +277,8 @@ func TestAuthoritativeSnapshotReplacesOnlyRecoveredAbortedFallback(t *testing.T)
 
 	service.contextLifecycleTerminal(context.Background(), lifecycleTestRunConfig())(nil)
 
-	if len(store.updates) != 1 {
-		t.Fatalf("aborted snapshot updates = %d, want 1", len(store.updates))
+	if len(store.Updates) != 1 {
+		t.Fatalf("aborted snapshot updates = %d, want 1", len(store.Updates))
 	}
 }
 
@@ -478,24 +320,24 @@ func TestTurnRunFinisherCreatesFallbackOnlyAfterFencedTerminalFinish(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			admitter := &lifecycleTurnAdmitter{finishErr: tt.finishErr}
-			store := &recordingContextLifecycleStore{}
+			admitter := &agenttest.LifecycleAdmitter{FinishErr: tt.finishErr}
+			store := &agenttest.RecordingLifecycleStore{}
 			service := &Service{sessionRuntime: admitter, contextLifecycles: store}
 			admission := lifecycleTestAdmission()
 
-			service.turnRunFinisher(tt.ctx, admission, sessionmode.Chat)(RunOutcome{Status: tt.status, Cause: tt.cause})
+			service.turnRunFinisher(tt.ctx, admission, sessionmode.Chat)(outcome.RunOutcome{Status: tt.status, Cause: tt.cause})
 
-			if len(admitter.finishes) != 1 {
-				t.Fatalf("FinishRun calls = %d, want 1", len(admitter.finishes))
+			if len(admitter.Finishes) != 1 {
+				t.Fatalf("FinishRun calls = %d, want 1", len(admitter.Finishes))
 			}
-			if tt.name == "pre-context failure" && admitter.finishes[0].message != string(apperror.CodeWorkspaceUnreachable) {
-				t.Fatalf("stable finish code = %q", admitter.finishes[0].message)
+			if tt.name == "pre-context failure" && admitter.Finishes[0].Message != string(apperror.CodeWorkspaceUnreachable) {
+				t.Fatalf("stable finish code = %q", admitter.Finishes[0].Message)
 			}
-			if len(store.creates) != tt.wantCreates {
-				t.Fatalf("lifecycle creates = %d, want %d", len(store.creates), tt.wantCreates)
+			if len(store.Creates) != tt.wantCreates {
+				t.Fatalf("lifecycle creates = %d, want %d", len(store.Creates), tt.wantCreates)
 			}
-			if tt.wantCreates > 0 && store.creates[0].Status != tt.wantStatus {
-				t.Fatalf("lifecycle status = %q, want %q", store.creates[0].Status, tt.wantStatus)
+			if tt.wantCreates > 0 && store.Creates[0].Status != tt.wantStatus {
+				t.Fatalf("lifecycle status = %q, want %q", store.Creates[0].Status, tt.wantStatus)
 			}
 		})
 	}
@@ -535,8 +377,8 @@ func TestSubagentTerminalPersistsSnapshotAndPreContextFallbackExactlyOnce(t *tes
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			admission := lifecycleTestAdmission()
-			admitter := &lifecycleTurnAdmitter{admission: admission}
-			store := &recordingContextLifecycleStore{}
+			admitter := &agenttest.LifecycleAdmitter{Admission: admission}
+			store := &agenttest.RecordingLifecycleStore{}
 			service := &Service{sessionRuntime: admitter, contextLifecycles: store}
 
 			_, subagentAdmission, terminal, err := service.AdmitSubagentRun(
@@ -555,26 +397,26 @@ func TestSubagentTerminalPersistsSnapshotAndPreContextFallbackExactlyOnce(t *tes
 			terminal(tt.terminal())
 			terminal(tools.SubagentTerminal{Cause: errors.New("late duplicate")})
 
-			if len(store.creates) != 1 || store.creates[0].Status != tt.wantStatus {
-				t.Fatalf("lifecycle creates = %#v, want one %s", store.creates, tt.wantStatus)
+			if len(store.Creates) != 1 || store.Creates[0].Status != tt.wantStatus {
+				t.Fatalf("lifecycle creates = %#v, want one %s", store.Creates, tt.wantStatus)
 			}
 			var snapshot contextfrag.LifecycleSnapshot
-			if err := json.Unmarshal(store.creates[0].Snapshot, &snapshot); err != nil {
+			if err := json.Unmarshal(store.Creates[0].Snapshot, &snapshot); err != nil {
 				t.Fatalf("decode snapshot: %v", err)
 			}
 			if snapshot.Version != tt.wantSnapshot.Version {
 				t.Fatalf("snapshot = %#v, want version %d", snapshot, tt.wantSnapshot.Version)
 			}
-			if len(admitter.finishes) != 1 || admitter.finishes[0].status != tt.wantFinish {
-				t.Fatalf("runtime finishes = %#v, want one %s", admitter.finishes, tt.wantFinish)
+			if len(admitter.Finishes) != 1 || admitter.Finishes[0].Status != tt.wantFinish {
+				t.Fatalf("runtime finishes = %#v, want one %s", admitter.Finishes, tt.wantFinish)
 			}
 		})
 	}
 }
 
 func TestCanceledSubagentUsesOwningContextToPersistAborted(t *testing.T) {
-	admitter := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
-	store := &recordingContextLifecycleStore{}
+	admitter := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+	store := &agenttest.RecordingLifecycleStore{}
 	service := &Service{sessionRuntime: admitter, contextLifecycles: store}
 	runCtx, _, terminal, err := service.AdmitSubagentRun(
 		context.Background(),
@@ -591,15 +433,15 @@ func TestCanceledSubagentUsesOwningContextToPersistAborted(t *testing.T) {
 		t.Fatal("test lifecycle snapshot is unavailable")
 	}
 
-	admitter.cancel()
+	admitter.Cancel()
 	<-runCtx.Done()
 	terminal(tools.SubagentTerminal{Cause: context.Canceled, ContextLifecycle: &snapshot})
 
-	if len(store.creates) != 1 || store.creates[0].Status != contextLifecycleStatusAborted {
-		t.Fatalf("lifecycle creates = %#v, want one aborted row", store.creates)
+	if len(store.Creates) != 1 || store.Creates[0].Status != contextLifecycleStatusAborted {
+		t.Fatalf("lifecycle creates = %#v, want one aborted row", store.Creates)
 	}
-	if len(admitter.finishes) != 1 || admitter.finishes[0].status != sessionruntime.RunStatusAborted {
-		t.Fatalf("runtime finishes = %#v, want one aborted finish", admitter.finishes)
+	if len(admitter.Finishes) != 1 || admitter.Finishes[0].Status != sessionruntime.RunStatusAborted {
+		t.Fatalf("runtime finishes = %#v, want one aborted finish", admitter.Finishes)
 	}
 }
 
@@ -628,9 +470,9 @@ func TestRecoverContextLifecycleFromAssistantMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	const assistantMessageID = "44444444-4444-4444-8444-444444444444"
-	store := &recordingContextLifecycleStore{
-		assistantID: flowTestUUID(assistantMessageID),
-		metadata:    metadata,
+	store := &agenttest.RecordingLifecycleStore{
+		AssistantID: flowTestUUID(assistantMessageID),
+		Metadata:    metadata,
 	}
 	service := &Service{contextLifecycles: store}
 
@@ -642,10 +484,10 @@ func TestRecoverContextLifecycleFromAssistantMetadata(t *testing.T) {
 		apperror.New(apperror.CodeWorkspaceUnreachable, nil),
 	)
 
-	if len(store.creates) != 1 {
-		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.creates))
+	if len(store.Creates) != 1 {
+		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.Creates))
 	}
-	row := store.creates[0]
+	row := store.Creates[0]
 	if row.Status != contextLifecycleStatusFailedProvider ||
 		!row.ErrorCode.Valid || row.ErrorCode.String != string(apperror.CodeWorkspaceUnreachable) {
 		t.Fatalf("recovered terminal = (%q, %#v), want failed_provider with stable code", row.Status, row.ErrorCode)
@@ -670,16 +512,16 @@ func TestRecoverContextLifecycleFromAssistantMetadataSkipsExistingOrUnavailable(
 	}
 	tests := []struct {
 		name  string
-		store *recordingContextLifecycleStore
+		store *agenttest.RecordingLifecycleStore
 	}{
 		{
 			name: "existing lifecycle",
-			store: &recordingContextLifecycleStore{existing: &sqlc.GetContextLifecycleByRunIDRow{
+			store: &agenttest.RecordingLifecycleStore{Existing: &sqlc.GetContextLifecycleByRunIDRow{
 				RunID: runID, BotID: botID, SessionID: sessionID,
 			}},
 		},
-		{name: "missing assistant metadata", store: &recordingContextLifecycleStore{}},
-		{name: "malformed assistant metadata", store: &recordingContextLifecycleStore{metadata: []byte(`{"context_lifecycle":"invalid"}`)}},
+		{name: "missing assistant metadata", store: &agenttest.RecordingLifecycleStore{}},
+		{name: "malformed assistant metadata", store: &agenttest.RecordingLifecycleStore{Metadata: []byte(`{"context_lifecycle":"invalid"}`)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -691,8 +533,8 @@ func TestRecoverContextLifecycleFromAssistantMetadataSkipsExistingOrUnavailable(
 				lifecycleTestSessionID,
 				errors.New("continuation failed"),
 			)
-			if len(tt.store.creates) != 0 || service.contextLifecyclePersistenceErrors.Load() != 0 {
-				t.Fatalf("recovery writes = %d, failures = %d; want no-op", len(tt.store.creates), service.contextLifecyclePersistenceErrors.Load())
+			if len(tt.store.Creates) != 0 || service.contextLifecyclePersistenceErrors.Load() != 0 {
+				t.Fatalf("recovery writes = %d, failures = %d; want no-op", len(tt.store.Creates), service.contextLifecyclePersistenceErrors.Load())
 			}
 		})
 	}
@@ -700,7 +542,7 @@ func TestRecoverContextLifecycleFromAssistantMetadataSkipsExistingOrUnavailable(
 
 func TestRecoverContextLifecycleFromAssistantMetadataCountsStoreErrorsAndSkipsOwnershipLoss(t *testing.T) {
 	metadataErr := errors.New("metadata unavailable")
-	store := &recordingContextLifecycleStore{metadataErr: metadataErr}
+	store := &agenttest.RecordingLifecycleStore{MetadataErr: metadataErr}
 	service := &Service{contextLifecycles: store}
 	service.recoverContextLifecycleFromAssistantMetadata(
 		context.Background(),
@@ -713,7 +555,7 @@ func TestRecoverContextLifecycleFromAssistantMetadataCountsStoreErrorsAndSkipsOw
 		t.Fatalf("persistence failure count = %d, want 1", got)
 	}
 
-	ownershipStore := &recordingContextLifecycleStore{}
+	ownershipStore := &agenttest.RecordingLifecycleStore{}
 	service = &Service{contextLifecycles: ownershipStore}
 	service.recoverContextLifecycleFromAssistantMetadata(
 		context.Background(),
@@ -722,8 +564,8 @@ func TestRecoverContextLifecycleFromAssistantMetadataCountsStoreErrorsAndSkipsOw
 		lifecycleTestSessionID,
 		sessionruntime.ErrRunOwnershipLost,
 	)
-	if ownershipStore.getCalls != 0 || len(ownershipStore.creates) != 0 {
-		t.Fatalf("ownership-lost recovery touched store: gets=%d creates=%d", ownershipStore.getCalls, len(ownershipStore.creates))
+	if ownershipStore.GetCalls != 0 || len(ownershipStore.Creates) != 0 {
+		t.Fatalf("ownership-lost recovery touched store: gets=%d creates=%d", ownershipStore.GetCalls, len(ownershipStore.Creates))
 	}
 }
 
@@ -772,14 +614,14 @@ func TestBudgetOverAbortKeepsAbortTraceInSnapshot(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			store := &recordingContextLifecycleStore{}
+			store := &agenttest.RecordingLifecycleStore{}
 			service := &Service{contextLifecycles: store}
 			service.contextLifecycleTerminal(tt.ctx, lifecycleTestRunConfig(tt.mutations...))(tt.cause)
 
-			if len(store.creates) != 1 {
-				t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.creates))
+			if len(store.Creates) != 1 {
+				t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(store.Creates))
 			}
-			got := store.creates[0]
+			got := store.Creates[0]
 			if got.Status != tt.status {
 				t.Fatalf("status = %q, want %q", got.Status, tt.status)
 			}
@@ -799,5 +641,3 @@ func TestBudgetOverAbortKeepsAbortTraceInSnapshot(t *testing.T) {
 		})
 	}
 }
-
-func (*lifecycleTurnAdmitter) MarkInlineDecisionRun(string, string, string) {}

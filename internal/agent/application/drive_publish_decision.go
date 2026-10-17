@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	chatview "github.com/felinics/memoh/internal/agent/view"
@@ -46,6 +47,6 @@ func (p *decisionOutputPublisher) publish(ctx context.Context, ev native.StreamE
 // close ends the command's output log. A reader waits on that log until it is
 // closed, so a log that could not be closed must not leave a parked run
 // holding it: the refusal fails the run like any other publication.
-func (p *decisionOutputPublisher) close(ctx context.Context, _ runEnd) error {
+func (p *decisionOutputPublisher) close(ctx context.Context, _ outcome.RunEnd) error {
 	return p.sink.PublishDecisionOutput(ctx, p.command, p.seq+1, nil)
 }

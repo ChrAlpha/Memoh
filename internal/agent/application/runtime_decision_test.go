@@ -11,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -43,7 +46,7 @@ func decisionCommand(handle sessionruntime.RunHandle, id string) sessionruntime.
 // continueDecision drives one routed continuation the way the command handler
 // does: on the context and handle the parked run's control hands out, with
 // setup standing in for storing the answer and resolving the model run.
-func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Manager, command sessionruntime.Command, setup func(context.Context, ChatRequest) (runPlan, error)) {
+func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Manager, command sessionruntime.Command, setup func(context.Context, runreq.ChatRequest) (runPlan, error)) {
 	t.Helper()
 	live := command
 	live.Generation = strings.TrimSuffix(command.Generation, "-stale")
@@ -53,7 +56,7 @@ func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Ma
 	}
 	defer cancel()
 	service.driveRoutedContinuation(runCtx, command, handle, decisionContinuation{
-		Req:   ChatRequest{BotID: handle.BotID, ChatID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
+		Req:   runreq.ChatRequest{BotID: handle.BotID, ChatID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
 		Setup: setup,
 	})
 }
@@ -61,7 +64,7 @@ func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Ma
 // scriptedRun is a setup whose run produces events in order. A terminal event
 // among them ends the run, and parks it when it carries a pending decision;
 // cause, when set, is the failure the run reports besides its events.
-func scriptedRun(events []native.StreamEvent, cause error) func(context.Context, ChatRequest) (runPlan, error) {
+func scriptedRun(events []native.StreamEvent, cause error) func(context.Context, runreq.ChatRequest) (runPlan, error) {
 	exec := &scriptedExecutor{cause: cause}
 	for _, ev := range events {
 		if ev.IsTerminal() {
@@ -72,7 +75,7 @@ func scriptedRun(events []native.StreamEvent, cause error) func(context.Context,
 		}
 		exec.events = append(exec.events, ev)
 	}
-	return func(context.Context, ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil }
+	return func(context.Context, runreq.ChatRequest) (runPlan, error) { return runPlan{Exec: exec}, nil }
 }
 
 func runStatus(t *testing.T, manager *sessionruntime.Manager) *sessionruntime.CurrentRunView {
@@ -90,10 +93,12 @@ func runStatus(t *testing.T, manager *sessionruntime.Manager) *sessionruntime.Cu
 func TestRuntimeDecisionContinuationFailureIsReportedOnce(t *testing.T) {
 	backend := &decisionOutputBackend{MemoryBackend: sessionruntime.NewMemoryBackend()}
 	manager, handle := newWaitingDecisionRuntime(t, backend)
-	logger, logs := captureLogs()
+	logger, logs := agenttest.CaptureLogs()
 	service := continuationService(manager)
 	service.logger = logger
-	manager.SetTerminalObserver(service.logRunResult)
+	manager.SetTerminalObserver(func(ctx context.Context, terminal sessionruntime.TerminalRun) {
+		outcome.LogRunResult(ctx, service.logger, terminal)
+	})
 	failure := apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("private idle timeout detail"), nil)
 
 	continueDecision(t, service, manager, decisionCommand(handle, "answer-timeout"), scriptedRun([]native.StreamEvent{
@@ -123,10 +128,10 @@ func TestRuntimeDecisionContinuationFailureIsReportedOnce(t *testing.T) {
 		t.Fatalf("decision output = %d entries, want its events and one close", n)
 	}
 	records := waitRunResults(t, logs, 1)
-	if got := recordAttrs(records[0])["error"]; !strings.Contains(got, "private idle timeout detail") {
+	if got := agenttest.RecordAttrs(records[0])["error"]; !strings.Contains(got, "private idle timeout detail") {
 		t.Fatalf("result record error = %q, want the private cause", got)
 	}
-	for _, record := range logs.atLevel(slog.LevelError) {
+	for _, record := range logs.AtLevel(slog.LevelError) {
 		if record.Message != "agent run" {
 			t.Fatalf("unexpected error record %q besides the run result", record.Message)
 		}
@@ -222,13 +227,13 @@ func TestContinueRuntimeDecisionCancelsContinuationAfterPublicationFailure(t *te
 		emit(native.StreamEvent{Type: native.EventTextDelta, Delta: "late"})
 		<-ctx.Done()
 		continuationCause <- context.Cause(ctx)
-		return execEnding{Cause: context.Cause(ctx), Phase: phaseExecution}
+		return execEnding{Cause: context.Cause(ctx), Phase: outcome.PhaseExecution}
 	})
 
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		continueDecision(t, service, manager, decisionCommand(handle, "publish-failure"), func(context.Context, ChatRequest) (runPlan, error) {
+		continueDecision(t, service, manager, decisionCommand(handle, "publish-failure"), func(context.Context, runreq.ChatRequest) (runPlan, error) {
 			return runPlan{Exec: exec}, nil
 		})
 	}()
@@ -258,7 +263,7 @@ type runFuncExecutor func(ctx context.Context, emit func(native.StreamEvent)) ex
 func (f runFuncExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
 	ending := f(ctx, emit)
 	if ending.Commit == nil {
-		ending.Commit = func(context.Context, *RunFailure, bool) (commitSummary, error) { return commitSummary{}, nil }
+		ending.Commit = func(context.Context, *outcome.RunFailure, bool) (commitSummary, error) { return commitSummary{}, nil }
 	}
 	return ending
 }
@@ -271,12 +276,12 @@ type lifecycleRow struct {
 	Snapshot []byte
 }
 
-func lifecycleRows(store *recordingContextLifecycleStore) []lifecycleRow {
+func lifecycleRows(store *agenttest.RecordingLifecycleStore) []lifecycleRow {
 	var rows []lifecycleRow
-	for _, row := range store.creates {
+	for _, row := range store.Creates {
 		rows = append(rows, lifecycleRow{Status: row.Status, Snapshot: row.Snapshot})
 	}
-	for _, row := range store.terminalUpserts {
+	for _, row := range store.TerminalUpserts {
 		rows = append(rows, lifecycleRow{Status: row.Status, Snapshot: row.Snapshot})
 	}
 	return rows
@@ -284,9 +289,9 @@ func lifecycleRows(store *recordingContextLifecycleStore) []lifecycleRow {
 
 // lifecycleRun is a scripted run whose plan carries the context lifecycle a
 // resolved native run would, so the run's ending is what writes it.
-func lifecycleRun(service *Service, events []native.StreamEvent) func(context.Context, ChatRequest) (runPlan, error) {
+func lifecycleRun(service *Service, events []native.StreamEvent) func(context.Context, runreq.ChatRequest) (runPlan, error) {
 	run := scriptedRun(events, nil)
-	return func(ctx context.Context, req ChatRequest) (runPlan, error) {
+	return func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		plan, err := run(ctx, req)
 		plan.Lifecycle = service.contextLifecycleTerminal(ctx, lifecycleTestRunConfig())
 		return plan, err
@@ -320,7 +325,7 @@ func TestContinueRuntimeDecisionPersistsCurrentStackTerminalOutcomes(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager, handle := newWaitingDecisionRuntime(t)
-			lifecycles := &recordingContextLifecycleStore{}
+			lifecycles := &agenttest.RecordingLifecycleStore{}
 			service := continuationService(manager)
 			service.contextLifecycles = lifecycles
 			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
@@ -364,7 +369,7 @@ func TestContinueRuntimeDecisionDefersSecondPendingDecisionLifecycle(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			manager, handle := newWaitingDecisionRuntime(t)
-			lifecycles := &recordingContextLifecycleStore{}
+			lifecycles := &agenttest.RecordingLifecycleStore{}
 			service := continuationService(manager)
 			service.contextLifecycles = lifecycles
 			manager.SetTerminalObserver(service.reconcileTerminalContextLifecycle)
@@ -406,7 +411,7 @@ func TestContinueRuntimeDecisionStopEndsAborted(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		continueDecision(t, service, manager, decisionCommand(handle, "stop"), func(context.Context, ChatRequest) (runPlan, error) {
+		continueDecision(t, service, manager, decisionCommand(handle, "stop"), func(context.Context, runreq.ChatRequest) (runPlan, error) {
 			return runPlan{Exec: exec}, nil
 		})
 	}()
@@ -443,13 +448,13 @@ func waitRunStatus(t *testing.T, manager *sessionruntime.Manager, status string)
 // run its model call.
 func TestContinueRuntimeDecisionOwnershipLossDoesNotPersistLifecycle(t *testing.T) {
 	manager, handle := newWaitingDecisionRuntime(t)
-	lifecycles := &recordingContextLifecycleStore{}
+	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service := continuationService(manager)
 	service.contextLifecycles = lifecycles
 	stale := decisionCommand(handle, "stale")
 	stale.Generation += "-stale"
 
-	continueDecision(t, service, manager, stale, func(context.Context, ChatRequest) (runPlan, error) {
+	continueDecision(t, service, manager, stale, func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		t.Fatal("stale continuation unexpectedly ran")
 		return runPlan{}, nil
 	})
@@ -522,16 +527,16 @@ func TestDecisionContinuationsResumeAsTheParkedTurn(t *testing.T) {
 // accepted when the command committed it.
 func TestRoutedContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 	manager, handle := newWaitingDecisionRuntime(t)
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := continuationService(manager)
 	service.messageService = messages
 
-	continueDecision(t, service, manager, decisionCommand(handle, "setup-failure"), func(context.Context, ChatRequest) (runPlan, error) {
+	continueDecision(t, service, manager, decisionCommand(handle, "setup-failure"), func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{}, errors.New("SECRET tool result store unavailable")
 	})
 
-	if len(messages.persisted) != 1 || messages.persisted[0].Role != "assistant" {
-		t.Fatalf("persisted %#v, want one assistant failure row and no user row", messages.persisted)
+	if len(messages.Persisted) != 1 || messages.Persisted[0].Role != "assistant" {
+		t.Fatalf("persisted %#v, want one assistant failure row and no user row", messages.Persisted)
 	}
 	if view := runStatus(t, manager); view == nil || view.Status != sessionruntime.RunStatusErrored || view.ErrorCode != string(apperror.CodeRuntimeRunFailed) {
 		t.Fatalf("terminal run = %#v, want errored %s", view, apperror.CodeRuntimeRunFailed)
@@ -542,19 +547,19 @@ func TestRoutedContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 // assembled is not written yet: the continuation that resumes it writes the
 // row once the run does end.
 func TestParkedRunDoesNotEndItsLifecycle(t *testing.T) {
-	lifecycles := &recordingContextLifecycleStore{}
-	svc := newDriveService(nil, &scriptedAdmitter{started: true})
+	lifecycles := &agenttest.RecordingLifecycleStore{}
+	svc := newDriveService(nil, &agenttest.ScriptedAdmitter{Started: true})
 	svc.contextLifecycles = lifecycles
 	terminal := native.StreamEvent{Type: native.EventAgentEnd, ApprovalID: "next", Status: "pending"}
 	exec := &scriptedExecutor{terminal: &terminal, deferred: true}
 	spec := scheduledSpec(exec, noDelivery{})
-	spec.Setup = func(ctx context.Context, _ ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, _ runreq.ChatRequest) (runPlan, error) {
 		return runPlan{Exec: exec, Lifecycle: svc.contextLifecycleTerminal(ctx, lifecycleTestRunConfig())}, nil
 	}
 
 	result := svc.drive(context.Background(), spec)
 
-	if result.End != endParked {
+	if result.End != outcome.EndParked {
 		t.Fatalf("end = %s, want parked", result.End)
 	}
 	if rows := lifecycleRows(lifecycles); len(rows) != 0 {

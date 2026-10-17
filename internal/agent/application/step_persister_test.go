@@ -6,7 +6,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/step"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -16,7 +18,7 @@ import (
 // recordingStepPersister records the history boundary shared by native and
 // subagent step tests, with an optional persistence failure.
 type recordingStepPersister struct {
-	*recordingMessageService
+	*agenttest.RecordingMessages
 	steps   []messagepkg.AgentStep
 	stepErr error
 }
@@ -28,14 +30,14 @@ func TestAgentStepCommitterBindsContinuationToRequestMessage(t *testing.T) {
 		SessionID: handle.SessionID,
 		Token:     handle.FencingToken,
 	})
-	committer := service.newAgentStepCommitter(ctx, ChatRequest{
+	committer := service.newAgentStepCommitter(ctx, runreq.ChatRequest{
 		BotID:                  handle.BotID,
 		ThreadID:               handle.SessionID,
 		RunID:                  handle.RunID,
 		RunHandle:              handle,
 		UserMessagePersisted:   true,
 		PersistedUserMessageID: "request-message-id",
-	}, resolvedContext{runConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
+	}, runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
 	if committer == nil {
 		t.Fatal("missing agent step committer")
 	}

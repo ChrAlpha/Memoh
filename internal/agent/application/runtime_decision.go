@@ -8,13 +8,13 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -104,52 +104,31 @@ func runtimeDecisionReadError(err error) error {
 
 func toolApprovalDecisionTarget(row dbsqlc.ToolApprovalRequest) sessionruntime.DecisionTarget {
 	return sessionruntime.DecisionTarget{
-		Type: sessionruntime.CommandToolApprovalResponse, ID: decisionUUIDString(row.ID),
-		BotID: decisionUUIDString(row.BotID), SessionID: decisionUUIDString(row.SessionID),
-		RunID: decisionUUIDString(row.RunID), TurnID: decisionUUIDString(row.TurnID),
-		Status: row.Status, FencingToken: pgInt64(row.RuntimeFencingToken),
+		Type: sessionruntime.CommandToolApprovalResponse, ID: runreq.PGUUIDString(row.ID),
+		BotID: runreq.PGUUIDString(row.BotID), SessionID: runreq.PGUUIDString(row.SessionID),
+		RunID: runreq.PGUUIDString(row.RunID), TurnID: runreq.PGUUIDString(row.TurnID),
+		Status: row.Status, FencingToken: runreq.PGInt64(row.RuntimeFencingToken),
 		InlineDecision: isCapabilityManagementApproval(toolapproval.Request{ToolName: row.ToolName}),
-		ControlID:      pgText(row.ResponseControlID), PayloadHash: pgText(row.ResponsePayloadHash),
+		ControlID:      db.TextToString(row.ResponseControlID), PayloadHash: db.TextToString(row.ResponsePayloadHash),
 	}
 }
 
 func userInputDecisionTarget(row dbsqlc.UserInputRequest) sessionruntime.DecisionTarget {
 	return sessionruntime.DecisionTarget{
-		Type: sessionruntime.CommandUserInputResponse, ID: decisionUUIDString(row.ID),
-		BotID: decisionUUIDString(row.BotID), SessionID: decisionUUIDString(row.SessionID),
-		RunID: decisionUUIDString(row.RunID), TurnID: decisionUUIDString(row.TurnID),
-		Status: row.Status, FencingToken: pgInt64(row.RuntimeFencingToken),
-		ControlID: pgText(row.ResponseControlID), PayloadHash: pgText(row.ResponsePayloadHash),
+		Type: sessionruntime.CommandUserInputResponse, ID: runreq.PGUUIDString(row.ID),
+		BotID: runreq.PGUUIDString(row.BotID), SessionID: runreq.PGUUIDString(row.SessionID),
+		RunID: runreq.PGUUIDString(row.RunID), TurnID: runreq.PGUUIDString(row.TurnID),
+		Status: row.Status, FencingToken: runreq.PGInt64(row.RuntimeFencingToken),
+		ControlID: db.TextToString(row.ResponseControlID), PayloadHash: db.TextToString(row.ResponsePayloadHash),
 	}
 }
 
-func decisionUUIDString(value pgtype.UUID) string {
-	if !value.Valid {
-		return ""
-	}
-	return uuid.UUID(value.Bytes).String()
-}
-
-func pgInt64(value pgtype.Int8) int64 {
-	if !value.Valid {
-		return 0
-	}
-	return value.Int64
-}
-
-func pgText(value pgtype.Text) string {
-	if !value.Valid {
-		return ""
-	}
-	return value.String
-}
-
-func (s *Service) routeToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) (bool, error) {
+func (s *Service) routeToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
 	if s == nil || s.decisionRuntime == nil {
 		return false, nil
 	}
 	if input.ControlID == "" {
-		input.ControlID = implicitDecisionControlID(sessionruntime.CommandToolApprovalResponse, firstNonEmpty(input.ExplicitID, input.ApprovalID))
+		input.ControlID = implicitDecisionControlID(sessionruntime.CommandToolApprovalResponse, runreq.FirstNonEmpty(input.ExplicitID, input.ApprovalID))
 	}
 	payload, err := json.Marshal(input)
 	if err != nil {
@@ -157,7 +136,7 @@ func (s *Service) routeToolApprovalResponse(ctx context.Context, input ToolAppro
 	}
 	result, err := s.decisionRuntime.StreamDecisionResponse(ctx, sessionruntime.DecisionResponse{
 		ControlID: input.ControlID, Type: sessionruntime.CommandToolApprovalResponse,
-		DecisionID: firstNonEmpty(input.ExplicitID, input.ApprovalID),
+		DecisionID: runreq.FirstNonEmpty(input.ExplicitID, input.ApprovalID),
 		BotID:      input.BotID, SessionID: input.ThreadID, Payload: payload,
 	}, eventCh)
 	if errors.Is(err, sessionruntime.ErrDecisionNotFound) {
@@ -168,7 +147,7 @@ func (s *Service) routeToolApprovalResponse(ctx context.Context, input ToolAppro
 			if s.logger != nil {
 				s.logger.WarnContext(ctx, "accepted decision output interrupted", slog.Any("error", err))
 			}
-			raw, _ := json.Marshal(agentFailureStreamEvent(err))
+			raw, _ := json.Marshal(outcome.AgentFailureStreamEvent(err))
 			select {
 			case eventCh <- raw:
 				return true, nil
@@ -187,12 +166,12 @@ func (s *Service) routeToolApprovalResponse(ctx context.Context, input ToolAppro
 	return true, nil
 }
 
-func (s *Service) routeUserInputResponse(ctx context.Context, input UserInputResponseInput, eventCh chan<- WSStreamEvent) (bool, error) {
+func (s *Service) routeUserInputResponse(ctx context.Context, input UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
 	if s == nil || s.decisionRuntime == nil {
 		return false, nil
 	}
 	if input.ControlID == "" {
-		input.ControlID = implicitDecisionControlID(sessionruntime.CommandUserInputResponse, firstNonEmpty(input.ExplicitID, input.UserInputID))
+		input.ControlID = implicitDecisionControlID(sessionruntime.CommandUserInputResponse, runreq.FirstNonEmpty(input.ExplicitID, input.UserInputID))
 	}
 	payload, err := json.Marshal(input)
 	if err != nil {
@@ -200,7 +179,7 @@ func (s *Service) routeUserInputResponse(ctx context.Context, input UserInputRes
 	}
 	result, err := s.decisionRuntime.StreamDecisionResponse(ctx, sessionruntime.DecisionResponse{
 		ControlID: input.ControlID, Type: sessionruntime.CommandUserInputResponse,
-		DecisionID: firstNonEmpty(input.ExplicitID, input.UserInputID),
+		DecisionID: runreq.FirstNonEmpty(input.ExplicitID, input.UserInputID),
 		BotID:      input.BotID, SessionID: input.ThreadID, Payload: payload,
 	}, eventCh)
 	if errors.Is(err, sessionruntime.ErrDecisionNotFound) {
@@ -211,7 +190,7 @@ func (s *Service) routeUserInputResponse(ctx context.Context, input UserInputRes
 			if s.logger != nil {
 				s.logger.WarnContext(ctx, "accepted decision output interrupted", slog.Any("error", err))
 			}
-			raw, _ := json.Marshal(agentFailureStreamEvent(err))
+			raw, _ := json.Marshal(outcome.AgentFailureStreamEvent(err))
 			select {
 			case eventCh <- raw:
 				return true, nil
@@ -385,7 +364,7 @@ func (s *Service) publishCommittedRuntimeDecision(ctx context.Context, command s
 type decisionContinuation struct {
 	// Req is the request the resumed run executes as. It names the turn the
 	// decision parked, so a failure row the run leaves lands in that turn.
-	Req ChatRequest
+	Req runreq.ChatRequest
 	// Setup stores the answer as the parked call's result and resolves the
 	// resumed run. It runs inside the run, so its failure is the run's.
 	//
@@ -393,7 +372,7 @@ type decisionContinuation struct {
 	// runSpec.Setup: the entry built this continuation before the driver ran,
 	// so the request it closed over has no asset collector, and a resumed run
 	// that used it would write its outbound assets unlinked.
-	Setup func(ctx context.Context, req ChatRequest) (runPlan, error)
+	Setup func(ctx context.Context, req runreq.ChatRequest) (runPlan, error)
 }
 
 // driveRoutedContinuation drives the run an answer the session runtime routed
@@ -406,7 +385,7 @@ func (s *Service) driveRoutedContinuation(runCtx context.Context, command sessio
 	s.drive(ctx, runSpec{
 		Run: admittedRun{Handle: handle, TurnID: handle.TurnID, Mode: sessionmode.Chat},
 		Req: cont.Req,
-		Setup: func(ctx context.Context, req ChatRequest) (runPlan, error) {
+		Setup: func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 			// The answer may arrive before the run that parked has finished
 			// writing the call it answers; its result must not land first.
 			if err := s.decisionRuntime.WaitDecisionContinuationReady(ctx, command); err != nil {
@@ -415,7 +394,7 @@ func (s *Service) driveRoutedContinuation(runCtx context.Context, command sessio
 			return cont.Setup(ctx, req)
 		},
 		Delivery:  noDelivery{},
-		Input:     inputAccepted,
+		Input:     outcome.InputAccepted,
 		Publisher: &decisionOutputPublisher{sink: s.decisionRuntime, handle: handle, command: command},
 	})
 }
@@ -426,7 +405,7 @@ func (s *Service) driveRoutedContinuation(runCtx context.Context, command sessio
 //
 // A caller without an event stream learns a failure only from the return
 // value; one with a stream already received it as the run's error event.
-func (s *Service) driveUnroutedContinuation(ctx context.Context, cont decisionContinuation, eventCh chan<- WSStreamEvent) error {
+func (s *Service) driveUnroutedContinuation(ctx context.Context, cont decisionContinuation, eventCh chan<- runreq.WSStreamEvent) error {
 	ctx, release := continuationContext(workspace.WithWorkspaceTarget(ctx, cont.Req.WorkspaceTargetID))
 	defer release()
 	var delivery RunDelivery = noDelivery{}
@@ -437,7 +416,7 @@ func (s *Service) driveUnroutedContinuation(ctx context.Context, cont decisionCo
 		Req:      cont.Req,
 		Setup:    cont.Setup,
 		Delivery: delivery,
-		Input:    inputAccepted,
+		Input:    outcome.InputAccepted,
 	})
 	if eventCh != nil {
 		return nil
@@ -456,7 +435,7 @@ func continuationContext(ctx context.Context) (context.Context, func()) {
 	carry := func() {
 		cause := context.Cause(ctx)
 		if errors.Is(cause, context.Canceled) {
-			cause = errRunStopped
+			cause = outcome.ErrRunStopped
 		}
 		cancel(cause)
 	}
@@ -476,8 +455,8 @@ func continuationContext(ctx context.Context) (context.Context, func()) {
 // nativeContinuationPlan resolves the built-in agent run that resumes after an
 // answered decision. Its steps commit through the live queue the run was
 // admitted with, so the resumed steps continue the parked run's numbering.
-func (s *Service) nativeContinuationPlan(ctx context.Context, req ChatRequest, cfg native.RunConfig, modelID string) (runPlan, error) {
-	rc := resolvedContext{runConfig: cfg, model: models.GetResponse{ID: modelID}}
+func (s *Service) nativeContinuationPlan(ctx context.Context, req runreq.ChatRequest, cfg native.RunConfig, modelID string) (runPlan, error) {
+	rc := runreq.ResolvedContext{RunConfig: cfg, Model: models.GetResponse{ID: modelID}}
 	committer, err := s.bindQueueContinuation(ctx, &req, &cfg, rc)
 	if err != nil {
 		return runPlan{}, err
@@ -485,7 +464,7 @@ func (s *Service) nativeContinuationPlan(ctx context.Context, req ChatRequest, c
 	timing := newReasoningTimingTracker(nil)
 	configureNativeReasoningTiming(&cfg, timing, committer)
 	s.bindStepCompaction(&cfg, req, committer)
-	rc.runConfig = cfg
+	rc.RunConfig = cfg
 	return runPlan{
 		Exec: &nativeExecutor{
 			agent:     s.agent,

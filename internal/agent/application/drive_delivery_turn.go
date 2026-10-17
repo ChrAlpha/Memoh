@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
@@ -173,7 +174,7 @@ func (t *turnRun) Inject(ctx context.Context, msg turn.InjectMessage) error {
 // it, and a failure the run already declared keeps its own name instead.
 func (t *turnRun) Cancel() {
 	if t.cancel != nil {
-		t.cancel(errRunStopped)
+		t.cancel(outcome.ErrRunStopped)
 	}
 }
 

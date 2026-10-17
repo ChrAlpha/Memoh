@@ -3,9 +3,6 @@ package application
 import (
 	"strings"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
@@ -62,17 +59,6 @@ func mergeMissingCompactionSummaries(messages []historyfrag.HistoryRecord, summa
 	}
 	out = append(out, missing[next:]...)
 	return out
-}
-
-func pgUUIDString(value pgtype.UUID) string {
-	if !value.Valid {
-		return ""
-	}
-	parsed, err := uuid.FromBytes(value.Bytes[:])
-	if err != nil {
-		return ""
-	}
-	return parsed.String()
 }
 
 func replaceCompactedHistoryRecords(messages []historyfrag.HistoryRecord, summaries map[string]string, scope contextfrag.Scope) []historyfrag.HistoryRecord {

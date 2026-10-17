@@ -1,4 +1,4 @@
-package application
+package runreq
 
 import (
 	"context"
@@ -12,24 +12,24 @@ import (
 
 func TestActiveTurnDrainWaitsForCanceledTurnCleanup(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var turns activeTurnTracker
-		end, err := turns.begin()
+		var turns ActiveTurnTracker
+		end, err := turns.Begin()
 		if err != nil {
 			t.Fatal(err)
 		}
-		endSecond, err := turns.begin()
+		endSecond, err := turns.Begin()
 		if err != nil {
 			t.Fatal(err)
 		}
 		finished := make(chan error, 1)
-		go func() { finished <- turns.drain(t.Context()) }()
+		go func() { finished <- turns.Drain(t.Context()) }()
 		synctest.Wait()
 		select {
 		case err := <-finished:
 			t.Fatalf("drain returned before the turn finished: %v", err)
 		default:
 		}
-		if _, err := turns.begin(); !errors.Is(err, sessionruntime.ErrManagerClosed) {
+		if _, err := turns.Begin(); !errors.Is(err, sessionruntime.ErrManagerClosed) {
 			t.Fatalf("new turn admitted during drain: %v", err)
 		}
 		end()
@@ -47,15 +47,15 @@ func TestActiveTurnDrainWaitsForCanceledTurnCleanup(t *testing.T) {
 
 func TestActiveTurnDrainHonorsShutdownDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		var turns activeTurnTracker
-		end, err := turns.begin()
+		var turns ActiveTurnTracker
+		end, err := turns.Begin()
 		if err != nil {
 			t.Fatal(err)
 		}
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		finished := make(chan error, 1)
-		go func() { finished <- turns.drain(ctx) }()
+		go func() { finished <- turns.Drain(ctx) }()
 		synctest.Wait()
 		time.Sleep(time.Second)
 		if err := <-finished; !errors.Is(err, context.DeadlineExceeded) {

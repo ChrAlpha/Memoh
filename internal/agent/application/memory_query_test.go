@@ -6,13 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 type memoryQueryMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	messages []messagepkg.Message
 }
 
@@ -49,11 +51,11 @@ func TestMemoryQueryBuilderCombinesRecentUserMessages(t *testing.T) {
 	t.Parallel()
 
 	builder := memoryQueryBuilder{MaxRecentMessages: 2, MaxBytes: 2000, MaxLines: 20, MaxMessageRunes: 200}
-	query := builder.Build(ChatRequest{Query: "What should I pack?"}, []historyfrag.HistoryRecord{
-		{ModelMessage: ModelMessage{Role: "user", Content: newTextContent("I am visiting Berlin next week")}},
-		{ModelMessage: ModelMessage{Role: "assistant", Content: newTextContent("Sounds fun.")}},
-		{ModelMessage: ModelMessage{Role: "user", Content: newTextContent("I prefer tea over coffee")}},
-		{ModelMessage: ModelMessage{Role: "user", Content: newTextContent("What should I pack?")}},
+	query := builder.Build(runreq.ChatRequest{Query: "What should I pack?"}, []historyfrag.HistoryRecord{
+		{ModelMessage: runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("I am visiting Berlin next week")}},
+		{ModelMessage: runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("Sounds fun.")}},
+		{ModelMessage: runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("I prefer tea over coffee")}},
+		{ModelMessage: runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("What should I pack?")}},
 	})
 
 	if query.Source != "current_query_with_history" {
@@ -76,8 +78,8 @@ func TestMemoryQueryBuilderTruncates(t *testing.T) {
 	t.Parallel()
 
 	builder := memoryQueryBuilder{MaxRecentMessages: 1, MaxBytes: 120, MaxLines: 6, MaxMessageRunes: 500}
-	query := builder.Build(ChatRequest{Query: strings.Repeat("current ", 30)}, []historyfrag.HistoryRecord{
-		{ModelMessage: ModelMessage{Role: "user", Content: newTextContent(strings.Repeat("history ", 30))}},
+	query := builder.Build(runreq.ChatRequest{Query: strings.Repeat("current ", 30)}, []historyfrag.HistoryRecord{
+		{ModelMessage: runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent(strings.Repeat("history ", 30))}},
 	})
 
 	if !query.Truncated {
@@ -91,8 +93,8 @@ func TestMemoryQueryBuilderTruncates(t *testing.T) {
 func TestMemoryQueryBuilderSkipsEmptyVisibleQuery(t *testing.T) {
 	t.Parallel()
 
-	query := defaultMemoryQueryBuilder().Build(ChatRequest{Query: "   "}, []historyfrag.HistoryRecord{
-		{ModelMessage: ModelMessage{Role: "user", Content: newTextContent("history")}},
+	query := defaultMemoryQueryBuilder().Build(runreq.ChatRequest{Query: "   "}, []historyfrag.HistoryRecord{
+		{ModelMessage: runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("history")}},
 	})
 	if query.Query != "" {
 		t.Fatalf("expected empty query, got %+v", query)
@@ -117,7 +119,7 @@ func TestBuildMemoryQueryRespectsRetryCutoffForRawAndCompactedHistory(t *testing
 
 	resolver := &Service{
 		messageService: &memoryQueryMessageService{messages: []messagepkg.Message{prior, cutoff}},
-		queries: &recordingCompactionLogQueries{logs: []sqlc.BotHistoryMessageCompact{{
+		queries: &agenttest.RecordingCompactionLog{Logs: []sqlc.BotHistoryMessageCompact{{
 			ID:            mustPGUUID(t, compactID),
 			BotID:         mustPGUUID(t, botID),
 			SessionID:     mustPGUUID(t, sessionID),
@@ -127,7 +129,7 @@ func TestBuildMemoryQueryRespectsRetryCutoffForRawAndCompactedHistory(t *testing
 			AnchorEndMs:   cutoff.CreatedAt.UnixMilli(),
 		}}},
 	}
-	query := resolver.buildMemoryQuery(context.Background(), ChatRequest{
+	query := resolver.buildMemoryQuery(context.Background(), runreq.ChatRequest{
 		BotID:                        botID,
 		ThreadID:                     sessionID,
 		Query:                        "replacement request",

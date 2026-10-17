@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -43,7 +45,7 @@ func newDeferredSteerTestService(t *testing.T, backends ...sessionruntime.Backen
 	}
 	service := &Service{
 		sessionManager: manager,
-		messageService: &recordingStepPersister{recordingMessageService: &recordingMessageService{}},
+		messageService: &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}},
 		queries:        nilQueries{},
 		queue:          &memoryQueuedInputs{},
 	}
@@ -64,7 +66,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 	}
 
 	// Original run: the deferred step commits without touching the queue.
-	original := newQueueStepCoordinator(service, ChatRequest{
+	original := newQueueStepCoordinator(service, runreq.ChatRequest{
 		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID,
 		RunHandle: handle, QueueSteerEnabled: true,
 	})
@@ -84,7 +86,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 	}
 
 	// Continuation after the decision uses a fresh coordinator with the same run.
-	continuation := newQueueStepCoordinator(service, ChatRequest{
+	continuation := newQueueStepCoordinator(service, runreq.ChatRequest{
 		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID,
 		RunHandle: handle, QueueSteerEnabled: true, UserMessagePersisted: true,
 	})
@@ -104,7 +106,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 	if outcome.claimedSteer == nil || outcome.claimedSteer.ID != item.ID {
 		t.Fatalf("continuation did not claim the steer: %#v", outcome)
 	}
-	if got := QueuePayloadText(outcome.claimedSteer.Payload); got != "steer me" {
+	if got := runreq.QueuePayloadText(outcome.claimedSteer.Payload); got != "steer me" {
 		t.Fatalf("claimed payload = %q", got)
 	}
 
@@ -137,7 +139,7 @@ func TestFinalStepClaimsSteerForLoopContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coordinator := newQueueStepCoordinator(service, ChatRequest{
+	coordinator := newQueueStepCoordinator(service, runreq.ChatRequest{
 		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID,
 		RunHandle: handle, QueueSteerEnabled: true,
 	})
@@ -151,7 +153,7 @@ func TestFinalStepClaimsSteerForLoopContinuation(t *testing.T) {
 	if outcome.claimedSteer == nil || outcome.claimedSteer.ID != item.ID {
 		t.Fatalf("final did not claim the steer: %#v", outcome)
 	}
-	if got := QueuePayloadText(outcome.claimedSteer.Payload); got != "change direction" {
+	if got := runreq.QueuePayloadText(outcome.claimedSteer.Payload); got != "change direction" {
 		t.Fatalf("claimed payload = %q", got)
 	}
 	if _, err := service.EnqueueSteer(ctx, testQueueInput(handle.BotID, handle.SessionID, "invoke-2", "late")); err != nil {
@@ -169,7 +171,7 @@ func TestStepThatAppliesASteerRecordsThePromotedInputAsTaken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	coordinator := newQueueStepCoordinator(service, ChatRequest{
+	coordinator := newQueueStepCoordinator(service, runreq.ChatRequest{
 		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID,
 		RunHandle: handle, QueueSteerEnabled: true,
 	})

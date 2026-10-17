@@ -12,6 +12,7 @@ import (
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -53,7 +54,7 @@ type CommittedToolApprovalResponse struct {
 	ackOnly            bool
 }
 
-func (s *Service) respondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) respondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) error {
 	committed, err := s.CommitToolApprovalResponse(ctx, input)
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	target, err := s.toolApproval.ResolveTarget(ctx, toolapproval.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.ThreadID,
-		ExplicitID:             firstNonEmpty(input.ExplicitID, input.ApprovalID),
+		ExplicitID:             runreq.FirstNonEmpty(input.ExplicitID, input.ApprovalID),
 		ReplyExternalMessageID: input.ReplyExternalMessageID,
 	})
 	if err != nil {
@@ -114,8 +115,8 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	var activePrompt *externalAgentActivePromptSubscription
 	if isExternalAgent && !input.SuppressActivePromptAttach {
 		activePrompt, _ = s.subscribeExternalAgentActivePrompt(
-			firstNonEmpty(target.BotID, input.BotID),
-			firstNonEmpty(target.SessionID, input.ThreadID),
+			runreq.FirstNonEmpty(target.BotID, input.BotID),
+			runreq.FirstNonEmpty(target.SessionID, input.ThreadID),
 		)
 	}
 	if optionID != "" {
@@ -210,10 +211,10 @@ func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision 
 // ContinueCommittedToolApprovalResponse resumes what an approval parked when
 // no session runtime routed the answer: an inline runtime's waiter, or a
 // built-in agent run driven here with eventCh as the caller's end of it.
-func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- WSStreamEvent) error {
+func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, committed CommittedToolApprovalResponse, eventCh chan<- runreq.WSStreamEvent) error {
 	target := committed.request
 	if committed.ackOnly {
-		return emitApprovalAck(ctx, eventCh)
+		return runreq.EmitApprovalAck(ctx, eventCh)
 	}
 	if committed.usesDecisionWaiter {
 		if committed.activePrompt != nil {
@@ -222,7 +223,7 @@ func (s *Service) ContinueCommittedToolApprovalResponse(ctx context.Context, com
 				SkipApprovalID: target.ID,
 			})
 		}
-		return emitApprovalAck(ctx, eventCh)
+		return runreq.EmitApprovalAck(ctx, eventCh)
 	}
 	return s.driveUnroutedContinuation(ctx, s.toolApprovalContinuation(ctx, committed, eventCh != nil), eventCh)
 }
@@ -234,13 +235,13 @@ func (s *Service) toolApprovalContinuation(ctx context.Context, committed Commit
 	approval := withLocalWebReplyTarget(committed.request)
 	input := committed.input
 	requestMessageID, reqErr := s.continuationTurnRequestMessageID(ctx, approval.SessionID, committed.runHandle)
-	req := ChatRequest{
-		RunID:                   runIDForChatRequest(committed.runID),
+	req := runreq.ChatRequest{
+		RunID:                   runreq.RunID(committed.runID),
 		RunHandle:               committed.runHandle,
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		ThreadID:                approval.SessionID,
-		SourceChannelIdentityID: firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
+		SourceChannelIdentityID: runreq.FirstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          approval.SourcePlatform,
 		ReplyTarget:             approval.ReplyTarget,
 		ConversationType:        approval.ConversationType,
@@ -252,7 +253,7 @@ func (s *Service) toolApprovalContinuation(ctx context.Context, committed Commit
 		Req: req,
 		// The resumed run is the driver's request, which carries the per-run
 		// asset collector. Everything else in it is what this entry built.
-		Setup: func(ctx context.Context, runReq ChatRequest) (runPlan, error) {
+		Setup: func(ctx context.Context, runReq runreq.ChatRequest) (runPlan, error) {
 			if reqErr != nil {
 				return runPlan{}, reqErr
 			}
@@ -323,7 +324,7 @@ func (s *Service) authorizeExternalAgentToolApprovalResponse(ctx context.Context
 	if s == nil || s.sessionService == nil {
 		return errors.New("session service not configured")
 	}
-	sessionID := firstNonEmpty(target.SessionID, input.ThreadID)
+	sessionID := runreq.FirstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := s.sessionService.Get(ctx, sessionID)
 	if err != nil {
 		return err
@@ -331,7 +332,7 @@ func (s *Service) authorizeExternalAgentToolApprovalResponse(ctx context.Context
 	if !sessionpkg.UsesDecisionWaiter(sess) {
 		return s.authorizeToolApprovalResponse(ctx, target, input)
 	}
-	botID := firstNonEmpty(target.BotID, input.BotID)
+	botID := runreq.FirstNonEmpty(target.BotID, input.BotID)
 	if strings.TrimSpace(sess.BotID) != "" && strings.TrimSpace(botID) != "" && sess.BotID != botID {
 		return toolapproval.ErrForbidden
 	}
@@ -339,11 +340,11 @@ func (s *Service) authorizeExternalAgentToolApprovalResponse(ctx context.Context
 		botID = sess.BotID
 	}
 	target.BotID = botID
-	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
+	actorID := runreq.FirstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	if actorID == "" {
 		return toolapproval.ErrForbidden
 	}
-	runtimeOwnerID := metadataString(runtimeSessionMeta(sess), "runtime_owner_account_id")
+	runtimeOwnerID := runreq.MetadataString(runreq.RuntimeSessionMeta(sess), "runtime_owner_account_id")
 	if runtimeOwnerID == "" {
 		return toolapproval.ErrForbidden
 	}
@@ -354,7 +355,7 @@ func (s *Service) authorizeExternalAgentToolApprovalResponse(ctx context.Context
 }
 
 func (s *Service) authorizeToolApprovalResponse(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput) error {
-	target.BotID = firstNonEmpty(target.BotID, input.BotID)
+	target.BotID = runreq.FirstNonEmpty(target.BotID, input.BotID)
 	allowed, err := s.CanDecideToolApproval(ctx, target, ToolApprovalPrincipal{
 		UserID:            input.ActorUserID,
 		ChannelIdentityID: input.ActorChannelIdentityID,
@@ -377,7 +378,7 @@ type ToolApprovalPrincipal struct {
 }
 
 func (p ToolApprovalPrincipal) subject() string {
-	return firstNonEmpty(p.UserID, p.ChannelIdentityID)
+	return runreq.FirstNonEmpty(p.UserID, p.ChannelIdentityID)
 }
 
 func (p ToolApprovalPrincipal) is(id string) bool {
@@ -486,28 +487,13 @@ func toolApprovalPermission(target toolapproval.Request) (string, bool) {
 	}
 }
 
-func emitApprovalAck(ctx context.Context, eventCh chan<- WSStreamEvent) error {
-	if eventCh == nil {
-		return nil
-	}
-	for _, event := range []native.StreamEvent{
-		{Type: native.EventAgentStart},
-		{Type: native.EventAgentEnd},
-	} {
-		if err := sendAgentStreamEvent(ctx, eventCh, event); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Request, input ToolApprovalResponseInput, runID string) (sdk.ToolResultPart, map[string]any, error) {
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	req = withLocalWebReplyTarget(req)
 	resolved, err := s.ResolveRunConfig(ctx,
 		input.BotID,
 		req.SessionID,
-		firstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
+		runreq.FirstNonEmpty(req.ChannelIdentityID, input.ActorChannelIdentityID),
 		req.SourcePlatform,
 		req.ReplyTarget,
 		req.ConversationType,
@@ -516,7 +502,7 @@ func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Requ
 	if err != nil {
 		return sdk.ToolResultPart{}, nil, err
 	}
-	resolved.RunConfig.RunID = runIDForChatRequest(runID)
+	resolved.RunConfig.RunID = runreq.RunID(runID)
 	if fence, ok := runtimefence.FromContext(ctx); ok {
 		var count int64
 		err := runtimefence.InTransaction(ctx, s.queries, fence.BotID, fence.SessionID, func(queries dbstore.Queries) error {
@@ -548,7 +534,7 @@ func (s *Service) storeToolResultAndContinue(
 	input ToolApprovalResponseInput,
 	result sdk.ToolResultPart,
 	uiMetadata map[string]any,
-	req ChatRequest,
+	req runreq.ChatRequest,
 	live bool,
 ) (runPlan, error) {
 	approval = withLocalWebReplyTarget(approval)
@@ -557,7 +543,7 @@ func (s *Service) storeToolResultAndContinue(
 	if err != nil {
 		return runPlan{}, err
 	}
-	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
+	modelMessages := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	storeOpts := storeRoundOptions{AllowPendingToolCalls: true}
 	// UI-only payloads stripped from the tool output (e.g. the edit diff) ride
 	// the tool row's metadata — the model history reads only the content.
@@ -578,7 +564,7 @@ func (s *Service) continueToolApprovalSession(
 	ctx context.Context,
 	approval toolapproval.Request,
 	input ToolApprovalResponseInput,
-	req ChatRequest,
+	req runreq.ChatRequest,
 	live bool,
 ) (runPlan, error) {
 	approval = withLocalWebReplyTarget(approval)
@@ -586,7 +572,7 @@ func (s *Service) continueToolApprovalSession(
 	resolved, err := s.ResolveRunConfig(ctx,
 		input.BotID,
 		approval.SessionID,
-		firstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
+		runreq.FirstNonEmpty(approval.ChannelIdentityID, input.ActorChannelIdentityID),
 		approval.SourcePlatform,
 		approval.ReplyTarget,
 		approval.ConversationType,
@@ -601,7 +587,7 @@ func (s *Service) continueToolApprovalSession(
 		ctx,
 		resolved.RunConfig,
 		historyScopeFallbackFromToolApprovalRequest(approval),
-		compactionSummaryScope(firstNonEmpty(approval.BotID, input.BotID), "", approval.SessionID, approval.ConversationType, "", approval.ReplyTarget),
+		compactionSummaryScope(runreq.FirstNonEmpty(approval.BotID, input.BotID), "", approval.SessionID, approval.ConversationType, "", approval.ReplyTarget),
 		live,
 	)
 	if err != nil {
@@ -625,13 +611,4 @@ func rejectedToolResultText(reason string) string {
 		return "tool execution rejected by user"
 	}
 	return "tool execution rejected by user: " + reason
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
 }

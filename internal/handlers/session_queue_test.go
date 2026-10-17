@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -92,7 +93,7 @@ func TestSessionQueueResponsesDoNotUseMixedQueueKind(t *testing.T) {
 }
 
 func TestSessionQueueEditBySomeoneElseIsForbidden(t *testing.T) {
-	err := queueMutationError(fmt.Errorf("update: %w", application.ErrQueueItemNotEditable))
+	err := queueMutationError(fmt.Errorf("update: %w", runreq.ErrQueueItemNotEditable))
 	problem, ok := server.ProblemFrom(err, "")
 	if !ok || problem.Status != http.StatusForbidden || problem.Code != string(apperror.CodeQueueItemNotEditable) {
 		t.Fatalf("queueMutationError() = %v, want %d %s", err, http.StatusForbidden, apperror.CodeQueueItemNotEditable)

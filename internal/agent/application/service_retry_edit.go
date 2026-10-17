@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
@@ -43,7 +45,7 @@ type EditLatestMessageInput struct {
 	// TargetTurnID names the round being replaced. See RetryLatestMessageInput.
 	TargetTurnID           string
 	Text                   string
-	Attachments            []ChatAttachment
+	Attachments            []runreq.ChatAttachment
 	ActorChannelIdentityID string
 	ActorUserID            string
 	ChatToken              string
@@ -62,7 +64,7 @@ func (s *Service) retryRunSpec(admission *WebAdmission, input RetryLatestMessage
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	replace := &webReplacement{service: s, reason: "retry", oldTurnID: targetTurnID}
-	spec := s.webRunSpec(admission, ChatRequest{
+	spec := s.webRunSpec(admission, runreq.ChatRequest{
 		BotID:                    strings.TrimSpace(input.BotID),
 		ChatID:                   strings.TrimSpace(input.BotID),
 		ThreadID:                 sessionID,
@@ -80,9 +82,9 @@ func (s *Service) retryRunSpec(admission *WebAdmission, input RetryLatestMessage
 		ToolHTTPURL:              strings.TrimSpace(input.ToolHTTPURL),
 		SkipHistoryTurn:          true,
 		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
-	}, delivery, inputAccepted)
+	}, delivery, outcome.InputAccepted)
 	spec.Replacement = replace.hooks()
-	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		turn, cutoffMessageID, err := s.prepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
 		if err != nil {
 			return runPlan{}, err
@@ -127,7 +129,7 @@ func (s *Service) editRunSpec(admission *WebAdmission, input EditLatestMessageIn
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	text := strings.TrimSpace(input.Text)
 	replace := &webReplacement{service: s, reason: "edit", oldTurnID: targetTurnID}
-	spec := s.webRunSpec(admission, ChatRequest{
+	spec := s.webRunSpec(admission, runreq.ChatRequest{
 		BotID:                    strings.TrimSpace(input.BotID),
 		ChatID:                   strings.TrimSpace(input.BotID),
 		ThreadID:                 sessionID,
@@ -148,9 +150,9 @@ func (s *Service) editRunSpec(admission *WebAdmission, input EditLatestMessageIn
 		ToolHTTPURL:              strings.TrimSpace(input.ToolHTTPURL),
 		SkipHistoryTurn:          true,
 		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
-	}, delivery, inputAccepted)
+	}, delivery, outcome.InputAccepted)
 	spec.Replacement = replace.hooks()
-	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		if text == "" && len(input.Attachments) == 0 {
 			return runPlan{}, errors.New("message text or attachments required")
 		}
@@ -173,7 +175,7 @@ type webReplacement struct {
 	reason    string
 	oldTurnID string
 
-	req              ChatRequest
+	req              runreq.ChatRequest
 	requestMessageID string
 }
 
@@ -190,7 +192,7 @@ func (r *webReplacement) hooks() *turnReplacement {
 
 // target records the request that replaces the turn and returns it carrying
 // the replacement the history write stores the new turn under.
-func (r *webReplacement) target(ctx context.Context, req ChatRequest, requestMessageID string) ChatRequest {
+func (r *webReplacement) target(ctx context.Context, req runreq.ChatRequest, requestMessageID string) runreq.ChatRequest {
 	replacement := &messagepkg.TurnReplacement{
 		OldTurnID:               r.oldTurnID,
 		ReplacementTurnID:       strings.TrimSpace(req.TurnID),
@@ -339,7 +341,7 @@ func (s *Service) ensureLatestVisibleTurn(ctx context.Context, sessionID, turnID
 
 func (s *Service) replacePersistedTurn(
 	ctx context.Context,
-	req ChatRequest,
+	req runreq.ChatRequest,
 	oldTurnID string,
 	requestMessageID string,
 	reason string,
@@ -447,14 +449,14 @@ func (s *Service) prepareForkAnchorUpdate(ctx context.Context, sessionID string,
 		return nil
 	}
 
-	nextFork := cloneMetadataMap(fork)
+	nextFork := runreq.CloneMetadataMap(fork)
 	if nextAnchor != "" {
 		nextFork["fork_message_id"] = nextAnchor
 	} else {
 		delete(nextFork, "fork_message_id")
 	}
 
-	nextMetadata := cloneMetadataMap(sess.Metadata)
+	nextMetadata := runreq.CloneMetadataMap(sess.Metadata)
 	nextMetadata["forked_from"] = nextFork
 	return &forkAnchorUpdate{metadata: nextMetadata}
 }
@@ -531,17 +533,6 @@ func forkMetadataString(metadata map[string]any, key string) string {
 	return strings.TrimSpace(fmt.Sprint(value))
 }
 
-func cloneMetadataMap(metadata map[string]any) map[string]any {
-	if metadata == nil {
-		return map[string]any{}
-	}
-	out := make(map[string]any, len(metadata))
-	for key, value := range metadata {
-		out[key] = value
-	}
-	return out
-}
-
 func (s *Service) logForkAnchorUpdateWarning(message string, sessionID string, err error) {
 	if s != nil && s.logger != nil {
 		s.logger.Warn("fork anchor update skipped", slog.String("reason", message), slog.String("session_id", sessionID), slog.Any("error", err))
@@ -570,7 +561,7 @@ func visibleMessageText(msg messagepkg.Message) string {
 	if text := strings.TrimSpace(msg.DisplayContent); text != "" {
 		return text
 	}
-	var modelMessage ModelMessage
+	var modelMessage runreq.ModelMessage
 	if err := json.Unmarshal(msg.Content, &modelMessage); err == nil {
 		if text := strings.TrimSpace(modelMessage.TextContent()); text != "" {
 			return text

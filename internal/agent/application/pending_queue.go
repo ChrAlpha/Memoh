@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
@@ -30,7 +31,7 @@ func (s *Service) EnqueueFollowUp(ctx context.Context, input QueueInput) (sessio
 	if err != nil {
 		return sessionruntime.FollowUpItem{}, err
 	}
-	payload, err := encodeQueueCommand(cmd, nil)
+	payload, err := runreq.EncodeQueueCommand(cmd, nil)
 	if err != nil {
 		return sessionruntime.FollowUpItem{}, err
 	}
@@ -129,7 +130,7 @@ func (s *Service) UpdateFollowUp(ctx context.Context, botID, sessionID, itemID, 
 		if input.ID != itemID {
 			continue
 		}
-		payload, err := rewriteQueuePayloadText(input.Payload, editorUserID, text)
+		payload, err := runreq.RewriteQueuePayloadText(input.Payload, editorUserID, text)
 		if err != nil {
 			return sessionruntime.FollowUpItem{}, err
 		}

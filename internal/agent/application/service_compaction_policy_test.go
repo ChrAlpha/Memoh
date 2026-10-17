@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/settings"
@@ -203,13 +204,13 @@ func TestAutomaticCompactionPathsApplyTargetAndBoundAsyncDrain(t *testing.T) {
 	t.Parallel()
 
 	service, runner := newControllerPolicyService(t, targetPercentPointer(55))
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000453",
 		ThreadID: "00000000-0000-0000-0000-000000000454",
 	}
-	resolved := resolvedContext{
-		contextTokenBudget: 200000,
-		pressure:           &runPressure{conversation: 150000},
+	resolved := runreq.ResolvedContext{
+		ContextTokenBudget: 200000,
+		Pressure:           &runreq.RunPressure{Conversation: 150000},
 	}
 
 	runAutomaticCompaction(t, service, req, resolved, 150000)
@@ -285,13 +286,13 @@ func TestSyncBackstopTargetCapsAtSoftShare(t *testing.T) {
 			t.Parallel()
 
 			service, runner := newControllerPolicyService(t, tc.targetPercent)
-			req := ChatRequest{
+			req := runreq.ChatRequest{
 				BotID:    "00000000-0000-0000-0000-000000000453",
 				ThreadID: "00000000-0000-0000-0000-000000000454",
 			}
-			resolved := resolvedContext{
-				contextTokenBudget: 8000,
-				pressure:           &runPressure{conversation: 4000},
+			resolved := runreq.ResolvedContext{
+				ContextTokenBudget: 8000,
+				Pressure:           &runreq.RunPressure{Conversation: 4000},
 			}
 
 			runAutomaticCompaction(t, service, req, resolved, 4000)
@@ -335,7 +336,7 @@ func targetPercentPointer(value int) *int {
 
 // runAutomaticCompaction runs what maybeCompact starts as a unit, on the
 // test's goroutine.
-func runAutomaticCompaction(t *testing.T, service *Service, req ChatRequest, rc resolvedContext, inputTokens int) {
+func runAutomaticCompaction(t *testing.T, service *Service, req runreq.ChatRequest, rc runreq.ResolvedContext, inputTokens int) {
 	t.Helper()
 	plan, ok := service.planCompaction(context.Background(), req, rc, inputTokens)
 	if !ok {

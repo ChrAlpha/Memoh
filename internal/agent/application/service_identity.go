@@ -3,10 +3,12 @@ package application
 import (
 	"context"
 	"strings"
+
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 // resolveDisplayName returns the best available display name for the request identity.
-func (s *Service) resolveDisplayName(ctx context.Context, req ChatRequest) string {
+func (s *Service) resolveDisplayName(ctx context.Context, req runreq.ChatRequest) string {
 	if name := strings.TrimSpace(req.DisplayName); name != "" {
 		return name
 	}
@@ -17,7 +19,7 @@ func (s *Service) resolveDisplayName(ctx context.Context, req ChatRequest) strin
 	if channelIdentityID == "" {
 		return "User"
 	}
-	pgID, err := parseServiceUUID(channelIdentityID)
+	pgID, err := runreq.ParseServiceUUID(channelIdentityID)
 	if err != nil {
 		return "User"
 	}
@@ -34,7 +36,7 @@ func (s *Service) isExistingChannelIdentityID(ctx context.Context, id string) bo
 	if s.queries == nil {
 		return false
 	}
-	pgID, err := parseServiceUUID(id)
+	pgID, err := runreq.ParseServiceUUID(id)
 	if err != nil {
 		return false
 	}
@@ -46,7 +48,7 @@ func (s *Service) isExistingUserID(ctx context.Context, id string) bool {
 	if s.queries == nil {
 		return false
 	}
-	pgID, err := parseServiceUUID(id)
+	pgID, err := runreq.ParseServiceUUID(id)
 	if err != nil {
 		return false
 	}

@@ -7,7 +7,9 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -25,7 +27,7 @@ func TestExternalPromptInputCarriesWhetherTheRunCanAskTheUser(t *testing.T) {
 	newExecutor := func(unattended bool, hasInputPort bool) *externalExecutor {
 		svc := &Service{}
 		if hasInputPort {
-			svc.userInput = &fakeUserInputService{}
+			svc.userInput = &agenttest.UserInput{}
 		}
 		return &externalExecutor{service: svc, unattended: unattended}
 	}
@@ -59,7 +61,7 @@ func TestExternalPromptInputCarriesWhetherTheRunCanAskTheUser(t *testing.T) {
 func TestExternalProjectionCleanupRunsOnceAcrossGoroutines(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	exec := &externalExecutor{service: &Service{logger: slog.New(slog.DiscardHandler), messageService: messages}}
 	exec.projections.record("call-1")
 	exec.projections.complete("call-1", &messagepkg.Message{ID: "projection-1"})
@@ -74,8 +76,8 @@ func TestExternalProjectionCleanupRunsOnceAcrossGoroutines(t *testing.T) {
 	}
 	wg.Wait()
 
-	if len(messages.deleted) != 1 || len(messages.deleted[0]) != 1 || messages.deleted[0][0] != "projection-1" {
-		t.Fatalf("deleted = %v, want the projected row removed once", messages.deleted)
+	if len(messages.Deleted) != 1 || len(messages.Deleted[0]) != 1 || messages.Deleted[0][0] != "projection-1" {
+		t.Fatalf("deleted = %v, want the projected row removed once", messages.Deleted)
 	}
 }
 
@@ -91,7 +93,7 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 	}{
 		{name: "web_send", run: func(t *testing.T, service *Service) {
 			t.Helper()
-			if _, err := streamWebSend(context.Background(), t, service, ChatRequest{
+			if _, err := streamWebSend(context.Background(), t, service, runreq.ChatRequest{
 				BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 				Query: directLifecyclePrompt, RawQuery: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
 				CurrentChannel: "local",
@@ -123,8 +125,8 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 	}
 	for _, entry := range entries {
 		t.Run(entry.name, func(t *testing.T) {
-			messages := &recordingMessageService{}
-			lifecycles := &recordingContextLifecycleStore{}
+			messages := &agenttest.RecordingMessages{}
+			lifecycles := &agenttest.RecordingLifecycleStore{}
 			memory := &storeRoundMemoryProvider{
 				beforeChat: &memprovider.BeforeChatResult{
 					ContextText: "remembered fact", RetrievalMode: "graph", ResultCount: 1, ResultRefs: []string{"memory-1"},
@@ -136,7 +138,7 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 			service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, lifecycles)
 			service.memoryRegistry = registry
 			service.settingsService = settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil)
-			service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
+			service.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 			registerExternalDrivers(service, &drivePromptRecorder{})
 
 			entry.run(t, service)

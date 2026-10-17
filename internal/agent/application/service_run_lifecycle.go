@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
@@ -91,7 +93,7 @@ func (s *Service) stageContextLifecycleCandidate(
 	if s == nil || s.contextLifecycles == nil {
 		return false
 	}
-	fence, fenced := runtimefence.FromContext(nonNilContext(ctx))
+	fence, fenced := runtimefence.FromContext(runreq.NonNilContext(ctx))
 	if !fenced {
 		return false
 	}
@@ -165,7 +167,7 @@ func (s *Service) EnsureTerminalContextLifecycle(
 	if s == nil || s.contextLifecycles == nil || contextLifecycleOwnershipLost(ctx, cause) {
 		return
 	}
-	ctx = nonNilContext(ctx)
+	ctx = runreq.NonNilContext(ctx)
 	snapshot := minimalContextLifecycleSnapshot()
 	if s.stageContextLifecycleCandidate(
 		ctx,
@@ -233,7 +235,7 @@ func (s *Service) recoverContextLifecycleFromAssistantMetadata(
 	if s == nil || s.contextLifecycles == nil || contextLifecycleOwnershipLost(ctx, cause) {
 		return
 	}
-	ctx = nonNilContext(ctx)
+	ctx = runreq.NonNilContext(ctx)
 	status, _ := classifyContextLifecycleTerminal(ctx, minimalContextLifecycleSnapshot(), cause)
 	runUUID, _, _, err := parseContextLifecycleIDs(runID, botID, sessionID)
 	if err != nil {
@@ -274,7 +276,7 @@ func (s *Service) persistContextLifecycleSnapshot(
 	if s == nil || s.contextLifecycles == nil || snapshot == nil || contextLifecycleOwnershipLost(ctx, cause) {
 		return
 	}
-	ctx = nonNilContext(ctx)
+	ctx = runreq.NonNilContext(ctx)
 	if status, _ := classifyContextLifecycleTerminal(ctx, *snapshot, cause); status == contextLifecycleStatusFailedBudget &&
 		explicitRunCancellation(ctx, cause) {
 		// Budget evidence outranks the abort for the terminal status; keep the
@@ -497,9 +499,9 @@ func (s *Service) reconcileTerminalContextLifecycles(ctx context.Context) error 
 			errorCode = row.ErrorCode.String
 		}
 		s.reconcileTerminalContextLifecycle(repairCtx, sessionruntime.TerminalRun{
-			RunID:        pgUUIDString(row.RunID),
-			BotID:        pgUUIDString(row.BotID),
-			SessionID:    pgUUIDString(row.SessionID),
+			RunID:        runreq.PGUUIDString(row.RunID),
+			BotID:        runreq.PGUUIDString(row.BotID),
+			SessionID:    runreq.PGUUIDString(row.SessionID),
 			FencingToken: row.FencingToken,
 			State:        row.State,
 			ErrorCode:    errorCode,
@@ -512,7 +514,7 @@ func (s *Service) reconcileTerminalContextLifecycles(ctx context.Context) error 
 }
 
 func contextLifecycleBoundedContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	ctx = nonNilContext(ctx)
+	ctx = runreq.NonNilContext(ctx)
 	timeout := contextLifecycleWriteTimeout
 	if deadline, ok := ctx.Deadline(); ok {
 		if remaining := time.Until(deadline); remaining < timeout {
@@ -686,33 +688,26 @@ func classifyContextLifecycleTerminal(
 // that cancellation rather than a failure the runtime canceled itself over
 // (budget failures cancel with their own error as the cause).
 func explicitRunCancellation(ctx context.Context, cause error) bool {
-	return errors.Is(context.Cause(nonNilContext(ctx)), context.Canceled) &&
+	return errors.Is(context.Cause(runreq.NonNilContext(ctx)), context.Canceled) &&
 		(errors.Is(cause, context.Canceled) || errors.Is(apperror.CauseOf(cause), context.Canceled))
 }
 
 // drivenRunStopped reports a stop the run driver recorded. The driver cancels
-// its execution context with errRunStopped rather than context.Canceled so a
+// its execution context with outcome.ErrRunStopped rather than context.Canceled so a
 // cancellation nobody asked for is not misread as a user stop; the lifecycle
 // status still has to read "aborted", which is why the marker is checked here
 // instead of widening explicitRunCancellation (that one also serves the loops
 // the driver replaced).
 func drivenRunStopped(cause error) bool {
-	return errors.Is(cause, errRunStopped)
+	return errors.Is(cause, outcome.ErrRunStopped)
 }
 
 func contextLifecycleOwnershipLost(ctx context.Context, cause error) bool {
-	return errors.Is(context.Cause(nonNilContext(ctx)), sessionruntime.ErrRunOwnershipLost) ||
+	return errors.Is(context.Cause(runreq.NonNilContext(ctx)), sessionruntime.ErrRunOwnershipLost) ||
 		errors.Is(cause, sessionruntime.ErrRunOwnershipLost) ||
 		errors.Is(apperror.CauseOf(cause), sessionruntime.ErrRunOwnershipLost) ||
 		errors.Is(cause, sessionruntime.ErrCommandTargetNotActive) ||
 		errors.Is(apperror.CauseOf(cause), sessionruntime.ErrCommandTargetNotActive)
-}
-
-func nonNilContext(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
-	}
-	return ctx
 }
 
 func parseContextLifecycleIDs(runID, botID, sessionID string) (pgtype.UUID, pgtype.UUID, pgtype.UUID, error) {

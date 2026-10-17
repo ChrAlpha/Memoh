@@ -1,4 +1,4 @@
-package application
+package runreq
 
 import (
 	"encoding/json"
@@ -140,8 +140,10 @@ type (
 	AssistantOutput       = turn.AssistantOutput
 )
 
+// UserMessageKindSkillActivation marks a user message that activates a skill.
 const UserMessageKindSkillActivation = turn.UserMessageKindSkillActivation
 
-func newTextContent(text string) json.RawMessage {
+// NewTextContent encodes text as a model-message content value.
+func NewTextContent(text string) json.RawMessage {
 	return turn.NewTextContent(text)
 }

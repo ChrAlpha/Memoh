@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -13,9 +14,9 @@ import (
 // service, while claims are fenced by the session runtime backend.
 func (s *Service) bindQueueContinuation(
 	ctx context.Context,
-	req *ChatRequest,
+	req *runreq.ChatRequest,
 	cfg *native.RunConfig,
-	rc resolvedContext,
+	rc runreq.ResolvedContext,
 ) (*agentStepCommitter, error) {
 	if s == nil || req == nil || cfg == nil || s.sessionManager == nil ||
 		req.RunHandle.RunID == "" || req.RunHandle.OwnerID == "" || req.RunHandle.FencingToken <= 0 {

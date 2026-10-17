@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -50,7 +51,7 @@ func TestPrepareExternalForkAnswersRuntimeFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &Service{
 				queries: forkAnchorQueries{},
-				sessionService: &fakeBackgroundSessionService{getFn: func(context.Context, string) (session.Thread, error) {
+				sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
 					return session.Thread{ID: forkTestSessionID, BotID: forkTestBotID, BotAgentID: "agent-1", RuntimeType: session.RuntimeCodex}, nil
 				}},
 				externalDrivers: map[string]external.Driver{session.RuntimeCodex: failingForkDriver{err: tc.err}},

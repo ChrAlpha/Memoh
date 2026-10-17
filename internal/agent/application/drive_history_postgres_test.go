@@ -71,7 +71,7 @@ func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (chatTu
 	// The real store, with the two decision reads a finishing run makes
 	// answered as "none": this fixture creates no decisions.
 	service.queries = postgresNoDecisionQueries{queries}
-	service.allowedTeam = ""
+	setAllowedTeam(service, "")
 	return fixture, pool, botID, sessionID
 }
 
@@ -167,7 +167,7 @@ func TestDriveHistoryResumeWritesNoConversationRows(t *testing.T) {
 	}
 
 	done, err := service.resumeInterruptedSession(ctx, dbsqlc.SessionRun{
-		TeamID:    db.ParseUUIDOrEmpty(service.sessionResumeScopes().CurrentScope(ctx)),
+		TeamID:    db.ParseUUIDOrEmpty(service.teamScopes.CurrentScope(ctx)),
 		RunID:     db.ParseUUIDOrEmpty(interruptedID),
 		BotID:     db.ParseUUIDOrEmpty(botID),
 		SessionID: db.ParseUUIDOrEmpty(sessionID),

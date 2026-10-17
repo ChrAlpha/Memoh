@@ -151,15 +151,37 @@ func TestChatStorageDomainsDoNotDependOnUpperLayers(t *testing.T) {
 	}
 }
 
+// applicationLayerDirs are the packages that make up turn orchestration: what
+// is left in application and the packages split out of it. Rules that bind
+// orchestration, or keep lower layers from reaching it, cover all of them.
+var applicationLayerDirs = []string{
+	"internal/agent/application",
+	"internal/agent/runreq",
+	"internal/agent/outcome",
+	"internal/agent/agenttest",
+}
+
+// isApplicationLayer reports whether imp is one of applicationLayerDirs.
+func isApplicationLayer(imp string) bool {
+	for _, dir := range applicationLayerDirs {
+		if isPackageOrChild(imp, modulePrefix+dir) {
+			return true
+		}
+	}
+	return false
+}
+
 // TestApplicationDoesNotDependOnChannel keeps use-case orchestration on
 // neutral Agent/Chat ports. Platform identity and conversation vocabulary
 // must enter through adapters at the composition root.
 func TestApplicationDoesNotDependOnChannel(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range allGoFiles(t, root, "internal/agent/application") {
-		for _, imp := range imports(t, root, file) {
-			if isPackageOrChild(imp, modulePrefix+"internal/channel") {
-				t.Errorf("%s imports %s: Agent application must consume neutral ports, not Channel", file, imp)
+	for _, dir := range applicationLayerDirs {
+		for _, file := range allGoFiles(t, root, dir) {
+			for _, imp := range imports(t, root, file) {
+				if isPackageOrChild(imp, modulePrefix+"internal/channel") {
+					t.Errorf("%s imports %s: Agent application must consume neutral ports, not Channel", file, imp)
+				}
 			}
 		}
 	}
@@ -174,7 +196,7 @@ func TestAgentContextDoesNotDependOnExecutionOrDelivery(t *testing.T) {
 	for _, file := range goFiles(t, root, "internal/agent/context") {
 		for _, imp := range imports(t, root, file) {
 			switch {
-			case isPackageOrChild(imp, modulePrefix+"internal/agent/application"),
+			case isApplicationLayer(imp),
 				isPackageOrChild(imp, modulePrefix+"internal/agent/runtime"),
 				isPackageOrChild(imp, modulePrefix+"internal/agent/tool"),
 				isPackageOrChild(imp, modulePrefix+"internal/agent/adapter"):
@@ -201,7 +223,7 @@ func TestNativeRuntimeStaysBelowApplicationAndDelivery(t *testing.T) {
 	for _, file := range goFiles(t, root, "internal/agent/runtime/native") {
 		for _, imp := range imports(t, root, file) {
 			switch {
-			case isPackageOrChild(imp, modulePrefix+"internal/agent/application"):
+			case isApplicationLayer(imp):
 				t.Errorf("%s imports %s: native runtime must not depend on Agent application orchestration", file, imp)
 			case isPackageOrChild(imp, modulePrefix+"internal/channel"):
 				t.Errorf("%s imports %s: native runtime must not depend on Channel delivery", file, imp)
@@ -219,7 +241,7 @@ func TestAgentToolStaysOnNeutralPorts(t *testing.T) {
 	for _, file := range allGoFiles(t, root, "internal/agent/tool") {
 		for _, imp := range imports(t, root, file) {
 			switch {
-			case isPackageOrChild(imp, modulePrefix+"internal/agent/application"):
+			case isApplicationLayer(imp):
 				t.Errorf("%s imports %s: Agent tools must not depend on application orchestration", file, imp)
 			case isPackageOrChild(imp, modulePrefix+"internal/channel"):
 				t.Errorf("%s imports %s: Agent tools must use neutral messaging/contact ports", file, imp)
@@ -357,14 +379,13 @@ func turnForbiddenLayerImport(imp string) bool {
 		modulePrefix + "internal/pipeline",
 		modulePrefix + "internal/toolapproval",
 		modulePrefix + "internal/userinput",
-		modulePrefix + "internal/agent/application",
 		modulePrefix + "internal/agent/runtime",
 	} {
 		if isPackageOrChild(imp, packagePath) {
 			return true
 		}
 	}
-	return false
+	return isApplicationLayer(imp)
 }
 
 // TestRetiredDomainPackagesStayRemoved prevents compatibility imports from
@@ -497,7 +518,7 @@ func TestStandaloneChannelDoesNotOwnStorageBackends(t *testing.T) {
 func TestRouteCredentialsHaveOneIssuer(t *testing.T) {
 	root := repoRoot(t)
 	forbidden := regexp.MustCompile(`\bauth\.(GenerateChatToken|GenerateToken)\b`)
-	for _, dir := range []string{"internal/channel", "internal/agent/application"} {
+	for _, dir := range append([]string{"internal/channel"}, applicationLayerDirs...) {
 		for _, file := range goFiles(t, root, dir) {
 			data, err := os.ReadFile(filepath.Join(root, file)) //nolint:gosec // guard test walks repo-tracked files by design
 			if err != nil {

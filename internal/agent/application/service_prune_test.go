@@ -6,11 +6,13 @@ import (
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 // pruneEach applies the write-time prune to every message, as the store does.
-func pruneEach(messages []ModelMessage) []ModelMessage {
-	out := make([]ModelMessage, 0, len(messages))
+func pruneEach(messages []runreq.ModelMessage) []runreq.ModelMessage {
+	out := make([]runreq.ModelMessage, 0, len(messages))
 	for _, msg := range messages {
 		pruned, _ := pruneMessageForGateway(msg)
 		out = append(out, pruned)
@@ -23,8 +25,8 @@ func TestPruneMessageForGateway_PrunesToolResultContent(t *testing.T) {
 
 	unit := "汉😀"
 	huge := strings.Repeat(unit, (gatewayToolPayloadMaxBytes/len(unit))+20)
-	msgs := []ModelMessage{
-		{Role: "tool", Content: newTextContent(huge), ToolCallID: "call-1"},
+	msgs := []runreq.ModelMessage{
+		{Role: "tool", Content: runreq.NewTextContent(huge), ToolCallID: "call-1"},
 	}
 	out := pruneEach(msgs)
 	if len(out) != 1 {
@@ -47,14 +49,14 @@ func TestPruneMessageForGateway_PrunesToolCallArguments(t *testing.T) {
 
 	repeated := strings.Repeat("猫😺", (gatewayToolPayloadMaxBytes/len("猫😺"))+20)
 	hugeArgs := `{"a":"` + repeated + `"}`
-	msgs := []ModelMessage{
+	msgs := []runreq.ModelMessage{
 		{
 			Role: "assistant",
-			ToolCalls: []ToolCall{
+			ToolCalls: []runreq.ToolCall{
 				{
 					ID:   "call-1",
 					Type: "function",
-					Function: ToolCallFunction{
+					Function: runreq.ToolCallFunction{
 						Name:      "big_tool",
 						Arguments: hugeArgs,
 					},
@@ -106,7 +108,7 @@ func TestPruneMessageForGateway_ToolResultPartsRemainValidToolMessageSchema(t *t
 	if err != nil {
 		t.Fatalf("marshal tool content: %v", err)
 	}
-	msgs := []ModelMessage{
+	msgs := []runreq.ModelMessage{
 		{Role: "tool", Content: content, ToolCallID: "call-1"},
 	}
 

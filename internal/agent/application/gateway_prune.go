@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	textprune "github.com/felinics/memoh/internal/prune"
 )
 
@@ -17,7 +18,7 @@ const (
 	gatewayToolPayloadPrunedMarker = textprune.DefaultMarker
 )
 
-func pruneMessageForGateway(msg ModelMessage) (ModelMessage, bool) {
+func pruneMessageForGateway(msg runreq.ModelMessage) (runreq.ModelMessage, bool) {
 	changed := false
 	if strings.EqualFold(strings.TrimSpace(msg.Role), "tool") {
 		msg2, did := pruneToolMessage(msg)
@@ -36,9 +37,9 @@ func pruneMessageForGateway(msg ModelMessage) (ModelMessage, bool) {
 	return msg, changed
 }
 
-func pruneToolCalls(calls []ToolCall) ([]ToolCall, bool) {
+func pruneToolCalls(calls []runreq.ToolCall) ([]runreq.ToolCall, bool) {
 	changed := false
-	out := make([]ToolCall, len(calls))
+	out := make([]runreq.ToolCall, len(calls))
 	for i, call := range calls {
 		out[i] = call
 		args := call.Function.Arguments
@@ -51,7 +52,7 @@ func pruneToolCalls(calls []ToolCall) ([]ToolCall, bool) {
 	return out, changed
 }
 
-func pruneToolMessage(msg ModelMessage) (ModelMessage, bool) {
+func pruneToolMessage(msg runreq.ModelMessage) (runreq.ModelMessage, bool) {
 	// Vercel AI SDK schema requires tool messages to carry an array of tool-result parts.
 	// Prune outputs inside those parts (preserving shape) so the gateway prompt remains valid.
 	if pruned, ok := pruneToolResultParts(msg.Content); ok {
@@ -64,7 +65,7 @@ func pruneToolMessage(msg ModelMessage) (ModelMessage, bool) {
 	if !exceedsTextBudget(text) {
 		return msg, false
 	}
-	msg.Content = newTextContent(contextlimit.GatewayResultTier.LimitString(text, "tool result"))
+	msg.Content = runreq.NewTextContent(contextlimit.GatewayResultTier.LimitString(text, "tool result"))
 	return msg, true
 }
 

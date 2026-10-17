@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -33,9 +34,9 @@ func movingStickerTGS(t *testing.T) []byte {
 // only where images are handed to the model.
 func TestAnimatedStickerStaysOneAttachmentWithManyImages(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"sticker": movingStickerTGS(t)})
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:       "bot-1",
-		Attachments: []ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "image/webp", Name: "sticker.tgs"}},
+		Attachments: []runreq.ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "image/webp", Name: "sticker.tgs"}},
 	}
 	model := models.GetResponse{Model: models.Model{Config: models.ModelConfig{
 		Compatibilities: []string{models.CompatVision},
@@ -88,9 +89,9 @@ func TestAnimatedStickerStaysOneAttachmentWithManyImages(t *testing.T) {
 func TestAnimatedStickerIsIdenticalAcrossEntryPoints(t *testing.T) {
 	data := movingStickerTGS(t)
 	s := imageInputService(t, map[string][]byte{"sticker": data})
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:       "bot-1",
-		Attachments: []ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-gzip"}},
+		Attachments: []runreq.ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-gzip"}},
 	}
 	model := models.GetResponse{Model: models.Model{Config: models.ModelConfig{
 		Compatibilities: []string{models.CompatVision},
@@ -112,9 +113,9 @@ func TestAnimatedStickerIsIdenticalAcrossEntryPoints(t *testing.T) {
 // An External Agent gets the frames too, and still one reachable original.
 func TestAnimatedStickerReachesExternalAgentAsFrames(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"sticker": movingStickerTGS(t)})
-	prepared, err := s.prepareRuntimeAttachments(context.Background(), ChatRequest{
+	prepared, err := s.prepareRuntimeAttachments(context.Background(), runreq.ChatRequest{
 		BotID:       "bot-1",
-		Attachments: []ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "image/webp", Name: "sticker.tgs"}},
+		Attachments: []runreq.ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "image/webp", Name: "sticker.tgs"}},
 	})
 	if err != nil {
 		t.Fatalf("prepareRuntimeAttachments() error = %v", err)
@@ -137,7 +138,7 @@ func TestAnimatedStickerReachesExternalAgentAsFrames(t *testing.T) {
 func TestStaticAnimationCollapsesToOneFrame(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"still": tgsSticker(t)})
 	parts := s.inlineInjectAttachments(context.Background(), "bot-1",
-		[]ChatAttachment{{Type: "image", ContentHash: "still", Mime: "application/x-gzip"}})
+		[]runreq.ChatAttachment{{Type: "image", ContentHash: "still", Mime: "application/x-gzip"}})
 	if len(parts) != 1 {
 		t.Fatalf("inlineInjectAttachments() = %d parts, want identical frames collapsed to one", len(parts))
 	}
@@ -148,7 +149,7 @@ func TestStaticAnimationCollapsesToOneFrame(t *testing.T) {
 func TestAnimatedStickerFramesAreFlattenedOnWhite(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"sticker": movingStickerTGS(t)})
 	parts := s.inlineInjectAttachments(context.Background(), "bot-1",
-		[]ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-gzip"}})
+		[]runreq.ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-gzip"}})
 	if len(parts) == 0 {
 		t.Fatal("no frames rendered")
 	}
@@ -168,7 +169,7 @@ func TestAnimationFailureLeavesOtherImagesAlone(t *testing.T) {
 		"photo":  rasterPNG(t),
 	})
 	s.logger = slog.Default()
-	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "broken", Mime: "application/x-gzip"},
 		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	})
@@ -184,7 +185,7 @@ func TestAnimationFailureLeavesOtherImagesAlone(t *testing.T) {
 func TestAdapterLabelledAnimatedStickerRenders(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"sticker": movingStickerTGS(t)})
 	parts := s.inlineInjectAttachments(context.Background(), "bot-1",
-		[]ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}})
+		[]runreq.ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}})
 	if len(parts) != animationFrameCount {
 		t.Fatalf("inlineInjectAttachments() = %d parts, want %d frames", len(parts), animationFrameCount)
 	}

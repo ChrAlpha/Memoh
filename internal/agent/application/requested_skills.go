@@ -4,15 +4,16 @@ import (
 	"context"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/slash"
 )
 
-func (s *Service) rejectRequestedSkillsIfUnsupportedContext(ctx context.Context, req ChatRequest) error {
+func (s *Service) rejectRequestedSkillsIfUnsupportedContext(ctx context.Context, req runreq.ChatRequest) error {
 	if len(req.RequestedSkills) == 0 {
 		return nil
 	}
-	if req.UserMessagePersisted && req.UserMessageKind != UserMessageKindSkillActivation {
+	if req.UserMessagePersisted && req.UserMessageKind != runreq.UserMessageKindSkillActivation {
 		return slash.NewError(slash.CodeUnsupportedSkillSlashContext)
 	}
 	if mode := strings.TrimSpace(req.SessionType); mode != "" && mode != sessionpkg.TypeChat {
@@ -26,7 +27,7 @@ func (s *Service) rejectRequestedSkillsIfUnsupportedContext(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	if err := validateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
+	if err := runreq.ValidateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
 		return err
 	}
 
@@ -36,28 +37,7 @@ func (s *Service) rejectRequestedSkillsIfUnsupportedContext(ctx context.Context,
 	return nil
 }
 
-func rejectReservedSkillMetadataIfPresent(req ChatRequest) error {
-	for _, msg := range req.Messages {
-		for _, part := range msg.ContentParts() {
-			if err := slash.RejectReservedSkillMetadataValue(part.Metadata); err != nil {
-				return err
-			}
-		}
-	}
-	for _, att := range req.Attachments {
-		if err := slash.RejectReservedSkillMetadataValue(att.Metadata); err != nil {
-			return err
-		}
-	}
-	for _, att := range req.ReplyAttachments {
-		if err := slash.RejectReservedSkillMetadataValue(att.Metadata); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func buildRequestedSkillContextMessage(items []RequestedSkillContext) *ModelMessage {
+func buildRequestedSkillContextMessage(items []runreq.RequestedSkillContext) *runreq.ModelMessage {
 	if len(items) == 0 {
 		return nil
 	}
@@ -83,9 +63,9 @@ func buildRequestedSkillContextMessage(items []RequestedSkillContext) *ModelMess
 	if text == "" {
 		return nil
 	}
-	return &ModelMessage{
+	return &runreq.ModelMessage{
 		Role:    "user",
-		Content: newTextContent(text),
+		Content: runreq.NewTextContent(text),
 	}
 }
 

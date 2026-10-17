@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -90,7 +91,7 @@ func TestInlineInjectAttachmentsRendersAnimationsAndSkipsUnparsableBytes(t *test
 		"photo":            rasterPNG(t),
 	})
 
-	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		// WebM has no renderer here, so it stays out of the vision lane.
 		{Type: "image", ContentHash: "video-sticker", Mime: "video/webm"},
 		// TGS is rendered into frames, whatever the stored label claims.
@@ -116,7 +117,7 @@ func TestInlineInjectAttachmentsRendersAnimationsAndSkipsUnparsableBytes(t *test
 // enough to get them into a vision request.
 func TestInlineInjectAttachmentsIgnoresMislabeledStickerBytes(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"legacy": webmSticker()})
-	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "legacy", Mime: "image/png"},
 	})
 	if len(parts) != 0 {
@@ -135,7 +136,7 @@ func TestInlineInjectAttachmentsLoadsEachAssetOnce(t *testing.T) {
 			},
 		},
 	}
-	refs := []ChatAttachment{
+	refs := []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	}
@@ -152,7 +153,7 @@ func TestInlineInjectAttachmentsRendersAnimations(t *testing.T) {
 		"animated-sticker": movingStickerTGS(t),
 		"video-sticker":    webmSticker(),
 	})
-	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "animated-sticker", Mime: "image/webp"},
 		{Type: "image", ContentHash: "video-sticker", Mime: "image/png"},
 	})
@@ -166,9 +167,9 @@ func TestInlineInjectAttachmentsRendersAnimations(t *testing.T) {
 // keep doing so through the file lane, never as a vision part.
 func TestGatewayStickerBytesRouteToFileFallback(t *testing.T) {
 	s := imageInputService(t, map[string][]byte{"video-sticker": webmSticker()})
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:       "bot-1",
-		Attachments: []ChatAttachment{{Type: "image", ContentHash: "video-sticker", Mime: "image/png"}},
+		Attachments: []runreq.ChatAttachment{{Type: "image", ContentHash: "video-sticker", Mime: "image/png"}},
 	}
 	model := models.GetResponse{Model: models.Model{Config: models.ModelConfig{
 		Compatibilities: []string{models.CompatVision},
@@ -259,7 +260,7 @@ func TestStoredImageSurvivesShortReads(t *testing.T) {
 			},
 		},
 	}
-	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "photo", Mime: "image/png"},
 	})
 	if len(parts) != 1 || parts[0].MediaType != "image/png" {
@@ -274,7 +275,7 @@ func TestStoredImageSurvivesShortReads(t *testing.T) {
 func TestStoredImageShorterThanSniffWindow(t *testing.T) {
 	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0xFF, 0xD9}
 	s := imageInputService(t, map[string][]byte{"tiny": jpegBytes})
-	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "tiny", Mime: "image/jpeg"},
 	})
 	if len(parts) != 1 || parts[0].Image != dataURL("image/jpeg", jpegBytes) {
@@ -300,7 +301,7 @@ func TestGatewayInlineDataURLKeepsRealImage(t *testing.T) {
 func TestStoredImageMimeIsCorrectedFromBytes(t *testing.T) {
 	jpegBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0xFF, 0xD9}
 	s := imageInputService(t, map[string][]byte{"mislabeled": jpegBytes})
-	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []ChatAttachment{
+	parts := s.inlineInjectAttachments(context.Background(), "bot-1", []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "mislabeled", Mime: "image/png"},
 	})
 	if len(parts) != 1 || parts[0].MediaType != "image/jpeg" {

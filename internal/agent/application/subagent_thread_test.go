@@ -9,7 +9,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/partmeta"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -19,7 +21,7 @@ import (
 // fakeSubagentThreadService extends the background fake with the subagent
 // thread surface the direct-chat path probes for.
 type fakeSubagentThreadService struct {
-	fakeBackgroundSessionService
+	agenttest.Sessions
 	config      session.SubagentConfig
 	configErr   error
 	forkContext []session.SubagentForkContextMessage
@@ -35,8 +37,8 @@ func (f *fakeSubagentThreadService) ListSubagentForkContext(context.Context, str
 
 func TestApplySubagentThreadDefaults(t *testing.T) {
 	svc := &fakeSubagentThreadService{
-		fakeBackgroundSessionService: fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+		Sessions: agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				if sessionID == "sub-1" {
 					return session.Thread{ID: sessionID, Type: session.TypeSubagent}, nil
 				}
@@ -47,7 +49,7 @@ func TestApplySubagentThreadDefaults(t *testing.T) {
 	}
 	s := &Service{sessionService: svc}
 
-	got := s.applySubagentThreadDefaults(context.Background(), ChatRequest{ThreadID: "sub-1"}, false)
+	got := s.applySubagentThreadDefaults(context.Background(), runreq.ChatRequest{ThreadID: "sub-1"}, false)
 	if got.SessionType != session.TypeSubagent {
 		t.Fatalf("session type = %q, want subagent", got.SessionType)
 	}
@@ -59,19 +61,19 @@ func TestApplySubagentThreadDefaults(t *testing.T) {
 	}
 
 	// An explicit model choice from the request wins over the pinned config.
-	got = s.applySubagentThreadDefaults(context.Background(), ChatRequest{ThreadID: "sub-1", Model: "user-choice"}, false)
+	got = s.applySubagentThreadDefaults(context.Background(), runreq.ChatRequest{ThreadID: "sub-1", Model: "user-choice"}, false)
 	if got.Model != "user-choice" {
 		t.Fatalf("model = %q, want the request's own choice", got.Model)
 	}
 
 	// Non-subagent threads pass through untouched.
-	got = s.applySubagentThreadDefaults(context.Background(), ChatRequest{ThreadID: "chat-1"}, false)
+	got = s.applySubagentThreadDefaults(context.Background(), runreq.ChatRequest{ThreadID: "chat-1"}, false)
 	if got.SessionType != "" || got.Model != "" || got.SkipMemoryExtraction {
 		t.Fatalf("chat thread was rewritten: %+v", got)
 	}
 
 	// A turn that already carries a session type is never rewritten.
-	got = s.applySubagentThreadDefaults(context.Background(), ChatRequest{ThreadID: "sub-1", SessionType: "schedule"}, false)
+	got = s.applySubagentThreadDefaults(context.Background(), runreq.ChatRequest{ThreadID: "sub-1", SessionType: "schedule"}, false)
 	if got.SessionType != "schedule" {
 		t.Fatalf("session type = %q, want schedule preserved", got.SessionType)
 	}
@@ -79,7 +81,7 @@ func TestApplySubagentThreadDefaults(t *testing.T) {
 	// A session with a remembered pair keeps it: the pin is only the initial
 	// default (issue #879), so hasMemory suppresses the pin fill — but the
 	// subagent execution surface still applies.
-	got = s.applySubagentThreadDefaults(context.Background(), ChatRequest{ThreadID: "sub-1"}, true)
+	got = s.applySubagentThreadDefaults(context.Background(), runreq.ChatRequest{ThreadID: "sub-1"}, true)
 	if got.SessionType != session.TypeSubagent || !got.SkipMemoryExtraction || !got.SkipTitleGeneration {
 		t.Fatalf("subagent surface lost with memory: %+v", got)
 	}
@@ -93,8 +95,8 @@ func TestApplySubagentThreadDefaults(t *testing.T) {
 // persistence, so resolve has to hand the effective request back.
 func TestResolveReturnsTheEffectiveSubagentRequest(t *testing.T) {
 	svc := &fakeSubagentThreadService{
-		fakeBackgroundSessionService: fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+		Sessions: agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{ID: sessionID, Type: session.TypeSubagent}, nil
 			},
 		},
@@ -105,7 +107,7 @@ func TestResolveReturnsTheEffectiveSubagentRequest(t *testing.T) {
 	// Resolution fails at model selection (no settings service), which is the
 	// point: even the failure path must not hand back a request that has lost
 	// the subagent defaults.
-	_, effective, err := s.resolve(context.Background(), ChatRequest{
+	_, effective, err := s.resolve(context.Background(), runreq.ChatRequest{
 		BotID: "bot-1", ChatID: "chat-1", ThreadID: "sub-1", Query: "hello",
 	})
 	if err == nil {
@@ -124,14 +126,14 @@ func TestResolveReturnsTheEffectiveSubagentRequest(t *testing.T) {
 
 func TestApplySubagentThreadDefaultsSurvivesLookupFailure(t *testing.T) {
 	svc := &fakeSubagentThreadService{
-		fakeBackgroundSessionService: fakeBackgroundSessionService{
-			getFn: func(context.Context, string) (session.Thread, error) {
+		Sessions: agenttest.Sessions{
+			GetFn: func(context.Context, string) (session.Thread, error) {
 				return session.Thread{}, errors.New("db down")
 			},
 		},
 	}
 	s := &Service{sessionService: svc}
-	got := s.applySubagentThreadDefaults(context.Background(), ChatRequest{ThreadID: "sub-1"}, false)
+	got := s.applySubagentThreadDefaults(context.Background(), runreq.ChatRequest{ThreadID: "sub-1"}, false)
 	if got.SessionType != "" {
 		t.Fatalf("lookup failure must leave the request untouched, got type %q", got.SessionType)
 	}
@@ -154,7 +156,7 @@ func TestSubagentForkContextModelMessages(t *testing.T) {
 	}
 	s := &Service{sessionService: svc}
 
-	messages := s.subagentForkContextModelMessages(context.Background(), ChatRequest{
+	messages := s.subagentForkContextModelMessages(context.Background(), runreq.ChatRequest{
 		ThreadID: "sub-1", SessionType: session.TypeSubagent,
 	})
 	if len(messages) != 2 {
@@ -175,7 +177,7 @@ func TestSubagentForkContextModelMessages(t *testing.T) {
 	}
 
 	// Non-subagent turns never load fork context.
-	if got := s.subagentForkContextModelMessages(context.Background(), ChatRequest{ThreadID: "sub-1"}); got != nil {
+	if got := s.subagentForkContextModelMessages(context.Background(), runreq.ChatRequest{ThreadID: "sub-1"}); got != nil {
 		t.Fatalf("fork context loaded for a plain chat turn: %v", got)
 	}
 }

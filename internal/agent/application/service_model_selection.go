@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -21,7 +22,7 @@ import (
 // errChatModelNotConfigured means no request, conversation, or bot model could be selected.
 var errChatModelNotConfigured = errors.New("chat model not configured: specify model in request or bot settings")
 
-func (s *Service) selectChatModel(ctx context.Context, req ChatRequest, botSettings settings.Settings, sessionPrefModelID string) (models.GetResponse, sqlc.Provider, error) {
+func (s *Service) selectChatModel(ctx context.Context, req runreq.ChatRequest, botSettings settings.Settings, sessionPrefModelID string) (models.GetResponse, sqlc.Provider, error) {
 	if s.modelsService == nil {
 		return models.GetResponse{}, sqlc.Provider{}, errors.New("models service not configured")
 	}
@@ -240,7 +241,7 @@ func (s *Service) PatchSessionModelPreference(ctx context.Context, botID, sessio
 		var thread sessionpkg.Thread
 		_ = json.Unmarshal(sess.Metadata, &thread.Metadata)
 		_ = json.Unmarshal(sess.RuntimeMetadata, &thread.RuntimeMetadata)
-		projectPath := metadataString(runtimeSessionMeta(thread), "project_path")
+		projectPath := runreq.MetadataString(runreq.RuntimeSessionMeta(thread), "project_path")
 		modelID, reconciledEffort, err = s.reconcileDirectModelPreference(ctx, sess.BotID.String(), sess.BotAgentID.String(), sess.RuntimeType, projectPath, modelID, targetEffort)
 		externalID = pgtype.Text{String: modelID, Valid: modelID != ""}
 	case sess.RuntimeType == sessionpkg.RuntimeACPAgent:

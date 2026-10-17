@@ -8,6 +8,8 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
@@ -19,10 +21,10 @@ import (
 // failure's code and args rather than a step's.
 func (s *Service) persistExternalRound(
 	ctx context.Context,
-	req ChatRequest,
+	req runreq.ChatRequest,
 	runtimeType, projectPath string,
 	result external.PromptResult,
-	f *RunFailure,
+	f *outcome.RunFailure,
 	turnCompleted bool,
 	contextLifecycle *contextfrag.LifecycleHolder,
 	reasoningTiming []messagepkg.ReasoningTimingSegment,
@@ -42,16 +44,16 @@ func (s *Service) persistExternalRound(
 		meta["agent_turn_outcome"] = "failed"
 		meta = failureRowMetadata(*f, "", meta)
 	}
-	output := sdkMessagesToModelMessages(result.Output)
+	output := runreq.SDKMessagesToModelMessages(result.Output)
 	if len(output) == 0 {
-		output = []ModelMessage{{Role: "assistant", Content: newTextContent("")}}
+		output = []runreq.ModelMessage{{Role: "assistant", Content: runreq.NewTextContent("")}}
 	}
-	output = repairToolCallClosures(output, syntheticToolClosureError)
+	output = runreq.RepairToolCallClosures(output, runreq.SyntheticToolClosureError)
 	if len(result.SteerInputIDs) > 0 && output[len(output)-1].Role != "assistant" {
 		// A stop may arrive after the final steer input, before its reply.
 		// Keep the terminal metadata and fork anchor after that input, even
 		// when earlier portions of this runtime turn already had output.
-		output = append(output, ModelMessage{Role: "assistant", Content: newTextContent("")})
+		output = append(output, runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("")})
 	}
 	hasAssistant := false
 	for _, msg := range output {
@@ -72,8 +74,8 @@ func (s *Service) persistExternalRound(
 			}
 		}
 	}
-	round := make([]ModelMessage, 0, 1+len(output))
-	round = append(round, ModelMessage{Role: "user", Content: newTextContent(req.Query)})
+	round := make([]runreq.ModelMessage, 0, 1+len(output))
+	round = append(round, runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent(req.Query)})
 	round = append(round, output...)
 
 	metadataByIndex := make(map[int]map[string]any, len(output))
@@ -96,18 +98,18 @@ func (s *Service) persistExternalRound(
 		}
 	}
 	if f == nil && lastAssistantIndex >= 0 {
-		outcome := make(map[string]any, len(meta)+1)
+		ended := make(map[string]any, len(meta)+1)
 		for key, value := range meta {
-			outcome[key] = value
+			ended[key] = value
 		}
 		// Aborted partial rounds commit as "aborted", not "succeeded": the
 		// commit-unknown reconciliation needs the durable marker.
 		if turnCompleted {
-			outcome["agent_turn_outcome"] = "succeeded"
+			ended["agent_turn_outcome"] = "succeeded"
 		} else {
-			outcome["agent_turn_outcome"] = "aborted"
+			ended["agent_turn_outcome"] = "aborted"
 		}
-		metadataByIndex[lastAssistantIndex+metadataOffset] = outcome
+		metadataByIndex[lastAssistantIndex+metadataOffset] = ended
 	}
 	agentTurnID := strings.TrimSpace(result.AgentTurnID)
 	if (len(result.SteerInputIDs) > 0 || result.FinalTurnAnchorOnly) && lastAssistantIndex >= 0 {
@@ -143,7 +145,7 @@ func (s *Service) persistExternalRound(
 		AgentTurnID:      agentTurnID,
 		ContextLifecycle: contextLifecycle,
 	})
-	if err == nil && lastPersistedAssistantMessageID(persisted) == "" {
+	if err == nil && runreq.LastPersistedAssistantMessageID(persisted) == "" {
 		// Fires after a committed transaction: join the commit-unknown
 		// sentinel so callers route into database reconciliation instead of
 		// the definite-rollback compensation.

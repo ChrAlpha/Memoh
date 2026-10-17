@@ -1,4 +1,4 @@
-package application
+package runreq
 
 import (
 	"testing"
@@ -14,7 +14,7 @@ import (
 func TestRepairToolCallClosures_AppendsSyntheticToolResultForDanglingAssistantCall(t *testing.T) {
 	t.Parallel()
 
-	messages := sdkMessagesToModelMessages([]sdk.Message{
+	messages := SDKMessagesToModelMessages([]sdk.Message{
 		sdk.UserMessage("fetch this"),
 		{
 			Role: sdk.MessageRoleAssistant,
@@ -32,7 +32,7 @@ func TestRepairToolCallClosures_AppendsSyntheticToolResultForDanglingAssistantCa
 		},
 	})
 
-	repaired := repairToolCallClosures(messages, syntheticToolClosureError)
+	repaired := RepairToolCallClosures(messages, SyntheticToolClosureError)
 	if len(repaired) != 4 {
 		t.Fatalf("expected 4 messages after repair, got %d", len(repaired))
 	}
@@ -41,7 +41,7 @@ func TestRepairToolCallClosures_AppendsSyntheticToolResultForDanglingAssistantCa
 		t.Fatalf("expected synthetic tool message before trailing assistant, got role %q", repaired[2].Role)
 	}
 
-	results := extractToolResultParts(repaired[2])
+	results := ExtractToolResultParts(repaired[2])
 	if len(results) != 1 {
 		t.Fatalf("expected 1 tool result part, got %d", len(results))
 	}
@@ -56,7 +56,7 @@ func TestRepairToolCallClosures_AppendsSyntheticToolResultForDanglingAssistantCa
 func TestRepairToolCallClosures_DropsOrphanToolMessage(t *testing.T) {
 	t.Parallel()
 
-	orphanTool := sdkMessagesToModelMessages([]sdk.Message{
+	orphanTool := SDKMessagesToModelMessages([]sdk.Message{
 		sdk.ToolMessage(sdk.ToolResultPart{
 			ToolCallID: "web_fetch:10",
 			ToolName:   "web_fetch",
@@ -65,12 +65,12 @@ func TestRepairToolCallClosures_DropsOrphanToolMessage(t *testing.T) {
 	})[0]
 
 	messages := []ModelMessage{
-		{Role: "user", Content: newTextContent("hello")},
+		{Role: "user", Content: NewTextContent("hello")},
 		orphanTool,
-		{Role: "assistant", Content: newTextContent("done")},
+		{Role: "assistant", Content: NewTextContent("done")},
 	}
 
-	repaired := repairToolCallClosures(messages, syntheticToolClosureError)
+	repaired := RepairToolCallClosures(messages, SyntheticToolClosureError)
 	if len(repaired) != 2 {
 		t.Fatalf("expected orphan tool message to be removed, got %d messages", len(repaired))
 	}
@@ -82,7 +82,7 @@ func TestRepairToolCallClosures_DropsOrphanToolMessage(t *testing.T) {
 func TestRepairToolCallClosures_PreservesValidAssistantToolPair(t *testing.T) {
 	t.Parallel()
 
-	messages := sdkMessagesToModelMessages([]sdk.Message{
+	messages := SDKMessagesToModelMessages([]sdk.Message{
 		{
 			Role: sdk.MessageRoleAssistant,
 			Content: []sdk.MessagePart{
@@ -100,11 +100,11 @@ func TestRepairToolCallClosures_PreservesValidAssistantToolPair(t *testing.T) {
 		}),
 	})
 
-	repaired := repairToolCallClosures(messages, syntheticToolClosureError)
+	repaired := RepairToolCallClosures(messages, SyntheticToolClosureError)
 	if len(repaired) != 2 {
 		t.Fatalf("expected valid tool pair to be preserved, got %d messages", len(repaired))
 	}
-	results := extractToolResultParts(repaired[1])
+	results := ExtractToolResultParts(repaired[1])
 	if len(results) != 1 || results[0].ToolCallID != "web_search:1" {
 		t.Fatalf("unexpected repaired tool results: %#v", results)
 	}
@@ -129,7 +129,7 @@ func projectedAskUserCall(id string) sdk.Message {
 func TestRepairToolCallClosures_DoesNotMatchReusedIDAcrossUserTurns(t *testing.T) {
 	t.Parallel()
 
-	messages := sdkMessagesToModelMessages([]sdk.Message{
+	messages := SDKMessagesToModelMessages([]sdk.Message{
 		sdk.UserMessage("first turn"),
 		projectedAskUserCall("ask-1"),
 		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: "first turn ended"}}},
@@ -146,10 +146,10 @@ func TestRepairToolCallClosures_DoesNotMatchReusedIDAcrossUserTurns(t *testing.T
 		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: "second turn done"}}},
 	})
 
-	repaired := repairToolCallClosures(messages, syntheticToolClosureError)
+	repaired := RepairToolCallClosures(messages, SyntheticToolClosureError)
 	callIndexes := make([]int, 0, 2)
 	for index, msg := range repaired {
-		for _, call := range extractAssistantToolCallParts(msg) {
+		for _, call := range ExtractAssistantToolCallParts(msg) {
 			if call.ToolCallID == "ask-1" {
 				callIndexes = append(callIndexes, index)
 			}
@@ -162,7 +162,7 @@ func TestRepairToolCallClosures_DoesNotMatchReusedIDAcrossUserTurns(t *testing.T
 		if callIndex+1 >= len(repaired) {
 			t.Fatalf("ask-1 call at %d has no following result", callIndex)
 		}
-		results := extractToolResultParts(repaired[callIndex+1])
+		results := ExtractToolResultParts(repaired[callIndex+1])
 		if len(results) != 1 || results[0].ToolCallID != "ask-1" {
 			t.Fatalf("result after ask-1 call %d = %#v", index+1, repaired[callIndex+1])
 		}
@@ -182,13 +182,13 @@ func TestRepairToolCallClosures_UsesResolvedUserInputResult(t *testing.T) {
 		"answers": []any{map[string]any{"question_id": "q1"}},
 	})
 	call.Content[0] = part
-	messages := sdkMessagesToModelMessages([]sdk.Message{
+	messages := SDKMessagesToModelMessages([]sdk.Message{
 		call,
 		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: "done"}}},
 	})
 
-	repaired := repairToolCallClosures(messages, syntheticToolClosureError)
-	results := extractToolResultParts(repaired[1])
+	repaired := RepairToolCallClosures(messages, SyntheticToolClosureError)
+	results := ExtractToolResultParts(repaired[1])
 	if len(results) != 1 || results[0].IsError {
 		t.Fatalf("resolved ask_user result = %#v", results)
 	}
@@ -207,10 +207,10 @@ func TestRepairPermissionDecisionKeepsExecutionOutcomeSeparate(t *testing.T) {
 				{Type: event.ToolApprovalRequest, ToolCallID: "real", ToolName: "exec", Status: "approved"},
 				{Type: event.ToolApprovalRequest, ToolCallID: "consent", ToolName: "permission", Status: status},
 			}, "")
-			repaired := repairToolCallClosures(sdkMessagesToModelMessages(output), syntheticToolClosureError)
+			repaired := RepairToolCallClosures(SDKMessagesToModelMessages(output), SyntheticToolClosureError)
 			results := map[string]sdk.ToolResultPart{}
 			for _, message := range repaired {
-				for _, result := range extractToolResultParts(message) {
+				for _, result := range ExtractToolResultParts(message) {
 					results[result.ToolCallID] = result
 				}
 			}

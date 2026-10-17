@@ -4,27 +4,28 @@ import (
 	"testing"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 func TestDedupePersistedCurrentUserMessageRemovesCurrentInboundFromHistory(t *testing.T) {
 	t.Parallel()
 
 	history := []historyfrag.HistoryRecord{
-		historyRecord("row-1", ModelMessage{
+		historyRecord("row-1", runreq.ModelMessage{
 			Role:    "user",
-			Content: newTextContent("---\nmessage-id: qq-msg-1\nchannel: qq\n---\nhello"),
+			Content: runreq.NewTextContent("---\nmessage-id: qq-msg-1\nchannel: qq\n---\nhello"),
 		}, func(record *historyfrag.HistoryRecord) {
 			record.ExternalMessageID = "qq-msg-1"
 			record.Platform = "qq"
 			record.SenderChannelIdentityID = "channel-identity-1"
 		}),
-		historyRecord("row-2", ModelMessage{
+		historyRecord("row-2", runreq.ModelMessage{
 			Role:    "assistant",
-			Content: newTextContent("ok"),
+			Content: runreq.NewTextContent("ok"),
 		}, nil),
 	}
 
-	got := dedupePersistedCurrentUserMessage(history, ChatRequest{
+	got := dedupePersistedCurrentUserMessage(history, runreq.ChatRequest{
 		UserMessagePersisted:    true,
 		RouteID:                 "route-1",
 		ExternalMessageID:       "qq-msg-1",

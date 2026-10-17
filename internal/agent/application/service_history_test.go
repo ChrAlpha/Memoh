@@ -9,13 +9,15 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 type requiredHistoryMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	visible []messagepkg.Message
 	byID    map[string]messagepkg.Message
 }
@@ -45,15 +47,15 @@ func TestEnsureRequiredHistoryMessageMergesVisibleWindowInOrder(t *testing.T) {
 	}
 	resolver := &Service{messageService: service}
 	existing := []historyfrag.HistoryRecord{
-		historyRecord("prior", ModelMessage{
+		historyRecord("prior", runreq.ModelMessage{
 			Role:    "assistant",
-			Content: newTextContent("prior context"),
+			Content: runreq.NewTextContent("prior context"),
 		}, nil),
-		historyRecord("assistant-tool-1", ModelMessage{Role: "assistant", Content: newTextContent("calling tool")}, nil),
-		historyRecord("tool-1", ModelMessage{Role: "tool", Content: newTextContent("tool result")}, nil),
+		historyRecord("assistant-tool-1", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("calling tool")}, nil),
+		historyRecord("tool-1", runreq.ModelMessage{Role: "tool", Content: runreq.NewTextContent("tool result")}, nil),
 	}
 
-	got, err := resolver.ensureRequiredHistoryMessage(context.Background(), existing, ChatRequest{
+	got, err := resolver.ensureRequiredHistoryMessage(context.Background(), existing, runreq.ChatRequest{
 		ChatID:                       "bot-1",
 		ThreadID:                     "session-1",
 		RequiredHistoryMessageID:     "user-1",
@@ -74,7 +76,7 @@ func TestFilterMessagesBeforeIDFailsClosedWhenCutoffIsMissing(t *testing.T) {
 	t.Parallel()
 
 	records := []historyfrag.HistoryRecord{
-		historyRecord("later-user", ModelMessage{Role: "user", Content: newTextContent("later")}, nil),
+		historyRecord("later-user", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("later")}, nil),
 	}
 	if got := filterMessagesBeforeID(records, "missing-cutoff"); len(got) != 0 {
 		t.Fatalf("missing cutoff retained history: %#v", got)
@@ -134,9 +136,9 @@ func TestLoadCompactionArtifactBoundaryFetchesCutoffOutsideLoadedWindow(t *testi
 
 func persistedHistoryMessage(t *testing.T, id string, role string, text string) messagepkg.Message {
 	t.Helper()
-	content, err := json.Marshal(ModelMessage{
+	content, err := json.Marshal(runreq.ModelMessage{
 		Role:    role,
-		Content: newTextContent(text),
+		Content: runreq.NewTextContent(text),
 	})
 	if err != nil {
 		t.Fatalf("marshal message: %v", err)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
@@ -32,7 +33,7 @@ func TestBuildBaseRunConfigMissingModelPreservesPublicCode(t *testing.T) {
 	svc := &Service{logger: logger, queries: queries, settingsService: settings.NewService(logger, queries, nil, nil), modelsService: models.NewService(logger, queries)}
 	_, _, _, err := svc.buildBaseRunConfig(t.Context(), baseRunConfigParams{BotID: "00000000-0000-0000-0000-000000000001"})
 	const want apperror.Code = "agent.chat_model_not_configured"
-	if got := publicFailureCode(err); got != want {
+	if got := outcome.PublicFailureCode(err); got != want {
 		t.Fatalf("startup code = %q, want %q (error: %v)", got, want, err)
 	}
 	wire := rpc.AnswerStatus(t.Context(), fmt.Errorf("SECRET startup context: %w", err))

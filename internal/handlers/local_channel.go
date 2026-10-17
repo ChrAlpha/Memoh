@@ -25,6 +25,8 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -1349,7 +1351,7 @@ func sendWSErrorFromError(ctx context.Context, writer *wsWriter, ref wsTurnRef, 
 		sendWSRunRejected(writer, ref.withRun(""), code)
 		return apperror.Wrap(code, err, nil)
 	}
-	frame, rendered := server.NewStreamError(ctx, application.ExternalAgentError(err), "")
+	frame, rendered := server.NewStreamError(ctx, outcome.ExternalAgentError(err), "")
 	writer.SendJSON(wsErrorEvent(ref, frame))
 	return rendered
 }
@@ -2097,14 +2099,14 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 			userMessagePersisted := false
 			persistedUserMessageID := ""
 			externalMessageID := ""
-			var preparedActivationReq *application.ChatRequest
+			var preparedActivationReq *runreq.ChatRequest
 			if hasSkillActivation {
 				// The persisted user turn is deduplicated by the client's
 				// invocation id: it exists before any run does, and the
 				// invocation is precisely the key a redelivery would repeat.
 				externalMessageID = ref.InvocationID
 				ingestedActivationAttachments = h.ingestWSInboundAttachments(streamBaseCtx, botID, chatAttachments)
-				userReq := application.ChatRequest{
+				userReq := runreq.ChatRequest{
 					BotID:                   botID,
 					ChatID:                  botID,
 					ThreadID:                sessionID,
@@ -2174,7 +2176,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 			if admitted == nil {
 				continue
 			}
-			req := application.ChatRequest{
+			req := runreq.ChatRequest{
 				OnModelPreferenceSettled: wsModelPreferenceSettled(writer, runRef),
 				BotID:                    botID,
 				ChatID:                   botID,

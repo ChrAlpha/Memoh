@@ -2,14 +2,15 @@ package application
 
 import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
 // chatRequestFromCommand translates the pure-data command into the
 // application's request type, field for field. Function- and channel-typed
 // fields (InjectCh, OutboundAssetCollector) are wired by StartTurn.
-func chatRequestFromCommand(cmd turn.StartTurnCommand) ChatRequest {
-	return ChatRequest{
+func chatRequestFromCommand(cmd turn.StartTurnCommand) runreq.ChatRequest {
+	return runreq.ChatRequest{
 		BotID:                     cmd.BotID,
 		ChatID:                    cmd.ChatID,
 		ThreadID:                  cmd.ThreadID,

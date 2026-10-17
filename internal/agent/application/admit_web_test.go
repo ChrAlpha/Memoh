@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -66,10 +69,10 @@ func (d *webTestDelivery) wait(t *testing.T) ([]RunEvent, RunEnded) {
 
 // payloads is what the run delivered as the stream of WSStreamEvent the
 // pre-driver tests read.
-func (d *webTestDelivery) payloads(t *testing.T) chan WSStreamEvent {
+func (d *webTestDelivery) payloads(t *testing.T) chan runreq.WSStreamEvent {
 	t.Helper()
 	events, _ := d.wait(t)
-	ch := make(chan WSStreamEvent, len(events))
+	ch := make(chan runreq.WSStreamEvent, len(events))
 	for _, ev := range events {
 		ch <- ev.Payload
 	}
@@ -81,10 +84,10 @@ func (d *webTestDelivery) payloads(t *testing.T) chan WSStreamEvent {
 // admission names the run, and the send executes under it. A service without
 // a session runtime is given one that admits every invocation. It returns the
 // events the socket's end received and the run's failure.
-func streamWebSend(ctx context.Context, t *testing.T, svc *Service, req ChatRequest) (chan WSStreamEvent, error) {
+func streamWebSend(ctx context.Context, t *testing.T, svc *Service, req runreq.ChatRequest) (chan runreq.WSStreamEvent, error) {
 	t.Helper()
 	if svc.sessionRuntime == nil {
-		svc.sessionRuntime = &lifecycleTurnAdmitter{admission: webTestAdmission(req)}
+		svc.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: webTestAdmission(req)}
 	}
 	admission, err := svc.AdmitWebRun(ctx, WebAdmitInput{
 		BotID:        req.BotID,
@@ -104,7 +107,7 @@ func streamWebSend(ctx context.Context, t *testing.T, svc *Service, req ChatRequ
 
 // webTestAdmission is the run a test's admitter starts for req: the run and
 // turn the request names, or fixed ones when it names none.
-func webTestAdmission(req ChatRequest) sessionruntime.Admission {
+func webTestAdmission(req runreq.ChatRequest) sessionruntime.Admission {
 	admission := sessionruntime.Admission{RunID: req.RunID, TurnID: req.TurnID, Started: true}
 	if admission.RunID == "" {
 		admission.RunID = "run-1"
@@ -161,8 +164,8 @@ func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *WebAdmiss
 
 // webTestSpec is a Web send whose setup hands the driver exec.
 func webTestSpec(svc *Service, admission *WebAdmission, delivery RunDelivery, exec runExecutor) runSpec {
-	spec := svc.webRunSpec(admission, ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, inputHeld)
-	spec.Setup = func(_ context.Context, req ChatRequest) (runPlan, error) {
+	spec := svc.webRunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
+	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (runPlan, error) {
 		return runPlan{Exec: exec, Req: req}, nil
 	}
 	return spec
@@ -184,8 +187,8 @@ func (e *blockingExecutor) execute(ctx context.Context, emit func(native.StreamE
 	terminal := native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndCanceled}
 	return execEnding{
 		Terminal: &terminal,
-		Phase:    phaseExecution,
-		Commit: func(context.Context, *RunFailure, bool) (commitSummary, error) {
+		Phase:    outcome.PhaseExecution,
+		Commit: func(context.Context, *outcome.RunFailure, bool) (commitSummary, error) {
 			return commitSummary{}, nil
 		},
 	}
@@ -245,7 +248,7 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 	delivery := newWebTestDelivery()
 	spec := webTestSpec(svc, admission, delivery, exec)
 	setup := spec.Setup
-	spec.Setup = func(ctx context.Context, req ChatRequest) (runPlan, error) {
+	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		close(executed)
 		return setup(ctx, req)
 	}
@@ -318,7 +321,7 @@ func TestAdmitWebRunRefusesABusySession(t *testing.T) {
 	svc.startWebRun(running, webTestSpec(svc, running, delivery, exec))
 	awaitStarted(t, exec.started)
 	t.Cleanup(func() {
-		running.stop(errRunStopped)
+		running.stop(outcome.ErrRunStopped)
 		delivery.wait(t)
 	})
 
@@ -350,7 +353,7 @@ func TestWebRunEndReleasesTheSession(t *testing.T) {
 	if next.Duplicate || next.RunID == first.RunID {
 		t.Fatalf("next admission = %+v, want a new run", next)
 	}
-	next.stop(errRunStopped)
+	next.stop(outcome.ErrRunStopped)
 	next.endActive()
 }
 
@@ -550,8 +553,8 @@ func TestWebSendAssetsReachTheHistoryWrite(t *testing.T) {
 
 	var linked []turn.OutboundAssetRef
 	delivery := newWebTestDelivery()
-	spec := svc.webRunSpec(admission, ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, inputHeld)
-	spec.Setup = func(_ context.Context, req ChatRequest) (runPlan, error) {
+	spec := svc.webRunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
+	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (runPlan, error) {
 		exec := &collectingExecutor{
 			events: []native.StreamEvent{{
 				Type:        native.EventAttachment,
@@ -587,8 +590,8 @@ func (e *collectingExecutor) execute(_ context.Context, emit func(native.StreamE
 	terminal := native.StreamEvent{Type: native.EventAgentEnd}
 	return execEnding{
 		Terminal: &terminal,
-		Phase:    phaseExecution,
-		Commit: func(context.Context, *RunFailure, bool) (commitSummary, error) {
+		Phase:    outcome.PhaseExecution,
+		Commit: func(context.Context, *outcome.RunFailure, bool) (commitSummary, error) {
 			e.commit()
 			return commitSummary{}, nil
 		},

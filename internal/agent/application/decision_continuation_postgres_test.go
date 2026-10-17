@@ -10,6 +10,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/db"
@@ -130,7 +131,7 @@ func TestPostgresNativeDecisionAcceptanceAndShutdownRecovery(t *testing.T) {
 			}
 			// A different run must never inherit this accepted authority.
 			row.RunID = db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001")
-			if _, err := svc.interruptedDecisionContext(ctx, row, saved.Checkpoints); !errors.Is(err, errResumeUnrecoverable) {
+			if _, err := svc.interruptedDecisionContext(ctx, row, saved.Checkpoints); !errors.Is(err, runreq.ErrResumeUnrecoverable) {
 				t.Fatalf("cross-run checkpoint accepted: %v", err)
 			}
 		})

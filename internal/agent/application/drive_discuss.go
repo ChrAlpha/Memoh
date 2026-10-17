@@ -11,6 +11,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -159,11 +161,11 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 		return 0, nil, err
 	}
 
-	endActiveTurn, err := s.activeTurns.begin()
+	endActiveTurn, err := s.activeTurns.Begin()
 	if err != nil {
 		return 0, nil, err
 	}
-	runCtx, admission, finish, release, err := s.admitTriggeredRun(ctx, sessionmode.Discuss, botID, sessionID, discussInvocationID(sessionID, hw), payload, nil, errRunStopped)
+	runCtx, admission, finish, release, err := s.admitTriggeredRun(ctx, sessionmode.Discuss, botID, sessionID, discussInvocationID(sessionID, hw), payload, nil, outcome.ErrRunStopped)
 	if err != nil {
 		endActiveTurn()
 		switch {
@@ -181,12 +183,12 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	// here instead of being answered twice.
 	current, err := s.discussCover(runCtx, pgSessionID)
 	if err != nil {
-		finish(RunOutcome{Cause: err})
+		finish(outcome.RunOutcome{Cause: err})
 		endActiveTurn()
 		return 0, nil, err
 	}
 	if current >= hw {
-		finish(RunOutcome{Status: sessionruntime.RunStatusCompleted})
+		finish(outcome.RunOutcome{Status: sessionruntime.RunStatusCompleted})
 		endActiveTurn()
 		return DiscussNothingPending, nil, nil
 	}
@@ -206,7 +208,7 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 		Delivery: noDelivery{},
 		// The external input is already in history: a failure writes its row
 		// against it rather than handing anything back.
-		Input: inputAccepted,
+		Input: outcome.InputAccepted,
 	}
 	// The run builds its context from history like any other turn, and the text
 	// the model is prompted with is that context. A runtime that owns its own
@@ -217,7 +219,7 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	// batch twice. The assembly runs inside the run, after admission, so a wake
 	// that answers nothing pays for nothing, and the rendered text is what the
 	// run stores for a crash resume.
-	spec.Setup = func(setupCtx context.Context, req ChatRequest) (runPlan, error) {
+	spec.Setup = func(setupCtx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		if externalRuntime {
 			prompt, err := s.discussExternalPrompt(setupCtx, req)
 			if err != nil {
@@ -244,10 +246,10 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 // discussRequest is the request a discuss run executes: the session's route,
 // the participant who wrote the hw row, and credentials issued for them. The
 // input is the hw row itself, already in history.
-func (s *Service) discussRequest(ctx context.Context, botID, sessionID string, pgBotID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow, head dbsqlc.GetDiscussPendingHeadRow, externalRuntime bool) (ChatRequest, error) {
+func (s *Service) discussRequest(ctx context.Context, botID, sessionID string, pgBotID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow, head dbsqlc.GetDiscussPendingHeadRow, externalRuntime bool) (runreq.ChatRequest, error) {
 	bot, err := s.queries.GetBotByID(ctx, pgBotID)
 	if err != nil {
-		return ChatRequest{}, fmt.Errorf("read discuss bot: %w", err)
+		return runreq.ChatRequest{}, fmt.Errorf("read discuss bot: %w", err)
 	}
 	senderID := ""
 	boundUserID := ""
@@ -255,7 +257,7 @@ func (s *Service) discussRequest(ctx context.Context, botID, sessionID string, p
 		senderID = head.SenderChannelIdentityID.String()
 		userIDs, err := s.queries.ListUserIDsByChannelIdentity(ctx, head.SenderChannelIdentityID)
 		if err != nil {
-			return ChatRequest{}, fmt.Errorf("read discuss participant account: %w", err)
+			return runreq.ChatRequest{}, fmt.Errorf("read discuss participant account: %w", err)
 		}
 		// An identity bound to more than one account names nobody, as on the
 		// inbound path.
@@ -279,9 +281,9 @@ func (s *Service) discussRequest(ctx context.Context, botID, sessionID string, p
 		BotOwnerUserID:     bot.OwnerUserID.String(),
 	}, s.resumeSecret, discussCredentialTTL)
 	if err != nil {
-		return ChatRequest{}, fmt.Errorf("issue discuss credentials: %w", err)
+		return runreq.ChatRequest{}, fmt.Errorf("issue discuss credentials: %w", err)
 	}
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:                     botID,
 		ThreadID:                  sessionID,
 		ChatID:                    botID,

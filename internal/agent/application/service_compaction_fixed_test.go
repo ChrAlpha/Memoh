@@ -6,6 +6,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -15,7 +16,7 @@ func TestRunCompactionSyncFixedCarriesTheFixedRequestIntoTheConfig(t *testing.T)
 	t.Parallel()
 
 	service, runner := newControllerPolicyService(t, nil)
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000453",
 		ThreadID: "00000000-0000-0000-0000-000000000454",
 	}
@@ -38,15 +39,15 @@ func TestRunEndCompactionCarriesTheRunsFixedPart(t *testing.T) {
 	t.Parallel()
 
 	service, runner := newControllerPolicyService(t, nil)
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:    "00000000-0000-0000-0000-000000000453",
 		ThreadID: "00000000-0000-0000-0000-000000000454",
 	}
-	rc := resolvedContext{
-		contextTokenBudget: 8000,
-		pressure:           newRunPressure(lifecycleWithPlan(3000), conversationOf(3000)),
+	rc := runreq.ResolvedContext{
+		ContextTokenBudget: 8000,
+		Pressure:           runreq.NewRunPressure(lifecycleWithPlan(3000), conversationOf(3000)),
 	}
-	rc.pressure.observe(conversationOf(2500))
+	rc.Pressure.Observe(conversationOf(2500))
 	runAutomaticCompaction(t, service, req, rc, 0)
 	if len(runner.configs) == 0 {
 		t.Fatal("no compaction ran for a run past the soft share")
@@ -69,7 +70,7 @@ func TestStepCompactionFixedPartCountsTheRunsOwnMessages(t *testing.T) {
 		request:          []sdk.Message{request},
 	}
 	input := native.StepContextInput{FixedTokens: 1000}
-	want := 1000 + requestInputTokens(0, []sdk.Message{extra, request})
+	want := 1000 + runreq.RequestInputTokens(0, []sdk.Message{extra, request})
 	if got := run.fixedTokens(input); got != want {
 		t.Fatalf("fixedTokens = %d, want %d (fixed 1000 plus the extras and request)", got, want)
 	}
@@ -82,7 +83,7 @@ func TestRunCompactionSyncFixedCarriesTheReplacementCutoff(t *testing.T) {
 	t.Parallel()
 
 	service, runner := newControllerPolicyService(t, nil)
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:                        "00000000-0000-0000-0000-000000000453",
 		ThreadID:                     "00000000-0000-0000-0000-000000000454",
 		HistoryCutoffBeforeMessageID: "00000000-0000-0000-0000-000000000455",

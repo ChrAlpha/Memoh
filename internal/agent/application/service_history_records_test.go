@@ -14,33 +14,32 @@ import (
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/contextview"
 	"github.com/felinics/memoh/internal/db"
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
 func TestDedupePersistedCurrentUserMessageUsesHistoryRecordProvenance(t *testing.T) {
 	t.Parallel()
 
 	history := []historyfrag.HistoryRecord{
-		historyRecord("row-1", ModelMessage{
+		historyRecord("row-1", runreq.ModelMessage{
 			Role:    "user",
-			Content: newTextContent("---\nmessage-id: qq-msg-1\nchannel: qq\n---\nhello"),
+			Content: runreq.NewTextContent("---\nmessage-id: qq-msg-1\nchannel: qq\n---\nhello"),
 		}, func(record *historyfrag.HistoryRecord) {
 			record.ExternalMessageID = "qq-msg-1"
 			record.Platform = "qq"
 			record.SenderChannelIdentityID = "channel-identity-1"
 		}),
-		historyRecord("row-2", ModelMessage{
+		historyRecord("row-2", runreq.ModelMessage{
 			Role:    "assistant",
-			Content: newTextContent("ok"),
+			Content: runreq.NewTextContent("ok"),
 		}, nil),
 	}
 
-	got := dedupePersistedCurrentUserMessage(history, ChatRequest{
+	got := dedupePersistedCurrentUserMessage(history, runreq.ChatRequest{
 		UserMessagePersisted:    true,
 		RouteID:                 "route-1",
 		ExternalMessageID:       "qq-msg-1",
@@ -60,19 +59,19 @@ func TestReplaceCompactedHistoryRecordsUsesTypedSummaryRecord(t *testing.T) {
 	t.Parallel()
 
 	records := []historyfrag.HistoryRecord{
-		historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent("old 1")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("old 1")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "compact-1"
 		}),
-		historyRecord("row-2", ModelMessage{Role: "assistant", Content: newTextContent("old 2")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("old 2")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "compact-1"
 		}),
-		historyRecord("row-3", ModelMessage{Role: "user", Content: newTextContent("new")}, nil),
+		historyRecord("row-3", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("new")}, nil),
 	}
 
 	got := replaceCompactedHistoryRecords(records, map[string]string{"compact-1": "condensed"}, contextfrag.Scope{})
-	wantMessages := []ModelMessage{
-		{Role: "user", Content: newTextContent("<summary>\ncondensed\n</summary>")},
-		{Role: "user", Content: newTextContent("new")},
+	wantMessages := []runreq.ModelMessage{
+		{Role: "user", Content: runreq.NewTextContent("<summary>\ncondensed\n</summary>")},
+		{Role: "user", Content: runreq.NewTextContent("new")},
 	}
 	if gotMessages := historyfrag.ToModelMessages(got); !reflect.DeepEqual(gotMessages, wantMessages) {
 		t.Fatalf("replacement messages mismatch:\ngot  %#v\nwant %#v", gotMessages, wantMessages)
@@ -105,7 +104,7 @@ func TestReplaceCompactedHistoryRecordsScopesSummaryToConversationNotFirstSender
 	t.Parallel()
 
 	records := []historyfrag.HistoryRecord{
-		historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent("old 1")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("old 1")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "compact-1"
 			record.Scope = contextfrag.Scope{
 				BotID:             "bot-1",
@@ -118,7 +117,7 @@ func TestReplaceCompactedHistoryRecordsScopesSummaryToConversationNotFirstSender
 				ReplyToMessageID:  "msg-0",
 			}
 		}),
-		historyRecord("row-2", ModelMessage{Role: "assistant", Content: newTextContent("old 2")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("old 2")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "compact-1"
 		}),
 	}
@@ -144,10 +143,10 @@ func TestReplaceCompactedHistoryRecordsKeepsOriginalGroupWithoutSummary(t *testi
 	t.Parallel()
 
 	records := []historyfrag.HistoryRecord{
-		historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent("old 1")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("old 1")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "compact-1"
 		}),
-		historyRecord("row-2", ModelMessage{Role: "assistant", Content: newTextContent("old 2")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-2", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("old 2")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = "compact-1"
 		}),
 	}
@@ -179,22 +178,22 @@ func TestReplaceCompactedHistoryRecordsKeepsMustKeepIslandOrdering(t *testing.T)
 	// it stay raw. The read path must drop the summary in place and preserve
 	// order — "mid q" stays AFTER the ask_user exchange, never folded before it.
 	records := []historyfrag.HistoryRecord{
-		historyRecord("row-old", ModelMessage{Role: "user", Content: newTextContent("old q")}, func(r *historyfrag.HistoryRecord) {
+		historyRecord("row-old", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("old q")}, func(r *historyfrag.HistoryRecord) {
 			r.CompactID = "compact-1"
 		}),
-		historyRecord("row-ask-call", ModelMessage{Role: "assistant", Content: newTextContent("ask you something")}, nil),
-		historyRecord("row-ask-result", ModelMessage{Role: "tool", Content: newTextContent("answered")}, nil),
-		historyRecord("row-mid", ModelMessage{Role: "user", Content: newTextContent("mid q")}, nil),
-		historyRecord("row-current", ModelMessage{Role: "user", Content: newTextContent("current")}, nil),
+		historyRecord("row-ask-call", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("ask you something")}, nil),
+		historyRecord("row-ask-result", runreq.ModelMessage{Role: "tool", Content: runreq.NewTextContent("answered")}, nil),
+		historyRecord("row-mid", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("mid q")}, nil),
+		historyRecord("row-current", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("current")}, nil),
 	}
 
 	got := replaceCompactedHistoryRecords(records, map[string]string{"compact-1": "condensed"}, contextfrag.Scope{})
-	want := []ModelMessage{
-		{Role: "user", Content: newTextContent("<summary>\ncondensed\n</summary>")},
-		{Role: "assistant", Content: newTextContent("ask you something")},
-		{Role: "tool", Content: newTextContent("answered")},
-		{Role: "user", Content: newTextContent("mid q")},
-		{Role: "user", Content: newTextContent("current")},
+	want := []runreq.ModelMessage{
+		{Role: "user", Content: runreq.NewTextContent("<summary>\ncondensed\n</summary>")},
+		{Role: "assistant", Content: runreq.NewTextContent("ask you something")},
+		{Role: "tool", Content: runreq.NewTextContent("answered")},
+		{Role: "user", Content: runreq.NewTextContent("mid q")},
+		{Role: "user", Content: runreq.NewTextContent("current")},
 	}
 	if gotMessages := historyfrag.ToModelMessages(got); !reflect.DeepEqual(gotMessages, want) {
 		t.Fatalf("must-keep island ordering broken:\ngot  %#v\nwant %#v", gotMessages, want)
@@ -210,11 +209,11 @@ func TestHistoryContextFragsForMessagesCarriesActiveSummaryCoverage(t *testing.T
 	summary := historyfrag.SummaryRecord("compact-1", "condensed", covered, contextfrag.Scope{BotID: "bot-1"})
 	records := []historyfrag.HistoryRecord{
 		summary,
-		historyRecord("row-2", ModelMessage{Role: "user", Content: newTextContent("new")}, nil),
+		historyRecord("row-2", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("new")}, nil),
 	}
-	messages := []ModelMessage{
+	messages := []runreq.ModelMessage{
 		summary.ModelMessage,
-		{Role: "user", Content: newTextContent("new")},
+		{Role: "user", Content: runreq.NewTextContent("new")},
 	}
 
 	frags := historyContextFragsForMessages(messages, records)
@@ -230,7 +229,7 @@ func TestHistoryContextFragsForMessagesCarriesActiveSummaryCoverage(t *testing.T
 	}
 
 	cfg := native.RunConfig{
-		Messages:     modelMessagesToSDKMessages(messages),
+		Messages:     runreq.ModelMessagesToSDKMessages(messages),
 		ContextFrags: frags,
 	}.RefreshContextFrag()
 	if len(cfg.ContextManifest.CoverageTrace) != 1 {
@@ -275,7 +274,7 @@ func TestTotalCompactableHistoryTokensExcludesSummaries(t *testing.T) {
 	t.Parallel()
 
 	summary := historyfrag.SummaryRecord("compact-big", strings.Repeat("s", 4000), nil, contextfrag.Scope{})
-	raw := historyRecord("row-1", ModelMessage{Role: "user", Content: newTextContent(strings.Repeat("r", 400))}, nil)
+	raw := historyRecord("row-1", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent(strings.Repeat("r", 400))}, nil)
 	records := []historyfrag.HistoryRecord{summary, raw}
 
 	compactable := totalCompactableHistoryTokens(records)
@@ -290,7 +289,7 @@ func TestTotalCompactableHistoryTokensExcludesSummaries(t *testing.T) {
 func TestHistoryScopeFallbackFromChatRequestUsesRequestTopology(t *testing.T) {
 	t.Parallel()
 
-	got := historyScopeFallbackFromChatRequest(ChatRequest{
+	got := historyScopeFallbackFromChatRequest(runreq.ChatRequest{
 		ChatID:           " chat-1 ",
 		ConversationType: " group ",
 		ConversationName: " Dev Chat ",
@@ -371,7 +370,7 @@ func assertSameJSON(t *testing.T, got any, want any) {
 	}
 }
 
-func historyRecord(id string, msg ModelMessage, mutate func(*historyfrag.HistoryRecord)) historyfrag.HistoryRecord {
+func historyRecord(id string, msg runreq.ModelMessage, mutate func(*historyfrag.HistoryRecord)) historyfrag.HistoryRecord {
 	record := historyfrag.HistoryRecord{
 		Ref: contextfrag.ContextRef{
 			Namespace:   "bot_history_message",
@@ -393,39 +392,6 @@ func historyRecord(id string, msg ModelMessage, mutate func(*historyfrag.History
 		mutate(&record)
 	}
 	return record
-}
-
-type recordingCompactionLogQueries struct {
-	dbstore.Queries
-	logs      []sqlc.BotHistoryMessageCompact
-	refs      map[pgtype.UUID][]sqlc.ListMessageRefsByCompactIDRow
-	byID      map[pgtype.UUID]sqlc.BotHistoryMessageCompact
-	sessionID pgtype.UUID
-	listCalls int
-	refCalls  []pgtype.UUID
-	getCalls  []pgtype.UUID
-	listErr   error
-}
-
-func (q *recordingCompactionLogQueries) GetCompactionLogByID(_ context.Context, compactID pgtype.UUID) (sqlc.BotHistoryMessageCompact, error) {
-	q.getCalls = append(q.getCalls, compactID)
-	return q.byID[compactID], nil
-}
-
-func (q *recordingCompactionLogQueries) ListCompactionArtifactParentIDsBySuccessor(_ context.Context, arg sqlc.ListCompactionArtifactParentIDsBySuccessorParams) ([]pgtype.UUID, error) {
-	var ids []pgtype.UUID
-	for _, row := range q.byID {
-		if row.Status == "ok" && row.SupersededBy == arg.SuccessorID && row.BotID == arg.BotID && row.SessionID == arg.SessionID {
-			ids = append(ids, row.ID)
-		}
-	}
-	return ids, nil
-}
-
-func (q *recordingCompactionLogQueries) ListCompactionArtifactLineageBySession(_ context.Context, sessionID pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
-	q.sessionID = sessionID
-	q.listCalls++
-	return q.logs, q.listErr
 }
 
 func persistedCoverage(t *testing.T, id string) []byte {
@@ -467,11 +433,6 @@ func mustReplaceCompactedMessages(t *testing.T, resolver *Service, sessionID str
 		t.Fatalf("replaceCompactedMessages: %v", err)
 	}
 	return replaced
-}
-
-func (q *recordingCompactionLogQueries) ListMessageRefsByCompactID(_ context.Context, compactID pgtype.UUID) ([]sqlc.ListMessageRefsByCompactIDRow, error) {
-	q.refCalls = append(q.refCalls, compactID)
-	return q.refs[compactID], nil
 }
 
 func mustPGUUID(t *testing.T, value string) pgtype.UUID {

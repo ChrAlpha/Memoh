@@ -9,6 +9,7 @@ import (
 	"time"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/hooks"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
 	"github.com/felinics/memoh/internal/settings"
@@ -18,7 +19,7 @@ func TestLoadMemoryContextMessage_NoProvider(t *testing.T) {
 	resolver := &Service{
 		logger: slog.Default(),
 	}
-	got := resolver.loadMemoryContext(context.Background(), ChatRequest{
+	got := resolver.loadMemoryContext(context.Background(), runreq.ChatRequest{
 		Query:  "hello",
 		BotID:  "bot-1",
 		ChatID: "chat-1",
@@ -38,7 +39,7 @@ func TestLoadMemoryContextMessageSkipsEmptyQuery(t *testing.T) {
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
 	}
-	got := resolver.loadMemoryContext(context.Background(), ChatRequest{
+	got := resolver.loadMemoryContext(context.Background(), runreq.ChatRequest{
 		Query:      "",
 		ModelQuery: "The user activated the following skill for this turn without an additional prompt: alpha.",
 		BotID:      storeRoundBotID,
@@ -76,7 +77,7 @@ func TestLoadMemoryContextMessageUsesStaleCacheOnTimeout(t *testing.T) {
 			},
 		}),
 	}
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		Query:  "tea",
 		BotID:  storeRoundBotID,
 		ChatID: "chat-1",
@@ -130,7 +131,7 @@ func TestLoadMemoryContextMessageClassifiesCacheFilledDuringProviderWait(t *test
 		memorySearchTimeout: 100 * time.Millisecond,
 		memoryContextCache:  cache,
 	}
-	req := ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
+	req := runreq.ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
 	result := make(chan memoryContextLoad, 1)
 	go func() {
 		result <- resolver.loadMemoryContext(context.Background(), req)
@@ -178,7 +179,7 @@ func TestLoadMemoryContextMessageInvalidatesCacheWhenMemoryVersionChanges(t *tes
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
 	}
-	req := ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
+	req := runreq.ChatRequest{Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1"}
 
 	first := resolver.loadMemoryContext(context.Background(), req)
 	if first.Message == nil || first.Message.TextContent() != "memory v1" {
@@ -209,7 +210,7 @@ func TestLoadMemoryContextTracesEmptyResult(t *testing.T) {
 		logger:          slog.New(slog.DiscardHandler),
 	}
 
-	got := resolver.loadMemoryContext(context.Background(), ChatRequest{
+	got := resolver.loadMemoryContext(context.Background(), runreq.ChatRequest{
 		Query: "tea", BotID: storeRoundBotID, ChatID: "chat-1",
 	})
 	if got.Message != nil {

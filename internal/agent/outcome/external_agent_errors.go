@@ -1,4 +1,4 @@
-package application
+package outcome
 
 import (
 	"errors"
@@ -169,10 +169,10 @@ func acpPromptCode(err error) (apperror.Code, map[string]string) {
 	}
 }
 
-// isRuntimeConfigurationError reports a runtime failure where nothing ran:
+// IsRuntimeConfigurationError reports a runtime failure where nothing ran:
 // the turn must not persist a round, and the caller surfaces the error
 // directly. It reads the driver's error before ExternalAgentError hides it.
-func isRuntimeConfigurationError(err error) bool {
+func IsRuntimeConfigurationError(err error) bool {
 	var failure *external.Failure
 	if errors.As(err, &failure) {
 		switch failure.Kind {

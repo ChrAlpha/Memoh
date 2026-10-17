@@ -12,7 +12,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	agentpkg "github.com/felinics/memoh/internal/agent/runtime/native"
@@ -129,7 +131,7 @@ func assertDeferredLifecycleRow(
 		t.Fatalf("CreateContextLifecycle calls = %d, want 1", len(creates))
 	}
 	row := creates[0]
-	if got := pgUUIDString(row.RunID); got != runID {
+	if got := runreq.PGUUIDString(row.RunID); got != runID {
 		t.Fatalf("context lifecycle run ID = %q, want admitted run ID %q", got, runID)
 	}
 	if row.Status != status {
@@ -185,8 +187,8 @@ func TestTriggerScheduleResolveFailurePersistsAdmittedMinimalLifecycle(t *testin
 		t.Fatalf("lifecycle creates = %d, want 1", len(creates))
 	}
 	row := creates[0]
-	if pgUUIDString(row.RunID) != lifecycleTestRunID || row.Status != contextLifecycleStatusFailedProvider {
-		t.Fatalf("lifecycle terminal = (run %q, status %q), want admitted run %q failed_provider", pgUUIDString(row.RunID), row.Status, lifecycleTestRunID)
+	if runreq.PGUUIDString(row.RunID) != lifecycleTestRunID || row.Status != contextLifecycleStatusFailedProvider {
+		t.Fatalf("lifecycle terminal = (run %q, status %q), want admitted run %q failed_provider", runreq.PGUUIDString(row.RunID), row.Status, lifecycleTestRunID)
 	}
 	var snapshot contextfrag.LifecycleSnapshot
 	if err := json.Unmarshal(row.Snapshot, &snapshot); err != nil {
@@ -196,11 +198,11 @@ func TestTriggerScheduleResolveFailurePersistsAdmittedMinimalLifecycle(t *testin
 		snapshot.AssistantMessageID != "" {
 		t.Fatalf("pre-context lifecycle is not minimal: %#v", snapshot)
 	}
-	if len(fixture.messages.persisted) != 0 {
-		t.Fatalf("resolve failure persisted messages: %#v", fixture.messages.persisted)
+	if len(fixture.messages.Persisted) != 0 {
+		t.Fatalf("resolve failure persisted messages: %#v", fixture.messages.Persisted)
 	}
-	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusErrored {
-		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.finishes)
+	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusErrored {
+		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.Finishes)
 	}
 }
 
@@ -212,8 +214,8 @@ func TestTriggerScheduleProviderFailurePersistsFailedProviderLifecycle(t *testin
 		t.Fatal("TriggerSchedule() error = nil, want provider failure")
 	}
 	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusFailedProvider, "")
-	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusErrored {
-		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.finishes)
+	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusErrored {
+		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.Finishes)
 	}
 	// The provider refused the request with a 400: a background run names it
 	// as the WebSocket path does, and nothing of the provider's text.
@@ -237,7 +239,7 @@ func TestTriggerScheduleSendsARequestLargerThanTheWindowAsIs(t *testing.T) {
 	if provider.callCount() != 1 {
 		t.Fatalf("provider calls = %d, want the request sent once", provider.callCount())
 	}
-	if len(fixture.messages.persisted) == 0 {
+	if len(fixture.messages.Persisted) == 0 {
 		t.Fatal("no history written: the turn must be stored like any completed one")
 	}
 	assertDirectLifecycle(t, fixture.lifecycles, lifecycleTestRunID, contextLifecycleStatusCompleted, "message-id")
@@ -302,7 +304,7 @@ func TestTriggerScheduleContextViewFallbackPersistsFallbackAndReachesProvider(t 
 func TestTriggerScheduleLifecycleStoreFailureDoesNotFailSuccessfulTrigger(t *testing.T) {
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 	fixture.lifecycles.mu.Lock()
-	fixture.lifecycles.store.createErr = errors.New("context lifecycle store unavailable")
+	fixture.lifecycles.store.CreateErr = errors.New("context lifecycle store unavailable")
 	fixture.lifecycles.mu.Unlock()
 
 	result, err := triggerDirectSchedule(t, fixture.service)
@@ -315,15 +317,15 @@ func TestTriggerScheduleLifecycleStoreFailureDoesNotFailSuccessfulTrigger(t *tes
 	if got := fixture.service.contextLifecyclePersistenceErrors.Load(); got == 0 {
 		t.Fatal("lifecycle persistence error count = 0, want at least one recorded failure")
 	}
-	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusCompleted {
-		t.Fatalf("runtime finishes = %#v, want one completed finish", fixture.runtime.finishes)
+	if len(fixture.runtime.Finishes) != 1 || fixture.runtime.Finishes[0].Status != sessionruntime.RunStatusCompleted {
+		t.Fatalf("runtime finishes = %#v, want one completed finish", fixture.runtime.Finishes)
 	}
 }
 
 func TestTriggerScheduleACPPersistsCompletedLifecycle(t *testing.T) {
 	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
-	messages := &recordingMessageService{}
-	lifecycles := &recordingContextLifecycleStore{}
+	messages := &agenttest.RecordingMessages{}
+	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service, _ := scheduleLifecycleService(t, pool, messages, lifecycles)
 
 	result, err := runScheduledACP(context.Background(), service, schedule.TriggerPayload{
@@ -368,8 +370,8 @@ func (d *incompleteScheduleDriver) Prompt(_ context.Context, input external.Prom
 // nobody was asked to answer a decision.
 func TestTriggerScheduleRuntimeRejectsIncompleteTurn(t *testing.T) {
 	driver := &incompleteScheduleDriver{}
-	messages := &recordingMessageService{}
-	lifecycles := &recordingContextLifecycleStore{}
+	messages := &agenttest.RecordingMessages{}
+	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service, _ := scheduleLifecycleService(t, &recordingACPPrompter{}, messages, lifecycles)
 	registerExternalDrivers(service, scheduleSessionDriver(driver))
 	ctx, cancel := context.WithCancel(context.Background())

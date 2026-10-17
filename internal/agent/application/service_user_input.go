@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/decision"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/bots"
@@ -56,7 +57,7 @@ type UserInputResponseInput struct {
 	SuppressActivePromptAttach bool
 }
 
-func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseInput, eventCh chan<- WSStreamEvent) error {
+func (s *Service) respondUserInput(ctx context.Context, input UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) error {
 	committed, err := s.CommitUserInputResponse(ctx, input)
 	if err != nil {
 		return err
@@ -85,14 +86,14 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 	target, err := s.userInput.ResolveTarget(ctx, userinput.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.ThreadID,
-		ExplicitID:             firstNonEmpty(input.ExplicitID, input.UserInputID),
+		ExplicitID:             runreq.FirstNonEmpty(input.ExplicitID, input.UserInputID),
 		ReplyExternalMessageID: input.ReplyExternalMessageID,
 	})
 	if err != nil {
 		return CommittedUserInputResponse{}, err
 	}
 
-	isProcessLocalExternalAgent, err := s.isExternalAgentUserInputSession(ctx, firstNonEmpty(target.SessionID, input.ThreadID))
+	isProcessLocalExternalAgent, err := s.isExternalAgentUserInputSession(ctx, runreq.FirstNonEmpty(target.SessionID, input.ThreadID))
 	if err != nil {
 		return CommittedUserInputResponse{}, err
 	}
@@ -120,8 +121,8 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 	var activePrompt *externalAgentActivePromptSubscription
 	if isProcessLocalExternalAgent && !input.SuppressActivePromptAttach {
 		activePrompt, _ = s.subscribeExternalAgentActivePrompt(
-			firstNonEmpty(target.BotID, input.BotID),
-			firstNonEmpty(target.SessionID, input.ThreadID),
+			runreq.FirstNonEmpty(target.BotID, input.BotID),
+			runreq.FirstNonEmpty(target.SessionID, input.ThreadID),
 		)
 	}
 
@@ -169,10 +170,10 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 // ContinueCommittedUserInputResponse resumes what a question parked when no
 // session runtime routed the answer: an inline runtime's waiter, or a
 // built-in agent run driven here with eventCh as the caller's end of it.
-func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, committed CommittedUserInputResponse, eventCh chan<- WSStreamEvent) error {
+func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, committed CommittedUserInputResponse, eventCh chan<- runreq.WSStreamEvent) error {
 	resolved := committed.request
 	if committed.ackOnly {
-		return emitApprovalAck(ctx, eventCh)
+		return runreq.EmitApprovalAck(ctx, eventCh)
 	}
 	if committed.isExternalAgent {
 		// A waiter inside the running turn is blocked on this request and
@@ -185,7 +186,7 @@ func (s *Service) ContinueCommittedUserInputResponse(ctx context.Context, commit
 				SkipUserInputID: resolved.ID,
 			})
 		}
-		return emitApprovalAck(ctx, eventCh)
+		return runreq.EmitApprovalAck(ctx, eventCh)
 	}
 	return s.driveUnroutedContinuation(ctx, s.userInputContinuation(ctx, committed, eventCh != nil), eventCh)
 }
@@ -197,13 +198,13 @@ func (s *Service) userInputContinuation(ctx context.Context, committed Committed
 	resolved := withLocalWebUserInputReplyTarget(committed.request)
 	input := committed.input
 	requestMessageID, reqErr := s.continuationTurnRequestMessageID(ctx, resolved.SessionID, committed.runHandle)
-	req := ChatRequest{
-		RunID:                   runIDForChatRequest(committed.runID),
+	req := runreq.ChatRequest{
+		RunID:                   runreq.RunID(committed.runID),
 		RunHandle:               committed.runHandle,
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		ThreadID:                resolved.SessionID,
-		SourceChannelIdentityID: firstNonEmpty(resolved.ChannelIdentityID, input.ActorChannelIdentityID),
+		SourceChannelIdentityID: runreq.FirstNonEmpty(resolved.ChannelIdentityID, input.ActorChannelIdentityID),
 		CurrentChannel:          resolved.SourcePlatform,
 		ReplyTarget:             resolved.ReplyTarget,
 		ConversationType:        resolved.ConversationType,
@@ -219,7 +220,7 @@ func (s *Service) userInputContinuation(ctx context.Context, committed Committed
 		Req: req,
 		// The resumed run is the driver's request, which carries the per-run
 		// asset collector. Everything else in it is what this entry built.
-		Setup: func(ctx context.Context, runReq ChatRequest) (runPlan, error) {
+		Setup: func(ctx context.Context, runReq runreq.ChatRequest) (runPlan, error) {
 			if reqErr != nil {
 				return runPlan{}, reqErr
 			}
@@ -259,7 +260,7 @@ func (s *Service) authorizeExternalAgentUserInputResponse(ctx context.Context, t
 	if s == nil || s.sessionService == nil {
 		return errors.New("session service not configured")
 	}
-	sessionID := firstNonEmpty(target.SessionID, input.ThreadID)
+	sessionID := runreq.FirstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := s.sessionService.Get(ctx, sessionID)
 	if err != nil {
 		return err
@@ -267,7 +268,7 @@ func (s *Service) authorizeExternalAgentUserInputResponse(ctx context.Context, t
 	if !sessionpkg.UsesDecisionWaiter(sess) {
 		return nil
 	}
-	botID := firstNonEmpty(target.BotID, input.BotID)
+	botID := runreq.FirstNonEmpty(target.BotID, input.BotID)
 	if strings.TrimSpace(sess.BotID) != "" && strings.TrimSpace(botID) != "" && sess.BotID != botID {
 		return userinput.ErrForbidden
 	}
@@ -277,11 +278,11 @@ func (s *Service) authorizeExternalAgentUserInputResponse(ctx context.Context, t
 	// Channel responders without a bound account carry only their channel
 	// identity; grants are keyed on that identity, so it stays a valid
 	// authorization subject (base behavior).
-	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
+	actorID := runreq.FirstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	if actorID == "" {
 		return userinput.ErrForbidden
 	}
-	runtimeOwnerID := metadataString(runtimeSessionMeta(sess), "runtime_owner_account_id")
+	runtimeOwnerID := runreq.MetadataString(runreq.RuntimeSessionMeta(sess), "runtime_owner_account_id")
 	if runtimeOwnerID == "" {
 		return userinput.ErrForbidden
 	}
@@ -376,7 +377,7 @@ func (s *Service) storeUserInputResultAndContinue(
 	request userinput.Request,
 	input UserInputResponseInput,
 	result sdk.ToolResultPart,
-	req ChatRequest,
+	req runreq.ChatRequest,
 	live bool,
 ) (runPlan, error) {
 	request = withLocalWebUserInputReplyTarget(request)
@@ -385,7 +386,7 @@ func (s *Service) storeUserInputResultAndContinue(
 	if err != nil {
 		return runPlan{}, err
 	}
-	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
+	modelMessages := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	storeReq := req
 	storeReq.WorkspaceTarget = target
 	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
@@ -400,7 +401,7 @@ func (s *Service) continueUserInputSession(
 	ctx context.Context,
 	request userinput.Request,
 	input UserInputResponseInput,
-	req ChatRequest,
+	req runreq.ChatRequest,
 	live bool,
 ) (runPlan, error) {
 	request = withLocalWebUserInputReplyTarget(request)
@@ -408,7 +409,7 @@ func (s *Service) continueUserInputSession(
 	resolved, err := s.ResolveRunConfig(ctx,
 		input.BotID,
 		request.SessionID,
-		firstNonEmpty(request.ChannelIdentityID, input.ActorChannelIdentityID),
+		runreq.FirstNonEmpty(request.ChannelIdentityID, input.ActorChannelIdentityID),
 		request.SourcePlatform,
 		request.ReplyTarget,
 		request.ConversationType,
@@ -423,7 +424,7 @@ func (s *Service) continueUserInputSession(
 		ctx,
 		resolved.RunConfig,
 		historyScopeFallbackFromUserInputRequest(request),
-		compactionSummaryScope(firstNonEmpty(request.BotID, input.BotID), "", request.SessionID, request.ConversationType, "", request.ReplyTarget),
+		compactionSummaryScope(runreq.FirstNonEmpty(request.BotID, input.BotID), "", request.SessionID, request.ConversationType, "", request.ReplyTarget),
 		live,
 	)
 	if err != nil {

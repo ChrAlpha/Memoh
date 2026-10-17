@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/workdir"
@@ -58,7 +59,7 @@ type resolvedWorkspace struct {
 	// and nothing selected one.
 	TargetID string
 	// Target is the resolved snapshot, nil when resolution was skipped.
-	Target *WorkspaceTarget
+	Target *runreq.WorkspaceTarget
 	// WorkdirPath is the session's bound working directory, if any.
 	WorkdirPath string
 }
@@ -123,7 +124,7 @@ func (s *Service) resolveWorkspace(ctx context.Context, in workspaceInput) (cont
 		}
 		return ctx, out, err
 	}
-	out.Target = &WorkspaceTarget{
+	out.Target = &runreq.WorkspaceTarget{
 		TargetID: strings.TrimSpace(resolved.TargetID),
 		Kind:     strings.TrimSpace(resolved.Kind),
 		Name:     strings.TrimSpace(resolved.Name),
@@ -134,7 +135,7 @@ func (s *Service) resolveWorkspace(ctx context.Context, in workspaceInput) (cont
 
 // bindRequestWorkspace resolves the workspace for a request and records the
 // effective target on it, so the user turn and every later row carry it.
-func (s *Service) bindRequestWorkspace(ctx context.Context, req ChatRequest, principal *workspacePrincipal, bestEffort bool) (context.Context, ChatRequest, error) {
+func (s *Service) bindRequestWorkspace(ctx context.Context, req runreq.ChatRequest, principal *workspacePrincipal, bestEffort bool) (context.Context, runreq.ChatRequest, error) {
 	ctx, ws, err := s.resolveWorkspace(ctx, workspaceInput{
 		BotID:             req.BotID,
 		SessionID:         req.ThreadID,
@@ -152,11 +153,11 @@ func (s *Service) bindRequestWorkspace(ctx context.Context, req ChatRequest, pri
 
 // userPrincipal is the principal of an entry whose run is started by an end
 // user.
-func userPrincipal(req ChatRequest) *workspacePrincipal {
+func userPrincipal(req runreq.ChatRequest) *workspacePrincipal {
 	return &workspacePrincipal{UserID: req.UserID}
 }
 
-func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*WorkspaceTarget, error) {
+func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*runreq.WorkspaceTarget, error) {
 	if s == nil || s.workspaceTargets == nil {
 		if strings.TrimSpace(targetID) == "" {
 			return nil, nil
@@ -167,25 +168,25 @@ func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, tar
 	if err != nil {
 		return nil, err
 	}
-	return &WorkspaceTarget{
+	return &runreq.WorkspaceTarget{
 		TargetID: strings.TrimSpace(resolved.TargetID),
 		Kind:     strings.TrimSpace(resolved.Kind),
 		Name:     strings.TrimSpace(resolved.Name),
 	}, nil
 }
 
-func workspaceTargetFromRunConfig(cfg native.RunConfig) *WorkspaceTarget {
+func workspaceTargetFromRunConfig(cfg native.RunConfig) *runreq.WorkspaceTarget {
 	if strings.TrimSpace(cfg.Identity.WorkspaceTargetID) == "" {
 		return nil
 	}
-	return &WorkspaceTarget{
+	return &runreq.WorkspaceTarget{
 		TargetID: strings.TrimSpace(cfg.Identity.WorkspaceTargetID),
 		Kind:     strings.TrimSpace(cfg.Identity.WorkspaceTargetKind),
 		Name:     strings.TrimSpace(cfg.Identity.WorkspaceTargetName),
 	}
 }
 
-func rejectExternalAgentWorkspaceTarget(req ChatRequest) error {
+func rejectExternalAgentWorkspaceTarget(req runreq.ChatRequest) error {
 	if strings.TrimSpace(req.WorkspaceTargetID) == "" {
 		return nil
 	}

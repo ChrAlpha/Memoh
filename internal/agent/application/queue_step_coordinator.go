@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -19,7 +20,7 @@ import (
 // never included in the history transaction.
 type queueStepCoordinator struct {
 	service              *Service
-	req                  ChatRequest
+	req                  runreq.ChatRequest
 	persister            messagepkg.AgentStepPersister
 	replacementPersister messagepkg.AgentReplacementPersister
 	run                  sessionruntime.RunHandle
@@ -41,7 +42,7 @@ type queueStepOutcome struct {
 	replacementFinalized bool
 }
 
-func newQueueStepCoordinator(s *Service, req ChatRequest) *queueStepCoordinator {
+func newQueueStepCoordinator(s *Service, req runreq.ChatRequest) *queueStepCoordinator {
 	if !req.QueueSteerEnabled && req.TurnReplacement == nil {
 		return nil
 	}

@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/models"
 )
 
@@ -30,7 +31,7 @@ func countingStickerService(t *testing.T, opens *int) *Service {
 func TestNonVisionModelDoesNotPrepareImages(t *testing.T) {
 	opens := 0
 	s := countingStickerService(t, &opens)
-	req := ChatRequest{BotID: "bot-1", Attachments: []ChatAttachment{
+	req := runreq.ChatRequest{BotID: "bot-1", Attachments: []runreq.ChatAttachment{
 		{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"},
 	}}
 
@@ -68,7 +69,7 @@ func TestNonVisionModelDoesNotPrepareImages(t *testing.T) {
 func TestRenderedFramesAreCachedAcrossTurns(t *testing.T) {
 	opens := 0
 	s := countingStickerService(t, &opens)
-	refs := []ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}}
+	refs := []runreq.ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}}
 
 	first := s.inlineInjectAttachments(context.Background(), "bot-1", refs)
 	if len(first) != animationFrameCount || opens != 1 {
@@ -94,7 +95,7 @@ func TestRenderedFramesAreCachedAcrossTurns(t *testing.T) {
 func TestFrameCacheIsScopedPerBot(t *testing.T) {
 	opens := 0
 	s := countingStickerService(t, &opens)
-	refs := []ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}}
+	refs := []runreq.ChatAttachment{{Type: "image", ContentHash: "sticker", Mime: "application/x-tgsticker"}}
 	s.inlineInjectAttachments(context.Background(), "bot-a", refs)
 	s.inlineInjectAttachments(context.Background(), "bot-b", refs)
 	if opens != 2 {
@@ -130,9 +131,9 @@ func TestTurnVisionBudgetShedsExpansionFirst(t *testing.T) {
 		},
 	}}
 	const stickers = 10
-	refs := make([]ChatAttachment, 0, stickers)
+	refs := make([]runreq.ChatAttachment, 0, stickers)
 	for i := range stickers {
-		refs = append(refs, ChatAttachment{
+		refs = append(refs, runreq.ChatAttachment{
 			Type:        "image",
 			ContentHash: "sticker-" + string(rune('a'+i)),
 			Mime:        "application/x-tgsticker",

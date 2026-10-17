@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -29,19 +30,19 @@ type execEnding struct {
 	// because it knows where the failure came from; a driver's own failure
 	// carries its source in the cause (a runtime prompt failure does not read
 	// like this process's own), and re-deriving the name here would lose that.
-	Failure *RunFailure
+	Failure *outcome.RunFailure
 	// Cause is a failure the executor saw outside the event stream but did not
 	// name, such as a step that failed to commit. It is named from Phase.
 	Cause error
 	// Phase names the stage Cause belongs to: the ending's history write
-	// (phaseCommit) for a round-persist failure, execution (phaseExecution)
+	// (outcome.PhaseCommit) for a round-persist failure, execution (outcome.PhaseExecution)
 	// for a step-commit failure. It is what keeps a failed history write named
 	// session_runtime.history_inconsistent instead of runtime_run_failed, and
 	// keeps it from writing a failure row.
-	Phase runPhase
+	Phase outcome.RunPhase
 	// Commit writes this ending's history. The driver calls it at most once,
 	// after naming the run's failure, never after a stop or ownership loss.
-	Commit func(ctx context.Context, f *RunFailure, row bool) (commitSummary, error)
+	Commit func(ctx context.Context, f *outcome.RunFailure, row bool) (commitSummary, error)
 	// CommitStopped writes what the user already saw of a run that was stopped:
 	// no failure, no failure row, no memory extraction. The driver calls it at
 	// most once, in place of Commit, when the run ended as a stop. An executor

@@ -11,9 +11,11 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
@@ -22,8 +24,8 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryWithoutRecentRows(t *testing
 
 	sessionID := "00000000-0000-0000-0000-00000000f003"
 	compactID := "00000000-0000-0000-0000-00000000c003"
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{
 			{
 				ID:        mustPGUUID(t, compactID),
 				SessionID: mustPGUUID(t, sessionID),
@@ -34,13 +36,13 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryWithoutRecentRows(t *testing
 	}
 	resolver := &Service{queries: queries}
 	recent := []historyfrag.HistoryRecord{
-		historyRecord("row-current", ModelMessage{Role: "user", Content: newTextContent("current")}, nil),
+		historyRecord("row-current", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("current")}, nil),
 	}
 
 	got := mustReplaceCompactedMessages(t, resolver, sessionID, contextfrag.Scope{SessionID: sessionID}, recent)
 
-	if queries.sessionID != mustPGUUID(t, sessionID) {
-		t.Fatalf("queried session id = %#v, want %s", queries.sessionID, sessionID)
+	if queries.SessionID != mustPGUUID(t, sessionID) {
+		t.Fatalf("queried session id = %#v, want %s", queries.SessionID, sessionID)
 	}
 	if len(got) != 2 {
 		t.Fatalf("records = %d, want summary plus recent row: %#v", len(got), got)
@@ -63,8 +65,8 @@ func TestReplaceCompactedMessagesOnlyRestoresArtifactsWhollyBeforeIntentionalCut
 	oldCompactID := "00000000-0000-0000-0000-00000000c014"
 	unsafeCompactID := "00000000-0000-0000-0000-00000000c015"
 	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{
 			{
 				ID:            mustPGUUID(t, oldCompactID),
 				SessionID:     mustPGUUID(t, sessionID),
@@ -85,11 +87,11 @@ func TestReplaceCompactedMessagesOnlyRestoresArtifactsWhollyBeforeIntentionalCut
 	}
 	resolver := &Service{queries: queries}
 	loaded := []historyfrag.HistoryRecord{
-		historyRecord("prior-user", ModelMessage{Role: "user", Content: newTextContent("prior")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("prior-user", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("prior")}, func(record *historyfrag.HistoryRecord) {
 			record.CreatedAt = base.Add(10 * time.Minute)
 			record.CompactID = unsafeCompactID
 		}),
-		historyRecord("cutoff-assistant", ModelMessage{Role: "assistant", Content: newTextContent("old answer")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("cutoff-assistant", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("old answer")}, func(record *historyfrag.HistoryRecord) {
 			record.CreatedAt = base.Add(20 * time.Minute)
 			record.CompactID = unsafeCompactID
 		}),
@@ -146,8 +148,8 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryCoverageFromCompactedRows(t 
 	if err != nil {
 		t.Fatalf("marshal coverage: %v", err)
 	}
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{
 			{
 				ID:        mustPGUUID(t, compactID),
 				SessionID: mustPGUUID(t, sessionID),
@@ -171,8 +173,8 @@ func TestReplaceCompactedMessagesLoadsSessionSummaryCoverageFromCompactedRows(t 
 		got[0].Coverage.CoveredRefs[1].ID != "00000000-0000-0000-0000-000000000402" {
 		t.Fatalf("covered refs mismatch: %#v", got[0].Coverage.CoveredRefs)
 	}
-	if len(queries.refCalls) != 0 {
-		t.Fatalf("persisted artifact coverage must not query message refs, called: %#v", queries.refCalls)
+	if len(queries.RefCalls) != 0 {
+		t.Fatalf("persisted artifact coverage must not query message refs, called: %#v", queries.RefCalls)
 	}
 	frags := historyContextFragsForMessages(historyfrag.ToModelMessages(got), got)
 	if len(frags) != 1 || frags[0].Coverage == nil || len(frags[0].Coverage.CoveredRefs) != 2 {
@@ -186,8 +188,8 @@ func TestReplaceCompactedMessagesRejectsMalformedPersistedCoverage(t *testing.T)
 	sessionID := "00000000-0000-0000-0000-00000000f008"
 	compactID := "00000000-0000-0000-0000-00000000c008"
 	coveredID := "00000000-0000-0000-0000-000000000801"
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{
 			{
 				ID:        mustPGUUID(t, compactID),
 				SessionID: mustPGUUID(t, sessionID),
@@ -196,13 +198,13 @@ func TestReplaceCompactedMessagesRejectsMalformedPersistedCoverage(t *testing.T)
 				Coverage:  []byte(`{"unexpected":"shape"}`),
 			},
 		},
-		refs: map[pgtype.UUID][]sqlc.ListMessageRefsByCompactIDRow{
+		Refs: map[pgtype.UUID][]sqlc.ListMessageRefsByCompactIDRow{
 			mustPGUUID(t, compactID): {{ID: mustPGUUID(t, coveredID)}},
 		},
 	}
 	resolver := &Service{queries: queries}
 	recent := []historyfrag.HistoryRecord{
-		historyRecord(coveredID, ModelMessage{Role: "user", Content: newTextContent("edited raw")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord(coveredID, runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("edited raw")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = compactID
 		}),
 	}
@@ -212,8 +214,8 @@ func TestReplaceCompactedMessagesRejectsMalformedPersistedCoverage(t *testing.T)
 	if len(got) != 1 || got[0].DBMessageID != coveredID || got[0].ModelMessage.TextContent() != "edited raw" {
 		t.Fatalf("malformed non-empty coverage replaced current raw history: %#v", got)
 	}
-	if len(queries.refCalls) != 0 {
-		t.Fatalf("malformed non-empty coverage used legacy refs-only fallback: %#v", queries.refCalls)
+	if len(queries.RefCalls) != 0 {
+		t.Fatalf("malformed non-empty coverage used legacy refs-only fallback: %#v", queries.RefCalls)
 	}
 }
 
@@ -222,8 +224,8 @@ func TestReplaceCompactedMessagesInWindowGroupCoversRowsOutsideLoadWindow(t *tes
 
 	sessionID := "00000000-0000-0000-0000-00000000f007"
 	compactID := "00000000-0000-0000-0000-00000000c007"
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{
 			{
 				ID:        mustPGUUID(t, compactID),
 				SessionID: mustPGUUID(t, sessionID),
@@ -231,7 +233,7 @@ func TestReplaceCompactedMessagesInWindowGroupCoversRowsOutsideLoadWindow(t *tes
 				Summary:   "condensed context",
 			},
 		},
-		refs: map[pgtype.UUID][]sqlc.ListMessageRefsByCompactIDRow{
+		Refs: map[pgtype.UUID][]sqlc.ListMessageRefsByCompactIDRow{
 			mustPGUUID(t, compactID): {
 				{ID: mustPGUUID(t, "00000000-0000-0000-0000-000000000501")},
 				{ID: mustPGUUID(t, "00000000-0000-0000-0000-000000000502")},
@@ -242,7 +244,7 @@ func TestReplaceCompactedMessagesInWindowGroupCoversRowsOutsideLoadWindow(t *tes
 	// Only the newer half of the compact group is inside the loaded window; row
 	// ...501 already aged out of the 24h load slice but is still part of the group.
 	recent := []historyfrag.HistoryRecord{
-		historyRecord("00000000-0000-0000-0000-000000000502", ModelMessage{Role: "assistant", Content: newTextContent("old")}, func(r *historyfrag.HistoryRecord) {
+		historyRecord("00000000-0000-0000-0000-000000000502", runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("old")}, func(r *historyfrag.HistoryRecord) {
 			r.CompactID = compactID
 		}),
 	}
@@ -263,8 +265,8 @@ func TestReplaceCompactedMessagesInWindowGroupCoversRowsOutsideLoadWindow(t *tes
 			t.Fatalf("refs-only legacy coverage must not claim a source hash: %#v", ref)
 		}
 	}
-	if len(queries.refCalls) != 1 || queries.refCalls[0] != mustPGUUID(t, compactID) {
-		t.Fatalf("refs-only query should be called once for the compact group, got: %#v", queries.refCalls)
+	if len(queries.RefCalls) != 1 || queries.RefCalls[0] != mustPGUUID(t, compactID) {
+		t.Fatalf("refs-only query should be called once for the compact group, got: %#v", queries.RefCalls)
 	}
 }
 
@@ -274,8 +276,8 @@ func TestReplaceCompactedMessagesResolvesInWindowGroupsFromSessionLogs(t *testin
 	sessionID := "00000000-0000-0000-0000-00000000f005"
 	inWindowCompact := "00000000-0000-0000-0000-00000000c005"
 	outOfWindowCompact := "00000000-0000-0000-0000-00000000c006"
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{
 			{
 				ID:        mustPGUUID(t, inWindowCompact),
 				SessionID: mustPGUUID(t, sessionID),
@@ -289,25 +291,25 @@ func TestReplaceCompactedMessagesResolvesInWindowGroupsFromSessionLogs(t *testin
 				Summary:   "aged-out condensed context",
 			},
 		},
-		refs: map[pgtype.UUID][]sqlc.ListMessageRefsByCompactIDRow{
+		Refs: map[pgtype.UUID][]sqlc.ListMessageRefsByCompactIDRow{
 			mustPGUUID(t, inWindowCompact):    {{ID: mustPGUUID(t, "00000000-0000-0000-0000-000000000600")}},
 			mustPGUUID(t, outOfWindowCompact): {{ID: mustPGUUID(t, "00000000-0000-0000-0000-000000000601")}},
 		},
 	}
 	resolver := &Service{queries: queries}
 	recent := []historyfrag.HistoryRecord{
-		historyRecord("row-compacted", ModelMessage{Role: "user", Content: newTextContent("old")}, func(r *historyfrag.HistoryRecord) {
+		historyRecord("row-compacted", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("old")}, func(r *historyfrag.HistoryRecord) {
 			r.CompactID = inWindowCompact
 		}),
-		historyRecord("row-current", ModelMessage{Role: "user", Content: newTextContent("current")}, nil),
+		historyRecord("row-current", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("current")}, nil),
 	}
 
 	// The fake does not implement GetCompactionLogByID: resolving in-window
 	// groups must come from the single session log load, not per-group lookups.
 	got := mustReplaceCompactedMessages(t, resolver, sessionID, contextfrag.Scope{SessionID: sessionID}, recent)
 
-	if queries.listCalls != 1 {
-		t.Fatalf("session logs loaded %d times, want exactly once", queries.listCalls)
+	if queries.ListCalls != 1 {
+		t.Fatalf("session logs loaded %d times, want exactly once", queries.ListCalls)
 	}
 	if len(got) != 3 {
 		t.Fatalf("records = %d, want prepended summary + in-window summary + recent row: %#v", len(got), got)
@@ -325,10 +327,10 @@ func TestReplaceCompactedMessagesResolvesInWindowGroupsFromSessionLogs(t *testin
 		mustPGUUID(t, inWindowCompact):    true,
 		mustPGUUID(t, outOfWindowCompact): true,
 	}
-	if len(queries.refCalls) != len(wantRefCalls) {
-		t.Fatalf("refs-only query calls = %#v, want exactly one per compact group %#v", queries.refCalls, wantRefCalls)
+	if len(queries.RefCalls) != len(wantRefCalls) {
+		t.Fatalf("refs-only query calls = %#v, want exactly one per compact group %#v", queries.RefCalls, wantRefCalls)
 	}
-	for _, called := range queries.refCalls {
+	for _, called := range queries.RefCalls {
 		if !wantRefCalls[called] {
 			t.Fatalf("unexpected refs-only query for compact id: %#v", called)
 		}
@@ -343,8 +345,8 @@ func TestReplaceCompactedMessagesResolvesSupersededGroupToActiveArtifact(t *test
 	activeID := "00000000-0000-0000-0000-00000000c010"
 	coverage := persistedCoverage(t, "row-parent")
 	supersededAt := pgtype.Timestamptz{Time: time.Unix(10, 0), Valid: true}
-	queries := &recordingCompactionLogQueries{
-		logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		Logs: []sqlc.BotHistoryMessageCompact{
 			{
 				ID:           mustPGUUID(t, parentID),
 				SessionID:    mustPGUUID(t, sessionID),
@@ -366,7 +368,7 @@ func TestReplaceCompactedMessagesResolvesSupersededGroupToActiveArtifact(t *test
 	}
 	resolver := &Service{queries: queries}
 	recent := []historyfrag.HistoryRecord{
-		historyRecord("row-parent", ModelMessage{Role: "user", Content: newTextContent("covered by parent")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-parent", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("covered by parent")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = parentID
 		}),
 	}
@@ -395,7 +397,7 @@ func TestReplaceCompactedMessagesInsertsMissingFusedArtifactOnceAtAnchor(t *test
 	)
 	base := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	coveredSource := func(id string, at time.Time) compaction.CoveredSource {
-		record := historyRecord(id, ModelMessage{Role: "user", Content: newTextContent("outside loaded window")}, nil)
+		record := historyRecord(id, runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("outside loaded window")}, nil)
 		return compaction.CoveredSource{Ref: record.Ref, CreatedAtMs: at.UnixMilli()}
 	}
 	marshalCoverage := func(covered []compaction.CoveredSource) []byte {
@@ -409,7 +411,7 @@ func TestReplaceCompactedMessagesInsertsMissingFusedArtifactOnceAtAnchor(t *test
 	parentBCoverage := []compaction.CoveredSource{coveredSource(coveredBID, base.Add(20*time.Minute))}
 	rollupCoverage := append(append([]compaction.CoveredSource(nil), parentACoverage...), parentBCoverage...)
 	supersededAt := pgtype.Timestamptz{Time: base.Add(30 * time.Minute), Valid: true}
-	queries := &recordingCompactionLogQueries{logs: []sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{Logs: []sqlc.BotHistoryMessageCompact{
 		{
 			ID:            mustPGUUID(t, parentAID),
 			BotID:         mustPGUUID(t, botID),
@@ -448,10 +450,10 @@ func TestReplaceCompactedMessagesInsertsMissingFusedArtifactOnceAtAnchor(t *test
 	}}
 	scope := contextfrag.Scope{BotID: botID, SessionID: sessionID}
 	recent := []historyfrag.HistoryRecord{
-		historyRecord("before-row", ModelMessage{Role: "user", Content: newTextContent("before")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("before-row", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("before")}, func(record *historyfrag.HistoryRecord) {
 			record.CreatedAt = base.Add(5 * time.Minute)
 		}),
-		historyRecord("after-row", ModelMessage{Role: "user", Content: newTextContent("after")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("after-row", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("after")}, func(record *historyfrag.HistoryRecord) {
 			record.CreatedAt = base.Add(25 * time.Minute)
 		}),
 	}
@@ -482,8 +484,8 @@ func TestReplaceCompactedMessagesReconcilesStaleRawRowsByDurableCoverage(t *test
 	for _, required := range []bool{false, true} {
 		t.Run(fmt.Sprintf("required=%v", required), func(t *testing.T) {
 			t.Parallel()
-			queries := &recordingCompactionLogQueries{
-				logs: []sqlc.BotHistoryMessageCompact{{
+			queries := &agenttest.RecordingCompactionLog{
+				Logs: []sqlc.BotHistoryMessageCompact{{
 					ID:        mustPGUUID(t, compactID),
 					SessionID: mustPGUUID(t, sessionID),
 					Status:    "ok",
@@ -493,11 +495,11 @@ func TestReplaceCompactedMessagesReconcilesStaleRawRowsByDurableCoverage(t *test
 			}
 			resolver := &Service{queries: queries}
 			recent := []historyfrag.HistoryRecord{
-				historyRecord("before-row", ModelMessage{Role: "user", Content: newTextContent("before")}, nil),
-				historyRecord(coveredID, ModelMessage{Role: "assistant", Content: newTextContent("stale raw")}, func(record *historyfrag.HistoryRecord) {
+				historyRecord("before-row", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("before")}, nil),
+				historyRecord(coveredID, runreq.ModelMessage{Role: "assistant", Content: runreq.NewTextContent("stale raw")}, func(record *historyfrag.HistoryRecord) {
 					record.Required = required
 				}),
-				historyRecord("after-row", ModelMessage{Role: "user", Content: newTextContent("after")}, nil),
+				historyRecord("after-row", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("after")}, nil),
 			}
 
 			got := mustReplaceCompactedMessages(t, resolver, sessionID, contextfrag.Scope{SessionID: sessionID}, recent)
@@ -518,12 +520,12 @@ func TestReplaceCompactedMessagesPropagatesFrontierStorageError(t *testing.T) {
 	t.Parallel()
 
 	sentinel := errors.New("frontier database unavailable")
-	resolver := &Service{queries: &recordingCompactionLogQueries{listErr: sentinel}}
+	resolver := &Service{queries: &agenttest.RecordingCompactionLog{ListErr: sentinel}}
 	_, err := resolver.replaceCompactedMessages(
 		context.Background(),
 		"00000000-0000-0000-0000-00000000f011",
 		contextfrag.Scope{},
-		[]historyfrag.HistoryRecord{historyRecord("row-current", ModelMessage{Role: "user", Content: newTextContent("current")}, nil)},
+		[]historyfrag.HistoryRecord{historyRecord("row-current", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("current")}, nil)},
 		compactionArtifactBoundary{},
 	)
 	if !errors.Is(err, sentinel) {

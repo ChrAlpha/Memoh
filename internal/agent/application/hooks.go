@@ -7,11 +7,12 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
-func (s *Service) applyUserMessageHook(ctx context.Context, req ChatRequest) (ChatRequest, error) {
+func (s *Service) applyUserMessageHook(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, error) {
 	res, err := s.runChatHook(ctx, req, hooks.EventUserMessageReceived, func(hreq *hooks.Request) {
 		hreq.Channel = map[string]any{
 			"platform":          strings.TrimSpace(req.CurrentChannel),
@@ -32,9 +33,9 @@ func (s *Service) applyUserMessageHook(ctx context.Context, req ChatRequest) (Ch
 		return req, err
 	}
 	if strings.TrimSpace(res.AppendContext) != "" {
-		req.Messages = append(req.Messages, ModelMessage{
+		req.Messages = append(req.Messages, runreq.ModelMessage{
 			Role:    "user",
-			Content: newTextContent(formatServiceHookContext(hooks.EventUserMessageReceived, res.AppendContext)),
+			Content: runreq.NewTextContent(formatServiceHookContext(hooks.EventUserMessageReceived, res.AppendContext)),
 		})
 	}
 	// The reserved-skill-metadata guard runs at the service entrypoints
@@ -43,7 +44,7 @@ func (s *Service) applyUserMessageHook(ctx context.Context, req ChatRequest) (Ch
 	// guard is a security boundary (reserved keys are trusted downstream as
 	// server-authored state) and must hold for any future hook capability
 	// that can shape message content or metadata.
-	if err := rejectReservedSkillMetadataIfPresent(req); err != nil {
+	if err := runreq.RejectReservedSkillMetadataIfPresent(req); err != nil {
 		return req, err
 	}
 	return req, nil
@@ -74,7 +75,7 @@ type agentRunConfigView struct {
 	SystemBytes  int
 }
 
-func (s *Service) runChatHook(ctx context.Context, chatReq ChatRequest, eventName string, enrich func(*hooks.Request)) (hooks.Result, error) {
+func (s *Service) runChatHook(ctx context.Context, chatReq runreq.ChatRequest, eventName string, enrich func(*hooks.Request)) (hooks.Result, error) {
 	return s.runBaseHook(ctx, chatReq.BotID, chatReq.ThreadID, chatReq.ChatID, eventName, enrich)
 }
 

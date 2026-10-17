@@ -1,4 +1,4 @@
-package application
+package outcome
 
 import (
 	"context"
@@ -13,46 +13,46 @@ import (
 	"github.com/felinics/memoh/internal/schedule"
 )
 
-// runPhase names the stage a failure belongs to.
-type runPhase uint8
+// RunPhase names the stage a failure belongs to.
+type RunPhase uint8
 
 const (
-	phaseSetup     runPhase = iota + 1 // admitted, before the executor's first call
-	phaseExecution                     // the executor is running
-	phaseCommit                        // the ending's history write
-	phasePublish                       // a publication was refused
+	PhaseSetup     RunPhase = iota + 1 // admitted, before the executor's first call
+	PhaseExecution                     // the executor is running
+	PhaseCommit                        // the ending's history write
+	PhasePublish                       // a publication was refused
 )
 
-// runEnd names how a run ended.
-type runEnd uint8
+// RunEnd names how a run ended.
+type RunEnd uint8
 
 const (
-	endCompleted runEnd = iota + 1
-	endParked           // waiting on a decision; the session runtime keeps the run
-	endStopped          // someone stopped it
-	endFailed
-	endOwnershipLost // another owner names the outcome; nothing is written
+	EndCompleted RunEnd = iota + 1
+	EndParked           // waiting on a decision; the session runtime keeps the run
+	EndStopped          // someone stopped it
+	EndFailed
+	EndOwnershipLost // another owner names the outcome; nothing is written
 )
 
-// inputOwnership says who holds the input a run executes, which decides what a
+// InputOwnership says who holds the input a run executes, which decides what a
 // failure leaves behind. It is one fact with three values, not a per-entry
 // policy: the entries that share a value behave alike.
-type inputOwnership uint8
+type InputOwnership uint8
 
 const (
-	// inputHeld means the submitter still holds the input: a Web send whose
+	// InputHeld means the submitter still holds the input: a Web send whose
 	// draft the composer can restore. A failure before execution starts writes
 	// nothing, so the user can resend without duplicating a turn; a failure
 	// during execution writes the turn.
-	inputHeld inputOwnership = iota + 1
-	// inputAccepted means the input left the submitter: an IM message already
+	InputHeld InputOwnership = iota + 1
+	// InputAccepted means the input left the submitter: an IM message already
 	// sent to the platform, a Web retry or edit whose original is already in
 	// history. Every failure at or after setup leaves the message and a row.
-	inputAccepted
-	// inputSynthetic means nobody submitted this turn: a schedule fire, an
+	InputAccepted
+	// InputSynthetic means nobody submitted this turn: a schedule fire, an
 	// interrupted-session resume. The fire's log carries the outcome; no user
 	// message or failure row is written.
-	inputSynthetic
+	InputSynthetic
 )
 
 // RunFailure is a run's one failure value. Every place that reports the
@@ -61,7 +61,7 @@ type RunFailure struct {
 	Code  apperror.Code
 	Args  map[string]string // only args the catalog entry allows
 	Cause error             // private: result record and span only
-	Phase runPhase
+	Phase RunPhase
 }
 
 // Public returns the public error form of the failure: its text is the code,
@@ -88,9 +88,9 @@ func (f RunFailure) Fault() apperror.Fault {
 	return errs.FaultOf(f.Public())
 }
 
-// endingFacts is what the driver knows when it names how the run ended.
-type endingFacts struct {
-	Phase            runPhase
+// EndingFacts is what the driver knows when it names how the run ended.
+type EndingFacts struct {
+	Phase            RunPhase
 	RunCtx           context.Context     // ownership is read from its cause; stopping from errRunStopped
 	Declared         error               // first failure the run declared
 	Hook             bool                // Declared came from the user-message hook
@@ -101,82 +101,82 @@ type endingFacts struct {
 	Lost             bool                // a publication or write reported ownership loss
 }
 
-// errRunStopped is the driver's own stop marker. Every external stop signal is
+// ErrRunStopped is the driver's own stop marker. Every external stop signal is
 // translated into it, so a cancellation nobody asked for (a channel restart, a
 // gRPC send failure) is not mistaken for a user stop.
-var errRunStopped = errors.New("agent run stopped")
+var ErrRunStopped = errors.New("agent run stopped")
 
-// runStopped is the one explicit-cancellation test.
-func runStopped(runCtx context.Context) bool {
-	return errors.Is(context.Cause(runCtx), errRunStopped)
+// RunStopped is the one explicit-cancellation test.
+func RunStopped(runCtx context.Context) bool {
+	return errors.Is(context.Cause(runCtx), ErrRunStopped)
 }
 
-// runContextEnding names the ending a run context inherits from its caller. A
+// RunContextEnding names the ending a run context inherits from its caller. A
 // plain cancellation is a stop: the caller that started the run went away, or
 // asked for it to stop. Every other cause names its own reason — a revoked
 // ownership, an execution budget, a deadline — and is kept as it is.
-func runContextEnding(cause error) error {
+func RunContextEnding(cause error) error {
 	if cause == nil || errors.Is(cause, context.Canceled) {
-		return errRunStopped
+		return ErrRunStopped
 	}
 	return cause
 }
 
-// ownershipLost reports whether err says this process no longer owns the run:
+// OwnershipLost reports whether err says this process no longer owns the run:
 // the session runtime revoked ownership, or a fenced write found the fence
 // stale.
-func ownershipLost(err error) bool {
+func OwnershipLost(err error) bool {
 	return errors.Is(err, sessionruntime.ErrRunOwnershipLost) ||
 		errors.Is(err, runtimefence.ErrStale) ||
 		errors.Is(err, sessionruntime.ErrCommandTargetNotActive)
 }
 
-// nameRunEnd is the run failure policy, shared by every entry. It is called
+// NameRunEnd is the run failure policy, shared by every entry. It is called
 // twice: once before the ending's history write to decide whether that write
 // leaves a failure row, and once after it to fold the write's own error in.
-func nameRunEnd(f endingFacts) (runEnd, *RunFailure) {
+func NameRunEnd(f EndingFacts) (RunEnd, *RunFailure) {
 	// Ownership lost: another owner names the outcome, so nothing is written
 	// and nothing is reported. A fenced write that found its fence stale is the
 	// same fact as a revoked ownership.
-	if f.Lost || ownershipLost(context.Cause(f.RunCtx)) || ownershipLost(f.Declared) || ownershipLost(f.Commit) {
-		return endOwnershipLost, nil
+	if f.Lost || OwnershipLost(context.Cause(f.RunCtx)) || OwnershipLost(f.Declared) || OwnershipLost(f.Commit) {
+		return EndOwnershipLost, nil
 	}
 
 	// Stopped before the first failure was declared, or with none declared at
 	// all. A failure declared first keeps its name: the run had already failed
 	// when someone stopped it.
-	if runStopped(f.RunCtx) && (f.Declared == nil || f.StoppedAtDeclare) {
-		return endStopped, nil
+	if RunStopped(f.RunCtx) && (f.Declared == nil || f.StoppedAtDeclare) {
+		return EndStopped, nil
 	}
 
 	// The first declared failure names the run.
 	if f.Declared != nil {
 		failure := &RunFailure{Cause: f.Declared, Phase: f.Phase}
-		failure.Code, failure.Args = runFailureCode(f.Declared, f.Phase, f.Hook)
-		return endFailed, failure
+		failure.Code, failure.Args = RunFailureCode(f.Declared, f.Phase, f.Hook)
+		return EndFailed, failure
 	}
 
 	// A failed history write ends the run even when the terminal event parked
 	// it: the run cannot be resumed from a state that was never written.
 	if f.Commit != nil {
-		return endFailed, &RunFailure{
-			Code:  codeFromError(f.Commit, phaseCommit, false),
+		return EndFailed, &RunFailure{
+			Code:  CodeFromError(f.Commit, PhaseCommit, false),
 			Args:  apperror.ArgsOf(f.Commit),
 			Cause: f.Commit,
-			Phase: phaseCommit,
+			Phase: PhaseCommit,
 		}
 	}
 
 	if f.Deferred {
-		return endParked, nil
+		return EndParked, nil
 	}
 
 	if f.Terminal != nil {
 		switch f.Terminal.Type {
 		case event.AgentEnd:
-			return endCompleted, nil
+			return EndCompleted, nil
 		case event.AgentAbort:
-			return endFailed, abortRunFailure(f)
+			return EndFailed, abortRunFailure(f)
 		}
 	}
 
@@ -184,13 +184,13 @@ func nameRunEnd(f endingFacts) (runEnd, *RunFailure) {
 	// cancelled with, or an unnamed failure for a stream that ended without
 	// saying how.
 	if cause := context.Cause(f.RunCtx); cause != nil {
-		code, args := runFailureCode(cause, f.Phase, false)
-		return endFailed, &RunFailure{Code: code, Args: args, Cause: cause, Phase: phaseExecution}
+		code, args := RunFailureCode(cause, f.Phase, false)
+		return EndFailed, &RunFailure{Code: code, Args: args, Cause: cause, Phase: PhaseExecution}
 	}
-	return endFailed, &RunFailure{
+	return EndFailed, &RunFailure{
 		Code:  apperror.CodeRuntimeRunFailed,
 		Cause: errors.New("agent stream ended without a terminal event"),
-		Phase: phaseExecution,
+		Phase: PhaseExecution,
 	}
 }
 
@@ -198,15 +198,15 @@ func nameRunEnd(f endingFacts) (runEnd, *RunFailure) {
 // runtime only knows it was cancelled from outside, so the reasons it cannot
 // see — a budget, a stop, the driver's own abort — are read from the run
 // context here.
-func abortRunFailure(f endingFacts) *RunFailure {
-	failure := &RunFailure{Phase: phaseExecution}
+func abortRunFailure(f EndingFacts) *RunFailure {
+	failure := &RunFailure{Phase: PhaseExecution}
 	switch f.Terminal.EndReason {
 	case event.EndLoopDetected:
 		failure.Code = apperror.CodeAgentLoopDetected
 		failure.Cause = errors.New("agent loop detected")
 	case event.EndCanceled:
 		if cause := context.Cause(f.RunCtx); cause != nil {
-			failure.Code, failure.Args = runFailureCode(cause, phaseExecution, false)
+			failure.Code, failure.Args = RunFailureCode(cause, PhaseExecution, false)
 			failure.Cause = cause
 			return failure
 		}
@@ -219,19 +219,19 @@ func abortRunFailure(f endingFacts) *RunFailure {
 	return failure
 }
 
-// runFailureCode names the public code a declared failure is reported with.
-func runFailureCode(cause error, phase runPhase, hook bool) (apperror.Code, map[string]string) {
-	if code := publicFailureCode(cause); code != "" {
+// RunFailureCode names the public code a declared failure is reported with.
+func RunFailureCode(cause error, phase RunPhase, hook bool) (apperror.Code, map[string]string) {
+	if code := PublicFailureCode(cause); code != "" {
 		return code, apperror.ArgsOf(cause)
 	}
 	if code := sentinelFailureCode(cause); code != "" {
 		return code, apperror.ArgsOf(cause)
 	}
-	var epf externalPromptFailure
+	var epf ExternalPromptFailure
 	if errors.As(cause, &epf) {
 		return apperror.CodeRuntimePromptFailed, nil
 	}
-	return codeFromError(cause, phase, hook), nil
+	return CodeFromError(cause, phase, hook), nil
 }
 
 // sentinelFailureCode names the failures that carry no catalog entry of their
@@ -248,50 +248,50 @@ func sentinelFailureCode(cause error) apperror.Code {
 	return ""
 }
 
-// codeFromError returns the default code for an error in a given phase.
-func codeFromError(_ error, phase runPhase, hook bool) apperror.Code {
+// CodeFromError returns the default code for an error in a given phase.
+func CodeFromError(_ error, phase RunPhase, hook bool) apperror.Code {
 	if hook {
 		return apperror.CodeHookUserMessageFailed
 	}
 	switch phase {
-	case phaseCommit:
+	case PhaseCommit:
 		return apperror.CodeSessionHistoryInconsistent
-	case phasePublish:
+	case PhasePublish:
 		return apperror.CodeSessionPublishFailed
 	default:
 		return apperror.CodeRuntimeRunFailed
 	}
 }
 
-// wantsFailureRow says whether the ending leaves a user message and a failure
+// WantsFailureRow says whether the ending leaves a user message and a failure
 // row in conversation history.
-func wantsFailureRow(o inputOwnership, end runEnd, f *RunFailure, hook, replacing bool) bool {
-	if end != endFailed {
+func WantsFailureRow(o InputOwnership, end RunEnd, f *RunFailure, hook, replacing bool) bool {
+	if end != EndFailed {
 		return false
 	}
 	switch o {
-	case inputSynthetic:
+	case InputSynthetic:
 		// Nobody submitted this turn; the fire's log carries the outcome.
 		return false
-	case inputHeld:
+	case InputHeld:
 		// A Web send: the draft can still be handed back before execution
 		// starts, and must not be duplicated after it.
 		if replacing || f == nil {
 			return false
 		}
 		switch f.Phase {
-		case phaseSetup:
+		case PhaseSetup:
 			// Only the user-message hook: the input reached the server, was
 			// refused by policy, and the user has to see why. Resolve and
 			// workspace failures leave no row, which is what lets the composer
 			// restore the draft.
 			return hook
-		case phaseExecution, phasePublish:
+		case PhaseExecution, PhasePublish:
 			return true
 		default: // phaseCommit writes the thing that failed
 			return false
 		}
-	case inputAccepted:
+	case InputAccepted:
 		// The input left the submitter. Every failure at or after setup leaves
 		// the message and a row; a replacement turn keeps its own row only for
 		// the codes that name a failure the user has to see.
@@ -299,15 +299,15 @@ func wantsFailureRow(o inputOwnership, end runEnd, f *RunFailure, hook, replacin
 			return false
 		}
 		if replacing {
-			return f.Phase == phaseExecution && f.Code != "" && historyFailureCode(f.Code) == f.Code
+			return f.Phase == PhaseExecution && f.Code != "" && HistoryFailureCode(f.Code) == f.Code
 		}
-		return f.Phase != phaseCommit
+		return f.Phase != PhaseCommit
 	}
 	return false
 }
 
-// failureStreamEvent constructs the error event that reports f.
-func failureStreamEvent(f RunFailure) native.StreamEvent {
+// FailureStreamEvent constructs the error event that reports f.
+func FailureStreamEvent(f RunFailure) native.StreamEvent {
 	return native.StreamEvent{
 		Type:  event.Error,
 		Code:  string(f.Code),
@@ -316,7 +316,45 @@ func failureStreamEvent(f RunFailure) native.StreamEvent {
 	}
 }
 
-// externalPromptFailure marks an error from external.Driver.Prompt.
-type externalPromptFailure struct{ error }
+// ExternalPromptFailure marks an error from external.Driver.Prompt.
+type ExternalPromptFailure struct{ error }
 
-func (e externalPromptFailure) Unwrap() error { return e.error }
+// NewExternalPromptFailure marks err as an error from external.Driver.Prompt.
+func NewExternalPromptFailure(err error) ExternalPromptFailure { return ExternalPromptFailure{err} }
+
+// Unwrap returns the runtime's error.
+func (e ExternalPromptFailure) Unwrap() error { return e.error }
+
+// RunOwnershipLost reports that this process was told, mid-run, that it no
+// longer owns the run.
+//
+// It is the one interruption whose output must not be written. Every other stop
+// — client disconnect, idle timeout, user abort — leaves this process still
+// entitled to say how the turn ended, so persisting what it has is the honest
+// record. Ownership loss does not: another incarnation of the runtime now
+// decides that run's outcome, and a superseded owner writing history would
+// attach output to a turn whose ending it can no longer name (SR-DUR-002).
+//
+// The distinction only survives because the revocation carries a cause. On the
+// wire both arrive as the same cancelled context.
+func RunOwnershipLost(ctx context.Context) bool {
+	return ctx != nil && errors.Is(context.Cause(ctx), sessionruntime.ErrRunOwnershipLost)
+}
+
+// String names a RunEnd for a log line.
+func (e RunEnd) String() string {
+	switch e {
+	case EndCompleted:
+		return "completed"
+	case EndParked:
+		return "parked"
+	case EndStopped:
+		return "stopped"
+	case EndFailed:
+		return "failed"
+	case EndOwnershipLost:
+		return "ownership_lost"
+	default:
+		return "unknown"
+	}
+}

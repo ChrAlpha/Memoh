@@ -11,6 +11,8 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -64,8 +66,8 @@ func scheduleTerminalEvent(t *testing.T, assistantText string) native.StreamEven
 	return native.StreamEvent{Type: native.EventAgentEnd, Messages: messagesJSON, Usage: usageJSON}
 }
 
-func triggerStreamRequest() ChatRequest {
-	return ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "run scheduled task"}
+func triggerStreamRequest() runreq.ChatRequest {
+	return runreq.ChatRequest{BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", Query: "run scheduled task"}
 }
 
 // fakeTriggeredAdmitter captures the Admit input so tests can drive the
@@ -120,7 +122,7 @@ func TestAdmitTriggeredRunInjectsAdmissionView(t *testing.T) {
 		}
 	}
 
-	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), viewFn, errRunStopped)
+	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), viewFn, outcome.ErrRunStopped)
 	if err != nil {
 		t.Fatalf("admitTriggeredRun() error = %v", err)
 	}
@@ -148,7 +150,7 @@ func TestAdmitTriggeredRunWithoutViewKeepsEmptyProjection(t *testing.T) {
 	admitter := &fakeTriggeredAdmitter{}
 	svc := &Service{logger: slog.New(slog.DiscardHandler), sessionRuntime: admitter}
 
-	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), nil, errRunStopped)
+	ctx, admission, _, _, err := svc.admitTriggeredRun(context.Background(), sessionmode.Schedule, "bot-1", "session-1", "inv-1", []byte(`{}`), nil, outcome.ErrRunStopped)
 	if err != nil {
 		t.Fatalf("admitTriggeredRun() error = %v", err)
 	}

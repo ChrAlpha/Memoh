@@ -1,4 +1,4 @@
-package application
+package runreq
 
 import (
 	"strings"
@@ -10,7 +10,8 @@ import (
 	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
-const syntheticToolClosureError = "tool execution interrupted before a response was recorded"
+// SyntheticToolClosureError is the reason recorded on a tool result synthesized for an interrupted call.
+const SyntheticToolClosureError = "tool execution interrupted before a response was recorded"
 
 type pendingToolCall struct {
 	ID       string
@@ -22,13 +23,14 @@ type projectedToolCallKey struct {
 	callID  string
 }
 
-func repairToolCallClosures(messages []ModelMessage, reason string) []ModelMessage {
+// RepairToolCallClosures closes tool calls that have no result and drops results that have no call.
+func RepairToolCallClosures(messages []ModelMessage, reason string) []ModelMessage {
 	if len(messages) == 0 {
 		return messages
 	}
 	messages = normalizeDecisionProjectionResults(messages)
 	if strings.TrimSpace(reason) == "" {
-		reason = syntheticToolClosureError
+		reason = SyntheticToolClosureError
 	}
 
 	repaired := make([]ModelMessage, 0, len(messages))
@@ -58,7 +60,7 @@ func repairToolCallClosures(messages []ModelMessage, reason string) []ModelMessa
 				flushPending()
 			}
 			repaired = append(repaired, msg)
-			for _, call := range extractAssistantToolCallParts(msg) {
+			for _, call := range ExtractAssistantToolCallParts(msg) {
 				callID := strings.TrimSpace(call.ToolCallID)
 				if callID == "" {
 					continue
@@ -79,7 +81,7 @@ func repairToolCallClosures(messages []ModelMessage, reason string) []ModelMessa
 				continue
 			}
 			repaired = append(repaired, *filtered)
-			for _, result := range extractToolResultParts(*filtered) {
+			for _, result := range ExtractToolResultParts(*filtered) {
 				callID := strings.TrimSpace(result.ToolCallID)
 				delete(pending, callID)
 			}
@@ -111,8 +113,9 @@ func repairToolCallClosures(messages []ModelMessage, reason string) []ModelMessa
 	return repaired
 }
 
-func extractAssistantToolCallParts(msg ModelMessage) []sdk.ToolCallPart {
-	sdkMsg := modelMessageToSDKMessage(msg)
+// ExtractAssistantToolCallParts returns the tool calls of an assistant message.
+func ExtractAssistantToolCallParts(msg ModelMessage) []sdk.ToolCallPart {
+	sdkMsg := ModelMessageToSDKMessage(msg)
 	if len(sdkMsg.Content) == 0 {
 		return nil
 	}
@@ -127,8 +130,9 @@ func extractAssistantToolCallParts(msg ModelMessage) []sdk.ToolCallPart {
 	return calls
 }
 
-func extractToolResultParts(msg ModelMessage) []sdk.ToolResultPart {
-	sdkMsg := modelMessageToSDKMessage(msg)
+// ExtractToolResultParts returns the tool results of a tool message.
+func ExtractToolResultParts(msg ModelMessage) []sdk.ToolResultPart {
+	sdkMsg := ModelMessageToSDKMessage(msg)
 	if len(sdkMsg.Content) == 0 {
 		return nil
 	}
@@ -144,7 +148,7 @@ func extractToolResultParts(msg ModelMessage) []sdk.ToolResultPart {
 }
 
 func filterToolMessageToPendingCalls(msg ModelMessage, pending map[string]pendingToolCall) *ModelMessage {
-	results := extractToolResultParts(msg)
+	results := ExtractToolResultParts(msg)
 	if len(results) == 0 {
 		return nil
 	}
@@ -161,7 +165,7 @@ func filterToolMessageToPendingCalls(msg ModelMessage, pending map[string]pendin
 		return nil
 	}
 
-	converted := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(filtered...)})
+	converted := SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(filtered...)})
 	if len(converted) == 0 {
 		return nil
 	}
@@ -182,7 +186,7 @@ func normalizeDecisionProjectionResults(messages []ModelMessage) []ModelMessage 
 	for _, msg := range messages {
 		switch strings.ToLower(strings.TrimSpace(msg.Role)) {
 		case "assistant":
-			for _, call := range extractAssistantToolCallParts(msg) {
+			for _, call := range ExtractAssistantToolCallParts(msg) {
 				if isDecisionProjection(call) {
 					key := projectedToolCallKey{segment, strings.TrimSpace(call.ToolCallID)}
 					projected[key] = struct{}{}
@@ -194,7 +198,7 @@ func normalizeDecisionProjectionResults(messages []ModelMessage) []ModelMessage 
 				}
 			}
 		case "tool":
-			for _, result := range extractToolResultParts(msg) {
+			for _, result := range ExtractToolResultParts(msg) {
 				key := projectedToolCallKey{segment, strings.TrimSpace(result.ToolCallID)}
 				if _, ok := projected[key]; ok {
 					results[key] = result
@@ -212,7 +216,7 @@ func normalizeDecisionProjectionResults(messages []ModelMessage) []ModelMessage 
 	emitted := map[projectedToolCallKey]struct{}{}
 	segment = 0
 	for _, msg := range messages {
-		sdkMsg := modelMessageToSDKMessage(msg)
+		sdkMsg := ModelMessageToSDKMessage(msg)
 		parts := make([]sdk.MessagePart, 0, len(sdkMsg.Content))
 		pulled := make([]sdk.ToolResultPart, 0, 1)
 		switch strings.ToLower(strings.TrimSpace(msg.Role)) {
@@ -255,7 +259,7 @@ func normalizeDecisionProjectionResults(messages []ModelMessage) []ModelMessage 
 			out = append(out, *normalized)
 		}
 		if len(pulled) > 0 {
-			out = append(out, sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(pulled...)})...)
+			out = append(out, SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(pulled...)})...)
 		}
 	}
 	return out
@@ -300,7 +304,7 @@ func modelMessageWithParts(original ModelMessage, sdkMsg sdk.Message, parts []sd
 		return nil
 	}
 	sdkMsg.Content = parts
-	converted := sdkMessagesToModelMessages([]sdk.Message{sdkMsg})
+	converted := SDKMessagesToModelMessages([]sdk.Message{sdkMsg})
 	if len(converted) == 0 {
 		return nil
 	}
@@ -309,7 +313,7 @@ func modelMessageWithParts(original ModelMessage, sdkMsg sdk.Message, parts []sd
 }
 
 func syntheticToolResultMessage(toolCallID, toolName, reason string) ModelMessage {
-	converted := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
+	converted := SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
 		ToolCallID: strings.TrimSpace(toolCallID),
 		ToolName:   strings.TrimSpace(toolName),
 		Result:     toolexec.OutputFromValue(strings.TrimSpace(reason)),
@@ -318,7 +322,7 @@ func syntheticToolResultMessage(toolCallID, toolName, reason string) ModelMessag
 	if len(converted) == 0 {
 		return ModelMessage{
 			Role:    "tool",
-			Content: newTextContent(strings.TrimSpace(reason)),
+			Content: NewTextContent(strings.TrimSpace(reason)),
 		}
 	}
 	return converted[0]

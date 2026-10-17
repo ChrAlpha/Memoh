@@ -6,15 +6,17 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 type unavailableContinuationMessageService struct {
-	*recordingMessageService
+	*agenttest.RecordingMessages
 	err   error
 	calls int
 }
@@ -65,11 +67,11 @@ func (c *continuationRunConfigCapture) snapshot() (calls, budget int, runID stri
 // answer resumes, each called the way its continuation's setup calls it.
 var continuationSessions = []struct {
 	name    string
-	resolve func(context.Context, *Service, ChatRequest) (runPlan, error)
+	resolve func(context.Context, *Service, runreq.ChatRequest) (runPlan, error)
 }{
 	{
 		name: "user input",
-		resolve: func(ctx context.Context, service *Service, req ChatRequest) (runPlan, error) {
+		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (runPlan, error) {
 			return service.continueUserInputSession(ctx,
 				userinput.Request{
 					ID: "user-input", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
@@ -82,7 +84,7 @@ var continuationSessions = []struct {
 	},
 	{
 		name: "tool approval",
-		resolve: func(ctx context.Context, service *Service, req ChatRequest) (runPlan, error) {
+		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (runPlan, error) {
 			return service.continueToolApprovalSession(ctx,
 				toolapproval.Request{
 					ID: "tool-approval", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID,
@@ -95,8 +97,8 @@ var continuationSessions = []struct {
 	},
 }
 
-func continuationSessionRequest() ChatRequest {
-	return ChatRequest{
+func continuationSessionRequest() runreq.ChatRequest {
+	return runreq.ChatRequest{
 		RunID: lifecycleTestRunID, BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID,
 		ThreadID: lifecycleTestSessionID, CurrentChannel: "web", UserMessagePersisted: true,
 	}
@@ -139,15 +141,15 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 			messages := &unavailableContinuationMessageService{
-				recordingMessageService: &recordingMessageService{},
-				err:                     errors.New("assistant message store unavailable"),
+				RecordingMessages: &agenttest.RecordingMessages{},
+				err:               errors.New("assistant message store unavailable"),
 			}
 			fixture.service.messageService = messages
 			req := continuationSessionRequest()
 
 			err := fixture.service.driveUnroutedContinuation(context.Background(), decisionContinuation{
 				Req: req,
-				Setup: func(ctx context.Context, _ ChatRequest) (runPlan, error) {
+				Setup: func(ctx context.Context, _ runreq.ChatRequest) (runPlan, error) {
 					return tt.resolve(ctx, fixture.service, req)
 				},
 			}, nil)

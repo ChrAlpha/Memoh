@@ -1,4 +1,4 @@
-package application
+package outcome
 
 import (
 	"context"
@@ -113,7 +113,7 @@ func TestRuntimeConfigurationFailures(t *testing.T) {
 		{"response timeout", apperror.New(apperror.CodeAgentResponseTimeout, nil), false},
 		{"plain error", cause, false},
 	} {
-		if got := isRuntimeConfigurationError(fmt.Errorf("prompt: %w", tc.err)); got != tc.want {
+		if got := IsRuntimeConfigurationError(fmt.Errorf("prompt: %w", tc.err)); got != tc.want {
 			t.Errorf("%s: isRuntimeConfigurationError() = %v, want %v", tc.name, got, tc.want)
 		}
 	}

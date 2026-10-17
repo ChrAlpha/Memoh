@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -101,7 +102,7 @@ func TestTurnRunEndsWithRunTerminalCarryingArgs(t *testing.T) {
 		State:     turn.RunStateFailed,
 		ErrorCode: string(apperror.CodeRuntimeRunFailed),
 		ErrorArgs: map[string]string{"reason": "upstream refused"},
-		Failure:   RunFailure{Code: apperror.CodeRuntimeRunFailed, Args: map[string]string{"reason": "upstream refused"}}.Recorded(),
+		Failure:   outcome.RunFailure{Code: apperror.CodeRuntimeRunFailed, Args: map[string]string{"reason": "upstream refused"}}.Recorded(),
 	})
 
 	events, errs := drainTurnRun(t, handle)
@@ -152,7 +153,7 @@ func TestTurnRunSendsNoRunTerminalAfterTheCallerEndedIt(t *testing.T) {
 
 	handle, cancel := newTestTurnRun(context.Background())
 	handle.Deliver(context.Background(), RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
-	cancel(errRunStopped)
+	cancel(outcome.ErrRunStopped)
 	handle.Settle()
 	handle.Ended(context.Background(), RunEnded{State: turn.RunStateAborted})
 
@@ -171,7 +172,7 @@ func TestTurnRunDeliverReportsTheCallerGone(t *testing.T) {
 	t.Parallel()
 
 	handle, cancel := newTestTurnRun(context.Background())
-	cancel(errRunStopped)
+	cancel(outcome.ErrRunStopped)
 	if handle.Deliver(context.Background(), RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}}) {
 		t.Fatal("Deliver = true after the caller ended the run")
 	}
@@ -193,7 +194,7 @@ func TestTurnRunCancelStopsTheRunWithTheDriversMarker(t *testing.T) {
 	)
 	handle.Cancel()
 
-	if !runStopped(runCtx) {
+	if !outcome.RunStopped(runCtx) {
 		t.Fatalf("run context cause = %v, want the driver's stop marker", context.Cause(runCtx))
 	}
 }
@@ -300,11 +301,11 @@ func TestTurnRunDeliversThePublicPayloadOnly(t *testing.T) {
 
 	const privateDetail = "PRIVATE_PROVIDER_TEXT"
 	handle, _ := newTestTurnRun(context.Background())
-	event := failureStreamEvent(RunFailure{
+	event := outcome.FailureStreamEvent(outcome.RunFailure{
 		Code:  apperror.CodeCompactionModelUnavailable,
 		Args:  map[string]string{"reason": "the model never answered"},
 		Cause: errors.New(privateDetail),
-		Phase: phaseExecution,
+		Phase: outcome.PhaseExecution,
 	})
 	handle.Deliver(context.Background(), RunEvent{Event: event, Payload: marshalRunEvent(event)})
 	handle.Settle()

@@ -7,6 +7,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/telemetry"
@@ -33,7 +35,7 @@ import (
 // for it is a connection that outlives the turn or a request that was already
 // answered, so the turn is its own trace and links back. The ingress says
 // which by putting a trigger in the context.
-func startTurnSpan(ctx context.Context, req ChatRequest) (context.Context, func(error)) {
+func startTurnSpan(ctx context.Context, req runreq.ChatRequest) (context.Context, func(error)) {
 	ctx, span := telemetry.StartDetached(ctx, "agent.turn",
 		trace.WithSpanKind(trace.SpanKindInternal),
 		trace.WithAttributes(
@@ -71,14 +73,14 @@ func startTurnSpan(ctx context.Context, req ChatRequest) (context.Context, func(
 // and nothing for a run that completed or parked on a decision.
 func runSpanCause(result runResult) error {
 	switch result.End {
-	case endFailed:
+	case outcome.EndFailed:
 		if result.Failure != nil {
 			return result.Failure.Public()
 		}
 		return errs.New("agent run failed")
-	case endStopped:
+	case outcome.EndStopped:
 		return context.Canceled
-	case endOwnershipLost:
+	case outcome.EndOwnershipLost:
 		return sessionruntime.ErrRunOwnershipLost
 	default:
 		return nil

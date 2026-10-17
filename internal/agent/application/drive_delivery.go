@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sync"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -28,7 +29,7 @@ type RunDelivery interface {
 // It is separate from the run's own collector because those references exist
 // only once the caller has seen the events.
 type reportedAssetsSource interface {
-	reportedAssets() []OutboundAssetRef
+	reportedAssets() []runreq.OutboundAssetRef
 }
 
 // RunEvent is one event as it leaves the driver: the public form of the event

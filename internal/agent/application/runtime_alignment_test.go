@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -26,7 +28,7 @@ import (
 )
 
 type failNthPersistMessageService struct {
-	*recordingMessageService
+	*agenttest.RecordingMessages
 	failAt int
 	calls  int
 	err    error
@@ -40,7 +42,7 @@ func (s *failNthPersistMessageService) Persist(
 	if s.calls == s.failAt {
 		return messagepkg.Message{}, s.err
 	}
-	return s.recordingMessageService.Persist(ctx, input)
+	return s.RecordingMessages.Persist(ctx, input)
 }
 
 // PersistRound mirrors the per-message failure for the atomic round path: a
@@ -55,7 +57,7 @@ func (s *failNthPersistMessageService) PersistRound(
 		return nil, true, s.err
 	}
 	s.calls += len(inputs)
-	return s.recordingMessageService.PersistRound(ctx, inputs, options)
+	return s.RecordingMessages.PersistRound(ctx, inputs, options)
 }
 
 // failingPromptDriver is an External Agent runtime that cannot run the turn.
@@ -128,20 +130,20 @@ func TestACPGenericPromptFailurePublishesSanitizedErroredTerminal(t *testing.T) 
 func TestACPPersistFailureWithholdsTerminalAndPublishesSanitizedError(t *testing.T) {
 	privateErr := errors.New("PRIVATE_ACP_PERSIST_FAILURE")
 	messages := &failNthPersistMessageService{
-		recordingMessageService: &recordingMessageService{},
-		failAt:                  2,
-		err:                     privateErr,
+		RecordingMessages: &agenttest.RecordingMessages{},
+		failAt:            2,
+		err:               privateErr,
 	}
-	lifecycles := &recordingContextLifecycleStore{}
+	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service := newACPLifecycleService(
 		t,
 		&recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}},
 		messages,
 		lifecycles,
 	)
-	eventCh := make(chan WSStreamEvent, 16)
+	eventCh := make(chan runreq.WSStreamEvent, 16)
 
-	if _, err := service.streamACPAgentWS(context.Background(), ChatRequest{
+	if _, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 		RunID: lifecycleTestRunID, Query: "inspect",
 	}, eventCh, make(chan struct{})); err != nil {
@@ -159,10 +161,10 @@ func TestACPPersistFailureWithholdsTerminalAndPublishesSanitizedError(t *testing
 	// turn the way a misclassified rollback deletion would. This pin exists
 	// because reviewers have proposed both directions; the keep decision is
 	// intentional, not an omission.
-	for _, batch := range messages.deleted {
+	for _, batch := range messages.Deleted {
 		for _, id := range batch {
 			if id == "message-id" {
-				t.Fatalf("round rollback deleted the leading user message: %#v", messages.deleted)
+				t.Fatalf("round rollback deleted the leading user message: %#v", messages.Deleted)
 			}
 		}
 	}
@@ -175,12 +177,12 @@ func TestACPExplicitCancellationDoesNotPublishProviderError(t *testing.T) {
 		<-ctx.Done()
 		return acpclient.PromptResult{}, context.Cause(ctx)
 	}}
-	service := newACPLifecycleService(t, pool, &recordingMessageService{}, &recordingContextLifecycleStore{})
-	eventCh := make(chan WSStreamEvent, 16)
+	service := newACPLifecycleService(t, pool, &agenttest.RecordingMessages{}, &agenttest.RecordingLifecycleStore{})
+	eventCh := make(chan runreq.WSStreamEvent, 16)
 	abortCh := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- ignoreOutcome(service.streamACPAgentWS(context.Background(), ChatRequest{
+		done <- ignoreOutcome(service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
 			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 			RunID: lifecycleTestRunID, Query: "inspect",
 		}, eventCh, abortCh))
@@ -291,25 +293,25 @@ func (q *reconcileOutcomeQueries) DeleteRuntimeDecisionProjectionsByRun(
 // deleted, and the warm runtime is only discarded on a PROVEN rollback of a
 // completed turn.
 func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
-	assertUserMessageKept := func(t *testing.T, messages *recordingMessageService) {
+	assertUserMessageKept := func(t *testing.T, messages *agenttest.RecordingMessages) {
 		t.Helper()
-		for _, batch := range messages.deleted {
+		for _, batch := range messages.Deleted {
 			for _, id := range batch {
 				if id == "message-id" {
-					t.Fatalf("leading user message was deleted: %#v", messages.deleted)
+					t.Fatalf("leading user message was deleted: %#v", messages.Deleted)
 				}
 			}
 		}
 	}
 
 	t.Run("committed", func(t *testing.T) {
-		messages := &recordingMessageService{roundPersistErr: db.ErrCommitOutcomeUnknown}
+		messages := &agenttest.RecordingMessages{RoundPersistErr: db.ErrCommitOutcomeUnknown}
 		pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
-		service := newACPLifecycleService(t, pool, messages, &recordingContextLifecycleStore{})
+		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{})
 		service.queries = &reconcileOutcomeQueries{outcome: "succeeded"}
-		eventCh := make(chan WSStreamEvent, 16)
+		eventCh := make(chan runreq.WSStreamEvent, 16)
 
-		if _, err := service.streamACPAgentWS(context.Background(), ChatRequest{
+		if _, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
 			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 			RunID: lifecycleTestRunID, Query: "inspect",
 		}, eventCh, make(chan struct{})); err != nil {
@@ -326,13 +328,13 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 	})
 
 	t.Run("rolled back", func(t *testing.T) {
-		messages := &recordingMessageService{roundPersistErr: db.ErrCommitOutcomeUnknown}
+		messages := &agenttest.RecordingMessages{RoundPersistErr: db.ErrCommitOutcomeUnknown}
 		pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
-		service := newACPLifecycleService(t, pool, messages, &recordingContextLifecycleStore{})
+		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{})
 		service.queries = &reconcileOutcomeQueries{outcome: ""}
-		eventCh := make(chan WSStreamEvent, 16)
+		eventCh := make(chan runreq.WSStreamEvent, 16)
 
-		outcome, err := service.streamACPAgentWS(context.Background(), ChatRequest{
+		outcome, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
 			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 			RunID: lifecycleTestRunID, Query: "inspect",
 		}, eventCh, make(chan struct{}))
@@ -350,18 +352,18 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 	})
 
 	t.Run("unresolved", func(t *testing.T) {
-		messages := &recordingMessageService{roundPersistErr: db.ErrCommitOutcomeUnknown}
+		messages := &agenttest.RecordingMessages{RoundPersistErr: db.ErrCommitOutcomeUnknown}
 		pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
-		service := newACPLifecycleService(t, pool, messages, &recordingContextLifecycleStore{})
+		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{})
 		queries := &reconcileOutcomeQueries{
 			outcome:          "succeeded",
 			failFirst:        1, // the in-turn reconcile fails; the background retry succeeds
 			projectionsSwept: make(chan struct{}, 1),
 		}
 		service.queries = queries
-		eventCh := make(chan WSStreamEvent, 16)
+		eventCh := make(chan runreq.WSStreamEvent, 16)
 
-		outcome, err := service.streamACPAgentWS(context.Background(), ChatRequest{
+		outcome, err := service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
 			BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 			RunID: lifecycleTestRunID, Query: "inspect",
 		}, eventCh, make(chan struct{}))
@@ -383,20 +385,20 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 	})
 
 	t.Run("incomplete abort rollback keeps runtime", func(t *testing.T) {
-		messages := &recordingMessageService{roundPersistErr: errors.New("definite rollback")}
+		messages := &agenttest.RecordingMessages{RoundPersistErr: errors.New("definite rollback")}
 		started := make(chan struct{})
 		pool := &recordingACPPrompter{promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
 			close(started)
 			<-ctx.Done()
 			return acpclient.PromptResult{Text: "partial"}, context.Cause(ctx)
 		}}
-		service := newACPLifecycleService(t, pool, messages, &recordingContextLifecycleStore{})
+		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{})
 		service.queries = &reconcileOutcomeQueries{}
-		eventCh := make(chan WSStreamEvent, 16)
+		eventCh := make(chan runreq.WSStreamEvent, 16)
 		abortCh := make(chan struct{})
 		done := make(chan error, 1)
 		go func() {
-			done <- ignoreOutcome(service.streamACPAgentWS(context.Background(), ChatRequest{
+			done <- ignoreOutcome(service.streamACPAgentWS(context.Background(), runreq.ChatRequest{
 				BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,
 				RunID: lifecycleTestRunID, Query: "inspect",
 			}, eventCh, abortCh))

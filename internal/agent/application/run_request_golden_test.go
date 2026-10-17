@@ -12,6 +12,8 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
@@ -90,8 +92,8 @@ func goldenRunConfig(tc runRequestCase, provider sdk.Provider) native.RunConfig 
 	if mode == "" {
 		mode = sessionmode.Chat
 	}
-	svc := &Service{sessionService: &fakeBackgroundSessionService{
-		getFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
+	svc := &Service{sessionService: &agenttest.Sessions{
+		GetFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
 			return sessionpkg.Thread{ID: sessionID, Type: mode, SessionMode: mode, RuntimeType: sessionpkg.RuntimeModel, Facts: sessionfacts.Preset(mode)}, nil
 		},
 	}}
@@ -100,7 +102,7 @@ func goldenRunConfig(tc runRequestCase, provider sdk.Provider) native.RunConfig 
 		typ, _, stored := svc.resolveRunConfigSessionDescriptor(context.Background(), "session-golden")
 		facts = runFacts(stored, typ)
 	} else {
-		facts = svc.requestRunFacts(context.Background(), ChatRequest{ThreadID: "session-golden", SessionType: tc.sessionType})
+		facts = svc.requestRunFacts(context.Background(), runreq.ChatRequest{ThreadID: "session-golden", SessionType: tc.sessionType})
 	}
 	cfg := native.RunConfig{
 		Model:               &sdk.Model{ID: "golden-model", Provider: provider, Type: sdk.ModelTypeChat},

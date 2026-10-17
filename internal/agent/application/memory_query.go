@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/prune"
 	"github.com/felinics/memoh/internal/textutil"
 )
@@ -40,7 +41,7 @@ func defaultMemoryQueryBuilder() memoryQueryBuilder {
 	}
 }
 
-func (s *Service) buildMemoryQuery(ctx context.Context, req ChatRequest) memoryQuery {
+func (s *Service) buildMemoryQuery(ctx context.Context, req runreq.ChatRequest) memoryQuery {
 	builder := defaultMemoryQueryBuilder()
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
@@ -65,7 +66,7 @@ func (s *Service) buildMemoryQuery(ctx context.Context, req ChatRequest) memoryQ
 	return builder.Build(req, loaded)
 }
 
-func (b memoryQueryBuilder) Build(req ChatRequest, history []historyfrag.HistoryRecord) memoryQuery {
+func (b memoryQueryBuilder) Build(req runreq.ChatRequest, history []historyfrag.HistoryRecord) memoryQuery {
 	current := strings.TrimSpace(req.Query)
 	if current == "" {
 		return memoryQuery{}

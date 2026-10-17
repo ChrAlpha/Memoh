@@ -8,6 +8,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -44,8 +45,8 @@ func TestStepCommitSeparatesHistoryFailureFromQueueFailure(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true, PersistedUserMessageID: "user", QueueSteerEnabled: true}
-			committer := service.newAgentStepCommitter(ctx, req, resolvedContext{runConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
+			req := runreq.ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true, PersistedUserMessageID: "user", QueueSteerEnabled: true}
+			committer := service.newAgentStepCommitter(ctx, req, runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
 			if committer == nil {
 				t.Fatal("missing fenced step committer")
 			}

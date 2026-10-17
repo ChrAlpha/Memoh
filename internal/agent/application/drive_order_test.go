@@ -8,7 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/media"
 )
@@ -47,11 +50,11 @@ func TestOrderTerminalWriteFollowsDeliveryAndHistory(t *testing.T) {
 	pub := &recordingTurnEventPublisher{onPublish: func(ev native.StreamEvent) {
 		clock.record("published:" + string(ev.Type))
 	}}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(pub, admitter)
 	delivery := &orderedDelivery{clock: clock}
 	spec := scheduledSpec(exec, delivery)
-	spec.Setup = func(context.Context, ChatRequest) (runPlan, error) {
+	spec.Setup = func(context.Context, runreq.ChatRequest) (runPlan, error) {
 		return runPlan{Exec: &clockExecutor{inner: exec, clock: clock}}, nil
 	}
 
@@ -89,7 +92,7 @@ type clockExecutor struct {
 func (c *clockExecutor) execute(ctx context.Context, emit func(native.StreamEvent)) execEnding {
 	ending := c.inner.execute(ctx, emit)
 	commit := ending.Commit
-	ending.Commit = func(ctx context.Context, f *RunFailure, row bool) (commitSummary, error) {
+	ending.Commit = func(ctx context.Context, f *outcome.RunFailure, row bool) (commitSummary, error) {
 		c.clock.record("history-written")
 		return commit(ctx, f, row)
 	}
@@ -104,7 +107,7 @@ func TestOrderFailedCommitRecordsErroredAndPublishesNoTerminal(t *testing.T) {
 	terminal := scheduleTerminalEvent(t, "must not look complete")
 	exec := &scriptedExecutor{terminal: &terminal, commitErr: errors.New("write failed")}
 	pub := &recordingTurnEventPublisher{}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(pub, admitter)
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
@@ -114,10 +117,10 @@ func TestOrderFailedCommitRecordsErroredAndPublishesNoTerminal(t *testing.T) {
 			t.Fatalf("published terminal %#v after a failed history write", ev)
 		}
 	}
-	if len(admitter.finishes) != 1 {
-		t.Fatalf("terminal writes = %#v, want exactly one", admitter.finishes)
+	if len(admitter.Finishes) != 1 {
+		t.Fatalf("terminal writes = %#v, want exactly one", admitter.Finishes)
 	}
-	if got := admitter.finishes[0].status; got == "" || strings.EqualFold(got, "completed") {
+	if got := admitter.Finishes[0].Status; got == "" || strings.EqualFold(got, "completed") {
 		t.Fatalf("terminal status = %q, want the run recorded as failed", got)
 	}
 	if result.Failure == nil {
@@ -142,7 +145,7 @@ func TestOrderSlowDeliveryDoesNotDelayPublication(t *testing.T) {
 		default:
 		}
 	}}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	block := make(chan struct{})
 	delivery := &blockingDelivery{block: block}
 
@@ -157,7 +160,7 @@ func TestOrderSlowDeliveryDoesNotDelayPublication(t *testing.T) {
 		t.Fatal("publication waited for the delivery end")
 	}
 	close(block)
-	if result := <-done; result.End != endCompleted {
+	if result := <-done; result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want completed", result.End)
 	}
 }
@@ -191,7 +194,7 @@ func TestOrderDeliveryEndLeavingKeepsPublishing(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &recordingDelivery{goneAt: 2}
 
 	svc.drive(context.Background(), scheduledSpec(exec, delivery))
@@ -216,7 +219,7 @@ func TestOrderTerminalIsTheLastDelivery(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(pub, admitter)
 	clock := &orderedRecorder{}
 	delivery := &orderedDelivery{clock: clock}
@@ -244,7 +247,7 @@ func TestOrderRefusedPublisherIsNotCalledAgain(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{errAt: 1, err: errors.New("projection refused")}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 
 	svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 
@@ -267,7 +270,7 @@ func TestOrderEveryEventPublishedOnce(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 
 	svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 
@@ -297,13 +300,13 @@ func TestOrderStoppedRunStillPublishesItsTail(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	runCtx, stop := context.WithCancelCause(context.Background())
-	stop(errRunStopped)
+	stop(outcome.ErrRunStopped)
 
 	result := svc.drive(runCtx, scheduledSpec(exec, &recordingDelivery{}))
 
-	if result.End != endStopped {
+	if result.End != outcome.EndStopped {
 		t.Fatalf("end = %s, want stopped", result.End)
 	}
 	published := pub.published()
@@ -328,16 +331,16 @@ func TestOrderParkedRunWritesNoTerminalState(t *testing.T) {
 	terminal := native.StreamEvent{Type: native.EventAgentEnd, ApprovalID: "appr-1"}
 	exec := &scriptedExecutor{terminal: &terminal, deferred: true}
 	pub := &recordingTurnEventPublisher{}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(pub, admitter)
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 
-	if result.End != endParked {
+	if result.End != outcome.EndParked {
 		t.Fatalf("end = %s, want parked (failure %#v)", result.End, result.Failure)
 	}
-	if len(admitter.finishes) != 1 {
-		t.Fatalf("terminal writes = %#v, want the parked status", admitter.finishes)
+	if len(admitter.Finishes) != 1 {
+		t.Fatalf("terminal writes = %#v, want the parked status", admitter.Finishes)
 	}
 }
 
@@ -358,7 +361,7 @@ func TestOrderPreparationRewritesEventsBeforePublication(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	media := &fakeOutputMedia{}
 	speech := &fakeOutputSpeech{audio: []byte("voice-bytes"), contentType: "audio/mpeg"}
 	svc.outputMedia, svc.outputSpeech = media, speech
@@ -412,7 +415,7 @@ func TestOrderSlowSpeechPreparationKeepsEventOrder(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	svc.outputMedia = &fakeOutputMedia{}
 	svc.outputSpeech = &fakeOutputSpeech{
 		audio:       []byte("voice-bytes"),
@@ -480,7 +483,7 @@ func TestOrderSlowDeliveryEndWaitsAtTheByteLimit(t *testing.T) {
 	}
 	exec := &scriptedExecutor{events: produced, terminal: &terminal}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &gatedDelivery{block: make(chan struct{}), entered: make(chan struct{})}
 
 	done := make(chan runResult, 1)
@@ -507,7 +510,7 @@ func TestOrderSlowDeliveryEndWaitsAtTheByteLimit(t *testing.T) {
 
 	close(delivery.block)
 	result := <-done
-	if result.End != endCompleted {
+	if result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want completed", result.End)
 	}
 	got := delivery.snapshot()
@@ -539,12 +542,12 @@ func TestOrderSlowDeliveryEndUnderTheByteLimit(t *testing.T) {
 		terminal: &terminal,
 	}
 	pub := &recordingTurnEventPublisher{}
-	svc := newDriveService(pub, &scriptedAdmitter{started: true})
+	svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
 	delivery := &pacedDelivery{per: 5 * time.Millisecond}
 
 	result := svc.drive(context.Background(), scheduledSpec(exec, delivery))
 
-	if result.End != endCompleted {
+	if result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want completed", result.End)
 	}
 	if got := delivery.count(); got != 3 {

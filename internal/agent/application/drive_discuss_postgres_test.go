@@ -18,6 +18,8 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -311,7 +313,7 @@ type passiveInput struct {
 func (e discussEnv) write(t *testing.T, in passiveInput) int64 {
 	t.Helper()
 	ctx := context.Background()
-	modelMessage := sdkMessagesToModelMessages([]sdk.Message{sdk.UserMessage(in.text)})[0]
+	modelMessage := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.UserMessage(in.text)})[0]
 	raw, err := json.Marshal(modelMessage)
 	if err != nil {
 		t.Fatal(err)
@@ -453,9 +455,9 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 	svc.messageService = messagepkg.NewService(svc.logger, pg)
 	svc.queries = discussStore{Queries: base, pg: pg}
 	svc.resumeSecret = discussTestSecret
-	svc.allowedTeam = ""
-	svc.sessionService = &fakeBackgroundSessionService{
-		getFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
+	setAllowedTeam(svc, "")
+	svc.sessionService = &agenttest.Sessions{
+		GetFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
 			return sessionpkg.Thread{
 				ID: id, BotID: env.botID, Type: sessionpkg.TypeDiscuss,
 				SessionMode: sessionpkg.TypeDiscuss, RuntimeType: sessionpkg.RuntimeModel,
@@ -484,7 +486,7 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 		tools.NewMessageProvider(nil, sender, goldenMessagingReactor{}, goldenChannelResolver{}, nil),
 	})
 	svc.agent = agent
-	svc.userInput = &fakeUserInputService{}
+	svc.userInput = &agenttest.UserInput{}
 	return &discussProcess{svc: svc, manager: manager, provider: provider, sender: sender}
 }
 
@@ -1003,9 +1005,9 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 	if !row.RunID.Valid {
 		t.Fatalf("the interrupted run is not listed for resume")
 	}
-	proc.svc.allowedTeam = row.TeamID.String()
+	setAllowedTeam(proc.svc, row.TeamID.String())
 	proc.svc.accountService = accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{ID: env.ownerID, IsActive: true}})
-	proc.svc.botPermissions = &fakeBotPermissionChecker{values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
+	proc.svc.botPermissions = &agenttest.PermissionChecker{Values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
 	resumed, err := proc.svc.resumeInterruptedSession(ctx, row)
 	if err != nil {
 		t.Fatalf("resumeInterruptedSession() error = %v", err)

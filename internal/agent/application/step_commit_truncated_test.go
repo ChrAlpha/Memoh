@@ -6,6 +6,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -13,7 +14,7 @@ import (
 func TestOutputTruncatedNoticeIsRecordedOnTheCutOffAssistantRow(t *testing.T) {
 	t.Parallel()
 
-	messages := []ModelMessage{{Role: "user"}, {Role: "assistant"}}
+	messages := []runreq.ModelMessage{{Role: "user"}, {Role: "assistant"}}
 
 	cut := withOutputTruncatedNotice(storeRoundOptions{}, &step.Record{Result: sdk.ModelResult{FinishReason: sdk.FinishReasonLength}}, messages)
 	notices := event.NoticesFromMetadata(cut.MessageMetadataByIndex[1])

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	chatview "github.com/felinics/memoh/internal/agent/view"
@@ -24,7 +25,7 @@ type runtimeSteerClaim struct {
 	ref  sessionruntime.SteerClaimRef
 }
 
-func (s *Service) runtimeSteering(req ChatRequest) external.Steering {
+func (s *Service) runtimeSteering(req runreq.ChatRequest) external.Steering {
 	if s.sessionManager == nil || req.RunHandle.RunID == "" || req.AgentCommand != "" {
 		return nil
 	}
@@ -41,7 +42,7 @@ func (q *runtimeSteering) Next(ctx context.Context) (external.SteerInput, bool, 
 	q.mu.Lock()
 	q.pending[string(item.ID)] = runtimeSteerClaim{item, ref}
 	q.mu.Unlock()
-	return external.SteerInput{ID: string(item.ID), Text: QueuePayloadText(item.Payload)}, true, nil
+	return external.SteerInput{ID: string(item.ID), Text: runreq.QueuePayloadText(item.Payload)}, true, nil
 }
 
 func (q *runtimeSteering) Accepted(ctx context.Context, id string, step int) error {
@@ -54,7 +55,7 @@ func (q *runtimeSteering) Accepted(ctx context.Context, id string, step int) err
 	// The driver's sequencing marker makes the live user bubble appear after
 	// all earlier output, even when the WebSocket consumer is slower than Codex.
 	if err := q.manager.PublishQueueUserTurns(ctx, q.run, sessionruntime.QueueUserTurnUpdate{
-		ClaimedSteerItemID: id, ClaimedSteerText: QueuePayloadText(claim.item.Payload),
+		ClaimedSteerItemID: id, ClaimedSteerText: runreq.QueuePayloadText(claim.item.Payload),
 		ClaimedSteerTimestamp: claim.item.CreatedAt, AfterStepIndex: &step,
 	}); err != nil {
 		return err
@@ -79,7 +80,7 @@ func (q *runtimeSteering) Close(ctx context.Context) error {
 
 // Reconcile provisional steer bubbles to the identities assigned by the normal
 // round transaction before publishing terminal state.
-func (s *Service) publishRuntimeSteerHistory(ctx context.Context, req ChatRequest, ids []string, persisted []messagepkg.Message) {
+func (s *Service) publishRuntimeSteerHistory(ctx context.Context, req runreq.ChatRequest, ids []string, persisted []messagepkg.Message) {
 	if len(ids) == 0 || s.sessionManager == nil {
 		return
 	}

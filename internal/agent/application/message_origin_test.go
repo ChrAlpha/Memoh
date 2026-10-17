@@ -6,17 +6,18 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 func TestInternalFeedbackPersistenceSource(t *testing.T) {
-	messages := sdkMessagesWithOrigins([]sdk.Message{
+	messages := runreq.SDKMessagesWithOrigins([]sdk.Message{
 		{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{sdk.FilePart{Data: "AAAA", MediaType: "application/pdf", Filename: "test.pdf"}}},
 		sdk.UserMessage("another real user input"),
 		sdk.AssistantMessage("done"),
 	}, []int{0})
 	service := &Service{}
-	inputs, err := service.buildPersistInputs(context.Background(), ChatRequest{Query: "original", BotID: "bot", ThreadID: "session"}, messages, "model", storeRoundOptions{})
+	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{Query: "original", BotID: "bot", ThreadID: "session"}, messages, "model", storeRoundOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,12 +33,12 @@ func TestInternalFeedbackPersistenceSource(t *testing.T) {
 }
 
 func TestInternalFeedbackDoesNotClaimMatchingUserQuery(t *testing.T) {
-	messages := sdkMessagesWithOrigins([]sdk.Message{
+	messages := runreq.SDKMessagesWithOrigins([]sdk.Message{
 		sdk.UserMessage("same text"),
 		sdk.UserMessage("same text"),
 	}, []int{0})
 	service := &Service{}
-	inputs, err := service.buildPersistInputs(context.Background(), ChatRequest{
+	inputs, err := service.buildPersistInputs(context.Background(), runreq.ChatRequest{
 		Query: "same text", BotID: "bot", ThreadID: "session",
 		TurnID: "original-turn", ExternalMessageID: "inbound-event",
 	}, messages, "model", storeRoundOptions{})

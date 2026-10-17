@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	chatview "github.com/felinics/memoh/internal/agent/view"
@@ -66,7 +68,7 @@ func (s *recordingDecisionSink) snapshot() ([]string, []int64) {
 // whose events go to the projection and the answering command's output.
 func decisionSpec(exec runExecutor, sink decisionOutputSink) runSpec {
 	spec := scheduledSpec(exec, noDelivery{})
-	spec.Input = inputAccepted
+	spec.Input = outcome.InputAccepted
 	spec.Unattended = false
 	spec.Publisher = &decisionOutputPublisher{sink: sink, handle: spec.Run.Handle, command: sessionruntime.Command{ID: "answer", StreamOutput: true}}
 	return spec
@@ -83,11 +85,11 @@ func TestDecisionPublisherWritesProjectionThenOutputInOrder(t *testing.T) {
 		terminal: &terminal,
 	}
 	sink := &recordingDecisionSink{}
-	svc := newDriveService(nil, &scriptedAdmitter{started: true})
+	svc := newDriveService(nil, &agenttest.ScriptedAdmitter{Started: true})
 
 	result := svc.drive(context.Background(), decisionSpec(exec, sink))
 
-	if result.End != endCompleted {
+	if result.End != outcome.EndCompleted {
 		t.Fatalf("end = %s, want completed (failure %#v)", result.End, result.Failure)
 	}
 	writes, seqs := sink.snapshot()
@@ -133,12 +135,12 @@ func TestDecisionPublisherEitherRefusalFailsTheRun(t *testing.T) {
 				events:   []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "a"}, {Type: native.EventTextDelta, Delta: "b"}},
 				terminal: &terminal,
 			}
-			admitter := &scriptedAdmitter{started: true}
+			admitter := &agenttest.ScriptedAdmitter{Started: true}
 			svc := newDriveService(nil, admitter)
 
 			result := svc.drive(context.Background(), decisionSpec(exec, tc.sink))
 
-			if result.End != endFailed || result.Failure == nil || result.Failure.Code != apperror.CodeSessionPublishFailed {
+			if result.End != outcome.EndFailed || result.Failure == nil || result.Failure.Code != apperror.CodeSessionPublishFailed {
 				t.Fatalf("result = %s %#v, want failed %s", result.End, result.Failure, apperror.CodeSessionPublishFailed)
 			}
 			writes, _ := tc.sink.snapshot()
@@ -150,9 +152,9 @@ func TestDecisionPublisherEitherRefusalFailsTheRun(t *testing.T) {
 					t.Fatalf("writes = %v, want %v", writes, tc.want)
 				}
 			}
-			if len(admitter.finishes) != 1 || admitter.finishes[0].status != sessionruntime.RunStatusErrored ||
-				admitter.finishes[0].message != string(apperror.CodeSessionPublishFailed) {
-				t.Fatalf("terminal writes = %#v, want one errored %s", admitter.finishes, apperror.CodeSessionPublishFailed)
+			if len(admitter.Finishes) != 1 || admitter.Finishes[0].Status != sessionruntime.RunStatusErrored ||
+				admitter.Finishes[0].Message != string(apperror.CodeSessionPublishFailed) {
+				t.Fatalf("terminal writes = %#v, want one errored %s", admitter.Finishes, apperror.CodeSessionPublishFailed)
 			}
 		})
 	}
@@ -173,18 +175,18 @@ func TestDecisionPublisherCloseRefusalEndsAParkedRun(t *testing.T) {
 	// The request and the terminal are appended; the third output write is
 	// the close.
 	sink := &recordingDecisionSink{outputErrAt: 3}
-	admitter := &scriptedAdmitter{started: true}
+	admitter := &agenttest.ScriptedAdmitter{Started: true}
 	svc := newDriveService(nil, admitter)
 
 	result := svc.drive(context.Background(), decisionSpec(exec, sink))
 
-	if result.End != endFailed || result.Failure == nil || result.Failure.Code != apperror.CodeSessionPublishFailed {
+	if result.End != outcome.EndFailed || result.Failure == nil || result.Failure.Code != apperror.CodeSessionPublishFailed {
 		t.Fatalf("result = %s %#v, want failed %s", result.End, result.Failure, apperror.CodeSessionPublishFailed)
 	}
 	if writes, _ := sink.snapshot(); len(writes) != 4 || writes[3] != "output:agent_end" {
 		t.Fatalf("writes = %v, want everything up to the refused close", writes)
 	}
-	if len(admitter.finishes) != 1 || admitter.finishes[0].status != sessionruntime.RunStatusErrored {
-		t.Fatalf("terminal writes = %#v, want the parked run ended errored", admitter.finishes)
+	if len(admitter.Finishes) != 1 || admitter.Finishes[0].Status != sessionruntime.RunStatusErrored {
+		t.Fatalf("terminal writes = %#v, want the parked run ended errored", admitter.Finishes)
 	}
 }

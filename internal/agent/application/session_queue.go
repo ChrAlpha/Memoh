@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
@@ -85,7 +86,7 @@ func (s *Service) EnqueueSteer(ctx context.Context, input QueueInput) (sessionru
 	if err != nil {
 		return sessionruntime.SteerItem{}, err
 	}
-	payload, err := encodeQueueCommand(cmd, nil)
+	payload, err := runreq.EncodeQueueCommand(cmd, nil)
 	if err != nil {
 		return sessionruntime.SteerItem{}, err
 	}
@@ -139,7 +140,7 @@ func (s *Service) UpdateSteer(ctx context.Context, botID, sessionID, itemID, edi
 		if string(item.ID) != itemID {
 			continue
 		}
-		payload, err := rewriteQueuePayloadText(item.Payload, editorUserID, text)
+		payload, err := runreq.RewriteQueuePayloadText(item.Payload, editorUserID, text)
 		if err != nil {
 			return sessionruntime.SteerItem{}, err
 		}

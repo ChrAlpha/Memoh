@@ -10,8 +10,10 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/partmeta"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -20,7 +22,7 @@ import (
 // assembleMessageService serves a session's context rows the way the byte
 // budgeted loaders do and counts which loader a purpose used.
 type assembleMessageService struct {
-	recordingMessageService
+	agenttest.RecordingMessages
 	after   []messagepkg.Message
 	recent  []messagepkg.Message
 	visible []messagepkg.Message
@@ -73,13 +75,13 @@ func newAssembleService(messages *assembleMessageService) *Service {
 	return &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
 }
 
-func assembleRequest(purpose contextPurpose, chat ChatRequest) contextRequest {
+func assembleRequest(purpose contextPurpose, chat runreq.ChatRequest) contextRequest {
 	chat.BotID = pipelineTestBotID
 	chat.ThreadID = pipelineTestSessionID
 	return chatContextRequest(purpose, chat, 100000)
 }
 
-func messageTexts(messages []ModelMessage) []string {
+func messageTexts(messages []runreq.ModelMessage) []string {
 	texts := make([]string, 0, len(messages))
 	for _, message := range messages {
 		texts = append(texts, strings.TrimSpace(message.TextContent()))
@@ -87,7 +89,7 @@ func messageTexts(messages []ModelMessage) []string {
 	return texts
 }
 
-func assertTexts(t *testing.T, got []ModelMessage, want ...string) {
+func assertTexts(t *testing.T, got []runreq.ModelMessage, want ...string) {
 	t.Helper()
 	texts := messageTexts(got)
 	if len(texts) != len(want) {
@@ -148,11 +150,11 @@ func TestAssembleContextSourcesAndPreflightFailures(t *testing.T) {
 			t.Parallel()
 
 			source := &assembleMessageService{after: rows, recent: users}
-			assembled, err := newAssembleService(source).assembleContext(context.Background(), assembleRequest(tc.purpose, ChatRequest{}))
+			assembled, err := newAssembleService(source).assembleContext(context.Background(), assembleRequest(tc.purpose, runreq.ChatRequest{}))
 			if err != nil {
 				t.Fatalf("assembleContext: %v", err)
 			}
-			records := make([]ModelMessage, 0, len(assembled.Records))
+			records := make([]runreq.ModelMessage, 0, len(assembled.Records))
 			for _, record := range assembled.Records {
 				records = append(records, record.ModelMessage)
 			}
@@ -176,7 +178,7 @@ func TestAssembleContextWithoutSessionHasNoHistory(t *testing.T) {
 	t.Parallel()
 
 	source := &assembleMessageService{after: []messagepkg.Message{assembleText(t, "u", "user", "hello", assembleBase)}}
-	request := assembleRequest(contextPurposeRun, ChatRequest{})
+	request := assembleRequest(contextPurposeRun, runreq.ChatRequest{})
 	request.Scope.SessionID = ""
 	assembled, err := newAssembleService(source).assembleContext(context.Background(), request)
 	if err != nil {
@@ -213,7 +215,7 @@ func TestAssembleContextPlacesSummaryAtItsAnchor(t *testing.T) {
 			service.queries = fakeArtifactLineageQueries{rows: []sqlc.BotHistoryMessageCompact{
 				compactionLogRow(t, "earlier window", "covered-message", tc.anchor.UnixMilli()),
 			}}
-			assembled, err := service.assembleContext(context.Background(), assembleRequest(contextPurposeRun, ChatRequest{}))
+			assembled, err := service.assembleContext(context.Background(), assembleRequest(contextPurposeRun, runreq.ChatRequest{}))
 			if err != nil {
 				t.Fatalf("assembleContext: %v", err)
 			}
@@ -243,7 +245,7 @@ func TestAssembleContextRetryCutoffAndRequiredRow(t *testing.T) {
 		t.Parallel()
 
 		assembled, err := newAssembleService(&assembleMessageService{after: rows}).assembleContext(context.Background(),
-			assembleRequest(contextPurposeRun, ChatRequest{HistoryCutoffBeforeMessageID: "u2"}))
+			assembleRequest(contextPurposeRun, runreq.ChatRequest{HistoryCutoffBeforeMessageID: "u2"}))
 		if err != nil {
 			t.Fatalf("assembleContext: %v", err)
 		}
@@ -256,7 +258,7 @@ func TestAssembleContextRetryCutoffAndRequiredRow(t *testing.T) {
 		// leaves nothing before it but the request row itself.
 		source := &assembleMessageService{after: rows[3:4], visible: rows[2:4]}
 		assembled, err := newAssembleService(source).assembleContext(context.Background(),
-			assembleRequest(contextPurposeRun, ChatRequest{HistoryCutoffBeforeMessageID: "a2", RequiredHistoryMessageID: "u2"}))
+			assembleRequest(contextPurposeRun, runreq.ChatRequest{HistoryCutoffBeforeMessageID: "a2", RequiredHistoryMessageID: "u2"}))
 		if err != nil {
 			t.Fatalf("assembleContext: %v", err)
 		}
@@ -280,13 +282,13 @@ func TestAssembleContextDedupesThePersistedCurrentRow(t *testing.T) {
 	}
 	cases := []struct {
 		name string
-		chat ChatRequest
+		chat runreq.ChatRequest
 		want []string
 	}{
-		{"by row id without an external id", ChatRequest{UserMessagePersisted: true, PersistedUserMessageID: "row-current"}, []string{"earlier"}},
-		{"by external id without a row id", ChatRequest{UserMessagePersisted: true, ExternalMessageID: "external-current"}, []string{"earlier"}},
-		{"row id the history does not hold", ChatRequest{UserMessagePersisted: true, PersistedUserMessageID: "row-elsewhere"}, []string{"earlier", "continue the task"}},
-		{"request that persisted nothing", ChatRequest{PersistedUserMessageID: "row-current"}, []string{"earlier", "continue the task"}},
+		{"by row id without an external id", runreq.ChatRequest{UserMessagePersisted: true, PersistedUserMessageID: "row-current"}, []string{"earlier"}},
+		{"by external id without a row id", runreq.ChatRequest{UserMessagePersisted: true, ExternalMessageID: "external-current"}, []string{"earlier"}},
+		{"row id the history does not hold", runreq.ChatRequest{UserMessagePersisted: true, PersistedUserMessageID: "row-elsewhere"}, []string{"earlier", "continue the task"}},
+		{"request that persisted nothing", runreq.ChatRequest{PersistedUserMessageID: "row-current"}, []string{"earlier", "continue the task"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -329,7 +331,7 @@ func TestAssembleContextKeepsToolExchangesAndReasoning(t *testing.T) {
 		t.Fatalf("fixture has %d rows, want more than the old stripping threshold", len(rows))
 	}
 
-	assembled, err := newAssembleService(&assembleMessageService{after: rows}).assembleContext(context.Background(), assembleRequest(contextPurposeRun, ChatRequest{}))
+	assembled, err := newAssembleService(&assembleMessageService{after: rows}).assembleContext(context.Background(), assembleRequest(contextPurposeRun, runreq.ChatRequest{}))
 	if err != nil {
 		t.Fatalf("assembleContext: %v", err)
 	}
@@ -338,23 +340,23 @@ func TestAssembleContextKeepsToolExchangesAndReasoning(t *testing.T) {
 		t.Fatalf("messages = %d, want all %d stored rows", len(messages), len(rows))
 	}
 	for i, row := range rows {
-		var stored ModelMessage
+		var stored runreq.ModelMessage
 		if err := json.Unmarshal(row.Content, &stored); err != nil {
 			t.Fatal(err)
 		}
-		got, _ := json.Marshal(modelMessageToSDKMessage(messages[i]))
-		want, _ := json.Marshal(modelMessageToSDKMessage(stored))
+		got, _ := json.Marshal(runreq.ModelMessageToSDKMessage(messages[i]))
+		want, _ := json.Marshal(runreq.ModelMessageToSDKMessage(stored))
 		if string(got) != string(want) {
 			t.Fatalf("message %d changed:\ngot  %s\nwant %s", i, got, want)
 		}
 	}
 	var sawReasoning, sawResult bool
-	for _, part := range modelMessageToSDKMessage(messages[1]).Content {
+	for _, part := range runreq.ModelMessageToSDKMessage(messages[1]).Content {
 		if _, ok := part.(sdk.ReasoningPart); ok {
 			sawReasoning = true
 		}
 	}
-	for _, part := range modelMessageToSDKMessage(messages[2]).Content {
+	for _, part := range runreq.ModelMessageToSDKMessage(messages[2]).Content {
 		if _, ok := part.(sdk.ToolResultPart); ok {
 			sawResult = true
 		}
@@ -386,7 +388,7 @@ func TestAssembleContextFlagsALoadThatReachedItsBudget(t *testing.T) {
 			t.Parallel()
 
 			source := &assembleMessageService{after: rows}
-			request := assembleRequest(contextPurposeRun, ChatRequest{})
+			request := assembleRequest(contextPurposeRun, runreq.ChatRequest{})
 			request.Budget = tc.budget
 			assembled, err := newAssembleService(source).assembleContext(context.Background(), request)
 			if err != nil {
@@ -406,17 +408,17 @@ func TestAssembleContextFlagsALoadThatReachedItsBudget(t *testing.T) {
 func TestNormalizeContextMessagesKeepsToolExchanges(t *testing.T) {
 	t.Parallel()
 
-	var messages []ModelMessage
-	messages = append(messages, ModelMessage{Content: newTextContent("missing role")})
+	var messages []runreq.ModelMessage
+	messages = append(messages, runreq.ModelMessage{Content: runreq.NewTextContent("missing role")})
 	for i := range 6 {
 		call := "call-" + string(rune('a'+i))
-		messages = append(messages, sdkMessagesToModelMessages([]sdk.Message{
+		messages = append(messages, runreq.SDKMessagesToModelMessages([]sdk.Message{
 			sdk.UserMessage("question"),
 			{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{ToolCallID: call, ToolName: "web_fetch"}}},
 			sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: call, ToolName: "web_fetch", Result: toolexec.OutputFromValue("body")}),
 		})...)
 	}
-	messages = append(messages, sdkMessagesToModelMessages([]sdk.Message{
+	messages = append(messages, runreq.SDKMessagesToModelMessages([]sdk.Message{
 		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{ToolCallID: "open-call", ToolName: "ask_user"}}},
 	})...)
 

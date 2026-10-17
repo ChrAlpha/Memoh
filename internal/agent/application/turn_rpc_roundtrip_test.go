@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -146,10 +147,10 @@ func newRPCChatService(t *testing.T) (*Service, *recordingModelServer) {
 		modelsService:     models.NewService(logger, queries),
 		queries:           queries,
 		contextLifecycles: &synchronizedLifecycleStore{},
-		messageService:    &recordingMessageService{},
+		messageService:    &agenttest.RecordingMessages{},
 		settingsService:   settings.NewService(logger, queries, nil, nil),
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
 				return sessionpkg.Thread{
 					ID: sessionID, BotID: lifecycleTestBotID, Type: sessionpkg.TypeChat,
 					SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,

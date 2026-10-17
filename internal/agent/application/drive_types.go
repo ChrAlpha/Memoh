@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -16,18 +18,18 @@ type runSpec struct {
 	// Req is the request as the entry built it: identity, route, query, turn.
 	// The driver finishes the wiring the entry cannot do itself — the asset
 	// collector it builds per run — and hands the result to Setup.
-	Req ChatRequest
+	Req runreq.ChatRequest
 	// Setup resolves the executor from the run's request as the driver finished
 	// wiring it. It runs inside the run, after the run's execution context
 	// exists, so its failure is a setup failure under the run's failure policy.
 	// The request arrives as an argument rather than through the closure: an
 	// entry closes over the spec it built, which predates the driver's wiring.
-	Setup func(ctx context.Context, req ChatRequest) (runPlan, error)
+	Setup func(ctx context.Context, req runreq.ChatRequest) (runPlan, error)
 	// Delivery is the caller's end of the run's events.
 	Delivery RunDelivery
 	// Input says who holds the run's input, which is the one fact that decides
 	// whether a failure leaves a user message and a failure row.
-	Input inputOwnership
+	Input outcome.InputOwnership
 	// Replacement is set for retry and edit. Its presence is also what makes
 	// the ending a replacement turn rather than a new one: the turn it replaces
 	// is already in history, so no new user row is written.
@@ -63,7 +65,7 @@ type turnReplacement struct {
 type runPlan struct {
 	Exec runExecutor
 	// Req carries RunID, Query and RawQuery as Setup resolved them.
-	Req ChatRequest
+	Req runreq.ChatRequest
 	// IdleEffort is the reasoning effort the idle watchdog scales by.
 	IdleEffort string
 	// Lifecycle writes the run's context lifecycle terminal once with the run's
@@ -75,7 +77,7 @@ type runPlan struct {
 // ReqFor is the request the driver executes with: the request Setup resolved,
 // which carries the identity, route and turn the run was admitted for. A plan
 // that resolved nothing leaves the entry's request as it is.
-func (p runPlan) ReqFor(req ChatRequest) ChatRequest {
+func (p runPlan) ReqFor(req runreq.ChatRequest) runreq.ChatRequest {
 	if p.Req.BotID == "" {
 		return req
 	}
@@ -84,8 +86,8 @@ func (p runPlan) ReqFor(req ChatRequest) ChatRequest {
 
 // runResult is how the run ended, for the entry that started it.
 type runResult struct {
-	End       runEnd
-	Failure   *RunFailure                // set when End == endFailed
+	End       outcome.RunEnd
+	Failure   *outcome.RunFailure        // set when End == endFailed
 	Terminal  sessionruntime.TerminalRun // the record the terminal write produced; zero when none
 	Summary   commitSummary              // final text, usage, model id
 	Persisted []messagepkg.Message       // rows the ending's history write produced

@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"testing"
+
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 // A request with no query and no attachments is refused unless its input is
@@ -10,14 +12,14 @@ import (
 func TestResolveRejectsEmptyQueryUnlessInputIsPersisted(t *testing.T) {
 	svc := &Service{}
 
-	_, _, err := svc.resolve(context.Background(), ChatRequest{BotID: "bot-1", ThreadID: "session-1"})
+	_, _, err := svc.resolve(context.Background(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1"})
 	if err == nil || err.Error() != "query or attachments is required" {
 		t.Fatalf("empty query without persisted input: err = %v, want the query requirement", err)
 	}
 
 	// The persisted-input request passes the query check and stops at the
 	// next one, which needs a bot id this request leaves empty.
-	_, _, err = svc.resolve(context.Background(), ChatRequest{ThreadID: "session-1", ReusePersistedUserMessage: true})
+	_, _, err = svc.resolve(context.Background(), runreq.ChatRequest{ThreadID: "session-1", ReusePersistedUserMessage: true})
 	if err == nil || err.Error() == "query or attachments is required" {
 		t.Fatalf("empty query with persisted input: err = %v, want a failure past the query check", err)
 	}

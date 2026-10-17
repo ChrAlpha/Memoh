@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -98,7 +99,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 		Fence:         abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	lifecycles := &recordingContextLifecycleStore{}
+	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: lifecycles}
 	service.bindSessionRuntime(manager)
 
@@ -161,8 +162,8 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 	if durable.State != ledger.StateFailed || durable.ErrorCode != string(apperror.CodeAgentResponseInterrupted) {
 		t.Fatalf("durable run = %#v, want failed with an interrupted response", durable)
 	}
-	if len(lifecycles.terminalUpserts) != 1 || lifecycles.terminalUpserts[0].Status != contextLifecycleStatusFailedProvider {
-		t.Fatalf("lifecycle terminal = %#v, want failed_provider", lifecycles.terminalUpserts)
+	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != contextLifecycleStatusFailedProvider {
+		t.Fatalf("lifecycle terminal = %#v, want failed_provider", lifecycles.TerminalUpserts)
 	}
 	if errors.Is(runErr, context.Canceled) {
 		t.Fatalf("internal abort was misclassified as owning cancellation: %v", runErr)
@@ -189,7 +190,7 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 		Fence:         abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	service := &Service{contextLifecycles: &recordingContextLifecycleStore{}}
+	service := &Service{contextLifecycles: &agenttest.RecordingLifecycleStore{}}
 	service.bindSessionRuntime(manager)
 
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
@@ -254,7 +255,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		Fence:         abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	lifecycles := &recordingContextLifecycleStore{}
+	lifecycles := &agenttest.RecordingLifecycleStore{}
 	service := &Service{contextLifecycles: lifecycles}
 	service.bindSessionRuntime(manager)
 
@@ -361,7 +362,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	if durable.State != ledger.StateCompleted || durable.ErrorCode != "" {
 		t.Fatalf("durable run = %#v, want completed terminal", durable)
 	}
-	if len(lifecycles.terminalUpserts) != 1 || lifecycles.terminalUpserts[0].Status != contextLifecycleStatusCompleted {
-		t.Fatalf("lifecycle terminal = %#v, want completed", lifecycles.terminalUpserts)
+	if len(lifecycles.TerminalUpserts) != 1 || lifecycles.TerminalUpserts[0].Status != contextLifecycleStatusCompleted {
+		t.Fatalf("lifecycle terminal = %#v, want completed", lifecycles.TerminalUpserts)
 	}
 }

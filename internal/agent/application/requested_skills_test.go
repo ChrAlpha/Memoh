@@ -7,16 +7,18 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/slash"
 )
 
-func requestedSkillGuardRequest(sessionID string) ChatRequest {
-	return ChatRequest{
+func requestedSkillGuardRequest(sessionID string) runreq.ChatRequest {
+	return runreq.ChatRequest{
 		BotID:    "bot-1",
 		ThreadID: sessionID,
-		RequestedSkills: []RequestedSkillContext{{
+		RequestedSkills: []runreq.RequestedSkillContext{{
 			Name:    "alpha",
 			Content: "skill content",
 		}},
@@ -25,8 +27,8 @@ func requestedSkillGuardRequest(sessionID string) ChatRequest {
 
 func TestRejectRequestedSkillsAllowsModelChatSession(t *testing.T) {
 	resolver := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
 					ID:          sessionID,
 					BotID:       "bot-1",
@@ -39,7 +41,7 @@ func TestRejectRequestedSkillsAllowsModelChatSession(t *testing.T) {
 	}
 
 	req := requestedSkillGuardRequest("session-1")
-	req.InjectCh = make(chan InjectMessage)
+	req.InjectCh = make(chan runreq.InjectMessage)
 	if err := resolver.rejectRequestedSkillsIfUnsupportedContext(context.Background(), req); err != nil {
 		t.Fatalf("rejectRequestedSkillsIfUnsupportedContext() error = %v, want nil", err)
 	}
@@ -47,8 +49,8 @@ func TestRejectRequestedSkillsAllowsModelChatSession(t *testing.T) {
 
 func TestRejectRequestedSkillsAllowsPersistedSkillActivation(t *testing.T) {
 	resolver := &Service{
-		sessionService: &fakeBackgroundSessionService{
-			getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+		sessionService: &agenttest.Sessions{
+			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 				return session.Thread{
 					ID:          sessionID,
 					BotID:       "bot-1",
@@ -62,20 +64,20 @@ func TestRejectRequestedSkillsAllowsPersistedSkillActivation(t *testing.T) {
 
 	req := requestedSkillGuardRequest("session-1")
 	req.UserMessagePersisted = true
-	req.UserMessageKind = UserMessageKindSkillActivation
+	req.UserMessageKind = runreq.UserMessageKindSkillActivation
 	if err := resolver.rejectRequestedSkillsIfUnsupportedContext(context.Background(), req); err != nil {
 		t.Fatalf("rejectRequestedSkillsIfUnsupportedContext() error = %v, want nil", err)
 	}
 }
 
 func TestRejectReservedSkillMetadataIfPresentRejectsAttachments(t *testing.T) {
-	req := ChatRequest{
-		Attachments: []ChatAttachment{{
+	req := runreq.ChatRequest{
+		Attachments: []runreq.ChatAttachment{{
 			Type:     "image",
 			Metadata: map[string]any{"model_requested_skills": []string{"alpha"}},
 		}},
 	}
-	err := rejectReservedSkillMetadataIfPresent(req)
+	err := runreq.RejectReservedSkillMetadataIfPresent(req)
 	var slashErr slash.Error
 	if !errors.As(err, &slashErr) || slashErr.Code != slash.CodeReservedSkillMetadata {
 		t.Fatalf("err = %#v, want %s", err, slash.CodeReservedSkillMetadata)
@@ -83,7 +85,7 @@ func TestRejectReservedSkillMetadataIfPresentRejectsAttachments(t *testing.T) {
 }
 
 func TestRejectReservedSkillMetadataIfPresentRejectsMessageContentPartMetadata(t *testing.T) {
-	content, err := json.Marshal([]ContentPart{{
+	content, err := json.Marshal([]runreq.ContentPart{{
 		Type:     "text",
 		Text:     "hello",
 		Metadata: map[string]any{"requested_skills": []string{"alpha"}},
@@ -91,14 +93,14 @@ func TestRejectReservedSkillMetadataIfPresentRejectsMessageContentPartMetadata(t
 	if err != nil {
 		t.Fatalf("marshal content: %v", err)
 	}
-	req := ChatRequest{
-		Messages: []ModelMessage{{
+	req := runreq.ChatRequest{
+		Messages: []runreq.ModelMessage{{
 			Role:    "user",
 			Content: content,
 		}},
 	}
 
-	err = rejectReservedSkillMetadataIfPresent(req)
+	err = runreq.RejectReservedSkillMetadataIfPresent(req)
 	var slashErr slash.Error
 	if !errors.As(err, &slashErr) || slashErr.Code != slash.CodeReservedSkillMetadata {
 		t.Fatalf("err = %#v, want %s", err, slash.CodeReservedSkillMetadata)
@@ -109,7 +111,7 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 	tests := []struct {
 		name      string
 		sessionID string
-		mutate    func(*ChatRequest)
+		mutate    func(*runreq.ChatRequest)
 		session   session.Thread
 	}{
 		{
@@ -130,7 +132,7 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 		{
 			name:      "schedule run mode",
 			sessionID: "session-1",
-			mutate: func(req *ChatRequest) {
+			mutate: func(req *runreq.ChatRequest) {
 				req.SessionType = session.TypeSchedule
 			},
 			session: session.Thread{
@@ -144,7 +146,7 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 		{
 			name:      "already persisted user message",
 			sessionID: "session-1",
-			mutate: func(req *ChatRequest) {
+			mutate: func(req *runreq.ChatRequest) {
 				req.UserMessagePersisted = true
 			},
 			session: session.Thread{
@@ -180,8 +182,8 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			resolver := &Service{
-				sessionService: &fakeBackgroundSessionService{
-					getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+				sessionService: &agenttest.Sessions{
+					GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 						if sessionID != tc.sessionID {
 							t.Fatalf("session id = %q, want %q", sessionID, tc.sessionID)
 						}
@@ -208,13 +210,13 @@ func TestRejectRequestedSkillsRejectsUnsupportedContexts(t *testing.T) {
 
 func TestResolveRejectsRequestedSkillsBeforeModelResolution(t *testing.T) {
 	resolver := &Service{}
-	_, _, err := resolver.resolve(context.Background(), ChatRequest{
+	_, _, err := resolver.resolve(context.Background(), runreq.ChatRequest{
 		BotID:       "bot-1",
 		ChatID:      "chat-1",
 		ThreadID:    "session-1",
 		SessionType: session.TypeSchedule,
 		Query:       "scheduled prompt",
-		RequestedSkills: []RequestedSkillContext{{
+		RequestedSkills: []runreq.RequestedSkillContext{{
 			Name:    "alpha",
 			Content: "skill content",
 		}},

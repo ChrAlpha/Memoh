@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -64,13 +65,13 @@ func newQueueProcess(t *testing.T, env queueEnv, steps ...*discussStep) *discuss
 	proc := newDiscussProcess(t, env.discussEnv, steps...)
 	proc.svc.sessionService = chatSessionService(env.botID)
 	proc.svc.queue = env.store
-	proc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	return proc
 }
 
-func chatSessionService(botID string) *fakeBackgroundSessionService {
-	return &fakeBackgroundSessionService{
-		getFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
+func chatSessionService(botID string) *agenttest.Sessions {
+	return &agenttest.Sessions{
+		GetFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
 			return sessionpkg.Thread{
 				ID: id, BotID: botID, Type: sessionpkg.TypeChat, SessionMode: sessionpkg.TypeChat,
 				RuntimeType: sessionpkg.RuntimeModel, Facts: sessionfacts.Preset(sessionpkg.TypeChat),
@@ -678,7 +679,7 @@ func TestUnstartableInputIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
 	require.NoError(t, err)
 	foreign := env.turnCommand("foreign", "for another team")
 	foreign.TeamID = "00000000-0000-0000-0000-0000000000ff"
-	proc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	_, err = env.store.Enqueue(ctx, sessionruntime.QueueEnqueue{
 		Key: env.key(), Origin: sessionruntime.QueueOriginFollowUp, InvocationID: "foreign",
 		Payload: queuedPayload(t, foreign, time.Now()),
@@ -977,7 +978,7 @@ func TestQueueAndDiscussAreAdmittedInTurnsQueueFirst(t *testing.T) {
 	alice := env.participant(t, false)
 	proc := newDiscussProcess(t, env, &discussStep{text: "answer to the queued input"}, &discussStep{send: "answer to the group"})
 	proc.svc.queue = sessionruntime.NewQueuedInputs(dbsqlc.New(env.pool), env.pool)
-	proc.svc.allowedTeam = team.DefaultTeamID
+	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	hw := env.write(t, passiveInput{from: alice, externalID: "g1", text: "someone in the group said this"})
 	queued := queueEnv{discussEnv: env, store: proc.svc.queue.(*sessionruntime.QueuedInputs)}
 	queued.park(t, "q1", "", "a follow-up typed in the panel")
@@ -1033,7 +1034,7 @@ func TestQueueSweepRunsAtStartAndOnEveryTick(t *testing.T) {
 	env := newQueueEnv(t)
 	proc := newQueueProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a", "scope-b"}}
-	proc.svc.resumeScopes = scopes
+	proc.svc.teamScopes = scopes
 	sweep := NewQueueSweep(proc.svc)
 
 	ticks := make(chan time.Time)

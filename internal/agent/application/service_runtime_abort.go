@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
@@ -43,7 +44,7 @@ func (s *Service) AbortRuntimeRun(
 	if s == nil || s.abortRuntime == nil {
 		return false, errors.New("session runtime abort is not configured")
 	}
-	ctx = nonNilContext(ctx)
+	ctx = runreq.NonNilContext(ctx)
 	applied, err := s.abortRuntime.AbortControl(ctx, botID, sessionID, runID, controlID)
 	if applied || err != nil {
 		reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), contextLifecycleWriteTimeout)

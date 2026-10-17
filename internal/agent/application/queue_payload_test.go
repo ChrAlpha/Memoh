@@ -1,6 +1,10 @@
 package application
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/felinics/memoh/internal/agent/runreq"
+)
 
 func TestQueuePayloadTextNeverExposesCommandEnvelope(t *testing.T) {
 	for _, tc := range []struct{ payload, want string }{
@@ -11,7 +15,7 @@ func TestQueuePayloadTextNeverExposesCommandEnvelope(t *testing.T) {
 		{`{"command":{"Token":"PRIVATE"`, ""},
 		{`unversioned raw text`, ""},
 	} {
-		if got := QueuePayloadText([]byte(tc.payload)); got != tc.want {
+		if got := runreq.QueuePayloadText([]byte(tc.payload)); got != tc.want {
 			t.Errorf("visible text=%q, want %q", got, tc.want)
 		}
 	}

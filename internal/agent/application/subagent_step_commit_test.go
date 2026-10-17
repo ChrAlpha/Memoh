@@ -8,6 +8,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -31,7 +32,7 @@ func subagentRunContext(botID, sessionID string, token int64) context.Context {
 
 func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
-	store := &recordingStepPersister{recordingMessageService: &recordingMessageService{}}
+	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	service := &Service{messageService: store}
 
 	if commit, interrupt := service.SubagentStepCommit(context.Background(), botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
@@ -60,7 +61,7 @@ func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 	if commit, interrupt := service.SubagentStepCommit(subagentRunContext(botID, sessionID, 7), botID, sessionID, "model", "req-msg-1", nil, nil); commit == nil || interrupt == nil {
 		t.Fatal("commit not enabled for an admitted fenced subagent run")
 	}
-	bare := &Service{messageService: &recordingMessageService{}}
+	bare := &Service{messageService: &agenttest.RecordingMessages{}}
 	if commit, interrupt := bare.SubagentStepCommit(subagentRunContext(botID, sessionID, 7), botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
 		t.Fatal("commit enabled on a message service without step persistence")
 	}
@@ -68,7 +69,7 @@ func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
 
 func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
-	store := &recordingStepPersister{recordingMessageService: &recordingMessageService{}}
+	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	service := &Service{messageService: store}
 	ctx := subagentRunContext(botID, sessionID, 9)
 	holder := contextfrag.NewLifecycleHolder()
@@ -158,7 +159,7 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 
 func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
-	store := &recordingStepPersister{recordingMessageService: &recordingMessageService{}}
+	store := &recordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	service := &Service{messageService: store}
 	ctx := subagentRunContext(botID, sessionID, 3)
 	persistedSteps := 0

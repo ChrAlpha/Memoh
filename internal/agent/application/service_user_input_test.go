@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -11,7 +10,10 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -22,68 +24,6 @@ import (
 )
 
 const testACPUserInputOwnerID = "owner-user"
-
-type fakeUserInputService struct {
-	target   userinput.Request
-	resolved userinput.Request
-
-	submitCalls   int
-	cancelCalls   int
-	createCalls   int
-	submitted     userinput.SubmitInput
-	canceled      userinput.CancelInput
-	submitErr     error
-	cancelErr     error
-	submitHook    func()
-	canRespond    bool
-	canRespondSet bool
-}
-
-func (*fakeUserInputService) AdvanceText(context.Context, userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error) {
-	return userinput.AdvanceTextResult{}, errors.New("unexpected AdvanceText")
-}
-
-func (f *fakeUserInputService) CreatePending(context.Context, userinput.CreatePendingInput) (userinput.Request, error) {
-	f.createCalls++
-	return userinput.Request{}, errors.New("unexpected CreatePending")
-}
-
-func (f *fakeUserInputService) Get(context.Context, string) (userinput.Request, error) {
-	return f.target, nil
-}
-
-func (f *fakeUserInputService) ResolveTarget(context.Context, userinput.ResolveInput) (userinput.Request, error) {
-	return f.target, nil
-}
-
-func (f *fakeUserInputService) Submit(_ context.Context, input userinput.SubmitInput) (userinput.Request, error) {
-	f.submitCalls++
-	f.submitted = input
-	if f.submitHook != nil {
-		f.submitHook()
-	}
-	if f.submitErr != nil {
-		return userinput.Request{}, f.submitErr
-	}
-	return f.resolved, nil
-}
-
-func (f *fakeUserInputService) Cancel(_ context.Context, input userinput.CancelInput) (userinput.Request, error) {
-	f.cancelCalls++
-	f.canceled = input
-	if f.cancelErr != nil {
-		return userinput.Request{}, f.cancelErr
-	}
-	return f.resolved, nil
-}
-
-func (f *fakeUserInputService) CanRespond(req userinput.Request) bool {
-	if f.canRespondSet {
-		return f.canRespond
-	}
-	// Default mirrors a live waiter: a pending row can accept a response.
-	return req.Status == userinput.StatusPending
-}
 
 func chatResolvedRequest() userinput.Request {
 	return userinput.Request{
@@ -102,54 +42,54 @@ func chatResolvedRequest() userinput.Request {
 }
 
 // The continuation path (prepareContinuationRunConfig) builds its outgoing
-// messages via repairToolCallClosures(nonNilModelMessages(sanitizeMessages(...))).
+// messages via runreq.RepairToolCallClosures(runreq.NonNilModelMessages(runreq.SanitizeMessages(...))).
 // This asserts that composition closes an orphaned older ask_user call while
 // preserving the current call's real result — the reason a process restart
 // mid-ask_user no longer breaks strict assistant-tool adjacency.
 func TestUserInputContinuationHistoryClosesOlderPendingCall(t *testing.T) {
 	t.Parallel()
 
-	oldCall := sdkMessagesToModelMessages([]sdk.Message{{
+	oldCall := runreq.SDKMessagesToModelMessages([]sdk.Message{{
 		Role: sdk.MessageRoleAssistant,
 		Content: []sdk.MessagePart{sdk.ToolCallPart{
 			ToolCallID: "old-call",
 			ToolName:   userinput.ToolNameAskUser,
 		}},
 	}})[0]
-	currentCall := sdkMessagesToModelMessages([]sdk.Message{{
+	currentCall := runreq.SDKMessagesToModelMessages([]sdk.Message{{
 		Role: sdk.MessageRoleAssistant,
 		Content: []sdk.MessagePart{sdk.ToolCallPart{
 			ToolCallID: "current-call",
 			ToolName:   userinput.ToolNameAskUser,
 		}},
 	}})[0]
-	currentResult := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
+	currentResult := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
 		ToolCallID: "current-call",
 		ToolName:   userinput.ToolNameAskUser,
 		Result:     toolexec.OutputFromValue(map[string]any{"status": userinput.StatusSubmitted}),
 	})})[0]
 
-	input := nonNilModelMessages(sanitizeMessages([]ModelMessage{
+	input := runreq.NonNilModelMessages(runreq.SanitizeMessages([]runreq.ModelMessage{
 		oldCall,
-		{Role: "user", Content: newTextContent("start another ask_user")},
+		{Role: "user", Content: runreq.NewTextContent("start another ask_user")},
 		currentCall,
 		currentResult,
 	}))
-	got := repairToolCallClosures(input, syntheticToolClosureError)
+	got := runreq.RepairToolCallClosures(input, runreq.SyntheticToolClosureError)
 	if len(got) != 5 {
 		t.Fatalf("history length = %d, want 5: %#v", len(got), got)
 	}
-	oldResults := extractToolResultParts(got[1])
+	oldResults := runreq.ExtractToolResultParts(got[1])
 	if len(oldResults) != 1 || oldResults[0].ToolCallID != "old-call" || !oldResults[0].IsError {
 		t.Fatalf("old call closure = %#v", oldResults)
 	}
-	currentResults := extractToolResultParts(got[4])
+	currentResults := runreq.ExtractToolResultParts(got[4])
 	if len(currentResults) != 1 || currentResults[0].ToolCallID != "current-call" || currentResults[0].IsError {
 		t.Fatalf("current result = %#v", currentResults)
 	}
 }
 
-func collectAgentStreamEvents(t *testing.T, ch <-chan WSStreamEvent, count int) []native.StreamEvent {
+func collectAgentStreamEvents(t *testing.T, ch <-chan runreq.WSStreamEvent, count int) []native.StreamEvent {
 	t.Helper()
 	events := make([]native.StreamEvent, 0, count)
 	timeout := time.After(2 * time.Second)
@@ -169,13 +109,13 @@ func collectAgentStreamEvents(t *testing.T, ch <-chan WSStreamEvent, count int) 
 }
 
 func attachACPUserInputAuth(resolver *Service) {
-	resolver.botPermissions = &fakeBotPermissionChecker{
-		values: map[string]bool{
+	resolver.botPermissions = &agenttest.PermissionChecker{
+		Values: map[string]bool{
 			"bot-1:" + testACPUserInputOwnerID + ":" + bots.PermissionWorkspaceExec: true,
 		},
 	}
-	resolver.sessionService = &fakeBackgroundSessionService{
-		getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+	resolver.sessionService = &agenttest.Sessions{
+		GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
 			return session.Thread{
 				ID:          sessionID,
 				BotID:       "bot-1",
@@ -287,9 +227,9 @@ func TestUserInputAnswersFromText(t *testing.T) {
 func TestRespondUserInputContinuesChatSession(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeUserInputService{
-		target:   userinput.Request{ID: "input-1", Status: userinput.StatusPending},
-		resolved: chatResolvedRequest(),
+	fake := &agenttest.UserInput{
+		Target:   userinput.Request{ID: "input-1", Status: userinput.StatusPending},
+		Resolved: chatResolvedRequest(),
 	}
 	var continued *sdk.ToolResultPart
 	resolver := &Service{
@@ -303,7 +243,7 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 		},
 	}
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan runreq.WSStreamEvent, 4)
 	answers := []userinput.QuestionAnswer{{QuestionID: "q1", OptionIDs: []string{"q1.o1"}}}
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:    "bot-1",
@@ -314,11 +254,11 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 		t.Fatalf("respond user input: %v", err)
 	}
 
-	if fake.submitCalls != 1 || fake.cancelCalls != 0 {
-		t.Fatalf("submit/cancel calls = %d/%d", fake.submitCalls, fake.cancelCalls)
+	if fake.SubmitCalls != 1 || fake.CancelCalls != 0 {
+		t.Fatalf("submit/cancel calls = %d/%d", fake.SubmitCalls, fake.CancelCalls)
 	}
-	if fake.submitted.RequestID != "input-1" || len(fake.submitted.Answers) != 1 || fake.submitted.Answers[0].QuestionID != "q1" {
-		t.Fatalf("submitted input = %#v", fake.submitted)
+	if fake.Submitted.RequestID != "input-1" || len(fake.Submitted.Answers) != 1 || fake.Submitted.Answers[0].QuestionID != "q1" {
+		t.Fatalf("submitted input = %#v", fake.Submitted)
 	}
 	if continued == nil {
 		t.Fatal("chat request must continue the session")
@@ -351,8 +291,8 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 		runID     = "run-1"
 		inputID   = "input-1"
 	)
-	fake := &fakeUserInputService{
-		target: userinput.Request{
+	fake := &agenttest.UserInput{
+		Target: userinput.Request{
 			ID:         inputID,
 			BotID:      botID,
 			SessionID:  sessionID,
@@ -360,7 +300,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 			ToolName:   userinput.ToolNameAskUser,
 			Status:     userinput.StatusPending,
 		},
-		resolved: chatResolvedRequest(),
+		Resolved: chatResolvedRequest(),
 	}
 	releaseContinuation := make(chan struct{})
 	continuationStarted := make(chan struct{})
@@ -373,7 +313,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 				select {
 				case <-releaseContinuation:
 				case <-ctx.Done():
-					return execEnding{Cause: ctx.Err(), Phase: phaseExecution}
+					return execEnding{Cause: ctx.Err(), Phase: outcome.PhaseExecution}
 				}
 				emit(native.StreamEvent{Type: native.EventAgentStart})
 				return execEnding{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}
@@ -439,8 +379,8 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handle decision command: %v", err)
 	}
-	if fake.submitCalls != 1 {
-		t.Fatalf("submit calls = %d, want 1 before acknowledgement", fake.submitCalls)
+	if fake.SubmitCalls != 1 {
+		t.Fatalf("submit calls = %d, want 1 before acknowledgement", fake.SubmitCalls)
 	}
 
 	snapshot, err = manager.Snapshot(context.Background(), botID, sessionID)
@@ -505,9 +445,9 @@ func TestRespondUserInputLimitsChatToolResult(t *testing.T) {
 		},
 		"instruction": "Continue with the answer.",
 	}
-	fake := &fakeUserInputService{
-		target:   userinput.Request{ID: "input-1", Status: userinput.StatusPending},
-		resolved: resolved,
+	fake := &agenttest.UserInput{
+		Target:   userinput.Request{ID: "input-1", Status: userinput.StatusPending},
+		Resolved: resolved,
 	}
 	var continued *sdk.ToolResultPart
 	resolver := &Service{
@@ -559,11 +499,11 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 
 	resolved := chatResolvedRequest()
 	resolved.ProviderMetadata = map[string]any{"source": userinput.ProviderSourceACPMCP}
-	fake := &fakeUserInputService{
-		target:        userinput.Request{ID: "input-1", Status: userinput.StatusPending, ProviderMetadata: map[string]any{"source": userinput.ProviderSourceACPMCP}},
-		resolved:      resolved,
-		canRespond:    true,
-		canRespondSet: true,
+	fake := &agenttest.UserInput{
+		Target:            userinput.Request{ID: "input-1", Status: userinput.StatusPending, ProviderMetadata: map[string]any{"source": userinput.ProviderSourceACPMCP}},
+		Resolved:          resolved,
+		RespondAllowed:    true,
+		RespondAllowedSet: true,
 	}
 	resolver := &Service{
 		userInput: fake,
@@ -574,7 +514,7 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan runreq.WSStreamEvent, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -584,10 +524,10 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("respond user input: %v", err)
 	}
-	if fake.submitCalls != 1 {
-		t.Fatalf("submit calls = %d", fake.submitCalls)
+	if fake.SubmitCalls != 1 {
+		t.Fatalf("submit calls = %d", fake.SubmitCalls)
 	}
-	// emitApprovalAck sends agent start + end so the client stream settles.
+	// runreq.EmitApprovalAck sends agent start + end so the client stream settles.
 	if len(eventCh) != 2 {
 		t.Fatalf("ack events = %d, want 2", len(eventCh))
 	}
@@ -596,15 +536,15 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeUserInputService{
-		target: userinput.Request{
+	fake := &agenttest.UserInput{
+		Target: userinput.Request{
 			ID:               "input-1",
 			Status:           userinput.StatusPending,
 			ProviderMetadata: map[string]any{"source": userinput.ProviderSourceACPMCP},
 		},
-		submitErr:     userinput.ErrAlreadyDecided,
-		canRespond:    true,
-		canRespondSet: true,
+		SubmitErr:         userinput.ErrAlreadyDecided,
+		RespondAllowed:    true,
+		RespondAllowedSet: true,
 	}
 	resolver := &Service{
 		userInput: fake,
@@ -615,7 +555,7 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan runreq.WSStreamEvent, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -625,8 +565,8 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("respond user input: %v", err)
 	}
-	if fake.submitCalls != 1 || fake.cancelCalls != 0 {
-		t.Fatalf("submit/cancel calls = %d/%d", fake.submitCalls, fake.cancelCalls)
+	if fake.SubmitCalls != 1 || fake.CancelCalls != 0 {
+		t.Fatalf("submit/cancel calls = %d/%d", fake.SubmitCalls, fake.CancelCalls)
 	}
 	if len(eventCh) != 2 {
 		t.Fatalf("ack events = %d, want 2", len(eventCh))
@@ -638,15 +578,15 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 
 	resolved := chatResolvedRequest()
 	resolved.ProviderMetadata = map[string]any{"source": userinput.ProviderSourceACPMCP}
-	fake := &fakeUserInputService{
-		target: userinput.Request{
+	fake := &agenttest.UserInput{
+		Target: userinput.Request{
 			ID:               "input-1",
 			Status:           userinput.StatusPending,
 			ProviderMetadata: map[string]any{"source": userinput.ProviderSourceACPMCP},
 		},
-		resolved:      resolved,
-		canRespond:    true,
-		canRespondSet: true,
+		Resolved:          resolved,
+		RespondAllowed:    true,
+		RespondAllowedSet: true,
 	}
 	resolver := &Service{
 		userInput: fake,
@@ -657,7 +597,7 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan runreq.WSStreamEvent, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -667,11 +607,11 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("respond user input: %v", err)
 	}
-	if fake.submitCalls != 1 {
-		t.Fatalf("submit calls = %d, want 1", fake.submitCalls)
+	if fake.SubmitCalls != 1 {
+		t.Fatalf("submit calls = %d, want 1", fake.SubmitCalls)
 	}
-	if fake.cancelCalls != 0 {
-		t.Fatalf("cancel calls = %d, want 0", fake.cancelCalls)
+	if fake.CancelCalls != 0 {
+		t.Fatalf("cancel calls = %d, want 0", fake.CancelCalls)
 	}
 	if len(eventCh) != 2 {
 		t.Fatalf("ack events = %d, want 2", len(eventCh))
@@ -684,18 +624,18 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	resolved := chatResolvedRequest()
 	resolved.ProviderMetadata = map[string]any{"source": userinput.ProviderSourceACPMCP}
 	submitted := make(chan struct{})
-	fake := &fakeUserInputService{
-		target: userinput.Request{
+	fake := &agenttest.UserInput{
+		Target: userinput.Request{
 			ID:               "input-1",
 			SessionID:        "session-1",
 			ToolCallID:       "call-1",
 			Status:           userinput.StatusPending,
 			ProviderMetadata: map[string]any{"source": userinput.ProviderSourceACPMCP},
 		},
-		resolved:      resolved,
-		submitHook:    func() { close(submitted) },
-		canRespond:    true,
-		canRespondSet: true,
+		Resolved:          resolved,
+		SubmitHook:        func() { close(submitted) },
+		RespondAllowed:    true,
+		RespondAllowedSet: true,
 	}
 	resolver := &Service{
 		userInput: fake,
@@ -711,7 +651,7 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	}
 	defer resolver.unregisterExternalAgentActivePrompt("bot-1", "session-1", hub)
 
-	eventCh := make(chan WSStreamEvent, 8)
+	eventCh := make(chan runreq.WSStreamEvent, 8)
 	done := make(chan error, 1)
 	go func() {
 		done <- resolver.respondUserInput(context.Background(), UserInputResponseInput{
@@ -762,8 +702,8 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	if events[2].Type != native.EventEnd {
 		t.Fatalf("third event = %q, want %q", events[2].Type, native.EventEnd)
 	}
-	if fake.submitCalls != 1 || fake.cancelCalls != 0 {
-		t.Fatalf("submit/cancel calls = %d/%d", fake.submitCalls, fake.cancelCalls)
+	if fake.SubmitCalls != 1 || fake.CancelCalls != 0 {
+		t.Fatalf("submit/cancel calls = %d/%d", fake.SubmitCalls, fake.CancelCalls)
 	}
 }
 
@@ -772,16 +712,16 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 
 	resolved := chatResolvedRequest()
 	resolved.ProviderMetadata = map[string]any{"source": userinput.ProviderSourceACPMCP}
-	fake := &fakeUserInputService{
-		target: userinput.Request{
+	fake := &agenttest.UserInput{
+		Target: userinput.Request{
 			ID:               "input-1",
 			SessionID:        "session-1",
 			Status:           userinput.StatusPending,
 			ProviderMetadata: map[string]any{"source": userinput.ProviderSourceACPMCP},
 		},
-		resolved:      resolved,
-		canRespond:    true,
-		canRespondSet: true,
+		Resolved:          resolved,
+		RespondAllowed:    true,
+		RespondAllowedSet: true,
 	}
 	resolver := &Service{
 		userInput: fake,
@@ -797,7 +737,7 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 	}
 	defer resolver.unregisterExternalAgentActivePrompt("bot-1", "session-1", hub)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan runreq.WSStreamEvent, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:                      "bot-1",
 		ThreadID:                   "session-1",
@@ -808,8 +748,8 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 	if err != nil {
 		t.Fatalf("respond user input: %v", err)
 	}
-	if fake.submitCalls != 1 || fake.cancelCalls != 0 {
-		t.Fatalf("submit/cancel calls = %d/%d", fake.submitCalls, fake.cancelCalls)
+	if fake.SubmitCalls != 1 || fake.CancelCalls != 0 {
+		t.Fatalf("submit/cancel calls = %d/%d", fake.SubmitCalls, fake.CancelCalls)
 	}
 	if len(eventCh) != 2 {
 		t.Fatalf("ack events = %d, want 2", len(eventCh))
@@ -821,16 +761,16 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 
 	resolved := chatResolvedRequest()
 	resolved.ProviderMetadata = map[string]any{"source": userinput.ProviderSourceACPMCP}
-	fake := &fakeUserInputService{
-		target: userinput.Request{
+	fake := &agenttest.UserInput{
+		Target: userinput.Request{
 			ID:               "input-1",
 			Status:           userinput.StatusPending,
 			ProviderMetadata: map[string]any{"source": userinput.ProviderSourceACPMCP},
 		},
-		resolved: resolved,
+		Resolved: resolved,
 		// The blocked waiter is gone (process restart, prompt settled).
-		canRespondSet: true,
-		canRespond:    false,
+		RespondAllowedSet: true,
+		RespondAllowed:    false,
 	}
 	resolver := &Service{
 		userInput: fake,
@@ -841,7 +781,7 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 	}
 	attachACPUserInputAuth(resolver)
 
-	eventCh := make(chan WSStreamEvent, 4)
+	eventCh := make(chan runreq.WSStreamEvent, 4)
 	err := resolver.respondUserInput(context.Background(), UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
@@ -851,14 +791,14 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 	if err != nil {
 		t.Fatalf("respond user input: %v", err)
 	}
-	if fake.submitCalls != 0 {
-		t.Fatalf("submit calls = %d, want 0", fake.submitCalls)
+	if fake.SubmitCalls != 0 {
+		t.Fatalf("submit calls = %d, want 0", fake.SubmitCalls)
 	}
-	if fake.cancelCalls != 1 {
-		t.Fatalf("cancel calls = %d, want 1", fake.cancelCalls)
+	if fake.CancelCalls != 1 {
+		t.Fatalf("cancel calls = %d, want 1", fake.CancelCalls)
 	}
-	if fake.canceled.RequestID != "input-1" || fake.canceled.Reason == "" {
-		t.Fatalf("canceled input = %#v", fake.canceled)
+	if fake.Canceled.RequestID != "input-1" || fake.Canceled.Reason == "" {
+		t.Fatalf("canceled input = %#v", fake.Canceled)
 	}
 	if len(eventCh) != 2 {
 		t.Fatalf("ack events = %d, want 2", len(eventCh))
@@ -868,9 +808,9 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 	t.Parallel()
 
-	fake := &fakeUserInputService{
-		target:   userinput.Request{ID: "input-1", Status: userinput.StatusPending},
-		resolved: chatResolvedRequest(),
+	fake := &agenttest.UserInput{
+		Target:   userinput.Request{ID: "input-1", Status: userinput.StatusPending},
+		Resolved: chatResolvedRequest(),
 	}
 	continueCalls := 0
 	resolver := &Service{
@@ -890,11 +830,11 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("respond user input: %v", err)
 	}
-	if fake.cancelCalls != 1 || fake.submitCalls != 0 {
-		t.Fatalf("cancel/submit calls = %d/%d", fake.cancelCalls, fake.submitCalls)
+	if fake.CancelCalls != 1 || fake.SubmitCalls != 0 {
+		t.Fatalf("cancel/submit calls = %d/%d", fake.CancelCalls, fake.SubmitCalls)
 	}
-	if fake.canceled.RequestID != "input-1" || fake.canceled.Reason != "user_canceled" {
-		t.Fatalf("canceled input = %#v", fake.canceled)
+	if fake.Canceled.RequestID != "input-1" || fake.Canceled.Reason != "user_canceled" {
+		t.Fatalf("canceled input = %#v", fake.Canceled)
 	}
 	if continueCalls != 1 {
 		t.Fatalf("canceled chat request must still continue the session, calls = %d", continueCalls)

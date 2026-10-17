@@ -12,10 +12,11 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 )
 
-func historyContextFragsForMessages(messages []ModelMessage, records []historyfrag.HistoryRecord) []contextfrag.ContextFrag {
+func historyContextFragsForMessages(messages []runreq.ModelMessage, records []historyfrag.HistoryRecord) []contextfrag.ContextFrag {
 	if len(messages) == 0 || len(records) == 0 {
 		return nil
 	}
@@ -44,17 +45,17 @@ func historyContextFragsForMessages(messages []ModelMessage, records []historyfr
 	return frags
 }
 
-func looksLikeSummaryMessage(msg ModelMessage) bool {
+func looksLikeSummaryMessage(msg runreq.ModelMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(msg.Role), "user") &&
 		strings.HasPrefix(strings.TrimSpace(msg.TextContent()), "<summary>")
 }
 
-func sameModelMessage(a ModelMessage, b ModelMessage) bool {
+func sameModelMessage(a runreq.ModelMessage, b runreq.ModelMessage) bool {
 	return strings.EqualFold(strings.TrimSpace(a.Role), strings.TrimSpace(b.Role)) &&
 		string(a.Content) == string(b.Content)
 }
 
-func historySourceMessageIDsForMessages(messages []ModelMessage, records []historyfrag.HistoryRecord) []string {
+func historySourceMessageIDsForMessages(messages []runreq.ModelMessage, records []historyfrag.HistoryRecord) []string {
 	sourceIDs := make([]string, len(messages))
 	if len(messages) == 0 || len(records) == 0 {
 		return sourceIDs
@@ -88,7 +89,7 @@ func historySourceMessageIDsForMessages(messages []ModelMessage, records []histo
 	return sourceIDs
 }
 
-func modelMessageSourceKey(message ModelMessage) string {
+func modelMessageSourceKey(message runreq.ModelMessage) string {
 	return strings.ToLower(strings.TrimSpace(message.Role)) + "\x00" + string(message.Content)
 }
 
@@ -336,7 +337,7 @@ func recordArtifactOwner(record historyfrag.HistoryRecord, fallback contextfrag.
 		sessionIDKnown = sessionID != ""
 	}
 	return compaction.ArtifactOwner{
-		BotID:          firstNonEmpty(strings.TrimSpace(record.BotID), strings.TrimSpace(fallback.BotID)),
+		BotID:          runreq.FirstNonEmpty(strings.TrimSpace(record.BotID), strings.TrimSpace(fallback.BotID)),
 		SessionID:      sessionID,
 		SessionIDKnown: sessionIDKnown,
 	}
@@ -410,16 +411,16 @@ func (s *Service) coveredRefsForCompact(ctx context.Context, compactID pgtype.UU
 	rows, err := s.queries.ListMessageRefsByCompactID(ctx, compactID)
 	if err != nil {
 		if s.logger != nil {
-			s.logger.WarnContext(ctx, "coveredRefsForCompact: failed to load compacted message refs", slog.String("compact_id", pgUUIDString(compactID)), slog.Any("error", err))
+			s.logger.WarnContext(ctx, "coveredRefsForCompact: failed to load compacted message refs", slog.String("compact_id", runreq.PGUUIDString(compactID)), slog.Any("error", err))
 		}
 		return nil
 	}
 	refs := make([]contextfrag.ContextRef, 0, len(rows))
 	for _, row := range rows {
-		ref, err := historyfrag.DBMessageIdentityRef(pgUUIDString(row.ID))
+		ref, err := historyfrag.DBMessageIdentityRef(runreq.PGUUIDString(row.ID))
 		if err != nil {
 			if s.logger != nil {
-				s.logger.WarnContext(ctx, "coveredRefsForCompact: skipped compacted message ref", slog.String("compact_id", pgUUIDString(compactID)), slog.Any("error", err))
+				s.logger.WarnContext(ctx, "coveredRefsForCompact: skipped compacted message ref", slog.String("compact_id", runreq.PGUUIDString(compactID)), slog.Any("error", err))
 			}
 			continue
 		}

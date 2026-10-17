@@ -6,7 +6,7 @@
 
 - The AI agent runs **in-process** within the Go server — there is no separate agent gateway service.
 - `internal/agent/` is a bounded-package namespace. It intentionally contains no root Go package.
-- `internal/agent/application/` owns turn orchestration: message assembly, history, memory, compaction, decisions, persistence, and runtime dispatch.
+- `internal/agent/application/` owns turn orchestration: message assembly, history, memory, compaction, decisions, persistence, and runtime dispatch. Its shared request types and message helpers live in `internal/agent/runreq/`; how a run ended (failure codes, stream failure events, the run result record) lives in `internal/agent/outcome/`.
 - The Twilight AI native runtime lives in `internal/agent/runtime/native/`; `agent.go` there provides `Stream()` (SSE streaming) and `Generate()` (non-streaming) methods.
 - `internal/agent/turn/` is the pure port used by Channel and by the authenticated in-process/gRPC transports. Internal code says Thread; compatibility adapters keep external `session_id` and existing gRPC fields stable.
 - Model/client types are defined in `internal/models/types.go`: `openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, `openai-codex`, `github-copilot`, `edge-speech`.
@@ -284,11 +284,12 @@ The development Air supervisor gives the server the same shutdown allowance.
 
 ### Hosted tenant scope integration
 
-The composition root installs `SetSessionResumeScopeProvider` before startup.
+The composition root passes a `runreq.TeamScopes` as `Deps.TeamScopes`; without
+one, `New` uses `runreq.SingleTeam(AllowedTeam)`.
 Its provider enumerates a bounded page of opaque Team IDs through the hosted
 scope catalog, binds each ID to the ordinary database context, and reports the
 current binding. A hosted adapter can delegate to its existing session-runtime
-reaper scope provider, converting the page to `SessionResumeScopePage`.
+reaper scope provider, converting the page to `runreq.TeamScopePage`.
 
 Every run query, workspace readiness probe, authorization check, admission,
 stream and terminal write retains that bound context. The worker rejects a run

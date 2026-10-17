@@ -7,8 +7,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
@@ -33,15 +35,15 @@ func TestReplaceRecentCompactedMessagesFollowsSupersession(t *testing.T) {
 		Coverage:  coverage,
 		ParentIds: []pgtype.UUID{mustPGUUID(t, parentID)},
 	}
-	queries := &recordingCompactionLogQueries{
-		byID: map[pgtype.UUID]sqlc.BotHistoryMessageCompact{
+	queries := &agenttest.RecordingCompactionLog{
+		ByID: map[pgtype.UUID]sqlc.BotHistoryMessageCompact{
 			parent.ID: parent,
 			active.ID: active,
 		},
 	}
 	resolver := &Service{queries: queries}
 	recent := []historyfrag.HistoryRecord{
-		historyRecord("row-parent", ModelMessage{Role: "user", Content: newTextContent("covered by parent")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-parent", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("covered by parent")}, func(record *historyfrag.HistoryRecord) {
 			record.CompactID = parentID
 		}),
 	}
@@ -51,8 +53,8 @@ func TestReplaceRecentCompactedMessagesFollowsSupersession(t *testing.T) {
 	if len(got) != 1 || got[0].CompactID != activeID {
 		t.Fatalf("sessionless superseded group must resolve to active artifact %s: %#v", activeID, got)
 	}
-	if len(queries.getCalls) != 2 || queries.getCalls[0] != parent.ID || queries.getCalls[1] != active.ID {
-		t.Fatalf("lineage lookups = %#v, want parent then active", queries.getCalls)
+	if len(queries.GetCalls) != 2 || queries.GetCalls[0] != parent.ID || queries.GetCalls[1] != active.ID {
+		t.Fatalf("lineage lookups = %#v, want parent then active", queries.GetCalls)
 	}
 }
 
@@ -70,12 +72,12 @@ func TestReplaceRecentCompactedMessagesUsesRecordSessionAsOwner(t *testing.T) {
 		Status:    "ok",
 		Summary:   "foreign session summary",
 	}
-	queries := &recordingCompactionLogQueries{
-		byID: map[pgtype.UUID]sqlc.BotHistoryMessageCompact{foreign.ID: foreign},
+	queries := &agenttest.RecordingCompactionLog{
+		ByID: map[pgtype.UUID]sqlc.BotHistoryMessageCompact{foreign.ID: foreign},
 	}
 	resolver := &Service{queries: queries}
 	recent := []historyfrag.HistoryRecord{
-		historyRecord("row-owned-by-session", ModelMessage{Role: "user", Content: newTextContent("keep local raw")}, func(record *historyfrag.HistoryRecord) {
+		historyRecord("row-owned-by-session", runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent("keep local raw")}, func(record *historyfrag.HistoryRecord) {
 			record.BotID = botID
 			record.SessionID = recordSessionID
 			record.CompactID = foreignCompactID
@@ -87,7 +89,7 @@ func TestReplaceRecentCompactedMessagesUsesRecordSessionAsOwner(t *testing.T) {
 	if gotText := recordTexts(got); !reflect.DeepEqual(gotText, []string{"keep local raw"}) {
 		t.Fatalf("cross-session artifact replaced local history: %#v", gotText)
 	}
-	if len(queries.getCalls) != 0 {
-		t.Fatalf("session-owned group fell back to unscoped point lookup: %#v", queries.getCalls)
+	if len(queries.GetCalls) != 0 {
+		t.Fatalf("session-owned group fell back to unscoped point lookup: %#v", queries.GetCalls)
 	}
 }

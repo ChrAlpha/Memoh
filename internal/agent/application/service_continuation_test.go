@@ -7,6 +7,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -107,7 +108,7 @@ func TestPrepareContinuationRunConfigPropagatesArtifactProjectionFailure(t *test
 	t.Parallel()
 
 	sentinel := errors.New("artifact projection unavailable")
-	resolver := &Service{queries: &recordingCompactionLogQueries{listErr: sentinel}}
+	resolver := &Service{queries: &agenttest.RecordingCompactionLog{ListErr: sentinel}}
 	got, err := resolver.prepareContinuationRunConfig(
 		context.Background(),
 		native.RunConfig{Query: "must not survive"},
@@ -125,7 +126,7 @@ func TestPrepareContinuationRunConfigPropagatesArtifactProjectionFailure(t *test
 
 func TestPendingRuntimeDecisionsFailsClosedOnRuntimeLookupFailure(t *testing.T) {
 	sentinel := errors.New("session unavailable")
-	service := &Service{queries: &abortLifecycleQueries{pending: true}, sessionService: &fakeBackgroundSessionService{getFn: func(context.Context, string) (sessionpkg.Thread, error) { return sessionpkg.Thread{}, sentinel }}}
+	service := &Service{queries: &abortLifecycleQueries{pending: true}, sessionService: &agenttest.Sessions{GetFn: func(context.Context, string) (sessionpkg.Thread, error) { return sessionpkg.Thread{}, sentinel }}}
 	got, err := service.PendingRuntimeDecisions(t.Context(), "00000000-0000-0000-0000-000000000001")
 	if !errors.Is(err, sentinel) || got != nil {
 		t.Fatalf("runtime lookup error treated as native: %v %v", got, err)
@@ -137,7 +138,7 @@ func TestPendingRuntimeDecisionsFailsClosedOnRuntimeLookupFailure(t *testing.T) 
 func TestPrepareContinuationRunConfigOffersQuestionsOnlyToALiveRun(t *testing.T) {
 	t.Parallel()
 
-	resolver := &Service{userInput: &fakeUserInputService{}}
+	resolver := &Service{userInput: &agenttest.UserInput{}}
 	for _, live := range []bool{true, false} {
 		got, err := resolver.prepareContinuationRunConfig(context.Background(), native.RunConfig{}, historyfrag.ScopeFallback{}, contextfrag.Scope{}, live)
 		if err != nil {

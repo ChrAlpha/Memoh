@@ -1,4 +1,4 @@
-package application
+package outcome
 
 import (
 	"github.com/felinics/memoh/internal/apperror"
@@ -9,7 +9,7 @@ import (
 // the catalog knows. The default is this process's own unnamed failure, not a
 // code chosen by the entry that started the run.
 func classifyRunFailure(cause error) apperror.Code {
-	if code := publicFailureCode(cause); code != "" {
+	if code := PublicFailureCode(cause); code != "" {
 		return code
 	}
 	return apperror.CodeRuntimeRunFailed
@@ -22,9 +22,9 @@ func hasCatalogCode(err error) bool {
 	return ok
 }
 
-// publicFailureCode is the catalogued code a cause carries, or the code
+// PublicFailureCode is the catalogued code a cause carries, or the code
 // ExternalAgentError gives it. It is empty when the cause has neither.
-func publicFailureCode(cause error) apperror.Code {
+func PublicFailureCode(cause error) apperror.Code {
 	public := ExternalAgentError(cause)
 	if !hasCatalogCode(public) {
 		return ""
@@ -45,5 +45,5 @@ type RunOutcome struct {
 // code the cause carries, or empty to let the session runtime name it. The code
 // travels in its own column; it is never written as the run's error message.
 func (o RunOutcome) ErrorCode() string {
-	return string(publicFailureCode(o.Cause))
+	return string(PublicFailureCode(o.Cause))
 }

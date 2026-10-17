@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
@@ -15,14 +17,14 @@ import (
 // IM, follow-up, and resume. It handles skill checks, runtime dispatch,
 // workspace preparation, replacement preflight, user-message hook, resolve,
 // title generation, and executor construction.
-func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) (runPlan, error) {
+func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec runSpec) (runPlan, error) {
 	// The intent is recorded before anything else: it is what lets a later
 	// process resume this run after a crash, and it has to name the run's
 	// input as it arrived rather than as setup rewrote it.
 	if err := s.recordRunResumeContext(ctx, req); err != nil {
 		return runPlan{}, err
 	}
-	if err := rejectReservedSkillMetadataIfPresent(req); err != nil {
+	if err := runreq.RejectReservedSkillMetadataIfPresent(req); err != nil {
 		return runPlan{}, err
 	}
 	if err := s.rejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
@@ -76,7 +78,7 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 			if ctx.Err() != nil {
 				return runPlan{}, err
 			}
-			return runPlan{}, classifyUserMessageHookError(err)
+			return runPlan{}, outcome.ClassifyUserMessageHookError(err)
 		}
 	}
 
@@ -84,12 +86,12 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 	if err != nil {
 		return runPlan{}, fmt.Errorf("resolve: %w", err)
 	}
-	req.Query = rc.query
-	req.RunID = rc.runConfig.RunID
+	req.Query = rc.Query
+	req.RunID = rc.RunConfig.RunID
 
 	s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
-	cfg := rc.runConfig
+	cfg := rc.RunConfig
 	cfg.LiveToolStream = true
 	// Whether this run may park on a question follows the process's user input
 	// port, not its delivery end: an interruption resumed from the last process
@@ -140,7 +142,7 @@ func (s *Service) chatSetup(ctx context.Context, req ChatRequest, spec runSpec) 
 // something else cannot forget to pass it. The plan carries the context
 // lifecycle the run's context sections build, so the lifecycle row of a
 // runtime's turn records what the runtime was given, whoever started it.
-func (s *Service) externalRunPlan(ctx context.Context, req ChatRequest, spec runSpec, driver external.Driver) (runPlan, error) {
+func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, spec runSpec, driver external.Driver) (runPlan, error) {
 	plan, req, err := s.prepareExternal(ctx, req, driver)
 	if err != nil {
 		return runPlan{}, err
@@ -162,12 +164,12 @@ func (s *Service) externalRunPlan(ctx context.Context, req ChatRequest, spec run
 			service:    s,
 			plan:       plan,
 			req:        req,
-			prompt:     modelQueryText(req),
+			prompt:     runreq.ModelQueryText(req),
 			unattended: spec.Unattended,
 			input:      spec.Input,
 			lifecycle:  lifecycle,
 			timing:     newReasoningTimingTracker(nil),
-			rc:         resolvedContext{runConfig: cfg},
+			rc:         runreq.ResolvedContext{RunConfig: cfg},
 		},
 		Req:        req,
 		IdleEffort: req.ReasoningEffort,

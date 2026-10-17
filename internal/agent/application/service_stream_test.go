@@ -11,6 +11,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -56,7 +59,7 @@ func TestAgentStreamFailureConversion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			failure := agentStreamFailure(tc.event)
+			failure := outcome.AgentStreamFailure(tc.event)
 			if got := apperror.CodeOf(failure); got != tc.code {
 				t.Fatalf("code = %q, want %q", got, tc.code)
 			}
@@ -65,7 +68,7 @@ func TestAgentStreamFailureConversion(t *testing.T) {
 			}
 		})
 	}
-	if err := agentStreamFailure(native.StreamEvent{Type: native.EventTextDelta}); err != nil {
+	if err := outcome.AgentStreamFailure(native.StreamEvent{Type: native.EventTextDelta}); err != nil {
 		t.Fatalf("agentStreamFailure(text delta) = %v, want nil", err)
 	}
 }
@@ -78,7 +81,7 @@ func TestPublicAgentStreamEventRedactsPrivateFailure(t *testing.T) {
 		&sdk.APIError{Provider: "openai-completions", StatusCode: 401, Kind: sdk.KindAuthentication, Message: "Incorrect API key provided: SECRET", RequestID: "req_SECRET"},
 		errors.New("SECRET window"),
 	} {
-		event := publicAgentStreamEvent(native.StreamEvent{Type: native.EventError, Cause: cause})
+		event := outcome.PublicAgentStreamEvent(native.StreamEvent{Type: native.EventError, Cause: cause})
 		definition, ok := apperror.Lookup(apperror.Code(event.Code))
 		if !ok || event.Error != definition.Detail || event.Cause != nil {
 			t.Fatalf("public event = %#v, want a catalogued code with its detail", event)
@@ -98,7 +101,7 @@ func TestAgentFailureStreamEventExposesOnlyStablePublicContract(t *testing.T) {
 
 	t.Run("timeout", func(t *testing.T) {
 		cause := apperror.Wrap(apperror.CodeAgentResponseTimeout, errors.New("SECRET provider timeout"), nil)
-		event := agentFailureStreamEvent(cause)
+		event := outcome.AgentFailureStreamEvent(cause)
 		if event.Type != native.EventError || event.Code != string(apperror.CodeAgentResponseTimeout) {
 			t.Fatalf("timeout event = %#v", event)
 		}
@@ -112,7 +115,7 @@ func TestAgentFailureStreamEventExposesOnlyStablePublicContract(t *testing.T) {
 	})
 
 	t.Run("uncatalogued failure", func(t *testing.T) {
-		event := agentFailureStreamEvent(errors.New("SECRET provider response"))
+		event := outcome.AgentFailureStreamEvent(errors.New("SECRET provider response"))
 		if event.Code != string(apperror.CodeRuntimeRunFailed) {
 			t.Fatalf("fallback code = %q", event.Code)
 		}
@@ -120,163 +123,6 @@ func TestAgentFailureStreamEventExposesOnlyStablePublicContract(t *testing.T) {
 			t.Fatalf("private failure cause leaked: %q", event.Error)
 		}
 	})
-}
-
-type recordingMessageService struct {
-	persisted               []messagepkg.PersistInput
-	persistErr              error
-	roundPersistErr         error
-	roundOptions            []messagepkg.RoundPersistenceOptions
-	replaced                int
-	replacementTurnID       string
-	replacementTurnPosition *int64
-	deleted                 [][]string
-}
-
-func (s *recordingMessageService) Persist(_ context.Context, input messagepkg.PersistInput) (messagepkg.Message, error) {
-	if s.persistErr != nil {
-		return messagepkg.Message{}, s.persistErr
-	}
-	s.persisted = append(s.persisted, input)
-	return messagepkg.Message{ID: "message-id", SessionID: input.SessionID, Role: input.Role, Content: input.Content, DisplayContent: input.DisplayText}, nil
-}
-
-func (s *recordingMessageService) PersistRound(_ context.Context, inputs []messagepkg.PersistInput, options messagepkg.RoundPersistenceOptions) ([]messagepkg.Message, bool, error) {
-	s.roundOptions = append(s.roundOptions, options)
-	if s.roundPersistErr != nil {
-		return nil, true, s.roundPersistErr
-	}
-	if s.persistErr != nil {
-		return nil, true, s.persistErr
-	}
-	persisted := make([]messagepkg.Message, 0, len(inputs))
-	for _, input := range inputs {
-		s.persisted = append(s.persisted, input)
-		persisted = append(persisted, messagepkg.Message{
-			ID:             "message-id",
-			SessionID:      input.SessionID,
-			Role:           input.Role,
-			Content:        input.Content,
-			DisplayContent: input.DisplayText,
-		})
-	}
-	return persisted, true, nil
-}
-
-func (*recordingMessageService) List(context.Context, string) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListSince(context.Context, string, time.Time) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListActiveSince(context.Context, string, time.Time) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListLatest(context.Context, string, int32) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListBefore(context.Context, string, time.Time, int32) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListBySession(context.Context, string) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListSinceBySession(context.Context, string, time.Time) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListActiveSinceBySession(context.Context, string, time.Time) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListActiveAfterCompactionBySessionWithinBytes(context.Context, string, int64) (messagepkg.SessionHistoryAfterCompaction, error) {
-	return messagepkg.SessionHistoryAfterCompaction{}, nil
-}
-
-func (*recordingMessageService) ListRecentUserBySession(context.Context, string, int) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) MeasureActiveBySession(context.Context, string, time.Time) (messagepkg.ActiveMessagesMeasure, error) {
-	return messagepkg.ActiveMessagesMeasure{}, nil
-}
-
-func (*recordingMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListBeforeBySession(context.Context, string, time.Time, int32) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListBeforeMessageBySession(context.Context, string, string, int32) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) LocateByExternalIDBySession(context.Context, string, string, int32, int32) (messagepkg.LocateResult, error) {
-	return messagepkg.LocateResult{}, nil
-}
-
-func (s *recordingMessageService) GetByIDBySession(_ context.Context, sessionID, messageID string) (messagepkg.Message, error) {
-	for _, input := range s.persisted {
-		if input.SessionID == sessionID && input.Role == "user" {
-			return messagepkg.Message{
-				ID: messageID, SessionID: sessionID, Role: input.Role,
-				Content: input.Content, DisplayContent: input.DisplayText,
-			}, nil
-		}
-	}
-	return messagepkg.Message{}, errors.New("message not found")
-}
-
-func (*recordingMessageService) ListVisibleFromBySession(context.Context, string, string) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) ListVisibleFromForModelBySession(context.Context, string, string) ([]messagepkg.Message, error) {
-	return nil, nil
-}
-
-func (*recordingMessageService) GetVisibleTurnByMessage(context.Context, string, string) (messagepkg.HistoryTurn, error) {
-	return messagepkg.HistoryTurn{}, nil
-}
-
-func (*recordingMessageService) GetLatestVisibleTurnBySession(context.Context, string) (messagepkg.HistoryTurn, error) {
-	return messagepkg.HistoryTurn{}, nil
-}
-
-func (s *recordingMessageService) ReplaceTurn(_ context.Context, _, _, replacementTurnID string, replacementTurnPosition *int64, _, _, _ string) (messagepkg.HistoryTurn, error) {
-	s.replaced++
-	s.replacementTurnID = replacementTurnID
-	s.replacementTurnPosition = replacementTurnPosition
-	return messagepkg.HistoryTurn{}, nil
-}
-
-func (s *recordingMessageService) DeleteByIDs(_ context.Context, ids []string) error {
-	s.deleted = append(s.deleted, append([]string(nil), ids...))
-	return nil
-}
-
-func (*recordingMessageService) DeleteByBot(context.Context, string) error {
-	return nil
-}
-
-func (*recordingMessageService) DeleteBySession(context.Context, string) error {
-	return nil
-}
-
-func (*recordingMessageService) LinkAssets(context.Context, string, []messagepkg.AssetRef) error {
-	return nil
 }
 
 // A runtime that owns its conversation context has no rewind, so a retry of
@@ -288,7 +134,7 @@ func TestWebRetryRejectsTurnReplacementForACP(t *testing.T) {
 	resolver := &Service{
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 		messageService: driveReplaceableHistory(t),
-		sessionRuntime: newScriptedAdmitter(),
+		sessionRuntime: agenttest.NewScriptedAdmitter(),
 		logger:         slog.New(slog.DiscardHandler),
 	}
 	registerACPPool(resolver, pool)
@@ -316,24 +162,24 @@ func TestWebRetryRejectsTurnReplacementForACP(t *testing.T) {
 func TestHookFailureRowUsesAdmittedIdentity(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
 	position := int64(7)
-	_, err := service.persistFailureRow(context.Background(), ChatRequest{
+	_, err := service.persistFailureRow(context.Background(), runreq.ChatRequest{
 		BotID:        "bot-1",
 		ThreadID:     "session-1",
 		RunID:        "run-1",
 		TurnID:       "turn-1",
 		TurnPosition: &position,
 		Query:        "hello",
-	}, resolvedContext{}, RunFailure{Code: apperror.CodeHookUserMessageFailed}, failureOrigin(true))
+	}, runreq.ResolvedContext{}, outcome.RunFailure{Code: apperror.CodeHookUserMessageFailed}, failureOrigin(true))
 	if err != nil {
 		t.Fatalf("persistFailureRow: %v", err)
 	}
-	if len(messages.persisted) != 2 {
-		t.Fatalf("persisted %d messages, want user + assistant", len(messages.persisted))
+	if len(messages.Persisted) != 2 {
+		t.Fatalf("persisted %d messages, want user + assistant", len(messages.Persisted))
 	}
-	for i, input := range messages.persisted {
+	for i, input := range messages.Persisted {
 		if i == 0 && (input.TurnID != "turn-1" || input.TurnPosition == nil || *input.TurnPosition != position) {
 			t.Fatalf("user identity = (%q, %v), want (turn-1, %d)", input.TurnID, input.TurnPosition, position)
 		}
@@ -349,7 +195,7 @@ func TestHookFailureRowUsesAdmittedIdentity(t *testing.T) {
 func TestPersistTurnFailureSkipsRetryReplacement(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -357,20 +203,20 @@ func TestPersistTurnFailureSkipsRetryReplacement(t *testing.T) {
 
 	persisted, err := resolver.persistTurnFailure(
 		context.Background(),
-		ChatRequest{
+		runreq.ChatRequest{
 			BotID:           "bot-1",
 			ThreadID:        "session-1",
 			Query:           "hello",
 			SkipHistoryTurn: true,
 		},
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		apperror.CodeAgentResponseTimeout,
 	)
 	if err != nil {
 		t.Fatalf("persistTurnFailure returned error: %v", err)
 	}
-	if persisted != nil || len(messages.persisted) != 0 {
-		t.Fatalf("expected retry replacement not to persist a failure turn, got %#v", messages.persisted)
+	if persisted != nil || len(messages.Persisted) != 0 {
+		t.Fatalf("expected retry replacement not to persist a failure turn, got %#v", messages.Persisted)
 	}
 }
 
@@ -388,7 +234,7 @@ func TestHasVisibleAgentStreamOutputIgnoresLifecycleOnlyEvents(t *testing.T) {
 		{Type: native.EventAgentAbort},
 	}
 	for _, event := range cases {
-		if hasVisibleAgentStreamOutput(event) {
+		if outcome.HasVisibleAgentStreamOutput(event) {
 			t.Fatalf("event %q unexpectedly counted as visible", event.Type)
 		}
 	}
@@ -401,7 +247,7 @@ func TestHasVisibleAgentStreamOutputIgnoresLifecycleOnlyEvents(t *testing.T) {
 		{Type: native.EventUserInputRequest},
 	}
 	for _, event := range visible {
-		if !hasVisibleAgentStreamOutput(event) {
+		if !outcome.HasVisibleAgentStreamOutput(event) {
 			t.Fatalf("event %q unexpectedly counted as invisible", event.Type)
 		}
 	}
@@ -410,7 +256,7 @@ func TestHasVisibleAgentStreamOutputIgnoresLifecycleOnlyEvents(t *testing.T) {
 func TestReplacePersistedTurnErrorsWhenNoReplacementPersisted(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -418,7 +264,7 @@ func TestReplacePersistedTurnErrorsWhenNoReplacementPersisted(t *testing.T) {
 
 	err := resolver.replacePersistedTurn(
 		context.Background(),
-		ChatRequest{ThreadID: "session-1"},
+		runreq.ChatRequest{ThreadID: "session-1"},
 		"turn-1",
 		"request-1",
 		"retry",
@@ -427,15 +273,15 @@ func TestReplacePersistedTurnErrorsWhenNoReplacementPersisted(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected replacement error, got nil")
 	}
-	if messages.replaced != 0 {
-		t.Fatalf("ReplaceTurn called %d times, want 0", messages.replaced)
+	if messages.Replaced != 0 {
+		t.Fatalf("ReplaceTurn called %d times, want 0", messages.Replaced)
 	}
 }
 
 func TestPersistTerminalSnapshotSkipsUserOnlySnapshot(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -443,12 +289,12 @@ func TestPersistTerminalSnapshotSkipsUserOnlySnapshot(t *testing.T) {
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
-		ChatRequest{
+		runreq.ChatRequest{
 			BotID:    "bot-1",
 			ThreadID: "session-1",
 			Query:    "hello",
 		},
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages: []sdk.Message{sdk.UserMessage("hello")},
 		},
@@ -456,15 +302,15 @@ func TestPersistTerminalSnapshotSkipsUserOnlySnapshot(t *testing.T) {
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 
-	if len(messages.persisted) != 0 {
-		t.Fatalf("expected user-only terminal snapshot not to persist, got %#v", messages.persisted)
+	if len(messages.Persisted) != 0 {
+		t.Fatalf("expected user-only terminal snapshot not to persist, got %#v", messages.Persisted)
 	}
 }
 
 func TestPersistTerminalSnapshotSkipsEmptyAssistantSnapshot(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -472,12 +318,12 @@ func TestPersistTerminalSnapshotSkipsEmptyAssistantSnapshot(t *testing.T) {
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
-		ChatRequest{
+		runreq.ChatRequest{
 			BotID:    "bot-1",
 			ThreadID: "session-1",
 			Query:    "hello",
 		},
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages: []sdk.Message{sdk.AssistantMessage("")},
 		},
@@ -485,15 +331,15 @@ func TestPersistTerminalSnapshotSkipsEmptyAssistantSnapshot(t *testing.T) {
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 
-	if len(messages.persisted) != 0 {
-		t.Fatalf("expected empty assistant terminal snapshot not to persist, got %#v", messages.persisted)
+	if len(messages.Persisted) != 0 {
+		t.Fatalf("expected empty assistant terminal snapshot not to persist, got %#v", messages.Persisted)
 	}
 }
 
 func TestPersistTerminalSnapshotSkipsAbortedSnapshotBeforeVisibleOutput(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -501,12 +347,12 @@ func TestPersistTerminalSnapshotSkipsAbortedSnapshotBeforeVisibleOutput(t *testi
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
-		ChatRequest{
+		runreq.ChatRequest{
 			BotID:    "bot-1",
 			ThreadID: "session-1",
 			Query:    "hello",
 		},
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages: []sdk.Message{sdk.AssistantMessage("partial answer")},
 			aborted:     true,
@@ -515,15 +361,15 @@ func TestPersistTerminalSnapshotSkipsAbortedSnapshotBeforeVisibleOutput(t *testi
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 
-	if len(messages.persisted) != 0 {
-		t.Fatalf("expected pre-output abort not to persist, got %#v", messages.persisted)
+	if len(messages.Persisted) != 0 {
+		t.Fatalf("expected pre-output abort not to persist, got %#v", messages.Persisted)
 	}
 }
 
 func TestPersistTerminalSnapshotStoresTimeoutBeforeVisibleOutput(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -531,12 +377,12 @@ func TestPersistTerminalSnapshotStoresTimeoutBeforeVisibleOutput(t *testing.T) {
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
-		ChatRequest{
+		runreq.ChatRequest{
 			BotID:    "bot-1",
 			ThreadID: "session-1",
 			Query:    "hello",
 		},
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			aborted:     true,
 			failureCode: apperror.CodeAgentResponseTimeout,
@@ -545,16 +391,16 @@ func TestPersistTerminalSnapshotStoresTimeoutBeforeVisibleOutput(t *testing.T) {
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 
-	if len(messages.persisted) != 2 {
-		t.Fatalf("expected user + timeout assistant, got %#v", messages.persisted)
+	if len(messages.Persisted) != 2 {
+		t.Fatalf("expected user + timeout assistant, got %#v", messages.Persisted)
 	}
-	if messages.persisted[0].Role != "user" || messages.persisted[1].Role != "assistant" {
-		t.Fatalf("persisted roles = %s/%s", messages.persisted[0].Role, messages.persisted[1].Role)
+	if messages.Persisted[0].Role != "user" || messages.Persisted[1].Role != "assistant" {
+		t.Fatalf("persisted roles = %s/%s", messages.Persisted[0].Role, messages.Persisted[1].Role)
 	}
-	if got, _ := messages.persisted[1].Metadata[messagepkg.HistoryErrorCodeMetadataKey].(string); got != string(apperror.CodeAgentResponseTimeout) {
+	if got, _ := messages.Persisted[1].Metadata[messagepkg.HistoryErrorCodeMetadataKey].(string); got != string(apperror.CodeAgentResponseTimeout) {
 		t.Fatalf("error_code = %q, want %q", got, apperror.CodeAgentResponseTimeout)
 	}
-	if messages.persisted[1].Metadata[messagepkg.AgentStepInterruptedMetadataKey] != true {
+	if messages.Persisted[1].Metadata[messagepkg.AgentStepInterruptedMetadataKey] != true {
 		t.Fatalf("expected interrupted metadata on timeout assistant")
 	}
 }
@@ -562,7 +408,7 @@ func TestPersistTerminalSnapshotStoresTimeoutBeforeVisibleOutput(t *testing.T) {
 func TestPersistTerminalSnapshotStoresAssistantOutput(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -570,12 +416,12 @@ func TestPersistTerminalSnapshotStoresAssistantOutput(t *testing.T) {
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
-		ChatRequest{
+		runreq.ChatRequest{
 			BotID:    "bot-1",
 			ThreadID: "session-1",
 			Query:    "hello",
 		},
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages: []sdk.Message{sdk.AssistantMessage("partial answer")},
 		},
@@ -583,18 +429,18 @@ func TestPersistTerminalSnapshotStoresAssistantOutput(t *testing.T) {
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 
-	if len(messages.persisted) != 2 {
-		t.Fatalf("expected user and assistant messages to persist, got %#v", messages.persisted)
+	if len(messages.Persisted) != 2 {
+		t.Fatalf("expected user and assistant messages to persist, got %#v", messages.Persisted)
 	}
-	if messages.persisted[0].Role != "user" || messages.persisted[1].Role != "assistant" {
-		t.Fatalf("unexpected persisted roles: %q, %q", messages.persisted[0].Role, messages.persisted[1].Role)
+	if messages.Persisted[0].Role != "user" || messages.Persisted[1].Role != "assistant" {
+		t.Fatalf("unexpected persisted roles: %q, %q", messages.Persisted[0].Role, messages.Persisted[1].Role)
 	}
 }
 
 func TestPersistTerminalSnapshotPersistsUserWhenPipelineContextContainsCurrentMessage(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
@@ -602,12 +448,12 @@ func TestPersistTerminalSnapshotPersistsUserWhenPipelineContextContainsCurrentMe
 
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
-		ChatRequest{
+		runreq.ChatRequest{
 			BotID:    "bot-1",
 			ThreadID: "session-1",
 			Query:    "---\nmessage-id: tg-1\nchannel: telegram\n---\n@memoh1bot ping",
 		},
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages: []sdk.Message{sdk.AssistantMessage("pong")},
 		},
@@ -615,14 +461,14 @@ func TestPersistTerminalSnapshotPersistsUserWhenPipelineContextContainsCurrentMe
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 
-	if len(messages.persisted) != 2 {
-		t.Fatalf("expected user and assistant output to persist, got %#v", messages.persisted)
+	if len(messages.Persisted) != 2 {
+		t.Fatalf("expected user and assistant output to persist, got %#v", messages.Persisted)
 	}
-	if messages.persisted[0].Role != "user" {
-		t.Fatalf("unexpected first persisted role: %q", messages.persisted[0].Role)
+	if messages.Persisted[0].Role != "user" {
+		t.Fatalf("unexpected first persisted role: %q", messages.Persisted[0].Role)
 	}
-	if messages.persisted[1].Role != "assistant" {
-		t.Fatalf("unexpected second persisted role: %q", messages.persisted[1].Role)
+	if messages.Persisted[1].Role != "assistant" {
+		t.Fatalf("unexpected second persisted role: %q", messages.Persisted[1].Role)
 	}
 }
 
@@ -633,13 +479,13 @@ func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(storeRoundMemoryProviderID, memory)
 	resolver := &Service{
-		messageService:  &recordingMessageService{},
+		messageService:  &agenttest.RecordingMessages{},
 		memoryRegistry:  registry,
 		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
 		logger:          slog.New(slog.DiscardHandler),
 	}
 
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:    storeRoundBotID,
 		ThreadID: "session-1",
 		Query:    "hello",
@@ -647,7 +493,7 @@ func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
 		req,
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages:   []sdk.Message{sdk.AssistantMessage("pong")},
 			visibleOutput: true,
@@ -665,7 +511,7 @@ func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
 		req,
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages:   []sdk.Message{sdk.AssistantMessage("done")},
 			visibleOutput: true,
@@ -683,19 +529,19 @@ func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
 func TestPersistTerminalSnapshotSkillActivationWithoutPromptDoesNotStoreModelMarker(t *testing.T) {
 	t.Parallel()
 
-	messages := &recordingMessageService{}
+	messages := &agenttest.RecordingMessages{}
 	resolver := &Service{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
 	}
-	activation := &SkillActivation{
-		Skills: []SkillActivationSkill{{Name: "alpha", DisplayName: "Alpha", State: "effective"}},
+	activation := &runreq.SkillActivation{
+		Skills: []runreq.SkillActivationSkill{{Name: "alpha", DisplayName: "Alpha", State: "effective"}},
 	}
-	req := ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:                "bot-1",
 		ThreadID:             "session-1",
 		ModelQuery:           turn.SkillActivationModelQuery(activation),
-		UserMessageKind:      UserMessageKindSkillActivation,
+		UserMessageKind:      runreq.UserMessageKindSkillActivation,
 		SkillActivation:      activation,
 		SkipMemoryExtraction: true,
 	}
@@ -703,7 +549,7 @@ func TestPersistTerminalSnapshotSkillActivationWithoutPromptDoesNotStoreModelMar
 	if _, err := resolver.persistTerminalSnapshotResult(
 		context.Background(),
 		req,
-		resolvedContext{},
+		runreq.ResolvedContext{},
 		terminalSnapshot{
 			sdkMessages:   []sdk.Message{sdk.AssistantMessage("done")},
 			visibleOutput: true,
@@ -712,10 +558,10 @@ func TestPersistTerminalSnapshotSkillActivationWithoutPromptDoesNotStoreModelMar
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
 	}
 
-	if len(messages.persisted) != 2 {
-		t.Fatalf("persisted messages = %d, want user + assistant", len(messages.persisted))
+	if len(messages.Persisted) != 2 {
+		t.Fatalf("persisted messages = %d, want user + assistant", len(messages.Persisted))
 	}
-	user := messages.persisted[0]
+	user := messages.Persisted[0]
 	if user.Role != "user" {
 		t.Fatalf("first persisted role = %q, want user", user.Role)
 	}
@@ -725,7 +571,7 @@ func TestPersistTerminalSnapshotSkillActivationWithoutPromptDoesNotStoreModelMar
 	if user.DisplayText != "" {
 		t.Fatalf("display text = %q, want empty", user.DisplayText)
 	}
-	if user.Metadata["user_message_kind"] != UserMessageKindSkillActivation {
+	if user.Metadata["user_message_kind"] != runreq.UserMessageKindSkillActivation {
 		t.Fatalf("metadata kind = %#v, want skill_activation", user.Metadata["user_message_kind"])
 	}
 }

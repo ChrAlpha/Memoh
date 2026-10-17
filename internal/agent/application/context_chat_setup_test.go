@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -182,13 +183,13 @@ func TestChatSetupHookRefusalLeavesMarkedRowsForIM(t *testing.T) {
 	if workspace.callCount() == 0 {
 		t.Fatal("the user-message hook never ran for an IM send")
 	}
-	persisted := fixture.fixture.messages.persisted
+	persisted := fixture.fixture.messages.Persisted
 	if len(persisted) == 0 {
 		t.Fatal("a hook refused the message and nothing was written")
 	}
-	finish := fixture.admitter.awaitFinish(t)
-	if finish.message != string(apperror.CodeHookUserMessageFailed) {
-		t.Fatalf("finish code = %q, want %q", finish.message, apperror.CodeHookUserMessageFailed)
+	finish := fixture.admitter.AwaitFinish(t)
+	if finish.Message != string(apperror.CodeHookUserMessageFailed) {
+		t.Fatalf("finish code = %q, want %q", finish.Message, apperror.CodeHookUserMessageFailed)
 	}
 }
 
@@ -200,7 +201,7 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"allow"}`)
 	service := fixture.fixture.service
 
-	if _, err := service.chatSetup(context.Background(), ChatRequest{
+	if _, err := service.chatSetup(context.Background(), runreq.ChatRequest{
 		BotID:           lifecycleTestBotID,
 		ChatID:          lifecycleTestBotID,
 		ThreadID:        lifecycleTestSessionID,
@@ -222,7 +223,7 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 func TestChatSetupRetryOfAnAnsweredTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
-	if _, err := fixture.fixture.service.chatSetup(context.Background(), ChatRequest{
+	if _, err := fixture.fixture.service.chatSetup(context.Background(), runreq.ChatRequest{
 		BotID:                     lifecycleTestBotID,
 		ChatID:                    lifecycleTestBotID,
 		ThreadID:                  lifecycleTestSessionID,
@@ -248,7 +249,7 @@ func TestChatSetupAllowedHookRunsTheTurnToCompletion(t *testing.T) {
 	if workspace.callCount() != 1 {
 		t.Fatalf("hook calls = %d, want exactly one for one input", workspace.callCount())
 	}
-	if got := fixture.admitter.awaitFinish(t).status; got != "completed" {
+	if got := fixture.admitter.AwaitFinish(t).Status; got != "completed" {
 		t.Fatalf("finish status = %q, want completed", got)
 	}
 	if len(fixture.fixture.requests.recorded()) == 0 {
@@ -270,7 +271,7 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 		}},
 		Replacement: &turnReplacement{},
 	}
-	_, err := service.chatSetup(context.Background(), ChatRequest{
+	_, err := service.chatSetup(context.Background(), runreq.ChatRequest{
 		BotID:           lifecycleTestBotID,
 		ChatID:          lifecycleTestBotID,
 		ThreadID:        lifecycleTestSessionID,
@@ -293,7 +294,7 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 func TestChatSetupReplacementTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
-	_, err := fixture.fixture.service.chatSetup(context.Background(), ChatRequest{
+	_, err := fixture.fixture.service.chatSetup(context.Background(), runreq.ChatRequest{
 		BotID:           lifecycleTestBotID,
 		ChatID:          lifecycleTestBotID,
 		ThreadID:        lifecycleTestSessionID,
@@ -321,7 +322,7 @@ func TestChatSetupWithoutAHookRunsTheTurn(t *testing.T) {
 	if workspace.callCount() != 0 {
 		t.Fatalf("hook calls = %d, want none for a bot with hooks disabled", workspace.callCount())
 	}
-	if got := fixture.admitter.awaitFinish(t).status; got != "completed" {
+	if got := fixture.admitter.AwaitFinish(t).Status; got != "completed" {
 		t.Fatalf("finish status = %q, want completed", got)
 	}
 }

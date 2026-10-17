@@ -7,6 +7,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
 
@@ -29,7 +30,7 @@ type subagentThreadService interface {
 // pair (issue #879): the pin is only the session's INITIAL pair and the user
 // may override it, so once a remembered pair exists the pin must not refill
 // the request over it (the resolution chain reads the memory level itself).
-func (s *Service) applySubagentThreadDefaults(ctx context.Context, req ChatRequest, hasMemory bool) ChatRequest {
+func (s *Service) applySubagentThreadDefaults(ctx context.Context, req runreq.ChatRequest, hasMemory bool) runreq.ChatRequest {
 	if strings.TrimSpace(req.SessionType) != "" || strings.TrimSpace(req.ThreadID) == "" {
 		return req
 	}
@@ -66,7 +67,7 @@ func (s *Service) applySubagentThreadDefaults(ctx context.Context, req ChatReque
 // spawn path prepends the same rows on every parent-driven task; a direct
 // turn has to do it too or the forked agent loses its inherited context the
 // moment a human talks to it.
-func (s *Service) subagentForkContextModelMessages(ctx context.Context, req ChatRequest) []ModelMessage {
+func (s *Service) subagentForkContextModelMessages(ctx context.Context, req runreq.ChatRequest) []runreq.ModelMessage {
 	if !strings.EqualFold(strings.TrimSpace(req.SessionType), sessionpkg.TypeSubagent) {
 		return nil
 	}
@@ -90,5 +91,5 @@ func (s *Service) subagentForkContextModelMessages(ctx context.Context, req Chat
 		}
 		messages = append(messages, msg)
 	}
-	return sdkMessagesToModelMessages(messages)
+	return runreq.SDKMessagesToModelMessages(messages)
 }

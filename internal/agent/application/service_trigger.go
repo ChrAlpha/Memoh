@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -19,7 +21,7 @@ import (
 
 // TriggerSchedule executes a scheduled command via the internal agent.
 func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload schedule.TriggerPayload, token string) (schedule.TriggerResult, error) {
-	endActiveTurn, beginErr := s.activeTurns.begin()
+	endActiveTurn, beginErr := s.activeTurns.Begin()
 	if beginErr != nil {
 		return schedule.TriggerResult{}, beginErr
 	}
@@ -57,7 +59,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 			},
 		}
 	}
-	runCtx, admission, _, release, err := s.admitTriggeredRun(ctx, sessionmode.Schedule, botID, payload.SessionID, scheduleInvocationID(payload), submission, viewFn, errRunStopped)
+	runCtx, admission, _, release, err := s.admitTriggeredRun(ctx, sessionmode.Schedule, botID, payload.SessionID, scheduleInvocationID(payload), submission, viewFn, outcome.ErrRunStopped)
 	if errors.Is(err, sessionruntime.ErrSessionBusy) {
 		// A fire that cannot take the thread's slot has no value once the next
 		// one is due, so it is dropped rather than retried here.
@@ -74,7 +76,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	// Runtime sessions (ACP, codex, claude-code) must never silently degrade
 	// to the built-in model: resolve the driver and run the scheduled turn
 	// through it.
-	dispatch, err := s.resolveRuntimeDispatch(runCtx, ChatRequest{BotID: botID, ThreadID: payload.SessionID})
+	dispatch, err := s.resolveRuntimeDispatch(runCtx, runreq.ChatRequest{BotID: botID, ThreadID: payload.SessionID})
 	if err != nil {
 		return schedule.TriggerResult{}, errs.Recorded(err)
 	}
@@ -86,9 +88,9 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 			TurnPosition: &admission.TurnPosition,
 			Mode:         sessionmode.Schedule,
 		},
-		Req:        ChatRequest{BotID: botID, ThreadID: payload.SessionID, RunID: admission.RunID},
+		Req:        runreq.ChatRequest{BotID: botID, ThreadID: payload.SessionID, RunID: admission.RunID},
 		Delivery:   noDelivery{},
-		Input:      inputSynthetic,
+		Input:      outcome.InputSynthetic,
 		Unattended: true,
 	}
 	spec.Setup = s.scheduleSetup(spec, payload, botID, token, dispatch)
@@ -104,16 +106,16 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 func (s *Service) runScheduleSpec(runCtx context.Context, spec runSpec) (schedule.TriggerResult, error) {
 	result := s.drive(runCtx, spec)
 	switch result.End {
-	case endCompleted:
+	case outcome.EndCompleted:
 		return schedule.TriggerResult{
 			Status:     "ok",
 			Text:       result.Summary.Text,
 			UsageBytes: result.Summary.Usage,
 			ModelID:    result.Summary.ModelID,
 		}, nil
-	case endStopped:
-		return schedule.TriggerResult{}, errs.Recorded(agentAbortCause(runCtx))
-	case endOwnershipLost:
+	case outcome.EndStopped:
+		return schedule.TriggerResult{}, errs.Recorded(outcome.AgentAbortCause(runCtx))
+	case outcome.EndOwnershipLost:
 		return schedule.TriggerResult{}, sessionruntime.ErrRunOwnershipLost
 	default:
 		if result.Failure == nil {
@@ -136,8 +138,8 @@ func attachCurrentTurnPrompt(cfg native.RunConfig, prompt string) native.RunConf
 // scheduleSetup resolves one fire's executor: the built-in agent, or the
 // External Agent runtime the session runs on. It resolves around the request
 // the driver handed it, which already carries the per-run wiring.
-func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, botID, token string, dispatch runtimeDispatch) func(context.Context, ChatRequest) (runPlan, error) {
-	return func(setupCtx context.Context, req ChatRequest) (runPlan, error) {
+func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, botID, token string, dispatch runtimeDispatch) func(context.Context, runreq.ChatRequest) (runPlan, error) {
+	return func(setupCtx context.Context, req runreq.ChatRequest) (runPlan, error) {
 		req.RunHandle = spec.Run.Handle
 		// The admitted turn's identity travels with the request: the step
 		// committer refuses to arm without it, and a scheduled run without one
@@ -167,7 +169,7 @@ func (s *Service) scheduleSetup(spec runSpec, payload schedule.TriggerPayload, b
 }
 
 // nativeSchedulePlan resolves a scheduled run the built-in agent executes.
-func (s *Service) nativeSchedulePlan(ctx context.Context, req ChatRequest, payload schedule.TriggerPayload) (runPlan, error) {
+func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest, payload schedule.TriggerPayload) (runPlan, error) {
 	// The run acts for the bot's owner, who holds every permission, so there
 	// is no principal to check; binding the workspace here puts the target on
 	// the history rows the run writes.
@@ -179,9 +181,9 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req ChatRequest, paylo
 	if err != nil {
 		return runPlan{}, err
 	}
-	req.RunID = rc.runConfig.RunID
+	req.RunID = rc.RunConfig.RunID
 
-	cfg := rc.runConfig
+	cfg := rc.RunConfig
 	cfg.SessionType = sessionmode.Schedule
 	cfg.Identity.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
 	cfg.ContextScope.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
@@ -224,7 +226,7 @@ func (s *Service) nativeSchedulePlan(ctx context.Context, req ChatRequest, paylo
 // externalSchedulePlan resolves a scheduled run an External Agent runtime
 // executes. It prompts with the generated schedule prompt rather than the raw
 // command, and nobody is there to answer a decision.
-func (s *Service) externalSchedulePlan(ctx context.Context, req ChatRequest, spec runSpec, payload schedule.TriggerPayload, driver external.Driver) (runPlan, error) {
+func (s *Service) externalSchedulePlan(ctx context.Context, req runreq.ChatRequest, spec runSpec, payload schedule.TriggerPayload, driver external.Driver) (runPlan, error) {
 	prompt := native.GenerateSchedulePrompt(native.Schedule{
 		ID:          payload.ID,
 		Name:        payload.Name,

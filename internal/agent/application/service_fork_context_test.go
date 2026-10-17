@@ -4,29 +4,30 @@ import (
 	"testing"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 func TestHistorySourceMessageIDsFollowRetainedDatabaseMessages(t *testing.T) {
 	records := []historyfrag.HistoryRecord{
 		{
 			DBMessageID: "00000000-0000-0000-0000-000000000001",
-			ModelMessage: ModelMessage{
+			ModelMessage: runreq.ModelMessage{
 				Role:    "user",
-				Content: newTextContent("first"),
+				Content: runreq.NewTextContent("first"),
 			},
 		},
 		{
 			DBMessageID: "00000000-0000-0000-0000-000000000002",
-			ModelMessage: ModelMessage{
+			ModelMessage: runreq.ModelMessage{
 				Role:    "assistant",
-				Content: newTextContent("second"),
+				Content: runreq.NewTextContent("second"),
 			},
 		},
 	}
-	messages := []ModelMessage{
-		{Role: "system", Content: newTextContent("runtime workspace context")},
+	messages := []runreq.ModelMessage{
+		{Role: "system", Content: runreq.NewTextContent("runtime workspace context")},
 		records[1].ModelMessage,
-		{Role: "user", Content: newTextContent("current query")},
+		{Role: "user", Content: runreq.NewTextContent("current query")},
 	}
 
 	got := historySourceMessageIDsForMessages(messages, records)

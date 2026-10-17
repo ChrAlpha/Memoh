@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/felinics/memoh/internal/agent/decision/approval"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -68,11 +70,11 @@ func (s *Service) runtimeControlTarget(ctx context.Context, request RuntimeContr
 }
 
 func runtimeControlInput(sess session.Thread, request RuntimeControlRequest) external.PromptInput {
-	meta := runtimeSessionMeta(sess)
+	meta := runreq.RuntimeSessionMeta(sess)
 	input := external.PromptInput{
 		BotID: sess.BotID, BotAgentID: sess.BotAgentID, ThreadID: sess.ID,
 		RuntimeMetadata: meta, Command: request.Command,
-		RuntimeOwnerAccountID: metadataString(meta, "runtime_owner_account_id"),
+		RuntimeOwnerAccountID: runreq.MetadataString(meta, "runtime_owner_account_id"),
 		ChannelIdentityID:     request.ActorID, ToolHTTPURL: request.ToolHTTPURL,
 	}
 	return input
@@ -282,8 +284,8 @@ func (s *Service) runRuntimeControl(ctx context.Context, request RuntimeControlR
 		if errors.Is(resultErr, context.Canceled) || runCtx.Err() != nil {
 			status = sessionruntime.RunStatusAborted
 		}
-		outcome := RunOutcome{Status: status, Cause: resultErr}
-		finishCtx, finishCancel := context.WithTimeout(WithRunOutcome(context.WithoutCancel(runCtx), handle.RunID, outcome), terminalWriteTimeout)
+		ended := outcome.RunOutcome{Status: status, Cause: resultErr}
+		finishCtx, finishCancel := context.WithTimeout(outcome.WithRunOutcome(context.WithoutCancel(runCtx), handle.RunID, ended), terminalWriteTimeout)
 		defer finishCancel()
 		if _, err := s.sessionRuntime.FinishRunWithErrorCode(finishCtx, handle, status, string(apperror.CodeOf(publicRuntimeControlError(resultErr)))); err != nil {
 			resultErr = errors.Join(resultErr, err)
@@ -322,7 +324,7 @@ func publicRuntimeControlError(err error) error {
 	if errors.Is(err, turn.ErrTeamNotServed) {
 		return err
 	}
-	return RuntimeControlError(err)
+	return outcome.RuntimeControlError(err)
 }
 
 func (s *Service) ControlRuntimeGoal(ctx context.Context, request RuntimeControlRequest, action string) (err error) {

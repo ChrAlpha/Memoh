@@ -14,6 +14,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/application"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -147,7 +148,7 @@ func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context
 func (h wsRunHarness) send(t *testing.T, admitted *application.WebAdmission, ref wsTurnRef) {
 	t.Helper()
 	ended := make(chan struct{})
-	h.handler.agentService.RunWebSend(admitted, application.ChatRequest{
+	h.handler.agentService.RunWebSend(admitted, runreq.ChatRequest{
 		BotID: wsAdmissionBotID, ChatID: wsAdmissionBotID, ThreadID: wsAdmissionSessionID, Query: "hi",
 	}, newWSRunDelivery(h.writer, ref, func() { close(ended) }))
 	select {

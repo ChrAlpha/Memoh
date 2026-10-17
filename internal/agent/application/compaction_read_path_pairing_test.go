@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
@@ -159,9 +160,9 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	records := make([]historyfrag.HistoryRecord, 0, len(rows))
 	for i, row := range rows {
 		id := uuid.UUID(row.ID.Bytes).String()
-		record := historyRecord(id, ModelMessage{
+		record := historyRecord(id, runreq.ModelMessage{
 			Role:    roles[i],
-			Content: newTextContent(texts[i]),
+			Content: runreq.NewTextContent(texts[i]),
 		}, nil)
 		if marked[row.ID] {
 			record.CompactID = compactID
@@ -170,12 +171,12 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	}
 
 	got := replaceCompactedHistoryRecords(records, map[string]string{compactID: res.Summary}, contextfrag.Scope{})
-	want := []ModelMessage{
-		{Role: "user", Content: newTextContent("<summary>\n" + res.Summary + "\n</summary>")},
-		{Role: "assistant", Content: newTextContent("ask you something")},
-		{Role: "tool", Content: newTextContent("answered")},
-		{Role: "user", Content: newTextContent("mid q")},
-		{Role: "user", Content: newTextContent("current q")},
+	want := []runreq.ModelMessage{
+		{Role: "user", Content: runreq.NewTextContent("<summary>\n" + res.Summary + "\n</summary>")},
+		{Role: "assistant", Content: runreq.NewTextContent("ask you something")},
+		{Role: "tool", Content: runreq.NewTextContent("answered")},
+		{Role: "user", Content: runreq.NewTextContent("mid q")},
+		{Role: "user", Content: runreq.NewTextContent("current q")},
 	}
 	if gotMessages := historyfrag.ToModelMessages(got); !reflect.DeepEqual(gotMessages, want) {
 		t.Fatalf("selector output broke read-path ordering:\ngot  %#v\nwant %#v", gotMessages, want)

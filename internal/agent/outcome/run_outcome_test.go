@@ -1,4 +1,4 @@
-package application
+package outcome
 
 import (
 	"context"
@@ -52,7 +52,7 @@ func TestHistoryFailureCodeMarksOnlyNamedFailures(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := historyFailureCode(publicFailureCode(tc.cause)); got != tc.want {
+			if got := HistoryFailureCode(PublicFailureCode(tc.cause)); got != tc.want {
 				t.Fatalf("historyFailureCode() = %q, want %q", got, tc.want)
 			}
 		})

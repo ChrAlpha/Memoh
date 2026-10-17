@@ -4,24 +4,18 @@ package application
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net"
 	"net/http"
-	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
-	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/felinics/memoh/internal/accounts"
@@ -30,6 +24,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -88,10 +83,6 @@ type PlatformIdentitySource interface {
 	ListPlatformIdentities(ctx context.Context, botID string) ([]PlatformIdentity, error)
 }
 
-type botPermissionChecker interface {
-	HasBotPermission(ctx context.Context, botID, accountID, permission string) (bool, error)
-}
-
 type workspaceTargetResolver interface {
 	ResolveWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error)
 }
@@ -102,9 +93,9 @@ type compactionRunner interface {
 
 // Service orchestrates chat with the internal agent.
 type Service struct {
-	activeTurns             activeTurnTracker
+	activeTurns             runreq.ActiveTurnTracker
 	resumeSecret            string
-	resumeScopes            SessionResumeScopeProvider
+	teamScopes              runreq.TeamScopes
 	resumeReady             func(context.Context, string, string) error
 	resumeStop              context.CancelFunc
 	resumeDone              chan struct{}
@@ -115,7 +106,7 @@ type Service struct {
 	messageService          messagepkg.Service
 	settingsService         *settings.Service
 	accountService          *accounts.Service
-	sessionService          SessionService
+	sessionService          runreq.SessionService
 	externalDrivers         map[string]external.Driver
 	compactionService       compactionRunner
 	eventPublisher          messageevent.Publisher
@@ -123,7 +114,7 @@ type Service struct {
 	assetLoader             gatewayAssetLoader
 	animationFrames         animationCache
 	platformIdentities      PlatformIdentitySource
-	botPermissions          botPermissionChecker
+	botPermissions          runreq.BotPermissionChecker
 	workspaceTargets        workspaceTargetResolver
 	workdirs                sessionWorkdirResolver
 	streamHTTPClient        *http.Client
@@ -148,7 +139,7 @@ type Service struct {
 	clockLocation                     *time.Location
 	logger                            *slog.Logger
 	allowedTeam                       string
-	sessionRuntime                    turnAdmitter
+	sessionRuntime                    runreq.TurnAdmitter
 	decisionRuntime                   *sessionruntime.Manager
 	abortRuntime                      runtimeAbortController
 	contextLifecycles                 contextLifecycleStore
@@ -182,7 +173,7 @@ type Deps struct {
 	// Messages persists and reads chat messages.
 	Messages messagepkg.Service
 	// Sessions reads and updates session metadata and titles.
-	Sessions SessionService
+	Sessions runreq.SessionService
 	// Settings resolves per-bot settings.
 	Settings *settings.Service
 	// Accounts resolves the account behind a request.
@@ -196,7 +187,7 @@ type Deps struct {
 	// service's runtime callbacks on it.
 	SessionRuntime *sessionruntime.Manager
 	// BotPermissions decides whether an account may act on a bot.
-	BotPermissions botPermissionChecker
+	BotPermissions runreq.BotPermissionChecker
 	// WorkspaceTargets resolves a request-scoped Computer.
 	WorkspaceTargets workspaceTargetResolver
 	// ToolApproval stores and resolves tool approval decisions.
@@ -245,9 +236,9 @@ type Deps struct {
 	// ResumeReadiness checks workspace transport before a continuation is
 	// claimed; without it resume skips the check.
 	ResumeReadiness func(ctx context.Context, botID, targetID string) error
-	// ResumeScopes is the tenancy provider of a hosted deployment; without it
-	// resume covers only AllowedTeam.
-	ResumeScopes SessionResumeScopeProvider
+	// TeamScopes is the tenancy provider of a hosted deployment; without it
+	// resume and the discuss sweep cover only AllowedTeam.
+	TeamScopes runreq.TeamScopes
 
 	// Configuration.
 
@@ -328,6 +319,11 @@ func New(d Deps) (*Service, error) {
 		Timeout:   10 * time.Minute,
 	}
 
+	teamScopes := d.TeamScopes
+	if teamScopes == nil {
+		teamScopes = runreq.SingleTeam(d.AllowedTeam)
+	}
+
 	service := &Service{
 		agent:                    d.Agent,
 		modelsService:            d.Models,
@@ -354,7 +350,7 @@ func New(d Deps) (*Service, error) {
 		outputSpeech:             d.OutputSpeech,
 		externalDrivers:          externalDriverMap(d.ExternalRuntimes...),
 		resumeReady:              d.ResumeReadiness,
-		resumeScopes:             d.ResumeScopes,
+		teamScopes:               teamScopes,
 		contextAbsoluteCapTokens: d.ContextFallbackTokens,
 		allowedTeam:              d.AllowedTeam,
 		streamHTTPClient:         streamHTTPClient,
@@ -397,26 +393,6 @@ func (s *Service) effectiveContextTokenBudget(chatModel models.GetResponse) int 
 	return fallback
 }
 
-type resolvedContext struct {
-	runConfig       native.RunConfig
-	model           models.GetResponse
-	provider        sqlc.Provider
-	query           string // headerified persistable query
-	injectedRecords *[]InjectedMessageRecord
-	estimatedTokens int // estimated input token count for compaction
-	// pressure is a native chat run's estimate of its next request, which the
-	// background trigger judges the finished run by.
-	pressure           *runPressure
-	contextTokenBudget int // token budget used to clamp compaction triggers
-}
-
-func runIDForChatRequest(admittedRunID string) string {
-	if runID := strings.TrimSpace(admittedRunID); runID != "" {
-		return runID
-	}
-	return uuid.NewString()
-}
-
 func contextBudgetFromChatModel(chatModel models.GetResponse) int {
 	return chatModel.Config.ContextBudgetMaxTokens()
 }
@@ -437,7 +413,7 @@ func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID 
 		if index >= len(cfg.Messages) || cfg.Messages[index].Role != sdk.MessageRoleUser {
 			return
 		}
-		cfg.ContextCurrentUserMessageIndex = intPointer(index)
+		cfg.ContextCurrentUserMessageIndex = runreq.IntPointer(index)
 		return
 	}
 }
@@ -448,22 +424,22 @@ func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID 
 // model, and skip flags here — so everything that runs after resolution (title
 // generation, the step committer, terminal persistence) must use the returned
 // request, not the one that went in. Query is deliberately untouched: callers
-// that persist a headerified user message still take it from resolvedContext.
-func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext, ChatRequest, error) {
-	modelQuery := modelQueryText(req)
+// that persist a headerified user message still take it from runreq.ResolvedContext.
+func (s *Service) resolve(ctx context.Context, req runreq.ChatRequest) (runreq.ResolvedContext, runreq.ChatRequest, error) {
+	modelQuery := runreq.ModelQueryText(req)
 	// A request whose input is already persisted carries no query of its own:
 	// its current message is the history row it names.
 	if strings.TrimSpace(modelQuery) == "" && len(req.Attachments) == 0 && !req.ReusePersistedUserMessage {
-		return resolvedContext{}, req, errors.New("query or attachments is required")
+		return runreq.ResolvedContext{}, req, errors.New("query or attachments is required")
 	}
 	if strings.TrimSpace(req.BotID) == "" {
-		return resolvedContext{}, req, errors.New("bot id is required")
+		return runreq.ResolvedContext{}, req, errors.New("bot id is required")
 	}
 	if strings.TrimSpace(req.ChatID) == "" {
-		return resolvedContext{}, req, errors.New("chat id is required")
+		return runreq.ResolvedContext{}, req, errors.New("chat id is required")
 	}
 	if err := s.rejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
-		return resolvedContext{}, req, err
+		return runreq.ResolvedContext{}, req, err
 	}
 	// Session model preference (issue #879 spec v2): loaded once per turn,
 	// BEFORE the subagent pin below — the pin is only a session's initial
@@ -509,7 +485,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 			slog.String("bot_id", req.BotID),
 			slog.Any("error", err),
 		)
-		return resolvedContext{}, req, err
+		return runreq.ResolvedContext{}, req, err
 	}
 
 	// Persist explicit selections before generation and advance the revision
@@ -525,13 +501,13 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		// surface (no nested spawns), same prompt mode.
 		runCfg.Identity.IsSubagent = true
 	}
-	runCfg.RunID = runIDForChatRequest(req.RunID)
+	runCfg.RunID = runreq.RunID(req.RunID)
 	memoryContext := s.loadMemoryContext(ctx, req)
 	if memoryContext.Trace != nil && runCfg.ContextLifecycle != nil {
 		runCfg.ContextLifecycle.SetMemoryRecall(*memoryContext.Trace)
 	}
 	memoryMsg := memoryContext.Message
-	reqMessages := nonNilModelMessages(req.Messages)
+	reqMessages := runreq.NonNilModelMessages(req.Messages)
 
 	contextTokenBudget := s.effectiveContextTokenBudget(chatModel)
 	runCfg.ContextBudgetMaxTokens = contextTokenBudget
@@ -543,14 +519,14 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 			slog.String("stage", "initial"),
 			slog.Any("error", err),
 		)
-		return resolvedContext{}, req, err
+		return runreq.ResolvedContext{}, req, err
 	}
 	forkContext := s.subagentForkContextModelMessages(ctx, req)
 	notice := s.currentWorkspaceContextMessage(ctx, req)
 	requestedSkillMsg := buildRequestedSkillContextMessage(req.RequestedSkills)
-	var ownMessages []ModelMessage
+	var ownMessages []runreq.ModelMessage
 	ownMessages = append(ownMessages, forkContext...)
-	for _, message := range []*ModelMessage{notice, memoryMsg, requestedSkillMsg} {
+	for _, message := range []*runreq.ModelMessage{notice, memoryMsg, requestedSkillMsg} {
 		if message != nil {
 			ownMessages = append(ownMessages, *message)
 		}
@@ -562,7 +538,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		service:   s,
 		ctx:       ctx,
 		sessionID: req.ThreadID,
-		own:       append(modelMessagesToSDKMessages(ownMessages), currentUserMessageEstimate(req, modelQuery)...),
+		own:       append(runreq.ModelMessagesToSDKMessages(ownMessages), currentUserMessageEstimate(req, modelQuery)...),
 	}
 	assembled, err = s.compactBeforeTurn(ctx, req, chatModel.ID, contextTokenBudget, assembled, estimate)
 	if err != nil {
@@ -571,9 +547,9 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 			slog.String("stage", "post_compaction"),
 			slog.Any("error", err),
 		)
-		return resolvedContext{}, req, err
+		return runreq.ResolvedContext{}, req, err
 	}
-	pressure := newRunPressure(runCfg.ContextLifecycle, estimate.conversation(assembled.Messages))
+	pressure := runreq.NewRunPressure(runCfg.ContextLifecycle, estimate.conversation(assembled.Messages))
 	messages := assembled.Messages
 	historyRecords := assembled.Records
 	estimatedTokens := assembled.EstimatedTokens
@@ -590,7 +566,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	var memoryMessageIndex *int
 	if memoryMsg != nil {
 		messages = append(messages, *memoryMsg)
-		memoryMessageIndex = intPointer(len(messages) - 1)
+		memoryMessageIndex = runreq.IntPointer(len(messages) - 1)
 	}
 	if requestedSkillMsg != nil {
 		messages = append(messages, *requestedSkillMsg)
@@ -638,9 +614,9 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		headerifiedModelQuery = turnpkg.FormatUserHeader(headerInput, modelQuery)
 	}
 	runCfg.ContextFrags = historyContextFragsForMessages(messages, historyRecords)
-	forkMessages := nonNilModelMessages(messages)
+	forkMessages := runreq.NonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
-	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
+	runCfg.Messages = runreq.ModelMessagesToSDKMessages(forkMessages)
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if req.ReusePersistedUserMessage {
 		markRequiredHistoryMessageCurrent(&runCfg, req.RequiredHistoryMessageID)
@@ -652,7 +628,7 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 	runCfg.ContextScope = buildContextFragScope(req, displayName, runCfg.Identity)
 	runCfg = runCfg.RefreshContextFrag()
 
-	var injectedRecords *[]InjectedMessageRecord
+	var injectedRecords *[]runreq.InjectedMessageRecord
 	if req.InjectCh != nil {
 		agentInjectCh := make(chan native.InjectMessage, cap(req.InjectCh))
 		go func() {
@@ -672,12 +648,12 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		}()
 		runCfg.InjectCh = agentInjectCh
 
-		records := make([]InjectedMessageRecord, 0)
+		records := make([]runreq.InjectedMessageRecord, 0)
 		injectedRecords = &records
 		var recMu sync.Mutex
 		runCfg.InjectedRecorder = func(headerifiedText string, insertAfter int) {
 			recMu.Lock()
-			*injectedRecords = append(*injectedRecords, InjectedMessageRecord{
+			*injectedRecords = append(*injectedRecords, runreq.InjectedMessageRecord{
 				HeaderifiedText: headerifiedText,
 				InsertAfter:     insertAfter,
 			})
@@ -685,15 +661,15 @@ func (s *Service) resolve(ctx context.Context, req ChatRequest) (resolvedContext
 		}
 	}
 
-	return resolvedContext{
-		runConfig:          runCfg,
-		model:              chatModel,
-		provider:           provider,
-		query:              headerifiedQuery,
-		injectedRecords:    injectedRecords,
-		estimatedTokens:    estimatedTokens,
-		pressure:           pressure,
-		contextTokenBudget: contextTokenBudget,
+	return runreq.ResolvedContext{
+		RunConfig:          runCfg,
+		Model:              chatModel,
+		Provider:           provider,
+		Query:              headerifiedQuery,
+		InjectedRecords:    injectedRecords,
+		EstimatedTokens:    estimatedTokens,
+		Pressure:           pressure,
+		ContextTokenBudget: contextTokenBudget,
 	}, req, nil
 }
 
@@ -997,7 +973,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 			if forcedApproval {
 				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
 					Decision: toolexec.ToolApprovalDecisionRejected,
-					Reason:   firstNonEmpty(forcedApprovalReason, "hook requested approval but tool approval is not configured"),
+					Reason:   runreq.FirstNonEmpty(forcedApprovalReason, "hook requested approval but tool approval is not configured"),
 				}, call.ToolName), nil
 			}
 			return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
@@ -1007,7 +983,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 			if input.WorkspaceTargeted && errors.Is(err, workspace.ErrWorkspaceTargetNotFound) {
 				requestedTargetID := ""
 				if args, ok := toolexec.ArgumentsValue(call.Input).(map[string]any); ok {
-					requestedTargetID = strings.TrimSpace(readAnyString(args["target_id"]))
+					requestedTargetID = strings.TrimSpace(runreq.ReadAnyString(args["target_id"]))
 				}
 				if s.logger != nil {
 					s.logger.Warn("workspace tool target not found during approval",
@@ -1113,7 +1089,7 @@ func executionLocationResultMetadata(location *toolapproval.ExecutionLocation) m
 // requestRunFacts returns the facts a chat request runs under. A request that
 // names no mode is a message answered on the streaming path: its reply reaches
 // the sender, who can also answer decisions.
-func (s *Service) requestRunFacts(ctx context.Context, req ChatRequest) sessionfacts.Facts {
+func (s *Service) requestRunFacts(ctx context.Context, req runreq.ChatRequest) sessionfacts.Facts {
 	if strings.TrimSpace(req.SessionType) == "" {
 		return sessionfacts.Preset(sessionmode.Chat)
 	}
@@ -1166,8 +1142,8 @@ func (s *Service) resolveRunConfigSessionType(ctx context.Context, sessionID str
 	return typ
 }
 
-func buildModelSelectionRequest(p baseRunConfigParams, chatID string) ChatRequest {
-	return ChatRequest{
+func buildModelSelectionRequest(p baseRunConfigParams, chatID string) runreq.ChatRequest {
+	return runreq.ChatRequest{
 		BotID:          p.BotID,
 		ChatID:         chatID,
 		ThreadID:       p.SessionID,
@@ -1383,14 +1359,14 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	return cfg.RefreshContextFrag()
 }
 
-func normalizeContextMessages(messages []ModelMessage) []ModelMessage {
-	return repairToolCallClosures(sanitizeMessages(messages), syntheticToolClosureError)
+func normalizeContextMessages(messages []runreq.ModelMessage) []runreq.ModelMessage {
+	return runreq.RepairToolCallClosures(runreq.SanitizeMessages(messages), runreq.SyntheticToolClosureError)
 }
 
 func validCurrentUserMessageIndex(messages []sdk.Message, currentIndex, memoryIndex *int) *int {
 	if currentIndex != nil && *currentIndex >= 0 && *currentIndex < len(messages) &&
 		messages[*currentIndex].Role == sdk.MessageRoleUser && (memoryIndex == nil || *currentIndex != *memoryIndex) {
-		return intPointer(*currentIndex)
+		return runreq.IntPointer(*currentIndex)
 	}
 	return latestUserMessageIndex(messages, optionalIndex(memoryIndex)...)
 }
@@ -1398,7 +1374,7 @@ func validCurrentUserMessageIndex(messages []sdk.Message, currentIndex, memoryIn
 func latestUserMessageIndex(messages []sdk.Message, excluded ...int) *int {
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == sdk.MessageRoleUser && !containsIndex(excluded, i) {
-			return intPointer(i)
+			return runreq.IntPointer(i)
 		}
 	}
 	return nil
@@ -1419,8 +1395,6 @@ func containsIndex(indexes []int, target int) bool {
 	}
 	return false
 }
-
-func intPointer(value int) *int { return &value }
 
 func normalizeGatewaySkill(entry SkillEntry) (native.SkillEntry, bool) {
 	name := strings.TrimSpace(entry.Name)
@@ -1444,141 +1418,6 @@ func normalizeGatewaySkill(entry SkillEntry) (native.SkillEntry, bool) {
 	}, true
 }
 
-func normalizeUserMessageContent(msg ModelMessage) ModelMessage {
-	if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
-		return msg
-	}
-	normalized, changed := normalizeUserContentParts(msg.Content)
-	if !changed {
-		return msg
-	}
-	msg.Content = normalized
-	return msg
-}
-
-func normalizeUserContentParts(content json.RawMessage) (json.RawMessage, bool) {
-	if len(content) == 0 {
-		return nil, false
-	}
-	var parts []map[string]any
-	if err := json.Unmarshal(content, &parts); err != nil || len(parts) == 0 {
-		return nil, false
-	}
-
-	changed := false
-	rebuilt := make([]map[string]any, 0, len(parts))
-	for _, part := range parts {
-		partType := strings.TrimSpace(strings.ToLower(readAnyString(part["type"])))
-		switch partType {
-		case "image":
-			normalized, ok, didChange := normalizeUserImagePart(part)
-			if didChange {
-				changed = true
-			}
-			if ok {
-				rebuilt = append(rebuilt, normalized)
-			}
-		default:
-			rebuilt = append(rebuilt, part)
-		}
-	}
-	if !changed {
-		return nil, false
-	}
-	if len(rebuilt) == 0 {
-		rebuilt = append(rebuilt, map[string]any{
-			"type": "text",
-			"text": "[User sent an attachment]",
-		})
-	}
-	data, err := json.Marshal(rebuilt)
-	if err != nil {
-		return nil, false
-	}
-	return data, true
-}
-
-func normalizeUserImagePart(part map[string]any) (map[string]any, bool, bool) {
-	raw, ok := part["image"]
-	if !ok {
-		return nil, false, true
-	}
-	if image, ok := raw.(string); ok && strings.TrimSpace(image) != "" {
-		return part, true, false
-	}
-	bytes, ok := anyIndexedByteObject(raw)
-	if !ok {
-		return nil, false, true
-	}
-	cloned := cloneAnyMap(part)
-	mediaType := strings.TrimSpace(readAnyString(cloned["mediaType"]))
-	encoded := base64.StdEncoding.EncodeToString(bytes)
-	if mediaType != "" {
-		cloned["image"] = "data:" + mediaType + ";base64," + encoded
-	} else {
-		cloned["image"] = encoded
-	}
-	return cloned, true, true
-}
-
-func cloneAnyMap(input map[string]any) map[string]any {
-	cloned := make(map[string]any, len(input))
-	for key, value := range input {
-		cloned[key] = value
-	}
-	return cloned
-}
-
-func readAnyString(value any) string {
-	text, _ := value.(string)
-	return text
-}
-
-func anyIndexedByteObject(value any) ([]byte, bool) {
-	obj, ok := value.(map[string]any)
-	if !ok || len(obj) == 0 {
-		return nil, false
-	}
-	indexes := make([]int, 0, len(obj))
-	values := make(map[int]byte, len(obj))
-	for key, raw := range obj {
-		idx, err := strconv.Atoi(strings.TrimSpace(key))
-		if err != nil || idx < 0 {
-			return nil, false
-		}
-		byteValue, ok := anyNumberToByte(raw)
-		if !ok {
-			return nil, false
-		}
-		indexes = append(indexes, idx)
-		values[idx] = byteValue
-	}
-	sort.Ints(indexes)
-	if indexes[len(indexes)-1]+1 != len(indexes) {
-		return nil, false
-	}
-	bytes := make([]byte, len(indexes))
-	for _, idx := range indexes {
-		bytes[idx] = values[idx]
-	}
-	return bytes, true
-}
-
-func anyNumberToByte(value any) (byte, bool) {
-	floatValue, ok := value.(float64)
-	if !ok || math.IsNaN(floatValue) || math.IsInf(floatValue, 0) {
-		return 0, false
-	}
-	if floatValue < 0 || floatValue > 255 || math.Trunc(floatValue) != floatValue {
-		return 0, false
-	}
-	parsed, err := strconv.ParseUint(strconv.FormatFloat(floatValue, 'f', 0, 64), 10, 8)
-	if err != nil {
-		return 0, false
-	}
-	return byte(parsed), true
-}
-
 // userQueryNeedsHeader reports whether resolve should wrap req.Query in the
 // user message header (sender/channel/time/attachment paths). Text always
 // gets a header. An attachment-only message (no caption) must too: the header
@@ -1587,11 +1426,11 @@ func anyNumberToByte(value any) (byte, bool) {
 // The one deliberate exception is a no-prompt skill activation, whose stored
 // user content must stay empty (its model text travels via ModelQuery, and
 // display state via skill_activation metadata).
-func userQueryNeedsHeader(req ChatRequest, attachmentCount int) bool {
+func userQueryNeedsHeader(req runreq.ChatRequest, attachmentCount int) bool {
 	if strings.TrimSpace(req.Query) != "" {
 		return true
 	}
-	return attachmentCount > 0 && req.UserMessageKind != UserMessageKindSkillActivation
+	return attachmentCount > 0 && req.UserMessageKind != runreq.UserMessageKindSkillActivation
 }
 
 // extractAttachmentPaths collects container file paths from ALL gateway

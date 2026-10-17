@@ -14,6 +14,8 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -185,7 +187,7 @@ func (c *subagentStepCommitter) persist(ctx context.Context, stepIndex int, reco
 	if err != nil {
 		return err
 	}
-	c.contextLifecycle.SetAssistantMessageID(lastPersistedAssistantMessageID(persisted))
+	c.contextLifecycle.SetAssistantMessageID(runreq.LastPersistedAssistantMessageID(persisted))
 	c.nextStep++
 	if c.onPersisted != nil {
 		c.onPersisted()
@@ -197,7 +199,7 @@ func (c *subagentStepCommitter) persist(ctx context.Context, stepIndex int, reco
 // to the spawn provider: the run's public failure, named as for any native run,
 // with the event's cause in its chain.
 func (*Service) SubagentFailure(event native.StreamEvent) error {
-	return agentStreamFailure(event)
+	return outcome.AgentStreamFailure(event)
 }
 
 // SubagentRunObserver returns a per-event publisher that feeds one spawned
@@ -205,7 +207,7 @@ func (*Service) SubagentFailure(event native.StreamEvent) error {
 // publish to — no runtime configured, or a context without an admitted handle.
 //
 // The returned function mirrors forwardWSStreamEvents' publishing discipline:
-// events leave as publicAgentStreamEvent makes them, so a failed spawned run
+// events leave as outcome.PublicAgentStreamEvent makes them, so a failed spawned run
 // is named like any other native run; they are published on a context that
 // survives the run's cancellation (an aborted run's final events are exactly
 // the ones a subscriber must see); and a lost ownership stops publishing
@@ -224,7 +226,7 @@ func (s *Service) SubagentRunObserver(ctx context.Context) native.SpawnRunObserv
 		if lost.Load() {
 			return native.SpawnRunObservation{}
 		}
-		_, status, err := s.decisionRuntime.HandleAgentEventWithStatus(publishCtx, handle, publicAgentStreamEvent(event))
+		_, status, err := s.decisionRuntime.HandleAgentEventWithStatus(publishCtx, handle, outcome.PublicAgentStreamEvent(event))
 		if err != nil {
 			if errors.Is(err, sessionruntime.ErrRunOwnershipLost) {
 				lost.Store(true)

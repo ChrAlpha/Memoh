@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -203,8 +204,8 @@ func TestStage4PreTurnCompactionFailureSendsTheContextAsIs(t *testing.T) {
 		t.Fatalf("a failed compaction left covered=%v raw=%v", covered, raw)
 	}
 
-	req := ChatRequest{BotID: s.botID, ChatID: s.botID, ThreadID: s.sessionID, RunID: "stage4-run"}
-	assembled := s.assemble(ChatRequest{})
+	req := runreq.ChatRequest{BotID: s.botID, ChatID: s.botID, ThreadID: s.sessionID, RunID: "stage4-run"}
+	assembled := s.assemble(runreq.ChatRequest{})
 	before := stage4Labels(assembled.Messages)
 	after, err := fixture.service.compactBeforeTurn(s.ctx, req, "", 60000, assembled, &turnRequestEstimate{service: fixture.service, ctx: s.ctx, sessionID: req.ThreadID})
 	if err != nil {

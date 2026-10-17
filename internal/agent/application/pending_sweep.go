@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 )
@@ -25,19 +26,19 @@ const (
 // eachScope runs fn in every database scope the resume scope provider names,
 // page after page.
 func (s *Service) eachScope(ctx context.Context, what string, fn func(scopeCtx context.Context, scope string)) {
-	scopes := s.sessionResumeScopes()
+	scopes := s.teamScopes
 	cursor := ""
 	for ctx.Err() == nil {
 		page, err := scopes.ListScopePage(ctx, cursor, 16)
 		if err == nil {
-			err = validateResumeScopePage(page, cursor)
+			err = runreq.ValidateTeamScopePage(page, cursor)
 		}
 		if err != nil {
 			s.logger.WarnContext(ctx, "list sweep scopes failed", slog.String("sweep", what), slog.Any("error", err))
 			return
 		}
 		for _, scope := range page.Scopes {
-			scopeCtx, err := bindSessionResumeScope(ctx, scopes, scope)
+			scopeCtx, err := runreq.BindTeamScope(ctx, scopes, scope)
 			if err != nil {
 				s.logger.WarnContext(ctx, "bind sweep scope failed", slog.String("sweep", what), slog.Any("error", err))
 				continue

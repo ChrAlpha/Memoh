@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -42,7 +43,7 @@ func (p testResumeScopes) BindScope(ctx context.Context, scope string) context.C
 	return context.WithValue(ctx, resumeScopeKey{}, scope)
 }
 
-func (p testResumeScopes) ListScopePage(_ context.Context, after string, _ int32) (SessionResumeScopePage, error) {
+func (p testResumeScopes) ListScopePage(_ context.Context, after string, _ int32) (runreq.TeamScopePage, error) {
 	// One tenant per page exercises the worker's cross-page cursor.
 	for i, scope := range p.teams {
 		if after == "" || after == scope {
@@ -51,12 +52,12 @@ func (p testResumeScopes) ListScopePage(_ context.Context, after string, _ int32
 				index++
 			}
 			if index >= len(p.teams) {
-				return SessionResumeScopePage{Complete: true}, nil
+				return runreq.TeamScopePage{Complete: true}, nil
 			}
-			return SessionResumeScopePage{Scopes: []string{p.teams[index]}, NextCursor: p.teams[index], Complete: index == len(p.teams)-1}, nil
+			return runreq.TeamScopePage{Scopes: []string{p.teams[index]}, NextCursor: p.teams[index], Complete: index == len(p.teams)-1}, nil
 		}
 	}
-	return SessionResumeScopePage{}, errors.New("unknown scope cursor")
+	return runreq.TeamScopePage{}, errors.New("unknown scope cursor")
 }
 
 type tenantResumeQueries struct {
@@ -114,14 +115,14 @@ func (q *tenantResumeQueries) sessionReadScopes() []string {
 
 func TestResumeScopeBindingFailsClosed(t *testing.T) {
 	ctx := t.Context()
-	if _, err := bindSessionResumeScope(ctx, testResumeScopes{broken: true}, uuid.NewString()); !errors.Is(err, errResumeScopeMismatch) {
+	if _, err := runreq.BindTeamScope(ctx, testResumeScopes{broken: true}, uuid.NewString()); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("missing binding=%v", err)
 	}
-	s := &Service{resumeScopes: testResumeScopes{}}
-	if _, err := s.resumeInterruptedSession(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, errResumeScopeMismatch) {
+	s := &Service{teamScopes: testResumeScopes{}}
+	if _, err := s.resumeInterruptedSession(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("cross-team row=%v", err)
 	}
-	if err := validateResumeScopePage(SessionResumeScopePage{NextCursor: "same"}, "same"); err == nil {
+	if err := runreq.ValidateTeamScopePage(runreq.TeamScopePage{NextCursor: "same"}, "same"); err == nil {
 		t.Fatal("non-advancing page accepted")
 	}
 }
@@ -227,7 +228,7 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	s, admitter := newAdmittedTurnTestService()
 	s.logger = slog.Default()
 	s.queries = q
-	s.resumeScopes = scopes
+	s.teamScopes = scopes
 	scan := sessionResumeScan{}
 	slots := make(chan struct{}, 4)
 	for range 2 {
@@ -259,7 +260,7 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	if fmt.Sprint(q.seen) != fmt.Sprint(teams) {
 		t.Fatalf("scan scopes=%v", q.seen)
 	}
-	if len(admitter.admitted()) != 2 {
+	if len(admitter.Admitted()) != 2 {
 		t.Fatal("not all tenant sessions admitted")
 	}
 	// The unbound startup context cannot access the ordinary pool.

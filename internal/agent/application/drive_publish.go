@@ -4,17 +4,18 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
 // runPublisher writes a run's live state. A refusal is a run failure
-// (phasePublish) unless it says the run is no longer this process's.
+// (outcome.PhasePublish) unless it says the run is no longer this process's.
 type runPublisher interface {
 	publish(ctx context.Context, ev native.StreamEvent, payload json.RawMessage) error
 	// close ends whatever the publisher keeps open for the run once its last
 	// event is published. A publisher that keeps nothing open does nothing.
-	close(ctx context.Context, end runEnd) error
+	close(ctx context.Context, end outcome.RunEnd) error
 }
 
 // projectionPublisher writes the run's events into the session runtime's live
@@ -31,7 +32,7 @@ func (p projectionPublisher) publish(ctx context.Context, ev native.StreamEvent,
 	return p.write(ctx, p.handle, ev)
 }
 
-func (projectionPublisher) close(context.Context, runEnd) error { return nil }
+func (projectionPublisher) close(context.Context, outcome.RunEnd) error { return nil }
 
 // publisherFor picks the publisher for a run: the entry's own when it named
 // one, the session projection otherwise, and none for a run nobody admitted.
@@ -54,7 +55,7 @@ func (publisherRefused) publish(context.Context, native.StreamEvent, json.RawMes
 	return nil
 }
 
-func (publisherRefused) close(context.Context, runEnd) error { return nil }
+func (publisherRefused) close(context.Context, outcome.RunEnd) error { return nil }
 
 // publishRefused is the cause a run is cancelled with when publishing its
 // events was refused. It is not a stop: nobody asked this run to end, and the

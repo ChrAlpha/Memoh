@@ -9,6 +9,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -30,7 +32,7 @@ func (s *Service) reconcileDirectModelPreference(ctx context.Context, botID, bot
 		BotID: botID, BotAgentID: botAgentID, ProjectPath: projectPath, ModelID: modelID, ResolveDefaults: strings.TrimSpace(modelID) == "",
 	})
 	if err != nil {
-		return "", "", ExternalRuntimeError(err)
+		return "", "", outcome.ExternalRuntimeError(err)
 	}
 	return reconcileDirectPair(catalog, modelID, effort)
 }
@@ -70,7 +72,7 @@ func reconcileDirectPair(catalog external.ModelCatalog, modelID, effort string) 
 	return "", "", fmt.Errorf("%w: %q", ErrDirectModelUnavailable, modelID)
 }
 
-func (s *Service) applyDirectModelPreference(ctx context.Context, req ChatRequest, sess session.Thread) (ChatRequest, error) {
+func (s *Service) applyDirectModelPreference(ctx context.Context, req runreq.ChatRequest, sess session.Thread) (runreq.ChatRequest, error) {
 	if !session.IsDirectRuntime(sess) || req.SessionType == sessionmode.Schedule {
 		return req, nil
 	}
@@ -95,7 +97,7 @@ func (s *Service) applyDirectModelPreference(ctx context.Context, req ChatReques
 	// PATCH cannot overwrite this send.
 	if modelID == "" || modelID != sess.PreferredExternalModelID || effort != sess.PreferredReasoningEffort {
 		var err error
-		modelID, effort, err = s.reconcileDirectModelPreference(ctx, req.BotID, sess.BotAgentID, sess.RuntimeType, metadataString(runtimeSessionMeta(sess), "project_path"), modelID, effort)
+		modelID, effort, err = s.reconcileDirectModelPreference(ctx, req.BotID, sess.BotAgentID, sess.RuntimeType, runreq.MetadataString(runreq.RuntimeSessionMeta(sess), "project_path"), modelID, effort)
 		if err != nil {
 			return req, err
 		}

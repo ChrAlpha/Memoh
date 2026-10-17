@@ -8,6 +8,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -25,24 +26,24 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 			},
 		},
 	}
-	assistantToolCall := sdkMessagesToModelMessages([]sdk.Message{assistantToolCallSDK})[0]
+	assistantToolCall := runreq.SDKMessagesToModelMessages([]sdk.Message{assistantToolCallSDK})[0]
 	toolResultSDK := sdk.ToolMessage(sdk.ToolResultPart{
 		ToolCallID: "call-1",
 		ToolName:   "lookup",
 		Result:     toolexec.OutputFromValue("tool result"),
 	})
-	toolResult := sdkMessagesToModelMessages([]sdk.Message{toolResultSDK})[0]
+	toolResult := runreq.SDKMessagesToModelMessages([]sdk.Message{toolResultSDK})[0]
 	rows := []messagepkg.Message{
-		dbHistoryRow(t, "row-compact-user", "user", newTextContent("old compacted user"), func(msg *messagepkg.Message) {
+		dbHistoryRow(t, "row-compact-user", "user", runreq.NewTextContent("old compacted user"), func(msg *messagepkg.Message) {
 			msg.CompactID = "compact-ok"
 		}),
-		dbHistoryRow(t, "row-compact-assistant", "assistant", newTextContent("old compacted assistant"), func(msg *messagepkg.Message) {
+		dbHistoryRow(t, "row-compact-assistant", "assistant", runreq.NewTextContent("old compacted assistant"), func(msg *messagepkg.Message) {
 			msg.CompactID = "compact-ok"
 		}),
-		dbHistoryRow(t, "row-missing-summary", "user", newTextContent("missing summary body"), func(msg *messagepkg.Message) {
+		dbHistoryRow(t, "row-missing-summary", "user", runreq.NewTextContent("missing summary body"), func(msg *messagepkg.Message) {
 			msg.CompactID = "compact-missing"
 		}),
-		dbHistoryRow(t, "row-current", "user", newTextContent("already persisted current"), func(msg *messagepkg.Message) {
+		dbHistoryRow(t, "row-current", "user", runreq.NewTextContent("already persisted current"), func(msg *messagepkg.Message) {
 			msg.SessionID = "sess-1"
 			msg.ExternalMessageID = "msg-current"
 			msg.Platform = "telegram"
@@ -52,7 +53,7 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 			ID:      "row-plain",
 			BotID:   "bot-1",
 			Role:    "user",
-			Content: newTextContent("plain string content"),
+			Content: runreq.NewTextContent("plain string content"),
 		},
 		dbHistoryRow(t, "row-tool-call", "assistant", mustRawJSON(t, assistantToolCall), nil),
 		dbHistoryRow(t, "row-tool-result", "tool", mustRawJSON(t, toolResult), nil),
@@ -66,7 +67,7 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 		}
 		records = append(records, record)
 	}
-	records = dedupePersistedCurrentUserMessage(records, ChatRequest{
+	records = dedupePersistedCurrentUserMessage(records, runreq.ChatRequest{
 		UserMessagePersisted:    true,
 		ThreadID:                "sess-1",
 		ExternalMessageID:       "msg-current",
@@ -75,16 +76,16 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 	})
 	records = replaceCompactedHistoryRecords(records, map[string]string{"compact-ok": "condensed"}, contextfrag.Scope{})
 	annotated := injectWorkspaceTransitionRecords(records)
-	got := make([]ModelMessage, 0, len(annotated))
+	got := make([]runreq.ModelMessage, 0, len(annotated))
 	for _, record := range annotated {
 		got = append(got, record.ModelMessage)
 	}
 	tokens := estimateMessagesTokens(annotated)
 
-	want := []ModelMessage{
-		{Role: "user", Content: newTextContent("<summary>\ncondensed\n</summary>")},
-		{Role: "user", Content: newTextContent("missing summary body")},
-		{Role: "user", Content: newTextContent("plain string content")},
+	want := []runreq.ModelMessage{
+		{Role: "user", Content: runreq.NewTextContent("<summary>\ncondensed\n</summary>")},
+		{Role: "user", Content: runreq.NewTextContent("missing summary body")},
+		{Role: "user", Content: runreq.NewTextContent("plain string content")},
 		assistantToolCall,
 		toolResult,
 	}
@@ -95,8 +96,8 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 		t.Fatal("history pipeline should report estimated tokens for retained records")
 	}
 
-	repaired := repairToolCallClosures(sanitizeMessages(got), syntheticToolClosureError)
-	assertSameJSON(t, modelMessagesToSDKMessages(nonNilModelMessages(repaired)), []sdk.Message{
+	repaired := runreq.RepairToolCallClosures(runreq.SanitizeMessages(got), runreq.SyntheticToolClosureError)
+	assertSameJSON(t, runreq.ModelMessagesToSDKMessages(runreq.NonNilModelMessages(repaired)), []sdk.Message{
 		sdk.UserMessage("<summary>\ncondensed\n</summary>"),
 		sdk.UserMessage("missing summary body"),
 		sdk.UserMessage("plain string content"),

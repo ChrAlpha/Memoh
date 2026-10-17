@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
@@ -44,7 +45,7 @@ func dropEmptyHistoryFailures(records []historyfrag.HistoryRecord) []historyfrag
 	for _, rec := range records {
 		if strings.EqualFold(strings.TrimSpace(rec.ModelMessage.Role), "assistant") &&
 			historyErrorCode(rec.Metadata) != "" &&
-			isEmptyAssistantMessage(rec.ModelMessage) {
+			runreq.IsEmptyAssistantMessage(rec.ModelMessage) {
 			continue
 		}
 		out = append(out, rec)
