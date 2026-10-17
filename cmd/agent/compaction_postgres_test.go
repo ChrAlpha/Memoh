@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -64,9 +65,9 @@ func TestPostgresCompactionFoldsALegacySummaryIntoOne(t *testing.T) {
 }
 
 // Budget recovery only summarizes rows the request actually loaded: an older
-// backlog outside the loaded view stays raw instead of being folded into a
-// summary the request then has to carry on top of the view.
-func TestPostgresCompactionLeavesBacklogOutsideTheViewRaw(t *testing.T) {
+// backlog outside the loaded view, and rows after an edit or retry cutoff,
+// stay raw instead of being folded into a summary the request then carries.
+func TestPostgresCompactionLeavesRowsOutsideTheViewRaw(t *testing.T) {
 	f := newBacklogFixture(t)
 	f.appendBacklog(3, 400)
 	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET created_at=created_at - interval '2 days' WHERE session_id=$1`, f.sessionID); err != nil {
@@ -75,18 +76,25 @@ func TestPostgresCompactionLeavesBacklogOutsideTheViewRaw(t *testing.T) {
 	for i := range 4 {
 		f.appendMessage(fmt.Sprintf("view-%d", i), fmt.Sprintf("view-%d ", i)+strings.Repeat("y", 400))
 	}
+	cutoff := f.base.Add(time.Duration(len(f.rc)+1) * time.Second)
+	for i := range 2 {
+		f.appendMessage(fmt.Sprintf("after-%d", i), fmt.Sprintf("after-%d ", i)+strings.Repeat("z", 400))
+	}
 
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
 	res, err := compaction.NewService(slog.Default(), queries).RunCompactionSync(f.ctx, compaction.TriggerConfig{
 		BotID: f.botID, SessionID: f.sessionID, ModelID: "compact-model", ClientType: "openai-completions",
 		APIKey: "test-key", BaseURL: f.providerURL, SummaryWindowTokens: 128000, HistoryBudgetTokens: 100000,
-		CandidatesFrom: f.base,
+		CandidatesFrom: f.base, CandidatesBefore: cutoff,
 	})
 	if err != nil || res.Status != compaction.StatusOK {
 		t.Fatalf("result=%+v err=%v", res, err)
 	}
 	if raw, compacted := f.backlogRows(); raw != 3 || compacted != 0 {
 		t.Fatalf("backlog outside the view: raw=%d compacted=%d, want all 3 left raw", raw, compacted)
+	}
+	if raw, compacted := f.backlogRowsPrefixed("after-"); raw != 2 || compacted != 0 {
+		t.Fatalf("rows after the cutoff: raw=%d compacted=%d, want both left raw", raw, compacted)
 	}
 	if _, compacted := f.backlogRowsPrefixed("view-"); compacted == 0 {
 		t.Fatal("rows inside the view were not compacted")

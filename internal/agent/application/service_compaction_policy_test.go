@@ -2,12 +2,15 @@ package application
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/settings"
@@ -80,5 +83,34 @@ func TestSetCompactionServicePreservesNil(t *testing.T) {
 	service.SetCompactionService(nil)
 	if service.compactionService != nil {
 		t.Fatal("SetCompactionService(nil) stored a non-nil runner")
+	}
+}
+
+type cutoffMessageService struct {
+	recordingMessageService
+	created time.Time
+}
+
+func (s *cutoffMessageService) GetByIDBySession(_ context.Context, _, messageID string) (messagepkg.Message, error) {
+	if messageID != "edited" {
+		return messagepkg.Message{}, errors.New("message not found")
+	}
+	return messagepkg.Message{ID: messageID, CreatedAt: s.created}, nil
+}
+
+func TestCompactForBudgetStopsCandidatesAtTheRequestCutoff(t *testing.T) {
+	t.Parallel()
+
+	service, runner := newControllerPolicyService(t)
+	created := time.UnixMilli(1_700_000_000_000).UTC()
+	service.messageService = &cutoffMessageService{created: created}
+	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, HistoryCutoffBeforeMessageID: "edited"}
+
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 1 || !runner.configs[0].CandidatesBefore.Equal(created) {
+		t.Fatalf("err=%v configs=%+v, want candidates bounded by the edited message", err, runner.configs)
+	}
+	req.HistoryCutoffBeforeMessageID = "missing"
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err == nil || len(runner.configs) != 1 {
+		t.Fatalf("err=%v runs=%d, want an unknown cutoff to fail before compacting", err, len(runner.configs))
 	}
 }
