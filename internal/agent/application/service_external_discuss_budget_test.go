@@ -57,53 +57,44 @@ func FuzzExternalDiscussFinalEnvelope(f *testing.F) {
 func TestExternalDiscussAdmissionIncludesRuntimeContext(t *testing.T) {
 	service := &Service{}
 	service.SetContextAbsoluteMaxTokens(1000)
-	messages := make([]turn.DiscussMessage, 1000)
-	for i := range messages {
-		messages[i] = turn.DiscussMessage{Role: "user", Content: "abcd"}
-	}
+	messages := externalDiscuss(100)
 	messages[0] = turn.DiscussMessage{Role: "user", Content: "old summary", CompactionArtifactID: "summary"}
-	messages[len(messages)-1].Content = "CURRENT"
 	sections := buildRuntimeContextSections(runtimeContextRenderInput{})
 	markdown, _, _ := runtimeContextViaContextView(t.Context(), nil, sections, "")
 	got, err := service.prepareExternalDiscussContext(t.Context(), ChatRequest{discussMessages: messages}, markdown, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	actual := turn.EstimateTokensFromBytes(len(got.Query) + len(markdown))
-	if actual > 1000 {
-		t.Fatalf("final external envelope=%d, budget=1000", actual)
+	if actual := turn.EstimateTokensFromBytes(len(got.Query) + len(markdown)); actual > 1000 || !strings.Contains(got.Query, "old summary") || !strings.Contains(got.Query, "CURRENT") {
+		t.Fatalf("final external envelope=%d tokens, want every message within 1000", actual)
 	}
-	if !strings.Contains(got.Query, "old summary") || !strings.Contains(got.Query, "CURRENT") {
-		t.Fatal("lost protected sources")
+	_, err = service.prepareExternalDiscussContext(t.Context(), ChatRequest{discussMessages: messages}, markdown+strings.Repeat("runtime context\n", 125), 0)
+	if apperror.CodeOf(err) != apperror.CodeContextBudgetUnsatisfied {
+		t.Fatalf("runtime context crowding out history: err=%v, want budget_unsatisfied instead of dropping messages", err)
 	}
 }
 
-func TestExternalDiscussDriverReceivesBoundedFinalEnvelope(t *testing.T) {
+func TestExternalDiscussDriverFailsInsteadOfDroppingInput(t *testing.T) {
 	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
 	messages := &recordingMessageService{}
 	service := newACPLifecycleService(t, pool, messages, nil)
 	service.SetACPSessionPool(pool)
 	service.SetContextAbsoluteMaxTokens(1000)
-	sources := make([]turn.DiscussMessage, 1000)
-	for i := range sources {
-		sources[i] = turn.DiscussMessage{Role: "user", Content: "abcd"}
-	}
-	sources[len(sources)-1].Content = "CURRENT"
 	chunks, errs := service.StreamChat(t.Context(), ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, Query: "candidate", UserMessagePersisted: true,
-		discussMessages: sources,
+		discussMessages: externalDiscuss(1000),
 	})
 	drainStreamChunks(t, chunks)
+	var failure error
 	for err := range errs {
-		t.Fatal(err)
+		failure = err
 	}
-	actual := turn.EstimateTokensFromBytes(len(pool.input.Prompt) + len(pool.input.ContextMarkdown))
-	if pool.calls != 1 || actual > 1000 || !strings.Contains(pool.input.Prompt, "CURRENT") {
-		t.Fatalf("external dispatch escaped admission: calls=%d tokens=%d", pool.calls, actual)
+	if apperror.CodeOf(failure) != apperror.CodeContextBudgetUnsatisfied || pool.calls != 0 {
+		t.Fatalf("err=%v dispatches=%d, want budget_unsatisfied before dispatch", failure, pool.calls)
 	}
 }
 
-func TestExternalDiscussOversizedBatchCompactsOlderInputOrRecordsOmission(t *testing.T) {
+func TestExternalDiscussOversizedBatchCompactsOlderInputOrFails(t *testing.T) {
 	var messages []turn.DiscussMessage
 	for _, id := range []string{"a", "b", "c", "d"} {
 		messages = append(messages, turn.DiscussMessage{Role: "user", Content: id + strings.Repeat("x", 1200), Source: &turn.ContextMessageSource{Kind: "external", ID: id, Current: true}})
@@ -123,13 +114,8 @@ func TestExternalDiscussOversizedBatchCompactsOlderInputOrRecordsOmission(t *tes
 			}
 			continue
 		}
-		if err != nil || len(got.discussOmittedSources) == 0 || got.discussOmittedSources[0].ID != "a" || !strings.Contains(got.Query, "d"+strings.Repeat("x", 1200)) {
-			t.Fatalf("without recovery the newest input must proceed and the omission must be recorded: err=%v omitted=%+v", err, got.discussOmittedSources)
-		}
-		ledger := contextfrag.NewMutationLedger()
-		recordOmittedCurrentInput(ledger, got.discussOmittedSources)
-		if records := ledger.Records(); len(records) != 1 || records[0].Kind != contextfrag.MutationCurrentInputOmitted || !strings.HasPrefix(records[0].Detail, "sources=a") {
-			t.Fatalf("omission record=%+v", records)
+		if apperror.CodeOf(err) != apperror.CodeContextBudgetUnsatisfied || len(compactor.configs) != 0 || got.Query != "" {
+			t.Fatalf("exhausted recovery must fail instead of omitting input: err=%v compactions=%d", err, len(compactor.configs))
 		}
 	}
 }
@@ -161,8 +147,8 @@ func externalResumeService(t *testing.T) (*Service, *recordingACPPrompter, *resu
 	return service, pool, saved, ctx
 }
 
-func externalOversizedDiscuss() []turn.DiscussMessage {
-	sources := make([]turn.DiscussMessage, 1000)
+func externalDiscuss(n int) []turn.DiscussMessage {
+	sources := make([]turn.DiscussMessage, n)
 	for i := range sources {
 		sources[i] = turn.DiscussMessage{Role: "user", Content: "abcd"}
 	}
@@ -202,7 +188,7 @@ func TestExternalDiscussResumeAdmitsEverySavedBatchAgain(t *testing.T) {
 	service, pool, saved, ctx := externalResumeService(t)
 	chunks, errs := service.StreamChat(ctx, ChatRequest{
 		BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: uuid.NewString(),
-		Query: discussAgentFullContextPrompt(externalOversizedDiscuss()), UserMessagePersisted: true, discussMessages: externalOversizedDiscuss(),
+		Query: discussAgentFullContextPrompt(externalDiscuss(100)), UserMessagePersisted: true, discussMessages: externalDiscuss(100),
 	})
 	drainStreamChunks(t, chunks)
 	for err := range errs {
@@ -260,7 +246,7 @@ func TestExternalShutdownResumeBoundsInstructionPromptAndRuntimeContext(t *testi
 	service, pool, _, ctx := externalResumeService(t)
 	chunks, errs := service.StreamChat(ctx, ChatRequest{
 		BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID, RunID: uuid.NewString(), ShutdownResume: true,
-		Query: resumeInstruction + discussAgentFullContextPrompt(externalOversizedDiscuss()), UserMessagePersisted: true,
+		Query: resumeInstruction + discussAgentFullContextPrompt(externalDiscuss(1000)), UserMessagePersisted: true,
 	})
 	drainStreamChunks(t, chunks)
 	var failure error

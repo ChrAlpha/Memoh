@@ -1,11 +1,9 @@
 package compaction
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -16,23 +14,22 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/models"
 )
 
 func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubModel{}
-	cfg := machineryConfig(stub, 200)
-	cfg.MaxCompactTokens = 4000
+	cfg := machineryConfig(stub, 100000)
 	rows := fusionQualityRows(t, cfg)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 
-	items, _ := itemsFromRows(rows)
-	entries, ids := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
+	items, _ := candidatesFromRows(rows)
+	entries, ids := buildEntriesAndIDs(foldableItems(items))
 	raw := max(entriesPromptCost(entries), compactedReplayTokens(items, ids))
-	artifacts := fusionArtifacts(t, parents)
-	partialReplacement := summaryReplacementTokens(raw, artifacts[:1])
-	wholeReplacement := summaryReplacementTokens(raw, artifacts)
+	partialReplacement := raw + estimateSummaryReplayTokens(parents[0].Summary)
+	wholeReplacement := partialReplacement + estimateSummaryReplayTokens(parents[1].Summary)
 	stub.summary = strings.Repeat("s", partialReplacement*4)
 	summaryTokens := estimateSummaryReplayTokens(stub.summary)
 	if summaryTokens < partialReplacement || summaryTokens >= wholeReplacement {
@@ -57,53 +54,33 @@ func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *te
 	}
 }
 
-func TestDoCompactionFusionAbsorbsWholeFrontierWithEmptyPriorContext(t *testing.T) {
+func TestDoCompactionFoldsEveryParentSummaryWhole(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubModel{summary: "concise whole frontier replacement"}
-	cfg := machineryConfig(stub, 200)
-	cfg.MaxCompactTokens = 50000
+	cfg := machineryConfig(stub, 100000)
 	cfg.SummaryWindowTokens = 50000
 
-	absorbedOldest := "absorbed-oldest:" + strings.Repeat("a", 18800)
-	absorbedMiddle := "absorbed-middle:" + strings.Repeat("b", 4000)
-	absorbedNewest := "absorbed-newest:" + strings.Repeat("c", 1200)
-	parents := fusionParentLogs(t, cfg, absorbedOldest, absorbedMiddle, absorbedNewest)
+	oldest := "absorbed-oldest:" + strings.Repeat("a", 18800)
+	middle := "absorbed-middle:" + strings.Repeat("b", 4000)
+	newest := "absorbed-newest:" + strings.Repeat("c", 1200)
+	parents := fusionParentLogs(t, cfg, oldest, middle, newest)
 	artifacts := fusionArtifacts(t, parents)
-	expectedInputBudget, err := boundedCompactionInputTokens(cfg, cfg.MaxCompactTokens, maxCompactionSummaryTokens, fusionSystemPrompt)
-	if err != nil {
-		t.Fatalf("bounded fusion input fixture: %v", err)
-	}
 
 	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
-	var logOutput bytes.Buffer
-	svc := NewService(slog.New(slog.NewTextHandler(&logOutput, nil)), q)
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if res.Status != StatusOK || len(q.rollupCalls) != 1 {
 		t.Fatalf("whole-frontier fusion result = %#v rollup_calls=%d, want ok with one rollup", res, len(q.rollupCalls))
 	}
-	if stub.maxTokens != maxCompactionSummaryTokens {
-		t.Fatalf("fusion max output tokens = %d, want ordinary cap %d", stub.maxTokens, maxCompactionSummaryTokens)
+	if want := models.ResolveGenerationLimits(models.ClientTypeOpenAICompletions, nil, cfg.SummaryWindowTokens, 0).MaxOutputTokens; stub.maxTokens != want {
+		t.Fatalf("summarizer max output tokens = %d, want the model's allowance %d", stub.maxTokens, want)
 	}
-	if want := fmt.Sprintf("max_compact_tokens=%d", expectedInputBudget); !strings.Contains(logOutput.String(), want) {
-		t.Fatalf("fusion input budget log missing %q:\n%s", want, logOutput.String())
-	}
-
-	if strings.Contains(stub.prompt, "The following are summaries of earlier parts of this conversation.") {
-		t.Fatalf("whole-frontier fusion retained prior context:\n%s", stub.prompt)
-	}
-	absorbedStart := strings.LastIndex(stub.prompt, "<absorbed_context>")
-	absorbedEnd := strings.LastIndex(stub.prompt, "</absorbed_context>")
-	if absorbedStart < 0 || absorbedEnd <= absorbedStart {
-		t.Fatalf("whole-frontier fusion prompt section offsets = absorbed %d..%d", absorbedStart, absorbedEnd)
-	}
-	absorbedSection := stub.prompt[absorbedStart:absorbedEnd]
-	for _, absorbed := range []string{"absorbed-oldest:", "absorbed-middle:", "absorbed-newest:"} {
-		if !strings.Contains(absorbedSection, absorbed) {
-			t.Fatalf("absorbed context omitted parent %q:\n%s", absorbed, stub.prompt)
+	for _, summary := range []string{oldest, middle, newest} {
+		if !strings.Contains(stub.prompt, "<earlier_summary>\n"+summary+"\n</earlier_summary>") {
+			t.Fatalf("summarizer did not read parent %q whole", summary[:16])
 		}
 	}
 
@@ -148,18 +125,20 @@ func TestDoCompactionFoldsTheActiveSummaryIntoOneArtifact(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		summaries []string
+		budget    int
 		newRows   bool
 		wantFold  bool
 	}{
-		{name: "one parent and new rows", summaries: []string{"earlier decision: ship on friday"}, newRows: true, wantFold: true},
-		{name: "legacy parents without new rows", summaries: []string{"earlier decision: ship on friday", "later decision: freeze on thursday"}, wantFold: true},
-		{name: "one parent without new rows", summaries: []string{"earlier decision: ship on friday"}},
+		{name: "one parent and new rows", summaries: []string{"earlier decision: ship on friday"}, budget: 100000, newRows: true, wantFold: true},
+		{name: "legacy parents that fit without new rows", summaries: []string{"earlier decision: ship on friday", "later decision: freeze on thursday"}, budget: 100000},
+		{name: "parents that no longer fit without new rows", summaries: []string{strings.Repeat("a", 2000), strings.Repeat("b", 2000)}, budget: 800, wantFold: true},
+		{name: "one parent without new rows", summaries: []string{"earlier decision: ship on friday"}, budget: 100000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			stub := &stubModel{summary: "one replacement summary"}
-			cfg := machineryConfig(stub, 200)
+			cfg := machineryConfig(stub, tc.budget)
 			parents := fusionParentLogs(t, cfg, tc.summaries...)
 			q := &fakeQueries{priorLogs: parents}
 			if tc.newRows {
@@ -231,7 +210,7 @@ func TestDoCompactionBackfillsLegacyParentCoverageFromItsRows(t *testing.T) {
 	for _, source := range coverage {
 		covered[source.Ref.StableKey()] = true
 	}
-	legacyItems, _ := itemsFromRows(legacyRows)
+	legacyItems, _ := candidatesFromRows(legacyRows)
 	for _, item := range legacyItems {
 		if !covered[item.Record.Ref.StableKey()] {
 			t.Fatalf("rollup coverage %v omitted legacy row %v", coverage, item.ID)
@@ -253,14 +232,13 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 	t.Parallel()
 
 	stub := &stubModel{}
-	cfg := machineryConfig(stub, 200)
-	cfg.MaxCompactTokens = 4000
+	cfg := machineryConfig(stub, 100000)
 	rows := fusionQualityRows(t, cfg)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 
-	items, _ := itemsFromRows(rows)
-	entries, ids := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
-	replacementTokens := summaryReplacementTokens(max(entriesPromptCost(entries), compactedReplayTokens(items, ids)), fusionArtifacts(t, parents))
+	items, _ := candidatesFromRows(rows)
+	entries, ids := buildEntriesAndIDs(foldableItems(items))
+	replacementTokens := max(entriesPromptCost(entries), compactedReplayTokens(items, ids)) + estimateSummaryReplayTokens(parents[0].Summary) + estimateSummaryReplayTokens(parents[1].Summary)
 	stub.summary = strings.Repeat("s", replacementTokens*4)
 	if summaryTokens := estimateSummaryReplayTokens(stub.summary); summaryTokens < replacementTokens {
 		t.Fatalf("test setup invalid: summary=%d replacement=%d", summaryTokens, replacementTokens)
@@ -285,7 +263,6 @@ func TestDoCompactionFusionProviderFailureKeepsParentsActiveAndClaimsReclaimable
 
 	failing := &failingModel{}
 	cfg := machineryConfig(&stubModel{}, 200)
-	cfg.MaxCompactTokens = 4000
 	cfg.HTTPClient = &http.Client{Transport: failing}
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
@@ -308,7 +285,6 @@ func TestDoCompactionFusionRollupCASFailureKeepsParentsActiveAndClaimsReclaimabl
 
 	stub := &stubModel{summary: "concise fused replacement"}
 	cfg := machineryConfig(stub, 200)
-	cfg.MaxCompactTokens = 4000
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 	q := &fakeQueries{
 		uncompacted: fusionQualityRows(t, cfg),
@@ -341,13 +317,13 @@ func TestDoCompactionFusionFinalOverflowFailsBeforeClaimsAndProvider(t *testing.
 		mkRow(t, "assistant", "["+strings.Join(callParts, ",")+"]", 100),
 	}
 	for i := 0; i < fanout; i++ {
-		rows = append(rows, mkRow(t, "tool", fmt.Sprintf(`[{"type":"tool-result","toolCallId":"c%d","toolName":"probe","output":{"type":"text","value":"ok"}}]`, i), 100))
+		rows = append(rows, mkRow(t, "tool", fmt.Sprintf(`[{"type":"tool-result","toolCallId":"c%d","toolName":"probe","output":{"type":"text","value":"%s"}}]`, i, strings.Repeat("ok ", 200)), 100))
 	}
 	rows = append(rows, mkRow(t, "user", `"current question"`, 100))
 
 	stub := &stubModel{summary: "must not run"}
-	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 80
+	cfg := machineryConfig(stub, 100000)
+	cfg.SummaryWindowTokens = 8000
 	setFusionRowScopeAndTimes(t, cfg, rows)
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 40), strings.Repeat("b", 40))
 	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
@@ -368,18 +344,18 @@ func TestDoCompactionFusionFinalOverflowFailsBeforeClaimsAndProvider(t *testing.
 	assertFusionParentsActive(t, q, parents)
 }
 
-func TestDoCompactionFusionManyParentHeadersFailBeforeClaimsAndProvider(t *testing.T) {
+func TestDoCompactionFusionUnreadableEarlierSummariesFailBeforeClaimsAndProvider(t *testing.T) {
 	t.Parallel()
 
 	stub := &stubModel{summary: "must not run"}
-	cfg := machineryConfig(stub, 200)
-	cfg.MaxCompactTokens = 100
+	cfg := machineryConfig(stub, 100000)
+	cfg.SummaryWindowTokens = 8000
 	parents := fusionParentLogs(t, cfg,
-		strings.Repeat("a", 32),
-		strings.Repeat("b", 32),
-		strings.Repeat("c", 32),
-		strings.Repeat("d", 32),
-		strings.Repeat("e", 32),
+		strings.Repeat("a", 5000),
+		strings.Repeat("b", 5000),
+		strings.Repeat("c", 5000),
+		strings.Repeat("d", 5000),
+		strings.Repeat("e", 5000),
 	)
 	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
 

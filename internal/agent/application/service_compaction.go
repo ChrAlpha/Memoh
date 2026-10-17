@@ -2,8 +2,11 @@ package application
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -13,59 +16,56 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 )
 
-// runBudgetCompactionSync compacts everything before the protected tail, so
-// the session history can fit historyBudget. A failure leaves the history as
-// it was; the caller reports the budget it could not satisfy.
-func (s *Service) runBudgetCompactionSync(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) compaction.Result {
-	if ctx.Err() != nil {
-		return compaction.Result{}
-	}
+// compactForBudget folds the session history before the protected tail into
+// one summary that fits historyBudget, in as many passes as the summarizer
+// needs to read it all. It reports why when the history could not be folded;
+// a failed pass leaves the history it did not commit as it was.
+func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) error {
 	if s.compactionService == nil || s.settingsService == nil {
-		s.logger.WarnContext(ctx, "compaction sync: skipped, service or settings nil")
-		return compaction.Result{}
+		return errors.New("compaction service unavailable")
 	}
 	botSettings, err := s.settingsService.GetBot(ctx, req.BotID)
 	if err != nil {
-		s.logger.WarnContext(ctx, "compaction sync: failed to load settings", slog.Any("error", err))
-		return compaction.Result{}
+		return fmt.Errorf("load compaction settings: %w", err)
 	}
 	cfg, err := s.buildCompactionConfig(ctx, req, botSettings, inputTokens, turnModelID)
 	if err != nil {
-		s.logger.WarnContext(ctx, "compaction sync: failed to build config", slog.Any("error", err))
-		return compaction.Result{}
-	}
-	if cfg.ModelID == "" {
-		return compaction.Result{}
+		return err
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
 	cfg.CandidatesFrom = req.historyViewFrom
-	cfg.Ratio = 100
 	cfg.HistoryBudgetTokens = historyBudget
 
-	s.logger.InfoContext(ctx, "compaction sync: running synchronously",
-		slog.String("bot_id", req.BotID),
-		slog.String("session_id", req.ThreadID),
-		slog.Int("input_tokens", inputTokens),
-		slog.String("model_id", cfg.ModelID),
-	)
-	res, err := s.compactionService.RunCompactionSync(ctx, cfg)
-	if err != nil {
-		s.logger.WarnContext(ctx, "compaction sync: failed", slog.Any("error", err))
-		return compaction.Result{}
+	start := time.Now()
+	passes, folded := 0, false
+	for {
+		res, err := s.compactionService.RunCompactionSync(ctx, cfg)
+		passes++
+		if err != nil {
+			s.logger.WarnContext(ctx, "compaction failed",
+				slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
+				slog.Int("passes", passes), slog.Any("error", err))
+			return err
+		}
+		folded = folded || res.Status == compaction.StatusOK || res.Status == compaction.StatusProgress
+		if res.Status != compaction.StatusProgress || res.MessageCount == 0 {
+			s.logger.InfoContext(ctx, "compaction finished",
+				slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
+				slog.String("status", res.Status), slog.Int("passes", passes),
+				slog.Int("input_tokens", inputTokens), slog.Int("history_budget_tokens", historyBudget),
+				slog.Int64("duration_ms", time.Since(start).Milliseconds()))
+			if !folded {
+				return fmt.Errorf("compaction status %s", res.Status)
+			}
+			return nil
+		}
 	}
-	s.logger.InfoContext(ctx, "compaction sync: finished",
-		slog.String("bot_id", req.BotID),
-		slog.String("session_id", req.ThreadID),
-		slog.String("status", res.Status),
-	)
-	return res
 }
 
 // buildCompactionConfig resolves the summarizer through the shared model
 // policy — explicit override first, then the turn's actually-resolved model,
 // then the bot chat default, then the session's latest model — and attaches
-// credentials. Unavailable-model conditions return an empty config; infrastructure
-// errors propagate.
+// credentials.
 func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, botSettings settings.Settings, inputTokens int, turnModelID string) (compaction.TriggerConfig, error) {
 	sessionModelID := ""
 	if strings.TrimSpace(botSettings.CompactionModelID) == "" && strings.TrimSpace(turnModelID) == "" && strings.TrimSpace(botSettings.ChatModelID) == "" {
@@ -80,14 +80,6 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 		botSettings.ChatModelID,
 		sessionModelID,
 	)
-	if models.IsCompactionModelUnavailable(err) {
-		s.logger.InfoContext(ctx, "compaction: skipped",
-			slog.String("bot_id", req.BotID),
-			slog.String("session_id", req.ThreadID),
-			slog.Any("reason", err),
-		)
-		return compaction.TriggerConfig{}, nil
-	}
 	if err != nil {
 		return compaction.TriggerConfig{}, err
 	}
@@ -107,6 +99,7 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 		ChatCompletionsCompat: providers.ProviderConfigString(resolution.Provider, models.ChatCompletionsCompatConfigKey),
 		PromptCacheTTL:        providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
 		WindowTokens:          resolution.WindowTokens,
+		MaxOutputTokens:       resolution.Model.Config.MaxOutputTokensLimit(),
 	})
 	cfg.BotID = req.BotID
 	cfg.SessionID = req.ThreadID

@@ -39,7 +39,7 @@ func TestPostgresCompactionFoldsALegacySummaryIntoOne(t *testing.T) {
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
 	res, err := compaction.NewService(slog.Default(), queries).RunCompactionSync(f.ctx, compaction.TriggerConfig{
 		BotID: f.botID, SessionID: f.sessionID, ModelID: "compact-model", ClientType: "openai-completions",
-		APIKey: "test-key", BaseURL: f.providerURL, TargetTokens: 1,
+		APIKey: "test-key", BaseURL: f.providerURL, SummaryWindowTokens: 128000, HistoryBudgetTokens: 100000,
 	})
 	if err != nil || res.Status != compaction.StatusOK {
 		t.Fatalf("result=%+v err=%v", res, err)
@@ -79,7 +79,7 @@ func TestPostgresCompactionLeavesBacklogOutsideTheViewRaw(t *testing.T) {
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
 	res, err := compaction.NewService(slog.Default(), queries).RunCompactionSync(f.ctx, compaction.TriggerConfig{
 		BotID: f.botID, SessionID: f.sessionID, ModelID: "compact-model", ClientType: "openai-completions",
-		APIKey: "test-key", BaseURL: f.providerURL, TargetTokens: 1,
+		APIKey: "test-key", BaseURL: f.providerURL, SummaryWindowTokens: 128000, HistoryBudgetTokens: 100000,
 		CandidatesFrom: f.base,
 	})
 	if err != nil || res.Status != compaction.StatusOK {

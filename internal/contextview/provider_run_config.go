@@ -382,8 +382,10 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
 	compacted := recoveryAttempts > 0
-	if (recoveryAttempts == 0 || (budgetPlan != nil && providerHistoryCost(cfg.ContextSourceFrags) > budgetPlan.HistoryBudget)) && budgetErr == nil && (err == nil || errors.Is(err, contextfrag.ErrProtectedContextOverflow)) &&
-		recoveryAttempts < 3 && cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 &&
+	// One compaction per request: what it leaves is only rechecked, never
+	// compacted again to reach a lower mark.
+	if recoveryAttempts == 0 && budgetErr == nil && (err == nil || errors.Is(err, contextfrag.ErrProtectedContextOverflow)) &&
+		cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 &&
 		budgetPlan.ActualSystemCost <= budgetPlan.SystemBudget && ctx.Err() == nil {
 		recovery := cfg
 		recovery.ContextManifest.BudgetPlan = budgetPlan
@@ -401,6 +403,9 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 			return applyProviderRunConfigAttempt(ctx, logger, recovery, recoveryAttempts+1)
 		}
 		compacted = compacted || recovered || errors.Is(recoveryErr, contextfrag.ErrBudgetUnsatisfied)
+		if errors.Is(recoveryErr, contextfrag.ErrBudgetUnsatisfied) {
+			err = recoveryErr
+		}
 	}
 	if compacted && errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
 		err = fmt.Errorf("%w: compaction did not make the context fit: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
@@ -942,14 +947,4 @@ func warnMissingContextWindow(ctx context.Context, logger *slog.Logger, cfg agen
 		slog.String("session_id", cfg.ContextScope.SessionID),
 		slog.String("model_id", cfg.CurrentModelID),
 	)
-}
-
-func providerHistoryCost(frags []contextfrag.ContextFrag) int {
-	cost := 0
-	for _, frag := range frags {
-		if frag.Slot != contextfrag.SlotSystem && frag.Slot != contextfrag.SlotCurrentUser && frag.Kind != contextfrag.KindCurrentUserMessage {
-			cost += contextfrag.ResolveProviderBudgetFragTokens(frag)
-		}
-	}
-	return cost
 }

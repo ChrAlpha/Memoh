@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/models"
 )
 
 func qualityRows(t *testing.T) []sqlc.ListUncompactedMessagesBySessionRow {
@@ -48,8 +49,8 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if stub.maxTokens != 2000 {
-		t.Fatalf("summary max tokens = %d, want window/10 = 2000", stub.maxTokens)
+	if stub.maxTokens != 5000 {
+		t.Fatalf("summary max tokens = %d, want the model's output allowance in a 20000 window", stub.maxTokens)
 	}
 
 	wide := &stubModel{summary: "SUMMARY"}
@@ -58,8 +59,8 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfgWide); err != nil {
 		t.Fatalf("RunCompactionSync wide: %v", err)
 	}
-	if wide.maxTokens != maxCompactionSummaryTokens {
-		t.Fatalf("summary max tokens = %d, want the %d cap", wide.maxTokens, maxCompactionSummaryTokens)
+	if wide.maxTokens != models.DefaultOutputReserveTokens {
+		t.Fatalf("summary max tokens = %d, want the model's output allowance %d", wide.maxTokens, models.DefaultOutputReserveTokens)
 	}
 }
 

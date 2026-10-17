@@ -35,16 +35,18 @@ var (
 	// on every attempt, so it fails closed before claiming any source rows.
 	// Exported so manual surfaces can map it to a stable capability error.
 	ErrSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
-	// errCompactionInputOverflow marks a selection whose minimal entries (an
-	// unsplittable tool exchange) still exceed the summarizer input budget.
-	// Sending it anyway would overflow the provider window, so it fails closed
-	// before claiming any source rows.
-	errCompactionInputOverflow = errors.New("compaction: minimal entries exceed the summarizer input budget")
+	// errCompactionInputOverflow marks content the summarizer cannot read in one
+	// call: an unsplittable tool exchange, or the earlier summary beside the
+	// oldest one. Its text is never cut to fit, so it fails before claiming any
+	// source rows.
+	errCompactionInputOverflow = errors.New("compaction: content exceeds the summarizer input")
+	// errNoSummaryRoom marks a request whose kept history leaves no room for a
+	// summary, or a summary longer than that room.
+	errNoSummaryRoom = errors.New("compaction: no room for the summary in the request")
+	// errCompactionUnsized marks a call without the request budget or the
+	// summarizer window it is sized from.
+	errCompactionUnsized = errors.New("compaction: request budget or summarizer window unknown")
 )
-
-// maxCompactionSummaryTokens bounds a single summary's output so it can never
-// crowd out the raw history it is meant to replace.
-const maxCompactionSummaryTokens = 4096
 
 // inflightRun marks one session's running compaction for activity reporting.
 type inflightRun struct {
@@ -206,10 +208,9 @@ func (s *Service) runCompactionHook(ctx context.Context, eventName string, cfg T
 		return nil
 	}
 	payload := map[string]any{
-		"input_tokens":  cfg.TotalInputTokens,
-		"target_tokens": cfg.TargetTokens,
-		"ratio":         cfg.Ratio,
-		"model_id":      cfg.ModelID,
+		"input_tokens":          cfg.TotalInputTokens,
+		"history_budget_tokens": cfg.HistoryBudgetTokens,
+		"model_id":              cfg.ModelID,
 	}
 	for key, value := range extra {
 		payload[key] = value

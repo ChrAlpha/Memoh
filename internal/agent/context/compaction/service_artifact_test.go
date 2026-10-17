@@ -52,7 +52,7 @@ func TestDoCompactionPersistsDurableCoverageAndAnchor(t *testing.T) {
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY"}
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 200)); err != nil {
+	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestDoCompactionOrdersDurableCoverageBySourceTime(t *testing.T) {
 	rows[3].CreatedAt = pgtype.Timestamptz{Time: time.UnixMilli(4000), Valid: true}
 	q := &fakeQueries{uncompacted: rows}
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(&stubModel{summary: "SUMMARY"}, 200)); err != nil {
+	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2])); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestDoCompactionCoverageHashIncludesMessageAssets(t *testing.T) {
 	}
 	stub := &stubModel{summary: "SUMMARY"}
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 200)); err != nil {
+	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -185,7 +185,7 @@ func TestDoCompactionStopsWhenAssetsCannotBeLoaded(t *testing.T) {
 		assetsErr:   assetErr,
 	}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(&stubModel{summary: "SUMMARY"}, 200))
+	_, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if !errors.Is(err, assetErr) {
 		t.Fatalf("RunCompactionSync error = %v, want %v", err, assetErr)
 	}
@@ -209,7 +209,7 @@ func TestDoCompactionReturnsSuccessfulArtifactFinalizationError(t *testing.T) {
 		completeErr: completeErr,
 	}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(&stubModel{summary: "SUMMARY"}, 200))
+	_, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if !errors.Is(err, completeErr) {
 		t.Fatalf("RunCompactionSync error = %v, want %v", err, completeErr)
 	}
@@ -230,7 +230,7 @@ func TestDoCompactionRejectsPartialSourceMarking(t *testing.T) {
 	markedRows := int64(1)
 	q := &fakeQueries{uncompacted: rows, markedRowCount: &markedRows}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(&stubModel{summary: "SUMMARY"}, 200))
+	_, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if err == nil || !strings.Contains(err.Error(), "marked 1 of 2") {
 		t.Fatalf("RunCompactionSync error = %v, want partial-mark failure", err)
 	}

@@ -114,7 +114,7 @@ func TestChatBudgetRecoveryReloadsOnlyHistory(t *testing.T) {
 	if len(runner.configs) != 1 || history.loads != 1 || history.maxBytes != s.historyLoadMaxBytes(16000) {
 		t.Fatalf("compactions=%d history loads=%d maxBytes=%d", len(runner.configs), history.loads, history.maxBytes)
 	}
-	if compactionCfg := runner.configs[0]; compactionCfg.TargetTokens != 0 || compactionCfg.Ratio != 100 || compactionCfg.HistoryBudgetTokens != 984 || compactionCfg.TotalInputTokens != 3900 {
+	if compactionCfg := runner.configs[0]; compactionCfg.HistoryBudgetTokens != 984 || compactionCfg.TotalInputTokens != 3900 {
 		t.Fatalf("recovery did not subtract fixed history content: %#v", compactionCfg)
 	}
 	if got.RunID != cfg.RunID || got.Model != cfg.Model || got.InjectCh != cfg.InjectCh || !reflect.DeepEqual(got.ContextToolDefs, cfg.ContextToolDefs) {
@@ -150,12 +150,6 @@ func TestChatBudgetRecoveryCannotBypassFailure(t *testing.T) {
 				return compaction.Result{Status: compaction.StatusOK}, nil
 			}
 			_, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
-			if outcome == "droppable reload" {
-				if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || len(runner.configs) != 2 {
-					t.Fatalf("history that still does not fit was trimmed instead of failing: error=%v calls=%d", err, len(runner.configs))
-				}
-				return
-			}
 			if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || len(runner.configs) != 1 {
 				t.Fatalf("unrecovered error=%v calls=%d", err, len(runner.configs))
 			}
@@ -377,7 +371,7 @@ func TestChatBudgetRecoveryCompactsOrdinaryHistoryOrFails(t *testing.T) {
 			cfg.ContextSourceFrags = buildProviderSourceFrags(t.Context(), cfg, []native.SystemSection{{ID: "system", Kind: contextfrag.KindSystemPrompt, Text: strings.Repeat("s", 3200)}}, nil)
 			cfg.RecoverContextBudget = s.chatBudgetRecovery(ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID}, chatHistoryLayout{historyCount: 1, pressureTokens: 2500})
 			got, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
-			if len(runner.configs) != 1 || runner.configs[0].Ratio != 100 || runner.configs[0].HistoryBudgetTokens != 998 || runner.configs[0].TotalInputTokens != 3125 {
+			if len(runner.configs) != 1 || runner.configs[0].HistoryBudgetTokens != 998 || runner.configs[0].TotalInputTokens != 3125 {
 				t.Fatalf("recovery did not compact once against history allowance 998: %#v", runner.configs)
 			}
 			if summarizerFails {
@@ -539,7 +533,7 @@ func TestChatBudgetRecoveryContinuesAfterPartialProgress(t *testing.T) {
 			status = compaction.StatusOK
 		}
 		history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent(text)}}
-		return compaction.Result{Status: status}, nil
+		return compaction.Result{Status: status, MessageCount: 1}, nil
 	}
 	got, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
 	if err != nil || len(runner.configs) != 2 || countRecoveryText(got.Messages, "fitting final summary") != 1 {

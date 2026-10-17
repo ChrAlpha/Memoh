@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
@@ -128,20 +129,22 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	svc := compaction.NewService(slog.New(slog.DiscardHandler), q)
 
 	res, err := svc.RunCompactionSync(context.Background(), compaction.TriggerConfig{
-		BotID:        uuid.NewString(),
-		SessionID:    uuid.NewString(),
-		ModelID:      "stub-model",
-		ClientType:   "openai-completions",
-		APIKey:       "test",
-		BaseURL:      "http://stub.invalid",
-		HTTPClient:   &http.Client{Transport: pairingSummarizer{summary: "condensed old exchange"}},
-		TargetTokens: 200,
+		BotID:               uuid.NewString(),
+		SessionID:           uuid.NewString(),
+		ModelID:             "stub-model",
+		ClientType:          "openai-completions",
+		APIKey:              "test",
+		BaseURL:             "http://stub.invalid",
+		HTTPClient:          &http.Client{Transport: pairingSummarizer{summary: "condensed old exchange"}},
+		ProtectedSources:    []turn.ContextMessageSource{{Kind: "history", ID: uuid.UUID(rows[4].ID.Bytes).String(), Current: true}},
+		SummaryWindowTokens: 128000,
+		HistoryBudgetTokens: 1000,
 	})
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if res.Status != compaction.StatusOK {
-		t.Fatalf("status = %q, want %q", res.Status, compaction.StatusOK)
+	if res.Status != compaction.StatusProgress {
+		t.Fatalf("status = %q, want %q with mid q still foldable behind the island", res.Status, compaction.StatusProgress)
 	}
 
 	marked := make(map[pgtype.UUID]bool, len(q.markedIDs))

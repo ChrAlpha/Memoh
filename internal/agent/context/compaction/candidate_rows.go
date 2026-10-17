@@ -13,19 +13,12 @@ import (
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
-// itemsFromRows classifies each uncompacted row into a typed CompactionCandidate.
-// A row that cannot be classified remains as a must-keep barrier rather than
-// aborting the whole compaction. Keeping its position prevents compact spans on
-// either side from sharing an ID and being reordered by the read path.
-func itemsFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]CompactionCandidate, int) {
-	items, barrierCount := candidatesFromRows(rows)
-	markSelectionPolicies(items)
-	return items, barrierCount
-}
-
-// candidatesFromRows classifies rows like itemsFromRows without treating the
-// newest user row as the current turn, for callers that name the current turn
-// through ProtectedSources.
+// candidatesFromRows classifies each uncompacted row into a typed
+// CompactionCandidate. A row that cannot be classified remains as a must-keep
+// barrier rather than aborting the whole compaction. Keeping its position
+// prevents compact spans on either side from sharing an ID and being
+// reordered by the read path. The current turn is named only through
+// ProtectedSources.
 func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]CompactionCandidate, int) {
 	items := make([]CompactionCandidate, 0, len(rows))
 	barrierCount := 0
@@ -41,7 +34,6 @@ func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]Comp
 			items = append(items, CompactionCandidate{
 				ID:           row.ID,
 				RawContent:   row.Content,
-				RawUsage:     row.Usage,
 				Policies:     policies,
 				IsToolResult: toolResult,
 			})
@@ -50,7 +42,6 @@ func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]Comp
 		items = append(items, CompactionCandidate{
 			ID:           row.ID,
 			RawContent:   row.Content,
-			RawUsage:     row.Usage,
 			Record:       record,
 			Policies:     candidatePolicies(record),
 			IsToolResult: strings.EqualFold(strings.TrimSpace(record.ModelMessage.Role), "tool"),

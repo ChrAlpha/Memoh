@@ -102,7 +102,13 @@ func TestRunCompactionSyncSurfacesCompletionPersistenceFailure(t *testing.T) {
 	}
 }
 
-func TestDoCompactionSharesPromptBudgetWithAbsorbedContext(t *testing.T) {
+// summarizerWindowFor is a summarizer window whose input room is about
+// inputTokens beside the default output allowance and the fixed prompt.
+func summarizerWindowFor(inputTokens int) int {
+	return (inputTokens + estimateBytesAsTokens(systemPrompt) + compactionPromptFramingTokens) * 4 / 3
+}
+
+func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) {
 	t.Parallel()
 
 	rows := make([]sqlc.ListUncompactedMessagesBySessionRow, 0, 13)
@@ -118,20 +124,23 @@ func TestDoCompactionSharesPromptBudgetWithAbsorbedContext(t *testing.T) {
 	run := func(t *testing.T, withPrior bool) int {
 		t.Helper()
 		stub := &stubModel{summary: "condensed"}
-		cfg := machineryConfig(stub, 100)
-		cfg.MaxCompactTokens = 1000
+		cfg := machineryConfig(stub, 100000)
+		cfg.SummaryWindowTokens = summarizerWindowFor(1000)
+		cfg.ProtectedSources = historySources(rows[12])
 		var priorLogs []sqlc.BotHistoryMessageCompact
 		if withPrior {
 			priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", 1200))
 		}
 		q := &fakeQueries{uncompacted: rows, priorLogs: priorLogs}
-		svc := newMachineryService(q)
-		res, err := svc.RunCompactionSync(context.Background(), cfg)
+		res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("RunCompactionSync: %v", err)
 		}
-		if res.Status != StatusOK {
-			t.Fatalf("status = %q, want %q", res.Status, StatusOK)
+		if res.Status != StatusProgress {
+			t.Fatalf("status = %q, want %q: the rows past the summarizer input wait for the next pass", res.Status, StatusProgress)
+		}
+		if got := estimateBytesAsTokens(stub.prompt); got > 1000+320 {
+			t.Fatalf("summarizer prompt ~%d tokens, want within its input room plus fixed overhead", got)
 		}
 		return len(q.markedIDs)
 	}
@@ -139,11 +148,11 @@ func TestDoCompactionSharesPromptBudgetWithAbsorbedContext(t *testing.T) {
 	without := run(t, false)
 	with := run(t, true)
 	if with >= without {
-		t.Fatalf("absorbed context must carve out of the entries budget: marked %d with prior, %d without", with, without)
+		t.Fatalf("earlier summaries must share the summarizer input: marked %d with prior, %d without", with, without)
 	}
 }
 
-func TestDoCompactionTruncatesEntriesPastTheTotalCap(t *testing.T) {
+func TestDoCompactionNeverTruncatesAnEntryToFit(t *testing.T) {
 	t.Parallel()
 
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
@@ -152,25 +161,12 @@ func TestDoCompactionTruncatesEntriesPastTheTotalCap(t *testing.T) {
 	}
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "condensed"}
-	svc := newMachineryService(q)
-
-	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 1000
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
-	}
-	if res.Status != StatusOK {
-		t.Fatalf("status = %q, want %q", res.Status, StatusOK)
-	}
-	if len(q.markedIDs) != 1 || q.markedIDs[0] != rows[0].ID {
-		t.Fatalf("marked = %v, want the oversized row", q.markedIDs)
-	}
-	if !strings.Contains(stub.prompt, truncationMarker) {
-		t.Fatal("an entry larger than the whole budget must be truncated, not sent verbatim")
-	}
-	if got := estimateBytesAsTokens(stub.prompt); got > 1000+320 {
-		t.Fatalf("combined prompt ~%d tokens, want within the total cap plus fixed overhead", got)
+	cfg := machineryConfig(stub, 100000)
+	cfg.SummaryWindowTokens = summarizerWindowFor(1000)
+	cfg.ProtectedSources = historySources(rows[1])
+	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if !errors.Is(err, errCompactionInputOverflow) || stub.calls != 0 || q.created || len(q.markedIDs) != 0 {
+		t.Fatalf("err=%v calls=%d created=%t marked=%v, want an overflow before any claim or call: a summary covers only what its model read", err, stub.calls, q.created, q.markedIDs)
 	}
 }
 

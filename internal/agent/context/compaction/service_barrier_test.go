@@ -38,7 +38,7 @@ func TestDoCompactionDoesNotSplitToolExchangeAtUnparseableBarrier(t *testing.T) 
 			q := &fakeQueries{uncompacted: rows}
 			stub := &stubModel{summary: "SUMMARY"}
 
-			if _, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 200)); err != nil {
+			if _, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 200, rows[4])); err != nil {
 				t.Fatalf("RunCompactionSync: %v", err)
 			}
 

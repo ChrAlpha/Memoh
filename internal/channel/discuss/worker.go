@@ -14,7 +14,7 @@ import (
 
 const discussIdleTimeout = 10 * time.Minute
 
-const maxDiscussRecoveries = 3
+const maxDiscussRecoveries = 1
 
 // errDiscussRunFailed is the cause reported to the processing indicator for
 // a run that ended in failure; the run's own result record names the error.
