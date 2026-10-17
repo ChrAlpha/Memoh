@@ -33,7 +33,6 @@ var (
 	// ErrSummaryWindowTooSmall marks a summarizer whose declared window cannot
 	// hold the fixed prompt plus the output reserve; running it would overflow
 	// on every attempt, so it fails closed before claiming any source rows.
-	// Exported so manual surfaces can map it to a stable capability error.
 	ErrSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
 	// errCompactionInputOverflow marks content the summarizer cannot read in one
 	// call: an unsplittable tool exchange, or the earlier summary beside the
@@ -46,6 +45,9 @@ var (
 	// errCompactionUnsized marks a call without the request budget or the
 	// summarizer window it is sized from.
 	errCompactionUnsized = errors.New("compaction: request budget or summarizer window unknown")
+	// errSummaryPastCutoff marks an edit or retry whose view ends inside an
+	// active summary: the view shows those rows raw, so no fold matches it.
+	errSummaryPastCutoff = errors.New("compaction: an active summary extends past the request cutoff")
 )
 
 // inflightRun marks one session's running compaction for activity reporting.

@@ -226,6 +226,23 @@ func TestDoCompactionKeepsLegacyParentUntouchedWhenTheSummaryFails(t *testing.T)
 	}
 }
 
+func TestDoCompactionRefusesASummaryPastTheRequestCutoff(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubModel{summary: "would fold rows after the cutoff"}
+	cfg := machineryConfig(stub, 100000)
+	parents := fusionParentLogs(t, cfg, "earlier", "spans the cutoff")
+	cfg.CandidatesBefore = time.UnixMilli(parents[1].AnchorEndMs)
+	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
+
+	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); !errors.Is(err, errSummaryPastCutoff) {
+		t.Fatalf("err = %v, want errSummaryPastCutoff", err)
+	}
+	if stub.calls != 0 || len(q.rollupCalls) != 0 {
+		t.Fatalf("summarizer calls=%d rollups=%d, want nothing folded", stub.calls, len(q.rollupCalls))
+	}
+}
+
 func legacyParentQueries(t *testing.T, cfg TriggerConfig) (*fakeQueries, []sqlc.BotHistoryMessageCompact, []sqlc.ListUncompactedMessagesBySessionRow) {
 	t.Helper()
 	parents := fusionParentLogs(t, cfg, "legacy summary")

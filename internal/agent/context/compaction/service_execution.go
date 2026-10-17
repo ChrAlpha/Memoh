@@ -94,6 +94,13 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			return Result{}, err
 		}
 	}
+	if !cfg.CandidatesBefore.IsZero() {
+		for _, parent := range parents {
+			if parent.AnchorEndMs <= 0 || parent.AnchorEndMs >= cfg.CandidatesBefore.UnixMilli() {
+				return Result{}, fmt.Errorf("%w: artifact_id=%s", errSummaryPastCutoff, parent.ID)
+			}
+		}
+	}
 	earlier := make([]string, len(parents))
 	earlierTokens := 0
 	for i, parent := range parents {

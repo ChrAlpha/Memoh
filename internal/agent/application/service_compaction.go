@@ -34,6 +34,13 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
 	cfg.CandidatesFrom = req.historyViewFrom
+	if cutoff := strings.TrimSpace(req.HistoryCutoffBeforeMessageID); cutoff != "" {
+		message, err := s.messageService.GetByIDBySession(ctx, req.ThreadID, cutoff)
+		if err != nil {
+			return fmt.Errorf("load history cutoff: %w", err)
+		}
+		cfg.CandidatesBefore = message.CreatedAt
+	}
 	cfg.HistoryBudgetTokens = historyBudget
 
 	start := time.Now()
@@ -44,7 +51,7 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		if err != nil {
 			s.logger.WarnContext(ctx, "compaction failed",
 				slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
-				slog.Int("passes", passes), slog.Any("error", err))
+				slog.Int("passes", passes), slog.Int64("duration_ms", time.Since(start).Milliseconds()), slog.Any("error", err))
 			return err
 		}
 		folded = folded || res.Status == compaction.StatusOK || res.Status == compaction.StatusProgress
