@@ -139,7 +139,7 @@ func runNativeTurnWith(t *testing.T, fixture directLifecycleFixture, runs *propo
 		OwnerID: "owner-retry-turn", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	fixture.service.SetSessionRuntime(manager)
+	fixture.service.bindSessionRuntime(manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
 

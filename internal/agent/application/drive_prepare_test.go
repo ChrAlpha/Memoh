@@ -67,7 +67,7 @@ func TestPrepareRunEventIngestsAWorkspaceFile(t *testing.T) {
 	t.Parallel()
 
 	svc := &Service{logger: slog.New(slog.DiscardHandler)}
-	svc.SetOutputPreparation(fakeOutputMedia{}, nil)
+	svc.outputMedia, svc.outputSpeech = fakeOutputMedia{}, nil
 	assets := newOutboundAssets()
 	prepared := svc.prepareRunEvent(context.Background(), "bot-1", assets, native.StreamEvent{
 		Type:        native.EventAttachment,

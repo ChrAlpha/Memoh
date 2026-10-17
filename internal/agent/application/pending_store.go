@@ -33,13 +33,3 @@ type queuedInputStore interface {
 }
 
 var _ queuedInputStore = (*sessionruntime.QueuedInputs)(nil)
-
-// SetQueuedInputs installs the durable input queue. Without it a turn that
-// meets a busy session is refused as busy and nothing is parked.
-func (s *Service) SetQueuedInputs(queue *sessionruntime.QueuedInputs) {
-	if queue == nil {
-		// A typed nil stored in the interface would read as configured.
-		return
-	}
-	s.queue = queue
-}

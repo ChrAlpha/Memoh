@@ -81,17 +81,6 @@ type SessionService interface {
 	MergeRuntimeMetadata(ctx context.Context, sessionID, runtimeType string, delta map[string]any) (session.Thread, error)
 }
 
-// SetSessionService configures the session service used for auto title generation.
-func (s *Service) SetSessionService(service SessionService) {
-	s.sessionService = service
-}
-
-// SetEventPublisher configures the event publisher for broadcasting events
-// such as session title updates.
-func (s *Service) SetEventPublisher(p messageevent.Publisher) {
-	s.eventPublisher = p
-}
-
 // maybeGenerateSessionTitle starts a background unit that gives the session
 // an auto-generated title if it has none yet. It is fired when a user
 // message is received so the title appears as early as possible without

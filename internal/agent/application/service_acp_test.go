@@ -65,7 +65,7 @@ func TestStreamACPAgentWSPromptBytesMatchQuery(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:    "bot-1",
@@ -109,7 +109,7 @@ func newACPLifecycleService(
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	service.SetACPSessionPool(pool)
+	registerACPPool(service, pool)
 	return service
 }
 
@@ -298,7 +298,7 @@ func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	eventCh, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:           "bot-1",
@@ -414,7 +414,7 @@ func TestWebSendRoutesDiscussACPAgentSessionToACPPool(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	eventCh, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:    "bot-1",
@@ -466,7 +466,7 @@ func TestWebSendRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	_, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:    "bot-1",
@@ -530,7 +530,7 @@ func TestStreamACPAgentWSRechecksRuntimeOwnerWorkspaceExecBeforePrompt(t *testin
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 		logger:         slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	outcome, err := resolver.streamACPAgentWS(
 		context.Background(),
@@ -688,7 +688,7 @@ func TestWebSendPersistsACPUserInputProjectionOnceBeforePromptReturns(t *testing
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:          "bot-1",
@@ -835,7 +835,7 @@ func TestWebSendPersistsACPSubmittedUserInputResult(t *testing.T) {
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 		logger:         slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:          "bot-1",
@@ -972,7 +972,7 @@ func TestWebSendPersistsACPApprovalProjectionOnce(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	if _, err := streamWebSend(context.Background(), t, resolver, ChatRequest{
 		BotID:          "bot-1",
@@ -1047,7 +1047,7 @@ func TestStreamACPAgentWSRequestsAutoTitle(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	if _, err := resolver.streamACPAgentWS(
 		context.Background(),
@@ -1109,7 +1109,7 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	if _, err := resolver.streamACPAgentWS(
 		context.Background(),
@@ -1482,7 +1482,7 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	eventCh := make(chan WSStreamEvent, 8)
 	if _, err := resolver.streamACPAgentWS(
@@ -1573,7 +1573,7 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	abortCh := make(chan struct{})
 	done := make(chan error, 1)
@@ -1652,7 +1652,7 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	abortCh := make(chan struct{})
 	eventCh := make(chan WSStreamEvent, 8)
@@ -1747,7 +1747,7 @@ func TestStreamACPAgentWSImageCapabilityErrorCarriesItsCode(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(&recordingACPPrompter{err: acpclient.ErrImagePromptUnsupported})
+	registerACPPool(resolver, &recordingACPPrompter{err: acpclient.ErrImagePromptUnsupported})
 
 	outcome, err := resolver.streamACPAgentWS(
 		context.Background(),
@@ -1811,7 +1811,7 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	if _, err := resolver.streamACPAgentWS(
 		context.Background(),
@@ -2456,7 +2456,7 @@ func (r runtimeTypedSessions) Get(ctx context.Context, sessionID string) (sessio
 // run the way a routed Stop does. A run that failed reports its failure in the
 // outcome.
 func (s *Service) streamExternalWebSend(ctx context.Context, driver external.Driver, req ChatRequest, eventCh chan<- WSStreamEvent, abortCh <-chan struct{}) (RunOutcome, error) {
-	s.SetExternalRuntimes(driver)
+	registerExternalDrivers(s, driver)
 	s.sessionService = runtimeTypedSessions{SessionService: s.sessionService, runtimeType: driver.RuntimeType()}
 	if s.sessionRuntime == nil {
 		s.sessionRuntime = &lifecycleTurnAdmitter{admission: webTestAdmission(req)}

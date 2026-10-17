@@ -196,9 +196,10 @@ func TestPermissionQuickActionFailureIsRecordedOnceByTheRequest(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	agentService := application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC)
-	agentService.SetSessionService(failingSessionService{err: errors.New("SECRET session store unreachable")})
-	agentService.SetBotPermissionChecker(allowAllPermissions{})
+	agentService := newTestAgentService(t, application.Deps{
+		Sessions:       failingSessionService{err: errors.New("SECRET session store unreachable")},
+		BotPermissions: allowAllPermissions{},
+	})
 	handler := &LocalChannelHandler{agentService: agentService, logger: logger}
 
 	_, err := handler.executeWebPermissionQuickAction(context.Background(), "bot-1", webQuickActionContext{SessionID: "session-1", ActorID: "user-1"})

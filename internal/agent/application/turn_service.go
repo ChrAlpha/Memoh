@@ -14,16 +14,6 @@ import (
 
 var _ turn.Service = (*Service)(nil)
 
-// SetAllowedTeam restricts the service to a single team. The in-process
-// runtime's database pool is session-bound to one team GUC, so commands
-// for any other team must fail closed (turn.ErrTeamNotServed) instead of
-// silently operating on the bound team's data. The composition root
-// injects the self-hosted singleton team; a hosted multi-team runtime
-// replaces this with request-scoped team binding.
-func (s *Service) SetAllowedTeam(teamID string) {
-	s.allowedTeam = teamID
-}
-
 // StartTurn validates the command, admits it durably, starts the underlying
 // stream, and returns a handle whose Events/Errs mirror the application stream.
 func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (turn.RunHandle, error) {

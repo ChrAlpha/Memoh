@@ -159,7 +159,7 @@ func newRPCChatService(t *testing.T) (*Service, *recordingModelServer) {
 		streamHTTPClient: server.Client(),
 		logger:           logger,
 	}
-	service.SetSessionRuntime(newRPCRuntime(t, "owner-rpc-chat"))
+	service.bindSessionRuntime(newRPCRuntime(t, "owner-rpc-chat"))
 	return service, model
 }
 

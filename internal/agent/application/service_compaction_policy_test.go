@@ -323,7 +323,7 @@ func TestSetCompactionServicePreservesNil(t *testing.T) {
 	t.Parallel()
 
 	service := &Service{}
-	service.SetCompactionService(nil)
+	service.compactionService = nil
 	if service.compactionService != nil {
 		t.Fatal("SetCompactionService(nil) stored a non-nil runner")
 	}

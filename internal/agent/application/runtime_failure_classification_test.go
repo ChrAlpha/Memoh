@@ -295,8 +295,8 @@ func TestStartTurnRefusedByRuntimeKeepsTheSendWithItsFailure(t *testing.T) {
 	messages := &recordingMessageService{}
 	service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
 	service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
-	service.SetAllowedTeam(driveTeamID)
-	service.SetExternalRuntimes(noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
+	service.allowedTeam = driveTeamID
+	registerExternalDrivers(service, noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(context.Context, external.PromptInput) (external.PromptResult, error) {
 		return external.PromptResult{}, &external.DependencyMissingError{DependencyID: "codex"}
 	}})
 	handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
@@ -354,7 +354,7 @@ func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
 				service := newACPLifecycleService(t, &recordingACPPrompter{}, messages, &recordingContextLifecycleStore{})
 				admitter := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
 				service.sessionRuntime = admitter
-				service.SetAllowedTeam(driveTeamID)
+				service.allowedTeam = driveTeamID
 				started := make(chan struct{})
 				driver := noticeTestDriver{kind: session.RuntimeACPAgent, prompt: func(ctx context.Context, _ external.PromptInput) (external.PromptResult, error) {
 					close(started)
@@ -364,7 +364,7 @@ func TestStopBeforeTheRuntimeRanFollowsInputOwnership(t *testing.T) {
 
 				switch entry {
 				case "im":
-					service.SetExternalRuntimes(driver)
+					registerExternalDrivers(service, driver)
 					handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
 						SchemaVersion: 1, TeamID: driveTeamID, Mode: turn.ModeChat,
 						BotID: lifecycleTestBotID, ChatID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID,

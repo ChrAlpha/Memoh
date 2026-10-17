@@ -1,7 +1,6 @@
 package application
 
 import (
-	"log/slog"
 	"net/http"
 	"testing"
 	"time"
@@ -10,7 +9,7 @@ import (
 func TestCompactionClientOutlivesColdSummarizerTTFB(t *testing.T) {
 	t.Parallel()
 
-	svc := NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, nil)
+	svc := newTestService(t, Deps{})
 
 	if svc.compactionHTTPClient == nil {
 		t.Fatal("compaction HTTP client not wired")

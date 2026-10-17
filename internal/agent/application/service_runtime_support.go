@@ -44,10 +44,6 @@ type RuntimeSessionExecutionInfo struct {
 	RuntimeOwnerAccountID string
 }
 
-func (s *Service) SetACPSessionPool(pool acpPrompter) {
-	s.SetExternalRuntimes(acpagent.NewDriver(pool))
-}
-
 func (s *Service) RuntimeSessionExecutionInfo(ctx context.Context, sessionID string) (RuntimeSessionExecutionInfo, error) {
 	if s == nil || s.sessionService == nil || strings.TrimSpace(sessionID) == "" {
 		return RuntimeSessionExecutionInfo{}, nil

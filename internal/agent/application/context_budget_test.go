@@ -27,7 +27,7 @@ func TestEffectiveContextTokenBudget(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &Service{logger: slog.New(slog.DiscardHandler)}
-			svc.SetContextAbsoluteMaxTokens(tc.fallback)
+			svc.contextAbsoluteCapTokens = tc.fallback
 			if got := svc.effectiveContextTokenBudget(tc.model); got != tc.want {
 				t.Fatalf("budget = %d, want %d", got, tc.want)
 			}

@@ -331,7 +331,7 @@ func TestCharacterizeTurnRunFinisherCodes_CurrentBehavior(t *testing.T) {
 			})
 			t.Cleanup(func() { _ = manager.Close() })
 			service := &Service{logger: slog.New(slog.DiscardHandler)}
-			service.SetSessionRuntime(manager)
+			service.bindSessionRuntime(manager)
 			admission, err := manager.Admit(context.Background(), sessionruntime.AdmitInput{
 				BotID: "bot-1", SessionID: "session-1", InvocationID: "invocation-finisher", Payload: []byte(`{}`),
 				Execution: sessionruntime.Execution{

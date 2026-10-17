@@ -231,7 +231,7 @@ func TestWebSendRejectsACPRequestedSkillsBeforePool(t *testing.T) {
 		logger:         slog.New(slog.DiscardHandler),
 		sessionService: acpRuntimeSessionServiceForTest("user-1"),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 
 	// The refusal is the run's setup failure, recorded under the catalog code
 	// the composer already renders for it.

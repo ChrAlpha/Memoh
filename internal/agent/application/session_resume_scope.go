@@ -34,12 +34,8 @@ func (singletonSessionResumeScopes) BindScope(ctx context.Context, _ string) con
 	return ctx
 }
 
-// SetSessionResumeScopeProvider installs hosted tenancy before startup. The OSS
-// default names only its singleton team; it never enumerates all session rows.
-func (s *Service) SetSessionResumeScopeProvider(provider SessionResumeScopeProvider) {
-	s.resumeScopes = provider
-}
-
+// sessionResumeScopes is the hosted tenancy provider when Deps carries one. The
+// OSS default names only its singleton team; it never enumerates all session rows.
 func (s *Service) sessionResumeScopes() SessionResumeScopeProvider {
 	if s.resumeScopes != nil {
 		return s.resumeScopes

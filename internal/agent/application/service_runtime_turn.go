@@ -17,20 +17,20 @@ import (
 	"github.com/felinics/memoh/internal/errs"
 )
 
-// SetExternalRuntimes registers out-of-process runtime drivers (codex,
-// claude-code, the ACP pool's adapter). Sessions whose runtime type has no
-// registered driver fail with a stable "runtime unavailable" error instead of
-// silently degrading to the built-in model runtime.
-func (s *Service) SetExternalRuntimes(drivers ...external.Driver) {
-	if s.externalDrivers == nil {
-		s.externalDrivers = map[string]external.Driver{}
-	}
+// externalDriverMap indexes out-of-process runtime drivers (codex,
+// claude-code, the ACP pool's adapter) by runtime type; a later driver replaces
+// an earlier one of the same type. Sessions whose runtime type has no driver
+// fail with a stable "runtime unavailable" error instead of silently degrading
+// to the built-in model runtime.
+func externalDriverMap(drivers ...external.Driver) map[string]external.Driver {
+	byType := map[string]external.Driver{}
 	for _, driver := range drivers {
 		if driver == nil {
 			continue
 		}
-		s.externalDrivers[strings.TrimSpace(driver.RuntimeType())] = driver
+		byType[strings.TrimSpace(driver.RuntimeType())] = driver
 	}
+	return byType
 }
 
 type runtimeDispatchKind int

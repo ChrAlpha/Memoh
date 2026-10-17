@@ -704,7 +704,7 @@ func TestQueuedTurnIsSignedWhenItStartsNotWhenItWasQueued(t *testing.T) {
 	ctx := context.Background()
 	env := newQueueEnv(t)
 	proc := newQueueProcess(t, env)
-	proc.svc.SetResumeSecret("queue-test-secret")
+	proc.svc.resumeSecret = "queue-test-secret"
 	cmd := env.turnCommand("m1", "hello")
 	payload := queuedPayload(t, cmd, time.Now())
 	stored := turnwire.ParseQueuedInput(payload)
@@ -1033,7 +1033,7 @@ func TestQueueSweepRunsAtStartAndOnEveryTick(t *testing.T) {
 	env := newQueueEnv(t)
 	proc := newQueueProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a", "scope-b"}}
-	proc.svc.SetSessionResumeScopeProvider(scopes)
+	proc.svc.resumeScopes = scopes
 	sweep := NewQueueSweep(proc.svc)
 
 	ticks := make(chan time.Time)

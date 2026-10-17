@@ -19,7 +19,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -47,6 +49,7 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/team"
 	"github.com/felinics/memoh/internal/testutil/routecredentials"
+	"github.com/felinics/memoh/internal/workspace"
 )
 
 // These tests carry a group conversation through the whole discuss path over
@@ -217,6 +220,20 @@ func (e2eSessions) CreateNewSession(context.Context, string, string, string, New
 // e2ePermissions lets everyone use the bot: what the tests are about is how the
 // input is routed, not who may speak.
 type e2ePermissions struct{}
+
+// e2eDenyPermissions is what a run sees when no external runtime is under test:
+// nothing in those tests asks for a bot permission.
+type e2eDenyPermissions struct{}
+
+func (e2eDenyPermissions) HasBotPermission(context.Context, string, string, string) (bool, error) {
+	return false, nil
+}
+
+type e2eWorkspaceTargets struct{}
+
+func (e2eWorkspaceTargets) ResolveWorkspaceTarget(context.Context, string, string) (workspace.ResolvedWorkspaceTarget, error) {
+	return workspace.ResolvedWorkspaceTarget{}, nil
+}
 
 func (e2ePermissions) HasBotPermission(context.Context, string, string, string) (bool, error) {
 	return true, nil
@@ -405,17 +422,33 @@ func newDiscussE2EWith(t *testing.T, deployment e2eDeployment, codex *e2eCodex, 
 		tools.NewMessageProvider(nil, e.sender, e2eReactor{}, e2eChannelResolver{}, nil),
 	})
 	e.sessions = sessionpkg.NewService(e.logger, e.queries, nil)
-	e.service = application.NewService(e.logger, models.NewService(e.logger, e.queries), e.queries,
-		messagepkg.NewService(e.logger, e.queries), settings.NewService(e.logger, e.queries, nil, nil), nil, agent, time.UTC)
-	e.service.SetSessionRuntime(e.manager)
-	e.service.SetResumeSecret(e2eSigningKey)
-	e.service.SetAllowedTeam(team.DefaultTeamID)
-	e.service.SetSessionService(e.sessions)
-	e.service.SetUserInputService(userinput.NewService(e.logger, e.queries))
-	if e.codex != nil {
-		e.service.SetExternalRuntimes(e.codex)
-		e.service.SetBotPermissionChecker(e2ePermissions{})
+	deps := application.Deps{
+		Logger:           e.logger,
+		Queries:          e.queries,
+		Messages:         messagepkg.NewService(e.logger, e.queries),
+		Sessions:         e.sessions,
+		Settings:         settings.NewService(e.logger, e.queries, nil, nil),
+		Accounts:         &accounts.Service{},
+		Models:           models.NewService(e.logger, e.queries),
+		Agent:            agent,
+		SessionRuntime:   e.manager,
+		BotPermissions:   e2eDenyPermissions{},
+		WorkspaceTargets: e2eWorkspaceTargets{},
+		ToolApproval:     &toolapproval.Service{},
+		UserInput:        userinput.NewService(e.logger, e.queries),
+		ResumeSecret:     e2eSigningKey,
+		AllowedTeam:      team.DefaultTeamID,
+		ClockLocation:    time.UTC,
 	}
+	if e.codex != nil {
+		deps.ExternalRuntimes = []external.Driver{e.codex}
+		deps.BotPermissions = e2ePermissions{}
+	}
+	service, err := application.New(deps)
+	if err != nil {
+		t.Fatalf("application.New: %v", err)
+	}
+	e.service = service
 
 	e.identities = identities.NewService(e.logger, e.queries)
 	e.cfg = channel.ChannelConfig{TeamID: team.DefaultTeamID, ID: "cfg-1", BotID: e.botID, ChannelType: channel.ChannelType(e2ePlatform)}

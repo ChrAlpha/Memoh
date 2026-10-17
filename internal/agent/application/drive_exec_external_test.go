@@ -137,7 +137,7 @@ func TestExternalRunRecordsItsContextLifecycleFromEveryEntry(t *testing.T) {
 			service.memoryRegistry = registry
 			service.settingsService = settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil)
 			service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
-			service.SetExternalRuntimes(&drivePromptRecorder{})
+			registerExternalDrivers(service, &drivePromptRecorder{})
 
 			entry.run(t, service)
 

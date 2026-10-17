@@ -361,7 +361,7 @@ func TestOrderPreparationRewritesEventsBeforePublication(t *testing.T) {
 	svc := newDriveService(pub, &scriptedAdmitter{started: true})
 	media := &fakeOutputMedia{}
 	speech := &fakeOutputSpeech{audio: []byte("voice-bytes"), contentType: "audio/mpeg"}
-	svc.SetOutputPreparation(media, speech)
+	svc.outputMedia, svc.outputSpeech = media, speech
 	delivery := &recordingDelivery{}
 
 	svc.drive(context.Background(), scheduledSpec(exec, delivery))
@@ -413,11 +413,12 @@ func TestOrderSlowSpeechPreparationKeepsEventOrder(t *testing.T) {
 	}
 	pub := &recordingTurnEventPublisher{}
 	svc := newDriveService(pub, &scriptedAdmitter{started: true})
-	svc.SetOutputPreparation(&fakeOutputMedia{}, &fakeOutputSpeech{
+	svc.outputMedia = &fakeOutputMedia{}
+	svc.outputSpeech = &fakeOutputSpeech{
 		audio:       []byte("voice-bytes"),
 		contentType: "audio/mpeg",
 		delay:       30 * time.Millisecond,
-	})
+	}
 
 	svc.drive(context.Background(), scheduledSpec(exec, &recordingDelivery{}))
 

@@ -106,7 +106,7 @@ func TestResumeRejectsInvalidCredentialAndForeignBotScope(t *testing.T) {
 func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
 	service := fixture.fixture.service
-	service.SetAllowedTeam("00000000-0000-0000-0000-000000000001")
+	service.allowedTeam = "00000000-0000-0000-0000-000000000001"
 	deadline := time.Now().Add(time.Minute)
 	data := resumeContext{Version: 1, ChatID: lifecycleTestBotID, UserID: "sender", Query: "original task", DeadlineAt: &deadline}
 	raw, err := json.Marshal(map[string]any{"resume": data})
@@ -169,7 +169,7 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 
 func TestResumeWaitsForWorkspaceBeforeAdmission(t *testing.T) {
 	s, admitter := newAdmittedTurnTestService()
-	s.SetAllowedTeam("00000000-0000-0000-0000-000000000001")
+	s.allowedTeam = "00000000-0000-0000-0000-000000000001"
 	s.resumeReady = func(context.Context, string, string) error { return errors.New("bridge not ready") }
 	raw, _ := json.Marshal(map[string]any{"resume": resumeContext{Version: 1, ChatID: "chat", Query: "work"}})
 	done, err := s.resumeInterruptedSession(t.Context(), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001"), InputJson: raw})
@@ -211,7 +211,7 @@ func TestResumeScanRetiresIntentsThatCannotContinue(t *testing.T) {
 	const teamID = "00000000-0000-0000-0000-000000000001"
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
 	s, admitter := fixture.fixture.service, fixture.admitter
-	s.SetAllowedTeam(teamID)
+	s.allowedTeam = teamID
 	unreadyBot := uuid.NewString()
 	s.resumeReady = func(_ context.Context, botID, _ string) error {
 		if botID == unreadyBot {

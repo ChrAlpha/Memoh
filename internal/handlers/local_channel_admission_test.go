@@ -110,11 +110,13 @@ func newWSRunHarness(t *testing.T, queries dbstore.Queries) wsRunHarness {
 		Fence:         wsAdmissionFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	agentService := application.NewService(slog.New(slog.DiscardHandler), nil, queries, nil, nil, nil, nil, time.UTC)
-	agentService.SetSessionRuntime(manager)
 	// The run's setup reads the session first; failing that read ends every
 	// run these tests start in its setup, before anything executes.
-	agentService.SetSessionService(failingSessionService{err: errors.New("resolve: model not found")})
+	agentService := newTestAgentService(t, application.Deps{
+		Queries:        queries,
+		SessionRuntime: manager,
+		Sessions:       failingSessionService{err: errors.New("resolve: model not found")},
+	})
 	return wsRunHarness{
 		handler: &LocalChannelHandler{logger: slog.New(slog.DiscardHandler), agentService: agentService, sessionRuntime: manager},
 		manager: manager,
@@ -484,7 +486,7 @@ func TestAdmitWSRunRequiresConfiguredRuntime(t *testing.T) {
 	writer := &wsWriter{ch: make(chan []byte, 4), stop: make(chan struct{}), done: make(chan struct{})}
 	handler := &LocalChannelHandler{
 		logger:       slog.New(slog.DiscardHandler),
-		agentService: application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC),
+		agentService: &application.Service{},
 	}
 	released := false
 	admitted, _ := handler.admitWSRun(context.Background(), writer, wsAdmissionBotID, "", wsAdmissionTestRef(), "ws.message", wsAdmissionTestSubmission(), emptyWSAdmissionView, nil, func() { released = true })

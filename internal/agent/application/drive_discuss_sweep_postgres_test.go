@@ -94,7 +94,7 @@ func TestDiscussSweepVisitsEveryScope(t *testing.T) {
 	env := newDiscussEnv(t, "group")
 	proc := newDiscussProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a", "scope-b", "scope-c"}}
-	proc.svc.SetSessionResumeScopeProvider(scopes)
+	proc.svc.resumeScopes = scopes
 	NewDiscussSweep(proc.svc).sweep(context.Background(), time.Now())
 	if got := scopes.visited(); len(got) != 3 || got[0] != "scope-a" || got[2] != "scope-c" {
 		t.Fatalf("scopes visited = %v, want all three in order", got)
@@ -110,7 +110,7 @@ func TestDiscussSweepRunSweepsAtStartAndOnEveryTick(t *testing.T) {
 	env := newDiscussEnv(t, "group")
 	proc := newDiscussProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a"}}
-	proc.svc.SetSessionResumeScopeProvider(scopes)
+	proc.svc.resumeScopes = scopes
 	sweep := NewDiscussSweep(proc.svc)
 
 	ticks := make(chan time.Time)

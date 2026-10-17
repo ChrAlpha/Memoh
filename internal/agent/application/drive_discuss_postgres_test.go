@@ -449,10 +449,10 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 		Fence:         runtimefence.NewActivator(pg),
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	svc.SetSessionRuntime(manager)
+	svc.bindSessionRuntime(manager)
 	svc.messageService = messagepkg.NewService(svc.logger, pg)
 	svc.queries = discussStore{Queries: base, pg: pg}
-	svc.SetResumeSecret(discussTestSecret)
+	svc.resumeSecret = discussTestSecret
 	svc.allowedTeam = ""
 	svc.sessionService = &fakeBackgroundSessionService{
 		getFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
@@ -1003,7 +1003,7 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 	if !row.RunID.Valid {
 		t.Fatalf("the interrupted run is not listed for resume")
 	}
-	proc.svc.SetAllowedTeam(row.TeamID.String())
+	proc.svc.allowedTeam = row.TeamID.String()
 	proc.svc.accountService = accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{ID: env.ownerID, IsActive: true}})
 	proc.svc.botPermissions = &fakeBotPermissionChecker{values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
 	resumed, err := proc.svc.resumeInterruptedSession(ctx, row)

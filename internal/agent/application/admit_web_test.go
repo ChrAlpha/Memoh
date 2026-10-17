@@ -545,7 +545,7 @@ func TestWebSendAssetsReachTheHistoryWrite(t *testing.T) {
 
 	svc := newWebTestService()
 	newWebTestRuntime(t, svc)
-	svc.SetOutputPreparation(&fakeOutputMedia{}, nil)
+	svc.outputMedia, svc.outputSpeech = &fakeOutputMedia{}, nil
 	admission := admitWebTestRun(t, svc, "invocation-1")
 
 	var linked []turn.OutboundAssetRef

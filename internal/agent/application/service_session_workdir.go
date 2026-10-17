@@ -22,11 +22,6 @@ type sessionWorkdirResolver interface {
 	ResolveForSession(ctx context.Context, botID, workdirID string) (workdir.Resolved, error)
 }
 
-// SetWorkdirResolver configures resolution of session workdir bindings.
-func (s *Service) SetWorkdirResolver(resolver sessionWorkdirResolver) {
-	s.workdirs = resolver
-}
-
 // resolveSessionWorkdirBinding loads the session's workdir binding, if any.
 // Errors fail the turn rather than degrade: silently dropping the binding
 // would run the turn in the wrong directory — the exact bug class workdir

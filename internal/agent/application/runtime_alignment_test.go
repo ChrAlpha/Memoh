@@ -75,7 +75,7 @@ func TestACPGenericPromptFailurePublishesSanitizedErroredTerminal(t *testing.T) 
 	const privateDetail = "PRIVATE_ACP_PROVIDER_FAILURE"
 
 	service, _ := newDrivePromptFixture(t)
-	service.SetExternalRuntimes(&failingPromptDriver{err: errors.New(privateDetail)})
+	registerExternalDrivers(service, &failingPromptDriver{err: errors.New(privateDetail)})
 
 	handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
 		SchemaVersion: 1,

@@ -291,7 +291,7 @@ func TestWebRetryRejectsTurnReplacementForACP(t *testing.T) {
 		sessionRuntime: newScriptedAdmitter(),
 		logger:         slog.New(slog.DiscardHandler),
 	}
-	resolver.SetACPSessionPool(pool)
+	registerACPPool(resolver, pool)
 	admission, err := resolver.AdmitWebRun(context.Background(), WebAdmitInput{
 		BotID: "bot-1", SessionID: "session-1", InvocationID: "retry-1", Payload: []byte(`{"kind":"retry_message"}`),
 	})

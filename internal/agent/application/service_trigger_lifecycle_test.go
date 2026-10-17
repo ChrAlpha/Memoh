@@ -371,7 +371,7 @@ func TestTriggerScheduleRuntimeRejectsIncompleteTurn(t *testing.T) {
 	messages := &recordingMessageService{}
 	lifecycles := &recordingContextLifecycleStore{}
 	service, _ := scheduleLifecycleService(t, &recordingACPPrompter{}, messages, lifecycles)
-	service.SetExternalRuntimes(scheduleSessionDriver(driver))
+	registerExternalDrivers(service, scheduleSessionDriver(driver))
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 

@@ -790,39 +790,7 @@ func provideCompactionService(log *slog.Logger, queries dbstore.Queries, cfg con
 	return service
 }
 
-func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, audioService *audiopkg.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, queuedInputs *sessionruntime.QueuedInputs, workdirService *workdir.Service, cfg config.Config) *application.Service {
-	service := application.NewService(log, modelsService, queries, msgService, settingsService, accountService, a, rc.TimezoneLocation)
-	service.SetResumeSecret(rc.JwtSecret)
-	service.SetResumeReadiness(func(ctx context.Context, botID, targetID string) error {
-		client, err := workspaceManager.NativeMCPClient(ctx, botID)
-		if err != nil {
-			return err
-		}
-		if _, err := client.Stat(ctx, "/"); err != nil {
-			return err
-		}
-		if targetID != "" && targetID != "native" {
-			client, err = workspaceManager.MCPClient(workspace.WithWorkspaceTarget(ctx, targetID), botID)
-			if err != nil {
-				return err
-			}
-			_, err = client.Stat(ctx, "/")
-			return err
-		}
-		return nil
-	})
-	service.SetContextAbsoluteMaxTokens(cfg.Agent.EffectiveContextFallbackTokens())
-	service.SetBotPermissionChecker(&applicationBotPermissionChecker{bots: botService, accounts: accountService})
-	// Every turn entry point goes through admission, so a service without it can
-	// start nothing: this is the thread's single-run guarantee, not an add-on.
-	service.SetSessionRuntime(sessionRuntime)
-	service.SetQueuedInputs(queuedInputs)
-	service.SetWorkspaceTargetResolver(workspaceManager)
-	service.SetWorkdirResolver(workdirService)
-	service.SetHookService(hookService)
-	// A run's events are prepared once, in the driver: every entry gets the
-	// same attachment ingestion and the same spoken reply.
-	service.SetOutputPreparation(mediaService, &agentOutputSpeech{settings: settingsService, audio: audioService})
+func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, audioService *audiopkg.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, queuedInputs *sessionruntime.QueuedInputs, workdirService *workdir.Service, cfg config.Config) (*application.Service, error) {
 	if sessionService != nil {
 		sessionService.SetHookService(hookService)
 	}
@@ -833,23 +801,66 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 	if workspaceManager != nil {
 		workspaceManager.SetHookService(hookService)
 	}
-	service.SetMemoryRegistry(memoryRegistry)
-	service.SetSkillLoader(&skillLoaderAdapter{handler: containerdHandler})
-	service.SetGatewayAssetLoader(&gatewayAssetLoaderAdapter{media: mediaService})
-	service.SetPlatformIdentitySource(channelidentityadapter.NewSource(channelStore))
-	service.SetSessionService(sessionService)
-	service.SetEventPublisher(eventHub)
-	service.SetCompactionService(compactionService)
-	service.SetBackgroundManager(bgManager)
 	if toolApproval != nil {
 		toolApproval.SetHookService(hookService)
 		toolApproval.SetWorkspaceTargetPolicyResolver(workspaceTargetPolicyResolver{manager: workspaceManager})
 	}
-	service.SetToolApprovalService(toolApproval)
-	service.SetUserInputService(userInput)
-	service.SetACPSessionPool(acpPool)
-	service.SetExternalRuntimes(directAgents...)
-	return service
+	return application.New(application.Deps{
+		Logger:           log,
+		Queries:          queries,
+		Messages:         msgService,
+		Sessions:         sessionService,
+		Settings:         settingsService,
+		Accounts:         accountService,
+		Models:           modelsService,
+		Agent:            a,
+		SessionRuntime:   sessionRuntime,
+		BotPermissions:   &applicationBotPermissionChecker{bots: botService, accounts: accountService},
+		WorkspaceTargets: workspaceManager,
+		ToolApproval:     toolApproval,
+		UserInput:        userInput,
+		ResumeSecret:     rc.JwtSecret,
+
+		Memory:             memoryRegistry,
+		Hooks:              hookService,
+		Skills:             &skillLoaderAdapter{handler: containerdHandler},
+		Assets:             &gatewayAssetLoaderAdapter{media: mediaService},
+		PlatformIdentities: channelidentityadapter.NewSource(channelStore),
+		Workdirs:           workdirService,
+		Compaction:         compactionService,
+		Background:         bgManager,
+		Events:             eventHub,
+		// A run's events are prepared once, in the driver: every entry gets the
+		// same attachment ingestion and the same spoken reply.
+		OutputMedia:      mediaService,
+		OutputSpeech:     &agentOutputSpeech{settings: settingsService, audio: audioService},
+		QueuedInputs:     queuedInputs,
+		ExternalRuntimes: append([]external.Driver{acpagent.NewDriver(acpPool)}, directAgents...),
+		ResumeReadiness: func(ctx context.Context, botID, targetID string) error {
+			client, err := workspaceManager.NativeMCPClient(ctx, botID)
+			if err != nil {
+				return err
+			}
+			if _, err := client.Stat(ctx, "/"); err != nil {
+				return err
+			}
+			if targetID != "" && targetID != "native" {
+				client, err = workspaceManager.MCPClient(workspace.WithWorkspaceTarget(ctx, targetID), botID)
+				if err != nil {
+					return err
+				}
+				_, err = client.Stat(ctx, "/")
+				return err
+			}
+			return nil
+		},
+
+		ClockLocation:         rc.TimezoneLocation,
+		ContextFallbackTokens: cfg.Agent.EffectiveContextFallbackTokens(),
+		// The self-hosted runtime binds its DB pool to the singleton team, so
+		// the service fails closed on any other TeamID (turn.ErrTeamNotServed).
+		AllowedTeam: team.DefaultTeamID,
+	})
 }
 
 // injectBackgroundTaskEvents connects notifications after the application and
@@ -1616,9 +1627,6 @@ func (a *gatewayAssetLoaderAdapter) AccessPathForGateway(ctx context.Context, bo
 // provideTurnService exposes the application service as Channel's only Agent
 // surface. Both chat and discuss turns run directly on the same service.
 func provideTurnService(service *application.Service) turn.Service {
-	// The self-hosted runtime binds its DB pool to the singleton team, so
-	// the service fails closed on any other TeamID (turn.ErrTeamNotServed).
-	service.SetAllowedTeam(team.DefaultTeamID)
 	return service
 }
 

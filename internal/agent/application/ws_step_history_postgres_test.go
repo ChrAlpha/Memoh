@@ -245,7 +245,7 @@ func newWSStepHistoryService(t *testing.T, mode wsStepHistoryModel, queries dbst
 	messages := messagepkg.NewService(service.logger, queries)
 	service.messageService = messages
 	service.streamHTTPClient = &http.Client{Transport: &wsStepHistoryTransport{base: service.streamHTTPClient.Transport, mode: mode}}
-	service.SetSessionRuntime(manager)
+	service.bindSessionRuntime(manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	service.queries = noDecisionQueries{service.queries.(*directLifecycleQueries)}
 	if mode == wsStepHistoryTextLoop {

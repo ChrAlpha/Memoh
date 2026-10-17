@@ -41,15 +41,10 @@ type turnAdmitter interface {
 	MarkInlineDecisionRun(botID, sessionID, runID string)
 }
 
-// SetSessionRuntime injects the durable admission gate. Setter injection rather
-// than a constructor argument because the manager and this service are wired
-// into the same fx graph and each is reachable from the other's dependencies.
-func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
-	if manager == nil {
-		// A typed nil stored in the interface would read as configured and then
-		// panic on first use, so an absent manager stays absent.
-		return
-	}
+// bindSessionRuntime attaches the durable admission gate and registers the
+// callbacks the runtime invokes into this service. The manager is built before
+// the service and holds no reference back to it, so New can wire both ways.
+func (s *Service) bindSessionRuntime(manager *sessionruntime.Manager) {
 	s.sessionRuntime = manager
 	s.sessionManager = manager
 	s.decisionRuntime = manager
@@ -62,12 +57,23 @@ func (s *Service) SetSessionRuntime(manager *sessionruntime.Manager) {
 	manager.SetLostRunDecisionCanceller(s.cancelLostRunDecisions)
 	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)
 	manager.SetDecisionFinalizer(s.finalizeRuntimeDecisions)
-	manager.SetTerminalObserver(func(ctx context.Context, terminal sessionruntime.TerminalRun) {
-		s.logRunResult(ctx, terminal)
-		s.reconcileTerminalContextLifecycle(ctx, terminal)
-		s.afterSessionTerminal(ctx, terminal)
-	})
+	manager.SetTerminalObserver(terminalFanout(
+		s.logRunResult,
+		s.reconcileTerminalContextLifecycle,
+		s.afterSessionTerminal,
+	))
 	manager.SetTerminalReconciler(s.reconcileTerminalContextLifecycles)
+}
+
+// terminalFanout runs the terminal observers in the order given. The order is
+// the contract: the outcome record comes first, the lifecycle reconciliation
+// next, and whatever the run's end releases (queued input) last.
+func terminalFanout(steps ...func(context.Context, sessionruntime.TerminalRun)) func(context.Context, sessionruntime.TerminalRun) {
+	return func(ctx context.Context, terminal sessionruntime.TerminalRun) {
+		for _, step := range steps {
+			step(ctx, terminal)
+		}
+	}
 }
 
 // cancelLostRunDecisions closes the decisions a lost run left parked. Both

@@ -31,17 +31,6 @@ type outputSpeech interface {
 	Synthesize(ctx context.Context, modelID, text string) (audio []byte, contentType string, err error)
 }
 
-// SetOutputPreparation injects the ports run event preparation needs. Both are
-// optional: without them an attachment keeps the path it arrived with, and a
-// speech event is dropped.
-func (s *Service) SetOutputPreparation(media outputMediaStore, speech outputSpeech) {
-	if s == nil {
-		return
-	}
-	s.outputMedia = media
-	s.outputSpeech = speech
-}
-
 // prepareRunEvent rewrites one event on its way from the runtime to the
 // subscribers. It runs for every entry, so an attachment or a spoken reply
 // looks the same whether the run started from Web, an IM message or a

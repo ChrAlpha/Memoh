@@ -24,7 +24,7 @@ func scheduleLifecycleService(
 ) (*Service, *lifecycleTurnAdmitter) {
 	t.Helper()
 	service := newACPLifecycleService(t, pool, messages, lifecycles)
-	service.SetACPSessionPool(pool)
+	registerACPPool(service, pool)
 	runtime := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
 	service.sessionRuntime = runtime
 	return service, runtime
@@ -38,7 +38,7 @@ func runScheduledExternal(ctx context.Context, t *testing.T, service *Service, d
 	if driver != nil {
 		// A session on an external runtime resolves the driver by the type the
 		// session reports, which is what the entry looks up.
-		service.SetExternalRuntimes(scheduleSessionDriver(driver))
+		registerExternalDrivers(service, scheduleSessionDriver(driver))
 	}
 	if service.sessionRuntime == nil {
 		// The entry writes the run's terminal state, which needs an admitted

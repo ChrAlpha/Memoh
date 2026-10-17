@@ -143,7 +143,7 @@ func withDriveRequestRuntime(t *testing.T, fixture directLifecycleFixture) *sess
 		Fence:         abortAlignmentFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	fixture.service.SetSessionRuntime(manager)
+	fixture.service.bindSessionRuntime(manager)
 	// The real manager asks for the run's pending decisions when it finishes.
 	fixture.service.queries = noDecisionQueries{fixture.service.queries.(*directLifecycleQueries)}
 	return manager
@@ -412,7 +412,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
 	key := sessionruntime.Key{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID}
-	fixture.service.SetAllowedTeam(driveTeamID)
+	fixture.service.allowedTeam = driveTeamID
 
 	queue := &memoryQueuedInputs{}
 	fixture.service.queue = queue
@@ -457,7 +457,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 func driveResume(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t)
-	fixture.service.SetAllowedTeam(driveTeamID)
+	fixture.service.allowedTeam = driveTeamID
 	raw, err := json.Marshal(map[string]any{"resume": resumeContext{
 		Version:           1,
 		Query:             directLifecyclePrompt,
@@ -671,7 +671,7 @@ func newDrivePromptFixture(t *testing.T) (*Service, *drivePromptRecorder) {
 	service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
 	service.userInput = &fakeUserInputService{}
 	recorder := &drivePromptRecorder{}
-	service.SetExternalRuntimes(recorder)
+	registerExternalDrivers(service, recorder)
 	return service, recorder
 }
 

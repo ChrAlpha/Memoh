@@ -227,7 +227,7 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	s, admitter := newAdmittedTurnTestService()
 	s.logger = slog.Default()
 	s.queries = q
-	s.SetSessionResumeScopeProvider(scopes)
+	s.resumeScopes = scopes
 	scan := sessionResumeScan{}
 	slots := make(chan struct{}, 4)
 	for range 2 {

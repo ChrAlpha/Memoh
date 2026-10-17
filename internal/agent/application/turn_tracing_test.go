@@ -333,7 +333,7 @@ func spanTestEntries() []spanTestEntry {
 		}},
 		{name: "session_resume", start: func(t *testing.T, service *Service) (func(), func()) {
 			const teamID = "00000000-0000-0000-0000-000000000001"
-			service.SetAllowedTeam(teamID)
+			service.allowedTeam = teamID
 			raw, err := json.Marshal(map[string]any{"resume": resumeContext{
 				Version: 1, ChatID: lifecycleTestBotID, UserID: "user-1", Query: directLifecyclePrompt, SessionType: sessionmode.Chat,
 			}})
@@ -392,7 +392,7 @@ func TestTurnSpanReportsFailureFromEveryPath(t *testing.T) {
 				driver := &spanTestDriver{outcome: ending, started: make(chan struct{})}
 				service := newACPLifecycleService(t, &recordingACPPrompter{}, &recordingMessageService{}, &recordingContextLifecycleStore{})
 				service.sessionRuntime = &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
-				service.SetExternalRuntimes(driver)
+				registerExternalDrivers(service, driver)
 
 				stop, wait := entry.start(t, service)
 				if ending == "stopped" {

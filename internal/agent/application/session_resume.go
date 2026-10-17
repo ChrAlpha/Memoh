@@ -50,13 +50,6 @@ type resumeContext struct {
 // that may clear (workspace readiness, database errors) stay unwrapped.
 var errResumeUnrecoverable = errors.New("interrupted session cannot resume")
 
-func (s *Service) SetResumeSecret(secret string) { s.resumeSecret = secret }
-
-// SetResumeReadiness checks workspace transport before claiming a continuation.
-func (s *Service) SetResumeReadiness(check func(context.Context, string, string) error) {
-	s.resumeReady = check
-}
-
 func (s *Service) recordRunResumeContext(ctx context.Context, req ChatRequest) error {
 	if s.resumeSecret == "" || s.queries == nil || req.RunID == "" || req.ShutdownResume {
 		return nil

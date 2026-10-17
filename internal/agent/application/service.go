@@ -169,17 +169,135 @@ type Service struct {
 	pendingSessions sessionLocks
 }
 
-// NewService creates an application service backed by the native agent.
-func NewService(
-	log *slog.Logger,
-	modelsService *models.Service,
-	queries dbstore.Queries,
-	messageService messagepkg.Service,
-	settingsService *settings.Service,
-	accountService *accounts.Service,
-	a *native.Agent,
-	clockLocation *time.Location,
-) *Service {
+// Deps is everything New wires into a Service. The required block is checked
+// by New; the optional block may stay zero, which turns the feature it names
+// off; the configuration block carries plain values.
+type Deps struct {
+	// Required.
+
+	// Logger receives the service's own records.
+	Logger *slog.Logger
+	// Queries is the database port used by every persistence path.
+	Queries dbstore.Queries
+	// Messages persists and reads chat messages.
+	Messages messagepkg.Service
+	// Sessions reads and updates session metadata and titles.
+	Sessions SessionService
+	// Settings resolves per-bot settings.
+	Settings *settings.Service
+	// Accounts resolves the account behind a request.
+	Accounts *accounts.Service
+	// Models resolves model and provider configuration.
+	Models *models.Service
+	// Agent is the in-process model runtime.
+	Agent *native.Agent
+	// SessionRuntime is the durable admission gate. Every turn entry point goes
+	// through it, so a service without it starts nothing. New also registers the
+	// service's runtime callbacks on it.
+	SessionRuntime *sessionruntime.Manager
+	// BotPermissions decides whether an account may act on a bot.
+	BotPermissions botPermissionChecker
+	// WorkspaceTargets resolves a request-scoped Computer.
+	WorkspaceTargets workspaceTargetResolver
+	// ToolApproval stores and resolves tool approval decisions.
+	ToolApproval *toolapproval.Service
+	// UserInput stores and resolves user input decisions.
+	UserInput *userinput.Service
+	// ResumeSecret signs the credentials of runs the server starts itself and of
+	// resumed sessions.
+	ResumeSecret string
+
+	// Optional.
+
+	// Memory provides memory search and write-back; without it runs have no memory.
+	Memory *memprovider.Registry
+	// Hooks runs user-defined hooks; without it no hook fires.
+	Hooks *hooks.Service
+	// Skills lists a bot's usable skills; without it requests carry none.
+	Skills SkillLoader
+	// Assets inlines attachment content for the gateway; without it attachments
+	// keep their stored references.
+	Assets gatewayAssetLoader
+	// PlatformIdentities supplies connected platform accounts for the system
+	// prompt; without it the prompt names none.
+	PlatformIdentities PlatformIdentitySource
+	// Workdirs resolves session workdir bindings; without it bindings are ignored.
+	Workdirs sessionWorkdirResolver
+	// Compaction runs context compaction; without it nothing is compacted.
+	Compaction *compaction.Service
+	// Background supplies background task summaries; without it there are none.
+	Background *background.Manager
+	// Events broadcasts session events such as title updates; without it none
+	// are sent.
+	Events messageevent.Publisher
+	// OutputMedia stores attachments that runs emit; without it an attachment
+	// keeps the path it arrived with.
+	OutputMedia outputMediaStore
+	// OutputSpeech synthesizes spoken replies; without it a speech event is dropped.
+	OutputSpeech outputSpeech
+	// QueuedInputs is the durable queue for input that meets a busy session;
+	// without it such input is refused as busy.
+	QueuedInputs *sessionruntime.QueuedInputs
+	// ExternalRuntimes are the out-of-process runtime drivers (ACP, codex,
+	// claude-code). A session whose runtime type has no driver fails with a
+	// stable "runtime unavailable" error.
+	ExternalRuntimes []external.Driver
+	// ResumeReadiness checks workspace transport before a continuation is
+	// claimed; without it resume skips the check.
+	ResumeReadiness func(ctx context.Context, botID, targetID string) error
+	// ResumeScopes is the tenancy provider of a hosted deployment; without it
+	// resume covers only AllowedTeam.
+	ResumeScopes SessionResumeScopeProvider
+
+	// Configuration.
+
+	// ClockLocation is the time zone prompts render in; nil means UTC.
+	ClockLocation *time.Location
+	// ContextFallbackTokens is the context budget for models without a
+	// configured window; zero keeps the shared default.
+	ContextFallbackTokens int
+	// AllowedTeam restricts the service to one team: the in-process runtime's
+	// database pool is bound to a single team, so commands for any other team
+	// fail closed (turn.ErrTeamNotServed). Empty means no restriction.
+	AllowedTeam string
+}
+
+// validate names the first required dependency that is missing.
+func (d Deps) validate() error {
+	required := []struct {
+		name    string
+		missing bool
+	}{
+		{"Logger", d.Logger == nil},
+		{"Queries", d.Queries == nil},
+		{"Messages", d.Messages == nil},
+		{"Sessions", d.Sessions == nil},
+		{"Settings", d.Settings == nil},
+		{"Accounts", d.Accounts == nil},
+		{"Models", d.Models == nil},
+		{"Agent", d.Agent == nil},
+		{"SessionRuntime", d.SessionRuntime == nil},
+		{"BotPermissions", d.BotPermissions == nil},
+		{"WorkspaceTargets", d.WorkspaceTargets == nil},
+		{"ToolApproval", d.ToolApproval == nil},
+		{"UserInput", d.UserInput == nil},
+		{"ResumeSecret", d.ResumeSecret == ""},
+	}
+	for _, r := range required {
+		if r.missing {
+			return fmt.Errorf("agent application: Deps.%s is required", r.name)
+		}
+	}
+	return nil
+}
+
+// New creates an application service backed by the native agent. A missing
+// required dependency is an error, so a half-wired service cannot exist.
+func New(d Deps) (*Service, error) {
+	if err := d.validate(); err != nil {
+		return nil, err
+	}
+	clockLocation := d.ClockLocation
 	if clockLocation == nil {
 		clockLocation = time.UTC
 	}
@@ -211,26 +329,49 @@ func NewService(
 	}
 
 	service := &Service{
-		agent:                a,
-		modelsService:        modelsService,
-		queries:              queries,
-		contextLifecycles:    queries,
-		messageService:       messageService,
-		settingsService:      settingsService,
-		accountService:       accountService,
-		streamHTTPClient:     streamHTTPClient,
-		compactionHTTPClient: compactionHTTPClient,
-		memorySearchTimeout:  defaultMemorySearchTimeout,
-		clockLocation:        clockLocation,
-		logger:               log.With(slog.String("service", "agent/application")),
+		agent:                    d.Agent,
+		modelsService:            d.Models,
+		queries:                  d.Queries,
+		contextLifecycles:        d.Queries,
+		messageService:           d.Messages,
+		settingsService:          d.Settings,
+		accountService:           d.Accounts,
+		sessionService:           d.Sessions,
+		botPermissions:           d.BotPermissions,
+		workspaceTargets:         d.WorkspaceTargets,
+		toolApproval:             d.ToolApproval,
+		userInput:                d.UserInput,
+		resumeSecret:             d.ResumeSecret,
+		memoryRegistry:           d.Memory,
+		hookService:              d.Hooks,
+		skillLoader:              d.Skills,
+		assetLoader:              d.Assets,
+		platformIdentities:       d.PlatformIdentities,
+		workdirs:                 d.Workdirs,
+		bgManager:                d.Background,
+		eventPublisher:           d.Events,
+		outputMedia:              d.OutputMedia,
+		outputSpeech:             d.OutputSpeech,
+		externalDrivers:          externalDriverMap(d.ExternalRuntimes...),
+		resumeReady:              d.ResumeReadiness,
+		resumeScopes:             d.ResumeScopes,
+		contextAbsoluteCapTokens: d.ContextFallbackTokens,
+		allowedTeam:              d.AllowedTeam,
+		streamHTTPClient:         streamHTTPClient,
+		compactionHTTPClient:     compactionHTTPClient,
+		memorySearchTimeout:      defaultMemorySearchTimeout,
+		clockLocation:            clockLocation,
+		logger:                   d.Logger.With(slog.String("service", "agent/application")),
 	}
-	return service
-}
-
-// SetContextAbsoluteMaxTokens sets the context budget used for models without
-// a configured window (CM-ADM-001). Zero keeps the shared default.
-func (s *Service) SetContextAbsoluteMaxTokens(v int) {
-	s.contextAbsoluteCapTokens = v
+	// A typed nil stored in an interface would read as configured.
+	if d.Compaction != nil {
+		service.compactionService = d.Compaction
+	}
+	if d.QueuedInputs != nil {
+		service.queue = d.QueuedInputs
+	}
+	service.bindSessionRuntime(d.SessionRuntime)
+	return service, nil
 }
 
 // contextAbsoluteMaxTokens resolves the budget for models without a window.
@@ -254,68 +395,6 @@ func (s *Service) effectiveContextTokenBudget(chatModel models.GetResponse) int 
 		slog.String("model_id", chatModel.ID),
 		slog.Int("fallback_tokens", fallback))
 	return fallback
-}
-
-// SetMemoryRegistry sets the provider registry for memory operations.
-func (s *Service) SetMemoryRegistry(registry *memprovider.Registry) {
-	s.memoryRegistry = registry
-}
-
-// SetSkillLoader sets the skill loader used to populate usable skills in gateway requests.
-func (s *Service) SetSkillLoader(sl SkillLoader) {
-	s.skillLoader = sl
-}
-
-// SetGatewayAssetLoader configures optional asset loading used to inline
-// attachments before calling the agent gateway.
-func (s *Service) SetGatewayAssetLoader(loader gatewayAssetLoader) {
-	s.assetLoader = loader
-}
-
-func (s *Service) SetBotPermissionChecker(checker botPermissionChecker) {
-	s.botPermissions = checker
-}
-
-// SetWorkspaceTargetResolver configures request-scoped Computer resolution.
-func (s *Service) SetWorkspaceTargetResolver(resolver workspaceTargetResolver) {
-	s.workspaceTargets = resolver
-}
-
-// SetPlatformIdentitySource configures the neutral source used to load
-// platform identity metadata for system prompt generation.
-func (s *Service) SetPlatformIdentitySource(source PlatformIdentitySource) {
-	s.platformIdentities = source
-}
-
-// SetCompactionService configures the compaction service for context compaction.
-func (s *Service) SetCompactionService(service *compaction.Service) {
-	if service == nil {
-		s.compactionService = nil
-		return
-	}
-	s.compactionService = service
-}
-
-// SetBackgroundManager configures the background task manager used for task
-// summaries and background status tooling.
-func (s *Service) SetBackgroundManager(m *background.Manager) {
-	s.bgManager = m
-}
-
-func (s *Service) SetToolApprovalService(service *toolapproval.Service) {
-	s.toolApproval = service
-}
-
-func (s *Service) SetHookService(service *hooks.Service) {
-	s.hookService = service
-}
-
-func (s *Service) SetUserInputService(service *userinput.Service) {
-	if service == nil {
-		s.userInput = nil
-		return
-	}
-	s.userInput = service
 }
 
 type resolvedContext struct {

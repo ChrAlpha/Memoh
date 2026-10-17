@@ -57,9 +57,10 @@ func TestAdmitWSRunAnswersASendQueuedBehindARunWithRunQueued(t *testing.T) {
 		OwnerID: "owner-ws-queued", OwnerLeaseTTL: time.Minute, Ledger: sessionledger.New(), Fence: wsAdmissionFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	service := application.NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC)
-	service.SetSessionRuntime(manager)
-	service.SetQueuedInputs(sessionruntime.NewQueuedInputs(dbsqlc.New(pool), pool))
+	service := newTestAgentService(t, application.Deps{
+		SessionRuntime: manager,
+		QueuedInputs:   sessionruntime.NewQueuedInputs(dbsqlc.New(pool), pool),
+	})
 	handler := &LocalChannelHandler{logger: slog.New(slog.DiscardHandler), agentService: service, sessionRuntime: manager}
 	writer := &wsWriter{ch: make(chan []byte, 32), stop: make(chan struct{}), done: make(chan struct{})}
 	h := wsRunHarness{handler: handler, manager: manager, writer: writer}

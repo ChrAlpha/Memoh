@@ -37,7 +37,7 @@ func r4bExternalDiscuss(t *testing.T, env discussEnv) (*discussProcess, *recordi
 	t.Helper()
 	pool := &recordingACPPrompter{result: acpclient.PromptResult{Text: "done", StopReason: "end_turn"}}
 	proc := newDiscussProcess(t, env, &discussStep{})
-	proc.svc.SetACPSessionPool(pool)
+	registerACPPool(proc.svc, pool)
 	store, ok := proc.svc.queries.(discussStore)
 	if !ok {
 		t.Fatalf("fixture store = %T", proc.svc.queries)

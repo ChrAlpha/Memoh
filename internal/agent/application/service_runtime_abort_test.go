@@ -155,7 +155,7 @@ func TestSetSessionRuntimeConfiguresAbortRuntime(t *testing.T) {
 	manager := &sessionruntime.Manager{}
 	service := &Service{}
 
-	service.SetSessionRuntime(manager)
+	service.bindSessionRuntime(manager)
 
 	if service.abortRuntime != manager {
 		t.Fatalf("abort runtime = %T, want injected session manager", service.abortRuntime)

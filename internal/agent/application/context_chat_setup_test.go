@@ -157,7 +157,7 @@ func userMessageHookConfig(t *testing.T, command string) string {
 func newHookChatFixture(t *testing.T, workspace *hookWorkspace) chatTurnFixture {
 	t.Helper()
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
-	fixture.fixture.service.SetHookService(hooks.NewService(fixture.fixture.service.logger, newHookWorkspaceBridge(t, workspace)))
+	fixture.fixture.service.hookService = hooks.NewService(fixture.fixture.service.logger, newHookWorkspaceBridge(t, workspace))
 	return fixture
 }
 
@@ -262,7 +262,7 @@ func TestChatSetupAllowedHookRunsTheTurnToCompletion(t *testing.T) {
 // that says so, rather than rewriting history the runtime keeps.
 func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 	service, recorder := newDrivePromptFixture(t)
-	service.SetExternalRuntimes(recorder)
+	registerExternalDrivers(service, recorder)
 
 	spec := runSpec{
 		Run: admittedRun{Handle: sessionruntime.RunHandle{

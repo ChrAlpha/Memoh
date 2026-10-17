@@ -100,7 +100,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &recordingContextLifecycleStore{}
 	service := &Service{contextLifecycles: lifecycles}
-	service.SetSessionRuntime(manager)
+	service.bindSessionRuntime(manager)
 
 	ownerCtx, cancelOwner := context.WithCancelCause(context.Background())
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
@@ -190,7 +190,7 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	service := &Service{contextLifecycles: &recordingContextLifecycleStore{}}
-	service.SetSessionRuntime(manager)
+	service.bindSessionRuntime(manager)
 
 	runCtx, admission, finish, err := service.AdmitSubagentRun(
 		context.Background(),
@@ -256,7 +256,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &recordingContextLifecycleStore{}
 	service := &Service{contextLifecycles: lifecycles}
-	service.SetSessionRuntime(manager)
+	service.bindSessionRuntime(manager)
 
 	ownerCtx, cancelOwner := context.WithCancelCause(context.Background())
 	runCtx, admission, finish, err := service.AdmitSubagentRun(

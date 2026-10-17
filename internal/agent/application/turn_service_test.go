@@ -607,7 +607,7 @@ func TestBoundaryValuesPassThrough(t *testing.T) {
 
 func TestStartTurnRejectsForeignTeam(t *testing.T) {
 	a := newTurnTestService()
-	a.SetAllowedTeam("team-home")
+	a.allowedTeam = "team-home"
 	_, err := a.StartTurn(context.Background(), turn.StartTurnCommand{TeamID: "team-other", Mode: turn.ModeChat})
 	if !errors.Is(err, turn.ErrTeamNotServed) {
 		t.Fatalf("err = %v, want ErrTeamNotServed", err)

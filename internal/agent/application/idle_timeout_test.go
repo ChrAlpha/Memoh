@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"testing"
 	"testing/synctest"
@@ -58,7 +57,7 @@ func TestIdleTimeoutCapsInitialWindow(t *testing.T) {
 }
 
 func TestServiceStreamHTTPClientHasNoRequestDeadline(t *testing.T) {
-	service := NewService(slog.New(slog.DiscardHandler), nil, nil, nil, nil, nil, nil, time.UTC)
+	service := newTestService(t, Deps{ClockLocation: time.UTC})
 	if service.streamHTTPClient.Timeout != 0 {
 		t.Fatalf("stream client timeout = %v, want no whole-request deadline", service.streamHTTPClient.Timeout)
 	}

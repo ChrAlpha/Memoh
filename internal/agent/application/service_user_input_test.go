@@ -390,7 +390,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("start runtime manager: %v", err)
 	}
-	resolver.SetSessionRuntime(manager)
+	resolver.bindSessionRuntime(manager)
 	if _, err := sessiontest.Start(context.Background(), manager,
 		botID,
 		sessionID,
