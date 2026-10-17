@@ -231,6 +231,7 @@ func (s *Service) runSyncCompaction(ctx context.Context, req ChatRequest, inputT
 		return compaction.Result{}
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
+	cfg.CandidatesFrom = req.historyViewFrom
 	cfg.TargetTokens = syncBackstopTargetTokens(botSettings.CompactionTargetPercent, contextTokenBudget)
 	cfg.HardPressure = hardPressure
 	cfg.HistoryBudgetTokens = historyBudget

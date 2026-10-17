@@ -194,7 +194,7 @@ VALUES
 		t.Errorf("candidate set size = %d, want %d (an excluded row leaked in)", len(got), len(wantEligible))
 	}
 
-	measure, err := queries.MeasureUncompactedMessagesBySession(ctx, sessionUUID)
+	measure, err := queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{SessionID: sessionUUID})
 	if err != nil {
 		t.Fatalf("MeasureUncompactedMessagesBySession: %v", err)
 	}

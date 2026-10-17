@@ -64,6 +64,10 @@ type TriggerConfig struct {
 	// declared; it bounds the summary output reserve. Zero means unknown and
 	// keeps the engine's conservative defaults.
 	SummaryWindowTokens int
+	// CandidatesFrom is the creation time of the oldest row the caller's
+	// request loaded. Older rows are invisible to that request, so
+	// summarizing them cannot shrink it. Zero considers the whole session.
+	CandidatesFrom      time.Time
 	ProtectedSources    []turn.ContextMessageSource
 	HistoryBudgetTokens int
 	PromptCacheTTL      string

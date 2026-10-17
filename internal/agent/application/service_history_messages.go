@@ -19,14 +19,14 @@ import (
 // that discuss mode uses, replacing the legacy loadMessages path. The second
 // return value is the raw (compactable) token pressure measured before
 // trimming; the third also includes active summaries.
-func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, int) {
+func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, int, time.Time) {
 	sessionID := strings.TrimSpace(req.ThreadID)
 	if s.pipeline == nil || sessionID == "" {
-		return nil, 0, 0
+		return nil, 0, 0, time.Time{}
 	}
 	rc := s.pipeline.GetRC(sessionID)
 	if len(rc) == 0 {
-		return nil, 0, 0
+		return nil, 0, 0, time.Time{}
 	}
 
 	trs := s.loadTurnResponses(ctx, sessionID, contextTokenBudget)
@@ -34,7 +34,7 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 
 	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts)
 	if composed == nil {
-		return nil, 0, 0
+		return nil, 0, 0, time.Time{}
 	}
 
 	messages := make([]ModelMessage, 0, len(composed.Messages))
@@ -71,7 +71,7 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 		messages = trimPipelineMessagesByTokens(s.logger, messages, pinned, contextTokenBudget)
 	}
 
-	return messages, compactable, pressure
+	return messages, compactable, pressure, time.UnixMilli(timeline.ViewFromMs(rc, trs)).UTC()
 }
 
 // loadTimelineArtifacts projects the session's active compaction frontier for

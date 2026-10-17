@@ -228,7 +228,7 @@ func TestBuildMessagesFromPipelineInsertsArtifactSummary(t *testing.T) {
 		logger:   slog.New(slog.DiscardHandler),
 	}
 
-	messages, raw, pressure := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
+	messages, raw, pressure, _ := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
 		ThreadID: pipelineTestSessionID,
 	}, 0)
@@ -312,7 +312,7 @@ func TestBuildMessagesFromPipelineKeepsSummaryUnderBudget(t *testing.T) {
 		logger:   slog.New(slog.DiscardHandler),
 	}
 
-	messages, raw, pressure := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
+	messages, raw, pressure, _ := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
 		ThreadID: pipelineTestSessionID,
 	}, 200)
@@ -341,7 +341,7 @@ func TestPipelineCurrentIdentitySurvivesLaterExternalAndSelfMessages(t *testing.
 	echo.IsSelfSent = true
 	pipeline.PushEvent(pipelineTestSessionID, echo)
 	svc := &Service{pipeline: pipeline, logger: slog.New(slog.DiscardHandler)}
-	messages, _, _ := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{ThreadID: pipelineTestSessionID, ExternalMessageID: "current"}, 500)
+	messages, _, _, _ := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{ThreadID: pipelineTestSessionID, ExternalMessageID: "current"}, 500)
 	index := latestModelUserMessageIndex(messages)
 	if index == nil || !strings.Contains(messages[*index].TextContent(), "required input") {
 		t.Fatalf("wrong current source: index=%v messages=%s", index, messagesDebug(messages))

@@ -26,7 +26,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 	fusing := len(frontier.Artifacts) > 0
 	refold := len(frontier.Artifacts) > 1 || fusing && cfg.TargetTokens > 0 && estimateSummaryReplayTokens(frontier.Artifacts[0].Summary) > cfg.TargetTokens
-	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sessionUUID)
+	createdFrom := pgtype.Timestamptz{Time: cfg.CandidatesFrom, Valid: !cfg.CandidatesFrom.IsZero()}
+	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{
+		SessionID:   sessionUUID,
+		CreatedFrom: createdFrom,
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -35,8 +39,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	}
 	readMaxBytes := compactionReadMaxBytes(cfg)
 	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
-		SessionID: sessionUUID,
-		MaxBytes:  readMaxBytes,
+		SessionID:   sessionUUID,
+		CreatedFrom: createdFrom,
+		MaxBytes:    readMaxBytes,
 	})
 	if err != nil {
 		return Result{}, err
