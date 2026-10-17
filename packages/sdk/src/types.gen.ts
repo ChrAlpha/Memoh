@@ -2694,12 +2694,6 @@ export type HandlersToolDefBucket = {
     tools?: number;
 };
 
-export type HandlersTriggerCompactResponse = {
-    message_count?: number;
-    status?: string;
-    summary?: string;
-};
-
 export type HandlersUiLocateMessageResponse = {
     items: Array<ConversationUiTurn>;
     target_external_message_id: string;
@@ -11643,44 +11637,6 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses = {
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponse = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses];
-
-export type PostBotsByBotIdSessionsBySessionIdCompactData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Session ID
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/sessions/{session_id}/compact';
-};
-
-export type PostBotsByBotIdSessionsBySessionIdCompactErrors = {
-    /**
-     * Bad Request
-     */
-    400: ServerProblem;
-    /**
-     * Internal Server Error
-     */
-    500: ServerProblem;
-};
-
-export type PostBotsByBotIdSessionsBySessionIdCompactError = PostBotsByBotIdSessionsBySessionIdCompactErrors[keyof PostBotsByBotIdSessionsBySessionIdCompactErrors];
-
-export type PostBotsByBotIdSessionsBySessionIdCompactResponses = {
-    /**
-     * OK
-     */
-    200: HandlersTriggerCompactResponse;
-};
-
-export type PostBotsByBotIdSessionsBySessionIdCompactResponse = PostBotsByBotIdSessionsBySessionIdCompactResponses[keyof PostBotsByBotIdSessionsBySessionIdCompactResponses];
 
 export type GetBotsByBotIdSessionsBySessionIdContextLifecycleData = {
     body?: never;

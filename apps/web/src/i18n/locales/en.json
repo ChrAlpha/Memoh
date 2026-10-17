@@ -254,8 +254,8 @@
       "upstream_unavailable": "Connect-It could not complete the request. Please try again shortly."
     },
     "context": {
-      "budget_unsatisfied": "The model context window is too small for this request. Shorten the request, or switch to a model with a larger context window.",
-      "protected_overflow": "Required context exceeds the model context budget. Switch to a model with a larger context window."
+      "budget_unsatisfied": "Summarizing earlier history did not make this request fit the model context window, so the run stopped and history is unchanged. Try again, shorten the request, start a new conversation, or switch to a model with a larger context window.",
+      "protected_overflow": "Required context exceeds the model context budget. Shorten the request, or switch to a model with a larger context window."
     },
     "context_lifecycle": {
       "access_denied": "You do not have access to context lifecycle diagnostics.",

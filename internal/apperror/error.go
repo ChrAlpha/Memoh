@@ -37,7 +37,7 @@ const (
 	CodeChannelBindingRequired                   Code = "channel.binding_required"
 	CodeNetworkProviderNotConfigured             Code = "network.provider_not_configured"
 	CodeUserCannotRemoveSelf                     Code = "user.cannot_remove_self"
-	CodeCompactionModelUnavailable               Code = "compaction.model_unavailable"
+	CodeCompactionModelUnavailable               Code = "compaction.model_unavailable" // Deprecated: no longer returned; kept because it was published.
 	CodeSettingsReasoningEffortInvalid           Code = "settings.reasoning_effort_invalid"
 	CodeSettingsReasoningUnavailable             Code = "settings.reasoning_options_unavailable"
 	CodeContextBudgetUnsatisfied                 Code = "context.budget_unsatisfied"
@@ -576,11 +576,11 @@ var catalog = map[Code]Definition{
 	},
 	CodeContextBudgetUnsatisfied: {
 		HTTPStatus: http.StatusUnprocessableEntity,
-		Detail:     "The model context window is too small for this request. Run /compact to summarize older history, shorten the request, or switch to a model with a larger context window.",
+		Detail:     "Summarizing earlier history did not make this request fit the model context window, so the run stopped and history is unchanged. Try again, shorten the request, start a new conversation, or switch to a model with a larger context window.",
 	},
 	CodeContextProtectedOverflow: {
 		HTTPStatus: http.StatusUnprocessableEntity,
-		Detail:     "Required context exceeds the model context budget. Run /compact to summarize older history, or switch to a model with a larger context window.",
+		Detail:     "Required context exceeds the model context budget. Shorten the request, or switch to a model with a larger context window.",
 	},
 	CodeWorkspaceUnreachable: {
 		HTTPStatus: http.StatusServiceUnavailable,

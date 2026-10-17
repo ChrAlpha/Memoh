@@ -9061,51 +9061,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/bots/{bot_id}/sessions/{session_id}/compact": {
-            "post": {
-                "description": "Run context compaction synchronously for a session",
-                "tags": [
-                    "compaction"
-                ],
-                "summary": "Trigger immediate context compaction",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Session ID",
-                        "name": "session_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.TriggerCompactResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    }
-                }
-            }
-        },
         "/bots/{bot_id}/sessions/{session_id}/context-lifecycle": {
             "get": {
                 "description": "List run-keyed context lifecycle snapshots for a chat session, newest first, with page-scoped aggregate totals (cache read/write tokens, drop reasons, mutation kinds). Aggregates cover only the returned page; has_more reports older turns. Sessions predating run lifecycle persistence fall back to legacy assistant metadata (legacy_source). Per-fragment selection_decisions are never returned; each turn's selection trace carries their rolled-up counts and token costs",
@@ -24191,20 +24146,6 @@ const docTemplate = `{
                 },
                 "tools": {
                     "type": "integer"
-                }
-            }
-        },
-        "handlers.TriggerCompactResponse": {
-            "type": "object",
-            "properties": {
-                "message_count": {
-                    "type": "integer"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "summary": {
-                    "type": "string"
                 }
             }
         },

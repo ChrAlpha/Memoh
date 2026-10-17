@@ -4819,15 +4819,6 @@ definitions:
       tools:
         type: integer
     type: object
-  handlers.TriggerCompactResponse:
-    properties:
-      message_count:
-        type: integer
-      status:
-        type: string
-      summary:
-        type: string
-    type: object
   handlers.UILocateMessageResponse:
     properties:
       items:
@@ -13471,36 +13462,6 @@ paths:
       summary: Set ACP session runtime reasoning effort
       tags:
       - acp
-  /bots/{bot_id}/sessions/{session_id}/compact:
-    post:
-      description: Run context compaction synchronously for a session
-      parameters:
-      - description: Bot ID
-        in: path
-        name: bot_id
-        required: true
-        type: string
-      - description: Session ID
-        in: path
-        name: session_id
-        required: true
-        type: string
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/handlers.TriggerCompactResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/server.Problem'
-        "500":
-          description: Internal Server Error
-          schema:
-            $ref: '#/definitions/server.Problem'
-      summary: Trigger immediate context compaction
-      tags:
-      - compaction
   /bots/{bot_id}/sessions/{session_id}/context-lifecycle:
     get:
       description: List run-keyed context lifecycle snapshots for a chat session,
