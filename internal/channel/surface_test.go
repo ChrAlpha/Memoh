@@ -209,6 +209,39 @@ func TestSurfacePreviewSplitsLongStream(t *testing.T) {
 	}
 }
 
+// Text a preview showed before it ended with an empty final does not count
+// against the split window of the next preview.
+func TestSurfaceSplitWindowRestartsWithEachPreview(t *testing.T) {
+	t.Parallel()
+
+	adapter := newPreviewAdapter("preview-window", 100)
+	surface := newPreviewSurface(t, adapter)
+	ctx := context.Background()
+	text := strings.Repeat("a", 60)
+
+	first, err := surface.OpenPreview(ctx, "target-1", StreamOptions{})
+	if err != nil {
+		t.Fatalf("open preview: %v", err)
+	}
+	if err := first.Update(ctx, StreamEvent{Type: StreamEventDelta, Delta: text, Phase: StreamPhaseText}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Finish(ctx, finalOf("")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := surface.OpenPreview(ctx, "target-1", StreamOptions{Continuation: true})
+	if err != nil {
+		t.Fatalf("open continuation preview: %v", err)
+	}
+	if err := second.Update(ctx, StreamEvent{Type: StreamEventDelta, Delta: text, Phase: StreamPhaseText}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(adapter.opens) != 2 {
+		t.Fatalf("previews opened = %+v, want the two the caller opened and no split", adapter.opens)
+	}
+}
+
 // A preview that carries on after a split finishes without the text its
 // earlier previews already showed.
 func TestSurfaceContinuationFinalDoesNotRepeatText(t *testing.T) {

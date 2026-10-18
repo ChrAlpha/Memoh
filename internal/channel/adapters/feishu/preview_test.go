@@ -657,6 +657,37 @@ func TestFeishuPreviewCardKitStreamsTextViaEntityUpdates(t *testing.T) {
 	}
 }
 
+// A final with no message of its own ends the card with the text it has
+// streamed, and closes its streaming mode.
+func TestFeishuPreviewCardKitEmptyFinalKeepsStreamedText(t *testing.T) {
+	t.Parallel()
+
+	p, api := newCardKitPreview(t, nil, false)
+	mustUpdate(t, p, started())
+	mustUpdate(t, p, textDelta("Let me check."))
+	mustFinish(t, p, finalOf(channel.Message{}))
+
+	calls := api.snapshot()
+	lastText, closeAt, textAt := -1, -1, -1
+	for i, c := range calls {
+		switch {
+		case isCardKitElementPath(c.Path):
+			lastText = i
+			if strings.Contains(c.Body, "Let me check.") {
+				textAt = i
+			}
+		case isCardKitSettingsPath(c.Path) && strings.Contains(c.Body, "false"):
+			closeAt = i
+		}
+	}
+	if textAt < 0 || textAt != lastText {
+		t.Fatalf("the last card content update does not carry the streamed text; calls = %v", api.summary())
+	}
+	if closeAt < textAt {
+		t.Fatalf("streaming mode not closed after the text; calls = %v", api.summary())
+	}
+}
+
 // When CardKit entity creation fails the preview falls back to the ordinary
 // message-PATCH path without returning an error to the caller.
 func TestFeishuPreviewCardKitFallsBackToMessagePatchOnCreateFailure(t *testing.T) {

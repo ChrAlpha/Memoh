@@ -1050,6 +1050,135 @@ func TestPreview_FinishEndsTheReplyOnce(t *testing.T) {
 	}
 }
 
+// emptyFinal is the final that ends a text segment: it carries no message, so
+// the preview commits the text it has shown.
+func emptyFinal(t *testing.T) channel.PreparedStreamEvent {
+	t.Helper()
+	return mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventFinal, Final: &channel.StreamFinalizePayload{}})
+}
+
+// TestDraftMode_EmptyFinalKeepsBufferedTextAsPermanentMessage verifies that in
+// private chats the text streamed before a tool call is committed as a message
+// of its own when the preview ends with an empty final, and the next preview
+// posts the text after the tool call as another message.
+func TestDraftMode_EmptyFinalKeepsBufferedTextAsPermanentMessage(t *testing.T) {
+	newPreview := func() *telegramPreview {
+		return &telegramPreview{
+			adapter:       NewTelegramAdapter(nil),
+			cfg:           channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
+			target:        "123",
+			isPrivateChat: true,
+			draftID:       1,
+			streamChatID:  123,
+		}
+	}
+	ctx := context.Background()
+
+	origGetBot := getOrCreateBotForTest
+	origDraft := sendDraftForTest
+	origSendText := sendTextForTest
+	origSendEdit := sendEditForTest
+	origEdit := testEditFunc
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) {
+		return &tele.Bot{Token: "fake"}, nil
+	}
+	sendDraftForTest = func(*tele.Bot, int64, int, string, string) error { return nil }
+	var sent []string
+	sendTextForTest = func(_ *tele.Bot, _ string, text string, _ int, _ string) (int64, int, error) {
+		sent = append(sent, text)
+		return 123, len(sent), nil
+	}
+	sendEditForTest = func(*tele.Bot, int64, int, string, string) error {
+		t.Error("draft mode must not edit messages")
+		return nil
+	}
+	testEditFunc = func(*tele.Bot, int64, int, string, string) error {
+		t.Error("draft mode must not edit messages")
+		return nil
+	}
+	defer func() {
+		getOrCreateBotForTest = origGetBot
+		sendDraftForTest = origDraft
+		sendTextForTest = origSendText
+		sendEditForTest = origSendEdit
+		testEditFunc = origEdit
+	}()
+
+	for _, text := range []string{"Let me check.", "Here is the answer."} {
+		s := newPreview()
+		if err := s.Update(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: text, Phase: channel.StreamPhaseText})); err != nil {
+			t.Fatalf("update %q: %v", text, err)
+		}
+		if err := s.Finish(ctx, ptrTo(emptyFinal(t))); err != nil {
+			t.Fatalf("finish %q: %v", text, err)
+		}
+	}
+
+	if want := []string{"Let me check.", "Here is the answer."}; !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent = %q, want %q", sent, want)
+	}
+}
+
+// TestEditMode_EmptyFinalKeepsBufferedTextInPreviewMessage verifies that in
+// group chats the preview message is edited to the text it has buffered when
+// the preview ends with an empty final, and the next preview opens a message
+// of its own instead of overwriting it.
+func TestEditMode_EmptyFinalKeepsBufferedTextInPreviewMessage(t *testing.T) {
+	ctx := context.Background()
+	bot := newTestTelegramBot(telegramRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)),
+		}, nil
+	}))
+	origGetBot := getOrCreateBotForTest
+	origSendText := sendTextForTest
+	origEdit := testEditFunc
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) { return bot, nil }
+	var sent []string
+	sendTextForTest = func(_ *tele.Bot, _ string, text string, _ int, _ string) (int64, int, error) {
+		sent = append(sent, normalizeStreamComparableText(text))
+		return 42, len(sent), nil
+	}
+	edits := map[int][]string{}
+	testEditFunc = func(_ *tele.Bot, _ int64, msgID int, text string, _ string) error {
+		edits[msgID] = append(edits[msgID], text)
+		return nil
+	}
+	defer func() {
+		getOrCreateBotForTest = origGetBot
+		sendTextForTest = origSendText
+		testEditFunc = origEdit
+	}()
+
+	for _, text := range []string{"Let me check.", "Here is the answer."} {
+		s := &telegramPreview{
+			adapter: NewTelegramAdapter(nil),
+			cfg:     channel.ChannelConfig{ID: "test", Credentials: map[string]any{"bot_token": "fake"}},
+			target:  "123",
+		}
+		if err := s.Update(ctx, mustPreparedTelegramEvent(t, channel.StreamEvent{Type: channel.StreamEventDelta, Delta: text, Phase: channel.StreamPhaseText})); err != nil {
+			t.Fatalf("update %q: %v", text, err)
+		}
+		if err := s.Finish(ctx, ptrTo(emptyFinal(t))); err != nil {
+			t.Fatalf("finish %q: %v", text, err)
+		}
+	}
+
+	if want := []string{"Let me check.", "Here is the answer."}; !reflect.DeepEqual(sent, want) {
+		t.Fatalf("sent = %q, want one message per preview %q", sent, want)
+	}
+	if want := []string{"Let me check."}; !reflect.DeepEqual(edits[1], want) {
+		t.Fatalf("edits of the first message = %q, want %q", edits[1], want)
+	}
+	if want := []string{"Here is the answer."}; !reflect.DeepEqual(edits[2], want) {
+		t.Fatalf("edits of the second message = %q, want %q", edits[2], want)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
 // TestStreamFinal_RichPartsUseSendRichMessage verifies that when a
 // StreamEventFinal carries canonical Parts and the channel is RichText-capable
 // (per item 1), pushFinal routes through sendRichMessage instead of falling
