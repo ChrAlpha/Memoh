@@ -120,6 +120,9 @@ type RunInput struct {
 	// StreamFailure renders the failure reply for a run error that no
 	// run_terminal event answered.
 	StreamFailure func(err error) (channel.StreamEvent, bool)
+	// EventsEnded is called once the run's events have all been shown, before
+	// the final messages or the failure reply go out.
+	EventsEnded func()
 }
 
 // Run consumes one run's events until both channels close, and performs the
@@ -178,6 +181,7 @@ func (r *Reply) Run(ctx context.Context, in RunInput, events <-chan turn.Event, 
 			break
 		}
 	}
+	in.EventsEnded()
 	streamErr := runErr
 	if writeErr != nil {
 		streamErr = writeErr

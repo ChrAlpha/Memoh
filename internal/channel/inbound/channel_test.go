@@ -44,13 +44,16 @@ import (
 )
 
 type fakeChatGateway struct {
-	startErr         error
-	resp             fakeChatResponse
-	err              error
-	gotReq           turn.StartTurnCommand
-	startReqs        []turn.StartTurnCommand
-	startErrors      []error
-	onChat           func(turn.StartTurnCommand)
+	startErr    error
+	resp        fakeChatResponse
+	err         error
+	gotReq      turn.StartTurnCommand
+	startReqs   []turn.StartTurnCommand
+	startErrors []error
+	onChat      func(turn.StartTurnCommand)
+	// whileRunning, when set, keeps the run going: StartTurn returns at once
+	// and the run's events arrive only after it returns.
+	whileRunning     func()
 	userInputCalls   int
 	userInputInput   turn.UserInputResponse
 	userInputErr     error
@@ -175,18 +178,28 @@ func (f *fakeChatGateway) StartTurn(_ context.Context, cmd turn.StartTurnCommand
 		"messages": f.resp.Messages,
 	}
 	data, err := json.Marshal(payload)
-	if err == nil {
-		events <- turn.Event{
-			RunID:    "run-1",
-			TeamID:   cmd.TeamID,
-			ThreadID: cmd.ThreadID,
-			Seq:      1,
-			Kind:     "agent_end",
-			Payload:  data,
+	emit := func() {
+		if err == nil {
+			events <- turn.Event{
+				RunID:    "run-1",
+				TeamID:   cmd.TeamID,
+				ThreadID: cmd.ThreadID,
+				Seq:      1,
+				Kind:     "agent_end",
+				Payload:  data,
+			}
 		}
+		close(events)
+		close(errs)
 	}
-	close(events)
-	close(errs)
+	if f.whileRunning != nil {
+		go func() {
+			f.whileRunning()
+			emit()
+		}()
+	} else {
+		emit()
+	}
 	return &fakeTurnRun{events: events, errs: errs}, nil
 }
 

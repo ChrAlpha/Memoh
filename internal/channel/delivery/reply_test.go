@@ -229,6 +229,7 @@ func run(t *testing.T, setup runSetup) (*surfaceLog, *observed, runResult) {
 		Localizer:       i18n.New("en"),
 		Outputs:         outputs,
 		StreamFailure:   failure,
+		EventsEnded:     func() {},
 	}, events, errs)
 	if err := r.Close(context.Background()); err != nil {
 		t.Fatalf("close: %v", err)
@@ -687,8 +688,9 @@ func TestReplyUserInputPromptCarriesLocale(t *testing.T) {
 	}
 	r.cfg.Observe = obs
 	err = r.Run(context.Background(), RunInput{
-		Localizer: i18n.New("zh"),
-		Outputs:   func([]turn.ModelMessage) ([]channel.Message, bool) { return nil, false },
+		Localizer:   i18n.New("zh"),
+		Outputs:     func([]turn.ModelMessage) ([]channel.Message, bool) { return nil, false },
+		EventsEnded: func() {},
 	}, events, errs)
 	if err != nil {
 		t.Fatal(err)

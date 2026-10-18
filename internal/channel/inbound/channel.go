@@ -1173,9 +1173,6 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return startErr
 	}
 
-	// The run is over: stop re-sending the typing indicator before any final
-	// output goes out, so it cannot reappear after the reply.
-	status.StopRefresh()
 	runErr := p.consumeRun(ctx, runReply{
 		out: out, handle: handle, botID: identity.BotID, channelType: msg.Channel, caps: desc.Capabilities,
 		target: target, sourceMessageID: sourceMessageID,
@@ -1235,6 +1232,9 @@ func (p *ChannelInboundProcessor) consumeRun(ctx context.Context, r runReply) er
 		StreamFailure: func(err error) (channel.StreamEvent, bool) {
 			return channel.ErrorEvent(r.streamCtx, r.localizer, threadError(err))
 		},
+		// The typing indicator stops once the run's events are over and before
+		// any final output goes out, so it cannot reappear after the reply.
+		EventsEnded: r.status.StopRefresh,
 	}, events, r.handle.Errs())
 }
 
