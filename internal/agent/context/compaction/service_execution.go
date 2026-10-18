@@ -108,8 +108,8 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		earlierTokens += estimateSummaryReplayTokens(parent.Summary)
 	}
 
-	// The summary replaces everything it reads; what the request keeps beside
-	// it bounds how long it may be.
+	// The summary replaces the earlier summaries and the rows it folds; what
+	// the request keeps beside it bounds how long it may be.
 	room := summaryRoom{HistoryTokens: cfg.HistoryBudgetTokens, KeptTokens: keptReplayTokens(messages, cfg.ProtectedSources)}
 	summaryLimit := summaryOutputLimit(room.HistoryTokens-room.KeptTokens, capability)
 	if summaryLimit <= 0 {
