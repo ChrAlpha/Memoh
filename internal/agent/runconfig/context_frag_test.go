@@ -128,14 +128,30 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 		t.Fatalf("memory index = %#v, want 1", got.ContextMemoryMessageIndex)
 	}
 	wantMessages := []sdk.Message{
-		sdk.UserMessage("pipeline current user"),
-		sdk.UserMessage("memory recall", image),
+		sdk.UserMessage("pipeline current user", image),
+		sdk.UserMessage("memory recall"),
 	}
 	if !reflect.DeepEqual(got.Messages, wantMessages) {
 		t.Fatalf("provider messages changed: got %#v want %#v", got.Messages, wantMessages)
 	}
 	if len(got.ContextSourceFrags) == 0 {
 		t.Fatal("prepared config did not build authoritative source fragments")
+	}
+}
+
+func TestPipelineMediaFollowsExplicitCurrentInput(t *testing.T) {
+	t.Parallel()
+
+	cfg := native.RunConfig{
+		Messages:                       []sdk.Message{sdk.UserMessage("current"), sdk.UserMessage("self echo"), sdk.UserMessage("memory")},
+		ContextCurrentUserMessageIndex: intPointer(0),
+		ContextMemoryMessageIndex:      intPointer(2),
+		InlineImages:                   []sdk.ImagePart{{Image: "data:image/png;base64,YQ=="}},
+		InlineAttachments:              []sdk.MessagePart{sdk.FilePart{Data: "Yg==", MediaType: "application/pdf"}},
+	}
+	got := newBuilder().Prepare(context.Background(), cfg)
+	if len(got.Messages[0].Content) != 3 || len(got.Messages[1].Content) != 1 || len(got.Messages[2].Content) != 1 {
+		t.Fatalf("media detached from current input: %v", got.Messages)
 	}
 }
 
@@ -236,3 +252,5 @@ func messagesContainImage(messages []sdk.Message) bool {
 	}
 	return false
 }
+
+func intPointer(value int) *int { return &value }

@@ -255,7 +255,31 @@ func EstimateMessageTokens(msg runreq.ModelMessage) int {
 		data, _ := json.Marshal(msg.Content)
 		return contextfrag.TokensFromBytes(len(data))
 	}
-	return contextfrag.TokensFromBytes(len(text))
+	return contextfrag.TokensFromBytes(len(text) + replayedPartBytes(msg.Content))
+}
+
+// replayedPartBytes measures the reasoning and tool exchange parts that ride
+// along with assistant text; TextContent alone would leave them uncounted.
+// Inline images stay out so the selector's fixed image pricing still applies.
+func replayedPartBytes(content json.RawMessage) int {
+	var parts []json.RawMessage
+	if json.Unmarshal(content, &parts) != nil {
+		return 0
+	}
+	total := 0
+	for _, raw := range parts {
+		var part struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &part) != nil {
+			continue
+		}
+		switch part.Type {
+		case "reasoning", "tool-call", "tool-result":
+			total += len(raw)
+		}
+	}
+	return total
 }
 
 // totalCompactableHistoryTokens estimates the tokens held by raw history rows
