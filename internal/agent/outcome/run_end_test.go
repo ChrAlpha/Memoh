@@ -139,6 +139,14 @@ func TestNameRunEndTable(t *testing.T) {
 			wantRow:   false,
 		},
 		{
+			name:     "a delivered failure keeps its code when the history write also fails",
+			facts:    EndingFacts{Phase: PhaseExecution, Terminal: &terminalFailed, Declared: providerErr, Commit: errors.New("write failed")},
+			wantEnd:  EndFailed,
+			wantCode: apperror.CodeAgentProviderAuthFailed,
+			input:    InputAccepted,
+			wantRow:  true,
+		},
+		{
 			name:     "a failed history write ends a parked run",
 			facts:    EndingFacts{Phase: PhaseCommit, Terminal: &terminalCompleted, Deferred: true, Commit: errors.New("write failed")},
 			wantEnd:  EndFailed,

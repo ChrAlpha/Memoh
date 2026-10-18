@@ -981,3 +981,69 @@ func (s *linkingMessageService) LinkAssets(_ context.Context, _ string, assets [
 	s.linked = append(s.linked, append([]messagepkg.AssetRef(nil), assets...))
 	return nil
 }
+
+// The first failure a run declares names it. A provider failure the caller was
+// already shown keeps its code when a later history write also fails, whether
+// the executor reports that write as its own cause or the ending's commit
+// returns it.
+func TestDriveDeliveredFailureKeepsItsCodeAfterALaterHistoryFailure(t *testing.T) {
+	t.Parallel()
+
+	delivered := apperror.Wrap(apperror.CodeAgentProviderAuthFailed, errors.New("401"), nil)
+	cases := []struct {
+		name string
+		exec func(terminal *native.StreamEvent) *drivetest.ScriptedExecutor
+	}{
+		{"executor reports the failed write as its cause", func(terminal *native.StreamEvent) *drivetest.ScriptedExecutor {
+			return &drivetest.ScriptedExecutor{
+				Events:   []native.StreamEvent{{Type: native.EventError, Code: string(apperror.CodeAgentProviderAuthFailed), Cause: delivered}},
+				Terminal: terminal,
+				Cause:    errors.New("commit agent step: boom"),
+				Phase:    outcome.PhaseCommit,
+			}
+		}},
+		{"the ending's commit fails", func(terminal *native.StreamEvent) *drivetest.ScriptedExecutor {
+			return &drivetest.ScriptedExecutor{
+				Events:    []native.StreamEvent{{Type: native.EventError, Code: string(apperror.CodeAgentProviderAuthFailed), Cause: delivered}},
+				Terminal:  terminal,
+				CommitErr: errors.New("write history: boom"),
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			terminal := native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndFailed}
+			admitter := &agenttest.ScriptedAdmitter{Started: true}
+			svc := newDriveService(&agenttest.EventRecorder{}, admitter)
+			delivery := &drivetest.RecordingDelivery{}
+
+			result := svc.Drive(context.Background(), drivetest.ScheduledSpec(tc.exec(&terminal), delivery))
+
+			want := string(apperror.CodeAgentProviderAuthFailed)
+			if result.End != outcome.EndFailed || result.Failure == nil || string(result.Failure.Code) != want {
+				t.Fatalf("result = %s / %#v, want failed with %s", result.End, result.Failure, want)
+			}
+			if len(admitter.Finishes) != 1 || admitter.Finishes[0].Message != want {
+				t.Fatalf("terminal writes = %#v, want one recording %s", admitter.Finishes, want)
+			}
+			events, ended, _ := delivery.Snapshot()
+			if len(ended) != 1 || ended[0].ErrorCode != want {
+				t.Fatalf("Ended = %#v, want %s", ended, want)
+			}
+			failures := 0
+			for _, ev := range events {
+				if ev.Event.Type == native.EventError {
+					failures++
+					if ev.Event.Code != want {
+						t.Fatalf("delivered failure code = %q, want %s", ev.Event.Code, want)
+					}
+				}
+			}
+			if failures != 1 {
+				t.Fatalf("delivered %d failure events, want the one the stream raised", failures)
+			}
+		})
+	}
+}

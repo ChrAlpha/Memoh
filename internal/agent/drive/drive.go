@@ -227,7 +227,9 @@ func (d *Driver) settleRun(
 	// An executor that named its own failure keeps that name: it is the one
 	// that knows where the failure came from. A bare cause is named from the
 	// stage it was reported in. Either way the failure counts as declared, so
-	// the stop and ownership rules see it in the right order.
+	// the stop and ownership rules see it in the right order. The first failure
+	// declared names the run: when the stream already declared one, the
+	// executor's own is a later diagnostic and is only logged.
 	var named *outcome.RunFailure
 	if ending != nil {
 		named = ending.Failure
@@ -236,14 +238,21 @@ func (d *Driver) settleRun(
 			named = &outcome.RunFailure{Code: code, Args: args, Cause: ending.Cause, Phase: ending.Phase}
 		}
 	}
-	if named != nil && facts.Declared == nil {
+	namedFirst := named != nil && facts.Declared == nil
+	if named != nil && !namedFirst {
+		d.logger.WarnContext(runCtx, "run failure after the one already declared",
+			slog.String("run_id", spec.Run.Handle.RunID),
+			slog.String("code", string(named.Code)),
+			slog.Any("error", named.Cause))
+	}
+	if namedFirst {
 		facts.Declared = named.Cause
 		facts.Phase = named.Phase
 		facts.StoppedAtDeclare = outcome.RunStopped(runCtx)
 	}
 	end, failure := outcome.NameRunEnd(facts)
-	if named != nil && end == outcome.EndFailed {
-		end, failure = outcome.EndFailed, named
+	if namedFirst && end == outcome.EndFailed {
+		failure = named
 	}
 
 	// A lost run writes no history: another owner names its outcome. A stop
