@@ -1,0 +1,50 @@
+{
+  "tested_head": "bd515be7fa05fc8a4cf315ca75964e81594a68f6",
+  "baseline": "02f8b75328a624ddb79f96e016cd15ca4641a1ff",
+  "date": "2026-10-18",
+  "model": "mimo-v2.6-flash",
+  "live": {
+    "head": {
+      "correct_facts": 6,
+      "required_facts": 6,
+      "completed_turns": 7,
+      "attempted_turns": 7,
+      "reported_total_tokens": 60237,
+      "missing_usage_calls": 0
+    },
+    "base": {
+      "correct_facts": 6,
+      "required_facts": 6,
+      "completed_turns": 7,
+      "attempted_turns": 7,
+      "reported_total_tokens": 61974,
+      "missing_usage_calls": 1
+    }
+  },
+  "stress32": {
+    "head": {
+      "correct_facts": 32,
+      "required_facts": 32,
+      "completed_turns": 33,
+      "attempted_turns": 33,
+      "summary_calls": 31,
+      "request_bytes": 7958214
+    },
+    "base": {
+      "correct_facts": 1,
+      "required_facts": 32,
+      "completed_turns": 33,
+      "attempted_turns": 33,
+      "summary_calls": 6,
+      "request_bytes": 4439360
+    }
+  },
+  "known_limitations": [
+    "High-pressure Discuss deadlock and budget failure",
+    "Actual summary repeats current-request fact",
+    "One live task per variant; one baseline 502 has unknown token usage",
+    "Automated UI, not Human QA",
+    "Screenshots and E2E belong to bd515be7f, before the later stack merge"
+  ],
+  "cleanup": true
+}
