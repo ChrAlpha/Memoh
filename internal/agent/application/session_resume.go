@@ -314,7 +314,7 @@ func (s *Service) resumeInterruptedSession(ctx context.Context, row sqlc.Session
 		Input:    outcome.InputSynthetic,
 	}
 	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
-		return s.chatSetup(ctx, req, spec)
+		return s.plan.ChatSetup(ctx, req, spec)
 	}
 
 	done := make(chan struct{})

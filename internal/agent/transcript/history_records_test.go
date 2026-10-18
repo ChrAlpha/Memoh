@@ -11,8 +11,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
-	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
-	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -230,31 +228,15 @@ func TestHistoryScopeFallbackFromChatRequestUsesRequestTopology(t *testing.T) {
 	}
 }
 
-func TestResumeHistoryFallbackDoesNotUseBotIDAsChatID(t *testing.T) {
+func TestDecisionHistoryFallbackCarriesOnlyTheRecordedTopology(t *testing.T) {
 	t.Parallel()
 
-	userInputFallback := ScopeFallbackFromUserInputRequest(userinput.Request{
-		BotID:            "bot-1",
-		ConversationType: "group",
-		ReplyTarget:      "target-1",
-	})
-	if userInputFallback.ChatID != "" {
-		t.Fatalf("user input fallback ChatID = %q, want empty", userInputFallback.ChatID)
+	got := ScopeFallbackFromDecision(" group ", " target-1 ")
+	if got.ChatID != "" {
+		t.Fatalf("decision fallback ChatID = %q, want empty", got.ChatID)
 	}
-	if userInputFallback.ConversationType != "group" || userInputFallback.ReplyTarget != "target-1" {
-		t.Fatalf("user input fallback lost topology: %#v", userInputFallback)
-	}
-
-	approvalFallback := ScopeFallbackFromToolApprovalRequest(toolapproval.Request{
-		BotID:            "bot-1",
-		ConversationType: "direct",
-		ReplyTarget:      "target-2",
-	})
-	if approvalFallback.ChatID != "" {
-		t.Fatalf("approval fallback ChatID = %q, want empty", approvalFallback.ChatID)
-	}
-	if approvalFallback.ConversationType != "direct" || approvalFallback.ReplyTarget != "target-2" {
-		t.Fatalf("approval fallback lost topology: %#v", approvalFallback)
+	if got.ConversationType != "group" || got.ReplyTarget != "target-1" {
+		t.Fatalf("decision fallback lost topology: %#v", got)
 	}
 }
 

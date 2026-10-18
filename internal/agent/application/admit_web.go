@@ -214,7 +214,7 @@ func (s *Service) enqueueWebRun(ctx context.Context, in WebAdmitInput) (*WebAdmi
 func (s *Service) RunWebSend(admission *WebAdmission, req runreq.ChatRequest, delivery drive.RunDelivery) {
 	spec := s.webRunSpec(admission, req, delivery, outcome.InputHeld)
 	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
-		return s.chatSetup(ctx, req, spec)
+		return s.plan.ChatSetup(ctx, req, spec)
 	}
 	s.startWebRun(admission, spec)
 }

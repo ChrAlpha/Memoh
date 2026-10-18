@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/activeprompt"
 	"github.com/felinics/memoh/internal/agent/admit"
@@ -25,6 +23,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/plan"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -74,14 +73,13 @@ type Service struct {
 	decider         *decide.Decider
 	memory          *memory.Keeper
 	compact         *compact.Compactor
-	// continueUserInputFn overrides the application resume after a user input
-	// response; nil means storeUserInputResultAndContinue. Test seam.
-	continueUserInputFn func(ctx context.Context, req userinput.Request, input decide.UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error)
-	logger              *slog.Logger
-	allowedTeam         string
-	sessionRuntime      runreq.TurnAdmitter
-	decisionRuntime     *sessionruntime.Manager
-	sessionManager      *sessionruntime.Manager
+	plan            *plan.Planner
+	continuer       continuer
+	logger          *slog.Logger
+	allowedTeam     string
+	sessionRuntime  runreq.TurnAdmitter
+	decisionRuntime *sessionruntime.Manager
+	sessionManager  *sessionruntime.Manager
 	// queue is the durable queue of input that met a busy session. It is nil
 	// where the deployment has no database, and then nothing queues.
 	queue queuedInputStore
@@ -382,6 +380,23 @@ func New(d Deps) (*Service, error) {
 		Credentials: providers.NewService(nil, d.Queries, ""),
 		Events:      d.Events,
 	})
+	service.plan = plan.New(plan.Deps{
+		Logger:     d.Logger.With(slog.String("service", "agent/plan")),
+		Store:      d.Queries,
+		Agent:      d.Agent,
+		Runtime:    d.SessionRuntime,
+		Executions: approvalExecutions{queries: d.Queries},
+		Admit:      service.admit,
+		Bot:        service.botenv,
+		Transcript: service.transcript,
+		Lifecycle:  service.lifecycle,
+		Persist:    service.persist,
+		Compact:    service.compact,
+		Runconfig:  service.runconfig,
+		External:   service.externalrun,
+		Title:      service.title,
+	})
+	service.continuer = service.plan
 	service.bindSessionRuntime(d.SessionRuntime)
 	return service, nil
 }

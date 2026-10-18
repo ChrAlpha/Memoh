@@ -111,7 +111,7 @@ func (s *Service) retryRunSpec(admission *WebAdmission, input RetryLatestMessage
 		}
 		req.HistoryCutoffBeforeMessageID = cutoffMessageID
 		req.RequiredHistoryMessageID = requestMessage.ID
-		return s.chatSetup(ctx, replace.target(ctx, req, requestMessage.ID), spec)
+		return s.plan.ChatSetup(ctx, replace.target(ctx, req, requestMessage.ID), spec)
 	}
 	return spec
 }
@@ -160,7 +160,7 @@ func (s *Service) editRunSpec(admission *WebAdmission, input EditLatestMessageIn
 			return drive.RunPlan{}, err
 		}
 		req.HistoryCutoffBeforeMessageID = strings.TrimSpace(turn.RequestMessageID)
-		return s.chatSetup(ctx, replace.target(ctx, req, ""), spec)
+		return s.plan.ChatSetup(ctx, replace.target(ctx, req, ""), spec)
 	}
 	return spec
 }

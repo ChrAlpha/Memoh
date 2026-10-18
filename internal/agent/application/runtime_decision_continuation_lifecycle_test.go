@@ -6,10 +6,10 @@ import (
 	"sync"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/decide"
-	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
-	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -32,13 +32,20 @@ func (s *unavailableContinuationMessageService) Persist(
 	return messagepkg.Message{}, s.err
 }
 
+// PersistRound refuses the rows of an assistant: the stored answer of the
+// decision is a tool row, which is written.
 func (s *unavailableContinuationMessageService) PersistRound(
-	context.Context,
-	[]messagepkg.PersistInput,
-	messagepkg.RoundPersistenceOptions,
+	ctx context.Context,
+	inputs []messagepkg.PersistInput,
+	options messagepkg.RoundPersistenceOptions,
 ) ([]messagepkg.Message, bool, error) {
-	s.calls++
-	return nil, true, s.err
+	for _, input := range inputs {
+		if input.Role == "assistant" {
+			s.calls++
+			return nil, true, s.err
+		}
+	}
+	return s.RecordingMessages.PersistRound(ctx, inputs, options)
 }
 
 type continuationRunConfigCapture struct {
@@ -75,27 +82,25 @@ var continuationSessions = []struct {
 	{
 		name: "user input",
 		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (drive.RunPlan, error) {
-			return service.continueUserInputSession(ctx,
-				userinput.Request{
-					ID: "user-input", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
-					ToolCallID: "ask-user-call", ToolName: "ask_user", SourcePlatform: "web",
-				},
-				decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID},
-				req, false,
-			)
+			return service.plan.Continue(ctx, decide.DecidedCall{
+				Kind: decide.CallUserInput, Verdict: decide.VerdictAnswered,
+				DecisionID: "user-input", BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
+				SessionID: agenttest.LifecycleSessionID, SourcePlatform: "web",
+				ToolCallID: "ask-user-call", ToolName: "ask_user",
+				Result: sdk.ToolResultPart{ToolCallID: "ask-user-call", ToolName: "ask_user", Result: sdk.TextOutput("answer")},
+			}, req, false)
 		},
 	},
 	{
 		name: "tool approval",
 		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (drive.RunPlan, error) {
-			return service.continueToolApprovalSession(ctx,
-				toolapproval.Request{
-					ID: "tool-approval", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
-					ToolCallID: "approved-tool-call", ToolName: "container_exec", SourcePlatform: "web",
-				},
-				decide.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID},
-				req, false,
-			)
+			return service.plan.Continue(ctx, decide.DecidedCall{
+				Kind: decide.CallToolApproval, Verdict: decide.VerdictRejected,
+				DecisionID: "tool-approval", BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
+				SessionID: agenttest.LifecycleSessionID, SourcePlatform: "web",
+				ToolCallID: "approved-tool-call", ToolName: "container_exec",
+				Result: sdk.ToolResultPart{ToolCallID: "approved-tool-call", ToolName: "container_exec", Result: sdk.TextOutput("rejected"), IsError: true},
+			}, req, false)
 		},
 	},
 }
@@ -116,6 +121,7 @@ func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAg
 				Logger:             fixture.service.logger,
 				ContextViewApplier: capture.apply,
 			})
+			rewirePlan(fixture.service)
 
 			plan, err := tt.resolve(context.Background(), fixture.service, continuationSessionRequest())
 			if err != nil {

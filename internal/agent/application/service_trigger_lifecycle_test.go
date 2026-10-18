@@ -107,6 +107,7 @@ func configureTriggerLifecycleContextView(
 			return out
 		},
 	})
+	rewirePlan(fixture.service)
 	return provider
 }
 

@@ -77,6 +77,7 @@ func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFix
 		Logger:             logger,
 		ContextViewApplier: applier,
 	})
+	rewirePlan(fixture.service)
 	return chatTurnFixture{fixture: fixture, admitter: admitter}
 }
 

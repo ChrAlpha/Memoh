@@ -13,12 +13,10 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
-	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
-	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -351,31 +349,47 @@ func continuationContext(ctx context.Context) (context.Context, func()) {
 	}
 }
 
-// nativeContinuationPlan resolves the built-in agent run that resumes after an
-// answered decision. Its steps commit through the live queue the run was
-// admitted with, so the resumed steps continue the parked run's numbering.
-func (s *Service) nativeContinuationPlan(ctx context.Context, req runreq.ChatRequest, cfg native.RunConfig, modelID string) (drive.RunPlan, error) {
-	rc := runreq.ResolvedContext{RunConfig: cfg, Model: models.GetResponse{ID: modelID}}
-	committer, err := s.bindQueueContinuation(ctx, &req, &cfg, rc)
-	if err != nil {
-		return drive.RunPlan{}, err
+// continuer is what resuming an answered decision needs of the plan unit: the
+// plan of the run that continues from it.
+type continuer interface {
+	Continue(ctx context.Context, call decide.DecidedCall, req runreq.ChatRequest, live bool) (drive.RunPlan, error)
+}
+
+// decidedContinuation is the run an answered decision resumes: the decided
+// call's result is stored as the answer to the call the run parked on, and the
+// model runs on from there. live says whether a caller receives the run's
+// events as they happen.
+func (s *Service) decidedContinuation(ctx context.Context, call decide.DecidedCall, live bool) decisionContinuation {
+	requestMessageID, reqErr := s.transcript.ContinuationRequestMessageID(ctx, call.SessionID, call.RunHandle)
+	req := runreq.ChatRequest{
+		RunID:                   runreq.RunID(call.RunID),
+		RunHandle:               call.RunHandle,
+		BotID:                   call.BotID,
+		ChatID:                  call.BotID,
+		ThreadID:                call.SessionID,
+		SourceChannelIdentityID: call.ChannelIdentityID,
+		CurrentChannel:          call.SourcePlatform,
+		ReplyTarget:             call.ReplyTarget,
+		ConversationType:        call.ConversationType,
+		UserMessagePersisted:    true,
+		PersistedUserMessageID:  requestMessageID,
+		// An answer stored as a tool result schedules no user-message memory
+		// extraction.
+		SkipMemoryExtraction: call.SkipMemoryExtraction,
+		WorkspaceTargetID:    call.WorkspaceTargetID,
 	}
-	timing := persist.NewReasoningTimingTracker(nil)
-	persist.ConfigureNativeReasoningTiming(&cfg, timing, committer)
-	s.compact.BindStep(&cfg, req, committer)
-	rc.RunConfig = cfg
-	return drive.RunPlan{
-		Exec: &nativeExecutor{
-			agent:     s.agent,
-			cfg:       cfg,
-			rc:        rc,
-			req:       req,
-			committer: committer,
-			timing:    timing,
-			service:   s,
+	return decisionContinuation{
+		Req: req,
+		// The resumed run is the driver's request, which carries the per-run
+		// asset collector. Everything else in it is what this entry built.
+		Setup: func(ctx context.Context, runReq runreq.ChatRequest) (drive.RunPlan, error) {
+			if reqErr != nil {
+				return drive.RunPlan{}, reqErr
+			}
+			if err := call.Validate(); err != nil {
+				return drive.RunPlan{}, err
+			}
+			return s.continuer.Continue(ctx, call, runReq, live)
 		},
-		Req:        req,
-		IdleEffort: drive.ReasoningEffortForIdle(cfg),
-		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
-	}, nil
+	}
 }

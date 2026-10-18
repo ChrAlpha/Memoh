@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -16,11 +18,12 @@ import (
 // The native schedule entry resolves the workspace itself, ahead of resolve,
 // so a bound target that cannot be reached fails the fire instead of running
 // in the wrong place.
-func TestNativeSchedulePlanBindsWorkspaceBeforeResolve(t *testing.T) {
+func TestNativeScheduleSetupBindsWorkspaceBeforeResolve(t *testing.T) {
 	boom := errors.New("target unreachable")
 	service := workdirBoundService(agenttest.RemoteWorkdir(), agenttest.KindedTargetResolver{Err: boom}, nil)
 
-	_, err := service.nativeSchedulePlan(t.Context(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "owner-1"}, schedule.TriggerPayload{OwnerUserID: "owner-1"})
+	setup := service.plan.ScheduleSetup(drive.RunSpec{}, schedule.TriggerPayload{OwnerUserID: "owner-1"}, "bot-1", "", externalrun.Dispatch{Kind: externalrun.DispatchNative})
+	_, err := setup(t.Context(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "owner-1"})
 	if !errors.Is(err, boom) {
 		t.Fatalf("err = %v, want the workspace resolution failure", err)
 	}

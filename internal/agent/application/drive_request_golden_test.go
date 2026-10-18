@@ -574,10 +574,9 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 		ToolCallID: approval.ToolCallID, ToolName: approval.ToolName,
 		Result: sdk.TextOutput("command finished"),
 	}
-	cont := fixture.service.toolApprovalContinuation(context.Background(), decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, sessionruntime.RunHandle{}), true)
-	cont.Setup = func(ctx context.Context, runReq runreq.ChatRequest) (drive.RunPlan, error) {
-		return fixture.service.storeToolResultAndContinue(ctx, approval, input, result, nil, runReq, true)
-	}
+	call := fixture.service.decider.ToolApprovalCall(decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, sessionruntime.RunHandle{}))
+	call.Verdict, call.Result = decide.VerdictAnswered, result
+	cont := fixture.service.decidedContinuation(context.Background(), call, true)
 	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
 		return fixture.service.driveUnroutedContinuation(context.Background(), cont, eventCh)
 	})

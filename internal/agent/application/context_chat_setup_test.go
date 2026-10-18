@@ -170,6 +170,7 @@ func newHookChatFixture(t *testing.T, workspace *hookWorkspace) chatTurnFixture 
 		Bridge:   service.agent.BridgeProvider(),
 		Hooks:    hooks.NewService(service.logger, newHookWorkspaceBridge(t, workspace)),
 	})
+	rewirePlan(service)
 	return fixture
 }
 
@@ -212,7 +213,7 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"allow"}`)
 	service := fixture.fixture.service
 
-	if _, err := service.chatSetup(context.Background(), runreq.ChatRequest{
+	if _, err := service.plan.ChatSetup(context.Background(), runreq.ChatRequest{
 		BotID:           agenttest.LifecycleBotID,
 		ChatID:          agenttest.LifecycleBotID,
 		ThreadID:        agenttest.LifecycleSessionID,
@@ -221,7 +222,7 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
 	}, drive.RunSpec{}); err != nil {
-		t.Fatalf("chatSetup() error = %v", err)
+		t.Fatalf("ChatSetup() error = %v", err)
 	}
 	if workspace.callCount() != 1 {
 		t.Fatalf("hook calls = %d, want the retry to pass through the hook once", workspace.callCount())
@@ -234,7 +235,7 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 func TestChatSetupRetryOfAnAnsweredTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
-	if _, err := fixture.fixture.service.chatSetup(context.Background(), runreq.ChatRequest{
+	if _, err := fixture.fixture.service.plan.ChatSetup(context.Background(), runreq.ChatRequest{
 		BotID:                     agenttest.LifecycleBotID,
 		ChatID:                    agenttest.LifecycleBotID,
 		ThreadID:                  agenttest.LifecycleSessionID,
@@ -244,7 +245,7 @@ func TestChatSetupRetryOfAnAnsweredTurnSkipsTheHook(t *testing.T) {
 		UserVisibleText:           directLifecyclePrompt,
 		ReusePersistedUserMessage: true,
 	}, drive.RunSpec{}); err != nil {
-		t.Fatalf("chatSetup() error = %v", err)
+		t.Fatalf("ChatSetup() error = %v", err)
 	}
 	if workspace.callCount() != 0 {
 		t.Fatalf("hook calls = %d, want none for a reused user message", workspace.callCount())
@@ -282,7 +283,7 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 		}},
 		Replacement: &drive.TurnReplacement{},
 	}
-	_, err := service.chatSetup(context.Background(), runreq.ChatRequest{
+	_, err := service.plan.ChatSetup(context.Background(), runreq.ChatRequest{
 		BotID:           agenttest.LifecycleBotID,
 		ChatID:          agenttest.LifecycleBotID,
 		ThreadID:        agenttest.LifecycleSessionID,
@@ -295,7 +296,7 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 		t.Fatal("an External Agent runtime accepted a replacement turn")
 	}
 	if got := apperror.CodeOf(err); got != apperror.CodeExternalAgentTurnReplacementUnsupported {
-		t.Fatalf("chatSetup() error code = %q, want %q", got, apperror.CodeExternalAgentTurnReplacementUnsupported)
+		t.Fatalf("ChatSetup() error code = %q, want %q", got, apperror.CodeExternalAgentTurnReplacementUnsupported)
 	}
 }
 
@@ -305,7 +306,7 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 func TestChatSetupReplacementTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
-	_, err := fixture.fixture.service.chatSetup(context.Background(), runreq.ChatRequest{
+	_, err := fixture.fixture.service.plan.ChatSetup(context.Background(), runreq.ChatRequest{
 		BotID:           agenttest.LifecycleBotID,
 		ChatID:          agenttest.LifecycleBotID,
 		ThreadID:        agenttest.LifecycleSessionID,
@@ -315,7 +316,7 @@ func TestChatSetupReplacementTurnSkipsTheHook(t *testing.T) {
 		UserVisibleText: directLifecyclePrompt,
 	}, drive.RunSpec{Replacement: &drive.TurnReplacement{}})
 	if err != nil {
-		t.Fatalf("chatSetup() error = %v", err)
+		t.Fatalf("ChatSetup() error = %v", err)
 	}
 	if workspace.callCount() != 0 {
 		t.Fatalf("hook calls = %d, want none for a replacement turn", workspace.callCount())

@@ -1,4 +1,4 @@
-package application
+package plan
 
 import (
 	"context"
@@ -12,11 +12,11 @@ import (
 	"github.com/felinics/memoh/internal/models"
 )
 
-// writeBackSessionModelPreference persists the resolved pair only when the
+// writeBackModelPreference persists the resolved pair only when the
 // request carries one. Every carried send advances the revision, even when
 // its value matches, so an older picker PATCH cannot overwrite that send.
 // Writes remain best-effort: failures are logged and the next send retries.
-func (s *Service) writeBackSessionModelPreference(ctx context.Context, sessionIDRaw string, carriesPair bool, chatModel models.GetResponse, reasoning *models.ReasoningConfig) {
+func (p *Planner) writeBackModelPreference(ctx context.Context, sessionIDRaw string, carriesPair bool, chatModel models.GetResponse, reasoning *models.ReasoningConfig) {
 	if !carriesPair {
 		return
 	}
@@ -42,12 +42,12 @@ func (s *Service) writeBackSessionModelPreference(ctx context.Context, sessionID
 	}
 	// Every carried send advances the revision, including an unchanged pair.
 	// Otherwise a picker still comparing against this revision could overwrite it.
-	if err := s.queries.UpdateSessionModelPreference(ctx, sqlc.UpdateSessionModelPreferenceParams{
+	if err := p.store.UpdateSessionModelPreference(ctx, sqlc.UpdateSessionModelPreferenceParams{
 		ID:                       sessionID,
 		PreferredChatModelID:     modelID,
 		PreferredReasoningEffort: pgtype.Text{String: effort, Valid: effort != ""},
 	}); err != nil {
-		s.logger.WarnContext(ctx, "write-back session model preference",
+		p.logger.WarnContext(ctx, "write-back session model preference",
 			slog.String("session_id", sessionIDRaw),
 			slog.Any("error", err),
 		)

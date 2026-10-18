@@ -1,4 +1,4 @@
-package application
+package plan
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/outcome"
-	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -17,25 +16,25 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 )
 
-// chatSetup is the Setup function for chat-type entries: Web send/retry/edit,
+// ChatSetup is the Setup function for chat-type entries: Web send/retry/edit,
 // IM, follow-up, and resume. It handles skill checks, runtime dispatch,
 // workspace preparation, replacement preflight, user-message hook, resolve,
 // title generation, and executor construction.
-func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec) (drive.RunPlan, error) {
+func (p *Planner) ChatSetup(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec) (drive.RunPlan, error) {
 	// The intent is recorded before anything else: it is what lets a later
 	// process resume this run after a crash, and it has to name the run's
 	// input as it arrived rather than as setup rewrote it.
-	if err := s.admit.RecordResume(ctx, req); err != nil {
+	if err := p.admit.RecordResume(ctx, req); err != nil {
 		return drive.RunPlan{}, err
 	}
 	if err := runreq.RejectReservedSkillMetadataIfPresent(req); err != nil {
 		return drive.RunPlan{}, err
 	}
-	if err := s.runconfig.RejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
+	if err := p.runconfig.RejectRequestedSkillsIfUnsupportedContext(ctx, req); err != nil {
 		return drive.RunPlan{}, err
 	}
 
-	dispatch, err := s.externalrun.ResolveDispatch(ctx, req)
+	dispatch, err := p.externalrun.ResolveDispatch(ctx, req)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
@@ -53,10 +52,10 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		// A runtime that owns its conversation context is prompted with what
 		// the entry resolved rather than with a query: discuss hands it the
 		// whole batch, which is history and not a message of its own.
-		return s.externalRunPlan(ctx, req, spec, dispatch.Driver)
+		return p.externalRunPlan(ctx, req, spec, dispatch.Driver)
 	}
 
-	ctx, req, err = s.runconfig.BindRequestWorkspace(ctx, req, runconfig.UserPrincipal(req), false)
+	ctx, req, err = p.runconfig.BindRequestWorkspace(ctx, req, runconfig.UserPrincipal(req), false)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
@@ -77,7 +76,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	// pass through the hook again.
 	shouldRunHook := !req.UserMessagePersisted && !req.ReusePersistedUserMessage && spec.Replacement == nil
 	if shouldRunHook {
-		req, err = s.botenv.ApplyUserMessageHook(ctx, req)
+		req, err = p.bot.ApplyUserMessageHook(ctx, req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return drive.RunPlan{}, err
@@ -86,56 +85,36 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		}
 	}
 
-	rc, req, err := s.runconfig.Resolve(ctx, req)
+	rc, req, err := p.runconfig.Resolve(ctx, req)
 	if err != nil {
 		return drive.RunPlan{}, fmt.Errorf("resolve: %w", err)
 	}
-	s.settleResolved(ctx, req, &rc)
+	p.settleResolved(ctx, req, &rc)
 	req.Query = rc.Query
 	req.RunID = rc.RunConfig.RunID
 
-	s.title.MaybeGenerate(context.WithoutCancel(ctx), req, req.RawQuery)
+	p.title.MaybeGenerate(context.WithoutCancel(ctx), req, req.RawQuery)
 
-	cfg := rc.RunConfig
-	cfg.LiveToolStream = true
 	// Whether this run may park on a question follows the process's user input
 	// port, not its delivery end: an interruption resumed from the last process
 	// keeps asking the same way the inbound message that started it did.
-	cfg.CanRequestUserInput = true
-
-	reasoningTiming := persist.NewReasoningTimingTracker(nil)
-	var stepCommitter *persist.StepCommitter
-	if !spec.Unattended {
-		stepCommitter = s.persist.NewStepCommitter(ctx, req, rc)
-		persist.ConfigureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
-		if stepCommitter != nil {
-			stepCommitter.BindContinuation(&cfg)
-		}
+	opts := nativeOptions{
+		LiveToolStream:      true,
+		CanRequestUserInput: true,
+		Steps:               stepsFresh,
+		Replacement:         spec.Replacement,
 	}
-	cfg = s.runconfig.Prepare(ctx, cfg)
-	s.compact.BindStep(&cfg, req, stepCommitter)
-
+	if spec.Unattended {
+		opts.Steps = stepsOff
+	}
+	plan, err := p.nativePlan(ctx, req, rc, rc.RunConfig, opts)
+	if err != nil {
+		return drive.RunPlan{}, err
+	}
 	if req.OnModelPreferenceSettled != nil {
 		req.OnModelPreferenceSettled()
 	}
-
-	exec := &nativeExecutor{
-		agent:     s.agent,
-		cfg:       cfg,
-		rc:        rc,
-		req:       req,
-		committer: stepCommitter,
-		timing:    reasoningTiming,
-		replace:   spec.Replacement,
-		service:   s,
-	}
-
-	return drive.RunPlan{
-		Exec:       exec,
-		Req:        req,
-		IdleEffort: drive.ReasoningEffortForIdle(cfg),
-		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
-	}, nil
+	return plan, nil
 }
 
 // externalRunPlan resolves a run an External Agent runtime executes, for every
@@ -147,8 +126,8 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 // something else cannot forget to pass it. The plan carries the context
 // lifecycle the run's context sections build, so the lifecycle row of a
 // runtime's turn records what the runtime was given, whoever started it.
-func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec, driver external.Driver) (drive.RunPlan, error) {
-	plan, req, err := s.externalrun.Prepare(ctx, req, driver)
+func (p *Planner) externalRunPlan(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec, driver external.Driver) (drive.RunPlan, error) {
+	plan, req, err := p.externalrun.Prepare(ctx, req, driver)
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
@@ -165,7 +144,7 @@ func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, s
 		ContextLifecycle: lifecycle,
 	}
 	return drive.RunPlan{
-		Exec: s.externalrun.NewExecutor(externalrun.ExecutorSpec{
+		Exec: p.externalrun.NewExecutor(externalrun.ExecutorSpec{
 			Plan:       plan,
 			Req:        req,
 			Unattended: spec.Unattended,
@@ -175,6 +154,6 @@ func (s *Service) externalRunPlan(ctx context.Context, req runreq.ChatRequest, s
 		}),
 		Req:        req,
 		IdleEffort: req.ReasoningEffort,
-		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
+		Lifecycle:  p.lifecycle.Terminal(ctx, cfg),
 	}, nil
 }

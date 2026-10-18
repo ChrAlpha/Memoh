@@ -9,8 +9,6 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
-	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
-	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
@@ -120,17 +118,13 @@ func scopeFallbackFromChatRequest(req runreq.ChatRequest) historyfrag.ScopeFallb
 	}
 }
 
-func ScopeFallbackFromUserInputRequest(req userinput.Request) historyfrag.ScopeFallback {
+// ScopeFallbackFromDecision is the conversation scope a decision continuation
+// falls back to when the history it reads names none: the conversation type and
+// reply target the decision recorded.
+func ScopeFallbackFromDecision(conversationType, replyTarget string) historyfrag.ScopeFallback {
 	return historyfrag.ScopeFallback{
-		ConversationType: strings.TrimSpace(req.ConversationType),
-		ReplyTarget:      strings.TrimSpace(req.ReplyTarget),
-	}
-}
-
-func ScopeFallbackFromToolApprovalRequest(req toolapproval.Request) historyfrag.ScopeFallback {
-	return historyfrag.ScopeFallback{
-		ConversationType: strings.TrimSpace(req.ConversationType),
-		ReplyTarget:      strings.TrimSpace(req.ReplyTarget),
+		ConversationType: strings.TrimSpace(conversationType),
+		ReplyTarget:      strings.TrimSpace(replyTarget),
 	}
 }
 

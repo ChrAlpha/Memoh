@@ -141,15 +141,14 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 		Resolved: chatResolvedRequest(),
 	}
 	var continued *sdk.ToolResultPart
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(_ context.Context, req userinput.Request, _ decide.UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error) {
-			if req.ID != "input-1" {
-				t.Errorf("continued request = %#v", req)
-			}
-			continued = &result
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(_ context.Context, call decide.DecidedCall, _ runreq.ChatRequest, _ bool) (drive.RunPlan, error) {
+		if call.DecisionID != "input-1" {
+			t.Errorf("continued call = %#v", call)
+		}
+		result := call.Result
+		continued = &result
+		return completedContinuation(), nil
+	}))
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
 	answers := []userinput.QuestionAnswer{{QuestionID: "q1", OptionIDs: []string{"q1.o1"}}}
@@ -213,20 +212,18 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	releaseContinuation := make(chan struct{})
 	continuationStarted := make(chan struct{})
 	var continuationStartedOnce sync.Once
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			continuationStartedOnce.Do(func() { close(continuationStarted) })
-			return drive.RunPlan{Exec: runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
-				select {
-				case <-releaseContinuation:
-				case <-ctx.Done():
-					return drive.ExecEnding{Cause: ctx.Err(), Phase: outcome.PhaseExecution}
-				}
-				emit(native.StreamEvent{Type: native.EventAgentStart})
-				return drive.ExecEnding{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}
-			})}, nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		continuationStartedOnce.Do(func() { close(continuationStarted) })
+		return drive.RunPlan{Exec: runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
+			select {
+			case <-releaseContinuation:
+			case <-ctx.Done():
+				return drive.ExecEnding{Cause: ctx.Err(), Phase: outcome.PhaseExecution}
+			}
+			emit(native.StreamEvent{Type: native.EventAgentStart})
+			return drive.ExecEnding{Terminal: &native.StreamEvent{Type: native.EventAgentEnd}}
+		})}, nil
+	}))
 	manager := sessiontest.New(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
 		OwnerID:       "owner-1",
 		StateTTL:      time.Minute,
@@ -357,13 +354,13 @@ func TestRespondUserInputLimitsChatToolResult(t *testing.T) {
 		Resolved: resolved,
 	}
 	var continued *sdk.ToolResultPart
-	resolver := useDecisions(wireComponents(&Service{
+	resolver := useContinuer(useDecisions(wireComponents(&Service{
 		agent: native.New(native.Deps{Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80}}),
-		continueUserInputFn: func(_ context.Context, _ userinput.Request, _ decide.UserInputResponseInput, result sdk.ToolResultPart) (drive.RunPlan, error) {
-			continued = &result
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(_ context.Context, call decide.DecidedCall, _ runreq.ChatRequest, _ bool) (drive.RunPlan, error) {
+		result := call.Result
+		continued = &result
+		return completedContinuation(), nil
+	}))
 
 	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:    "bot-1",
@@ -411,12 +408,10 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			t.Error("ACP request must not continue the chat session; the blocked waiter resumes it")
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		t.Error("ACP request must not continue the chat session; the blocked waiter resumes it")
+		return completedContinuation(), nil
+	}))
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -451,12 +446,10 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			t.Error("already-decided ACP request must not continue the chat session")
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		t.Error("already-decided ACP request must not continue the chat session")
+		return completedContinuation(), nil
+	}))
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -492,12 +485,10 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			t.Error("ACP request must not continue the session in this response handler")
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		t.Error("ACP request must not continue the session in this response handler")
+		return completedContinuation(), nil
+	}))
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -540,12 +531,10 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			t.Error("ACP request must resume through the active ACP prompt")
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		t.Error("ACP request must resume through the active ACP prompt")
+		return completedContinuation(), nil
+	}))
 	attachACPUserInputAuth(resolver)
 	hub := resolver.activePrompts.Register("bot-1", "session-1")
 	if hub == nil {
@@ -625,12 +614,10 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 		RespondAllowed:    true,
 		RespondAllowedSet: true,
 	}
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			t.Error("ACP request must not continue the chat session")
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		t.Error("ACP request must not continue the chat session")
+		return completedContinuation(), nil
+	}))
 	attachACPUserInputAuth(resolver)
 	hub := resolver.activePrompts.Register("bot-1", "session-1")
 	if hub == nil {
@@ -673,12 +660,10 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 		RespondAllowedSet: true,
 		RespondAllowed:    false,
 	}
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			t.Error("orphaned ACP request must not continue the chat session")
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		t.Error("orphaned ACP request must not continue the chat session")
+		return completedContinuation(), nil
+	}))
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
@@ -713,12 +698,10 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 		Resolved: chatResolvedRequest(),
 	}
 	continueCalls := 0
-	resolver := useDecisions(wireComponents(&Service{
-		continueUserInputFn: func(context.Context, userinput.Request, decide.UserInputResponseInput, sdk.ToolResultPart) (drive.RunPlan, error) {
-			continueCalls++
-			return completedContinuation(), nil
-		},
-	}), func(d *decide.Deps) { d.UserInput = fake })
+	resolver := useContinuer(useDecisions(wireComponents(&Service{}), func(d *decide.Deps) { d.UserInput = fake }), continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
+		continueCalls++
+		return completedContinuation(), nil
+	}))
 
 	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:    "bot-1",

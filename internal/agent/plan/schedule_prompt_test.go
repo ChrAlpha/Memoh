@@ -1,4 +1,4 @@
-package application
+package plan
 
 import (
 	"context"
@@ -101,8 +101,7 @@ func triggerResolvedRunConfig(provider sdk.Provider, rawQuery string, now time.T
 func runTriggerPromptPipeline(t *testing.T, cfg agentpkg.RunConfig, provider *triggerCaptureProvider) (agentpkg.RunConfig, sdk.Request) {
 	t.Helper()
 	ctx := context.Background()
-	service := wireComponents(&Service{logger: slog.Default()})
-	cfg = service.runconfig.Prepare(ctx, cfg)
+	cfg = newTestBuilder().Prepare(ctx, cfg)
 
 	recorder := &triggerViewRecorder{}
 	agent := agentpkg.New(agentpkg.Deps{ContextViewApplier: recorder.apply})

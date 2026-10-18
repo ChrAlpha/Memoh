@@ -102,7 +102,7 @@ func TestScheduleSetupCarriesTheAdmittedTurnIdentity(t *testing.T) {
 		Run: drive.AdmittedRun{Handle: sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-9", FencingToken: 1}, TurnID: "turn-9", TurnPosition: &position},
 		Req: runreq.ChatRequest{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID},
 	}
-	setup := service.scheduleSetup(spec, schedule.TriggerPayload{
+	setup := service.plan.ScheduleSetup(spec, schedule.TriggerPayload{
 		FireID: "fire-1", ID: "schedule-1", SessionID: agenttest.LifecycleSessionID, Command: "inspect", OwnerUserID: "user-1",
 	}, agenttest.LifecycleBotID, "", externalrun.Dispatch{Kind: externalrun.DispatchExternal, Driver: driver})
 

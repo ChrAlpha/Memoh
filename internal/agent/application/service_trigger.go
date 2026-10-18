@@ -10,12 +10,8 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/outcome"
-	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
-	"github.com/felinics/memoh/internal/agent/runtime/external"
-	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	chatview "github.com/felinics/memoh/internal/agent/view"
@@ -100,7 +96,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 		Input:      outcome.InputSynthetic,
 		Unattended: true,
 	}
-	spec.Setup = s.scheduleSetup(spec, payload, botID, token, dispatch)
+	spec.Setup = s.plan.ScheduleSetup(spec, payload, botID, token, dispatch)
 
 	return s.runScheduleSpec(runCtx, spec)
 }
@@ -133,118 +129,6 @@ func (s *Service) runScheduleSpec(runCtx context.Context, spec drive.RunSpec) (s
 		// for the run's result record.
 		return schedule.TriggerResult{}, result.Failure.Recorded()
 	}
-}
-
-// attachCurrentTurnPrompt routes a trigger's rich prompt through Query so the
-// context view classifies it as the live current request rather than history.
-func attachCurrentTurnPrompt(cfg native.RunConfig, prompt string) native.RunConfig {
-	cfg.Query = prompt
-	return cfg
-}
-
-// scheduleSetup resolves one fire's executor: the built-in agent, or the
-// External Agent runtime the session runs on. It resolves around the request
-// the driver handed it, which already carries the per-run wiring.
-func (s *Service) scheduleSetup(spec drive.RunSpec, payload schedule.TriggerPayload, botID, token string, dispatch externalrun.Dispatch) func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
-	return func(setupCtx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
-		req.RunHandle = spec.Run.Handle
-		// The admitted turn's identity travels with the request: the step
-		// committer refuses to arm without it, and a scheduled run without one
-		// would persist only as a terminal snapshot.
-		req.TurnID = spec.Run.TurnID
-		req.TurnPosition = spec.Run.TurnPosition
-		req.Query = payload.Command
-		req.RawQuery = payload.Command
-		req.UserID = payload.OwnerUserID
-		req.Token = token
-		req.Model = payload.ModelID
-		req.RuntimeModelID = payload.RuntimeModelID
-		req.ReasoningEffort = payload.ReasoningEffort
-		req.SessionType = sessionmode.Schedule
-		req.ChatID = botID
-		// External schedules identify the triggering user as the channel
-		// identity, matching the native path (nativeSchedulePlan's cfg.Identity).
-		req.SourceChannelIdentityID = payload.OwnerUserID
-		if err := s.admit.RecordResume(setupCtx, req); err != nil {
-			return drive.RunPlan{}, err
-		}
-		if dispatch.Kind == externalrun.DispatchExternal {
-			return s.externalSchedulePlan(setupCtx, req, spec, payload, dispatch.Driver)
-		}
-		return s.nativeSchedulePlan(setupCtx, req, payload)
-	}
-}
-
-// nativeSchedulePlan resolves a scheduled run the built-in agent executes.
-func (s *Service) nativeSchedulePlan(ctx context.Context, req runreq.ChatRequest, payload schedule.TriggerPayload) (drive.RunPlan, error) {
-	// The run acts for the bot's owner, who holds every permission, so there
-	// is no principal to check; binding the workspace here puts the target on
-	// the history rows the run writes.
-	ctx, req, err := s.runconfig.BindRequestWorkspace(ctx, req, nil, true)
-	if err != nil {
-		return drive.RunPlan{}, err
-	}
-	rc, req, err := s.runconfig.Resolve(ctx, req)
-	if err != nil {
-		return drive.RunPlan{}, err
-	}
-	s.settleResolved(ctx, req, &rc)
-	req.RunID = rc.RunConfig.RunID
-
-	cfg := rc.RunConfig
-	cfg.SessionType = sessionmode.Schedule
-	cfg.Identity.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
-	cfg.ContextScope.ChannelIdentityID = strings.TrimSpace(payload.OwnerUserID)
-	cfg = attachCurrentTurnPrompt(cfg, native.GenerateSchedulePrompt(native.Schedule{
-		ID:          payload.ID,
-		Name:        payload.Name,
-		Description: payload.Description,
-		Pattern:     payload.Pattern,
-		MaxCalls:    payload.MaxCalls,
-		Command:     payload.Command,
-	}))
-	// Nobody is on the other end of a scheduled run.
-	cfg.LiveToolStream = false
-	cfg.CanRequestUserInput = false
-	cfg = s.runconfig.Prepare(ctx, cfg)
-
-	timing := persist.NewReasoningTimingTracker(nil)
-	committer := s.persist.NewStepCommitter(ctx, req, rc)
-	persist.ConfigureNativeReasoningTiming(&cfg, timing, committer)
-	if committer != nil {
-		committer.BindContinuation(&cfg)
-	}
-	s.compact.BindStep(&cfg, req, committer)
-	return drive.RunPlan{
-		Exec: &nativeExecutor{
-			agent:     s.agent,
-			cfg:       cfg,
-			rc:        rc,
-			req:       req,
-			committer: committer,
-			timing:    timing,
-			service:   s,
-		},
-		Req:        req,
-		IdleEffort: drive.ReasoningEffortForIdle(cfg),
-		Lifecycle:  s.lifecycle.Terminal(ctx, cfg),
-	}, nil
-}
-
-// externalSchedulePlan resolves a scheduled run an External Agent runtime
-// executes. It prompts with the generated schedule prompt rather than the raw
-// command, and nobody is there to answer a decision.
-func (s *Service) externalSchedulePlan(ctx context.Context, req runreq.ChatRequest, spec drive.RunSpec, payload schedule.TriggerPayload, driver external.Driver) (drive.RunPlan, error) {
-	prompt := native.GenerateSchedulePrompt(native.Schedule{
-		ID:          payload.ID,
-		Name:        payload.Name,
-		Description: payload.Description,
-		Pattern:     payload.Pattern,
-		MaxCalls:    payload.MaxCalls,
-		Command:     payload.Command,
-	})
-	req.ModelQuery = prompt
-	return s.externalRunPlan(ctx, req, spec, driver)
 }
 
 // scheduleSubmission is the canonical fingerprint input for a triggered turn.

@@ -26,6 +26,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/plan"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
@@ -174,6 +175,7 @@ var abortRuntimes sync.Map // *Service -> externalrun.Aborter
 func useAbortRuntime(s *Service, aborter externalrun.Aborter) *Service {
 	abortRuntimes.Store(s, aborter)
 	s.externalrun = externalOf(s)
+	rewirePlan(s)
 	return s
 }
 
@@ -195,6 +197,7 @@ func registerExternalDrivers(s *Service, drivers ...external.Driver) {
 	had, _ := previous.([]external.Driver)
 	externalDrivers.Store(s, append(slices.Clone(had), drivers...))
 	s.externalrun = externalOf(s)
+	rewirePlan(s)
 }
 
 func registerACPPool(s *Service, pool acpagent.Prompter) {
@@ -390,6 +393,7 @@ func setAllowedTeam(s *Service, teamID string) {
 	s.allowedTeam = teamID
 	s.teamScopes = runreq.SingleTeam(teamID)
 	s.externalrun = externalOf(s)
+	rewirePlan(s)
 }
 
 // useLifecycleStore routes the lifecycle rows of an already built service to
@@ -448,6 +452,10 @@ func wireComponents(s *Service) *Service {
 	if s.title == nil {
 		s.title = titleOf(s)
 	}
+	if s.plan == nil {
+		s.plan = planOf(s)
+		s.continuer = s.plan
+	}
 	return s
 }
 
@@ -491,6 +499,7 @@ func useRunconfig(s *Service, adjust func(*runconfig.Deps)) *Service {
 	s.runconfig = runconfigOf(s)
 	s.externalrun = externalOf(s)
 	s.title = titleOf(s)
+	rewirePlan(s)
 	return s
 }
 
@@ -502,6 +511,7 @@ func useDecisions(s *Service, adjust func(*decide.Deps)) *Service {
 	rebindDecisions(s)
 	s.runconfig = runconfigOf(s)
 	s.externalrun = externalOf(s)
+	rewirePlan(s)
 	return s
 }
 
@@ -539,6 +549,7 @@ func rewireRun(s *Service) {
 	s.subagent = subagentOf(s)
 	s.externalrun = externalOf(s)
 	s.title = titleOf(s)
+	rewirePlan(s)
 }
 
 // driverAdjustments are the dependency overrides a test named for a service's
@@ -565,6 +576,7 @@ func rebuildDriver(s *Service, kind string, mutate func(*drive.Deps)) {
 	s.driver = drive.New(driveDepsOf(s))
 	s.subagent = subagentOf(s)
 	s.externalrun = externalOf(s)
+	rewirePlan(s)
 }
 
 // bindRuntime is bindSessionRuntime for a Service built from a literal: the
@@ -583,6 +595,7 @@ func bindRuntime(s *Service, manager *sessionruntime.Manager) {
 	}
 	rebuildDriver(s, "events", func(d *drive.Deps) { d.Events = manager })
 	s.externalrun = externalOf(s)
+	rewirePlan(s)
 }
 
 func persistOf(s *Service) *persist.Writer {
@@ -801,6 +814,51 @@ func externalOf(s *Service) *externalrun.Host {
 	return externalrun.New(d)
 }
 
+// rewirePlan rebuilds the planner, which copies the components it plans with.
+// A continuer a test installed stays; one that was the planner follows it.
+func rewirePlan(s *Service) {
+	previous := s.plan
+	s.plan = planOf(s)
+	if s.continuer == nil || s.continuer == continuer(previous) {
+		s.continuer = s.plan
+	}
+}
+
+// useContinuer replaces what resumes an answered decision, so a test can see
+// the decided call and plan the resumed run itself.
+func useContinuer(s *Service, c continuer) *Service {
+	s.continuer = c
+	return s
+}
+
+// continueFunc is a continuer made of a function.
+type continueFunc func(ctx context.Context, call decide.DecidedCall, req runreq.ChatRequest, live bool) (drive.RunPlan, error)
+
+func (f continueFunc) Continue(ctx context.Context, call decide.DecidedCall, req runreq.ChatRequest, live bool) (drive.RunPlan, error) {
+	return f(ctx, call, req, live)
+}
+
+func planOf(s *Service) *plan.Planner {
+	d := plan.Deps{
+		Logger: s.logger, Admit: s.admit, Bot: s.botenv, Transcript: s.transcript, Lifecycle: s.lifecycle,
+		Persist: s.persist, Compact: s.compact, Runconfig: s.runconfig, External: s.externalrun, Title: s.title,
+		Executions: approvalExecutions{queries: s.queries},
+		Store:      agenttest.EmptyStore{},
+		Agent:      &native.Agent{},
+		Runtime:    standInSteerRuntime(),
+	}
+	if s.queries != nil {
+		d.Store = s.queries
+	}
+	if s.agent != nil {
+		d.Agent = s.agent
+	}
+	if s.sessionManager != nil {
+		d.Runtime = s.sessionManager
+	}
+	return plan.New(d)
+}
+
 func titleOf(s *Service) *title.Generator {
 	d := title.Deps{
 		Logger: s.logger, Credentials: providers.NewService(nil, s.queries, ""), Models: s.runconfig,
@@ -834,6 +892,7 @@ func useSecret(s *Service, secret string) *Service {
 	s.signer = admit.NewSigner(secret)
 	s.admit = admitOf(s)
 	s.subagent = subagentOf(s)
+	rewirePlan(s)
 	return s
 }
 

@@ -90,7 +90,7 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	// driver names the ending from the run context's own cause, so this one
 	// carries no separate stop channel.
 	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
-		return s.chatSetup(ctx, req, spec)
+		return s.plan.ChatSetup(ctx, req, spec)
 	}
 
 	go func() {

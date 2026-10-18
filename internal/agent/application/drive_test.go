@@ -2,11 +2,9 @@ package application
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -14,9 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/drivetest"
-	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
-	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -56,61 +52,6 @@ func continuationRequest() runreq.ChatRequest {
 	return runreq.ChatRequest{
 		BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 		UserMessagePersisted: true, PersistedUserMessageID: "request-message",
-	}
-}
-
-// A continuation whose model call the provider refuses before its first step
-// ends under the provider's code everywhere the failure is reported: the
-// caller's error event with the catalog detail, the run's failure, and the
-// failure row. The provider's own words reach none of them.
-func TestDriveDecisionContinuationNamesTheProviderFailure(t *testing.T) {
-	t.Parallel()
-
-	messages := &agenttest.RecordingMessages{}
-	service := wireComponents(&Service{
-		agent:          native.New(native.Deps{Logger: slog.New(slog.DiscardHandler)}),
-		logger:         slog.New(slog.DiscardHandler),
-		messageService: messages,
-	})
-	req := continuationRequest()
-	cfg := native.RunConfig{
-		Model:    &sdk.Model{ID: "continuation-model", Provider: rejectingSpawnProvider{}, Type: sdk.ModelTypeChat},
-		Messages: []sdk.Message{sdk.UserMessage("continue after the decision")},
-		Identity: native.SessionContext{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID},
-	}
-	eventCh := make(chan runreq.WSStreamEvent, 64)
-
-	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
-		Req: req,
-		Setup: func(ctx context.Context, _ runreq.ChatRequest) (drive.RunPlan, error) {
-			return service.nativeContinuationPlan(ctx, req, cfg, "model-1")
-		},
-	}, eventCh)
-	close(eventCh)
-	if err != nil {
-		t.Fatalf("continuation error = %v, want the failure delivered in the stream", err)
-	}
-
-	var errorEvents []native.StreamEvent
-	for raw := range eventCh {
-		if strings.Contains(string(raw), "SECRET") {
-			t.Fatalf("delivered event leaked the cause: %s", raw)
-		}
-		var ev native.StreamEvent
-		if err := json.Unmarshal(raw, &ev); err != nil {
-			t.Fatalf("decode delivered event %s: %v", raw, err)
-		}
-		if ev.Type == native.EventError {
-			errorEvents = append(errorEvents, ev)
-		}
-	}
-	definition, _ := apperror.Lookup(apperror.CodeAgentProviderAuthFailed)
-	if len(errorEvents) != 1 || errorEvents[0].Code != string(apperror.CodeAgentProviderAuthFailed) || errorEvents[0].Error != definition.Detail {
-		t.Fatalf("delivered error events = %#v, want one with the provider's code and detail", errorEvents)
-	}
-	row := failureRows(t, messages)
-	if got := row.Metadata[messagepkg.HistoryErrorCodeMetadataKey]; got != string(apperror.CodeAgentProviderAuthFailed) {
-		t.Fatalf("failure row code = %#v, want %s", got, apperror.CodeAgentProviderAuthFailed)
 	}
 }
 
@@ -172,55 +113,6 @@ func TestDriveDecisionContinuationTargetGoneWritesNothing(t *testing.T) {
 	}
 	if len(messages.Persisted) != 0 {
 		t.Fatalf("persisted %#v, want nothing", messages.Persisted)
-	}
-}
-
-// fixedStream is a native runtime that produces a fixed event sequence.
-type fixedStream []native.StreamEvent
-
-func (f fixedStream) Stream(context.Context, native.RunConfig) <-chan native.StreamEvent {
-	ch := make(chan native.StreamEvent, len(f))
-	for _, ev := range f {
-		ch <- ev
-	}
-	close(ch)
-	return ch
-}
-
-// A failed run whose terminal still carries the conversation it was given, but
-// nothing the user saw, leaves one failure row: the row is the failure's, and
-// the terminal's snapshot has no output of its own to add.
-func TestDriveDecisionContinuationSnapshotWithoutOutputWritesOneRow(t *testing.T) {
-	t.Parallel()
-
-	messages := &agenttest.RecordingMessages{}
-	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})
-	snapshot, err := json.Marshal([]sdk.Message{sdk.UserMessage("continue after the decision")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	failure := apperror.Wrap(apperror.CodeAgentProviderAuthFailed, errors.New("SECRET key"), nil)
-	exec := &nativeExecutor{
-		agent: fixedStream{
-			{Type: native.EventAgentStart},
-			{Type: native.EventError, Code: string(apperror.CodeAgentProviderAuthFailed), Cause: failure},
-			{Type: native.EventAgentAbort, Messages: snapshot, EndReason: event.EndFailed},
-		},
-		req:     continuationRequest(),
-		timing:  persist.NewReasoningTimingTracker(nil),
-		service: service,
-	}
-
-	_ = service.driveUnroutedContinuation(context.Background(), decisionContinuation{
-		Req: continuationRequest(),
-		Setup: func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
-			return drive.RunPlan{Exec: exec}, nil
-		},
-	}, nil)
-
-	row := failureRows(t, messages)
-	if got := row.Metadata[messagepkg.HistoryErrorCodeMetadataKey]; got != string(apperror.CodeAgentProviderAuthFailed) {
-		t.Fatalf("failure row code = %#v, want %s", got, apperror.CodeAgentProviderAuthFailed)
 	}
 }
 

@@ -230,7 +230,7 @@ func (s *Service) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 			req.ModelQuery = prompt
 			req.ForceFreshRuntime = true
 		}
-		return s.chatSetup(setupCtx, req, spec)
+		return s.plan.ChatSetup(setupCtx, req, spec)
 	}
 
 	done := make(chan struct{})

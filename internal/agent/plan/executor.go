@@ -1,4 +1,4 @@
-package application
+package plan
 
 import (
 	"context"
@@ -31,7 +31,7 @@ type nativeExecutor struct {
 	committer *persist.StepCommitter // nil when steps are not committed as they complete
 	timing    *persist.ReasoningTimingTracker
 	replace   *drive.TurnReplacement
-	service   *Service
+	persist   *persist.Writer
 
 	// Written by execute, read by commit after execute returned.
 	terminal    *native.StreamEvent
@@ -149,7 +149,7 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 		// second time.
 		snap.FailureCode = ""
 	}
-	persisted, err := e.service.persist.TerminalSnapshotResult(ctx, e.req, e.rc, snap)
+	persisted, err := e.persist.TerminalSnapshotResult(ctx, e.req, e.rc, snap)
 	if err != nil {
 		return summary, outcome.RuntimeHistoryError(err)
 	}
@@ -175,7 +175,7 @@ func (e *nativeExecutor) recordFailure(ctx context.Context, f outcome.RunFailure
 		// snapshot path writes it.
 		return nil, nil
 	}
-	return e.service.persist.FailureRow(ctx, e.req, e.rc, f, "")
+	return e.persist.FailureRow(ctx, e.req, e.rc, f, "")
 }
 
 // postPersist rewrites the replaced turn once its own history is written, for

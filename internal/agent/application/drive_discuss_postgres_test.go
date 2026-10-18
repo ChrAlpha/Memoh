@@ -494,6 +494,7 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 		tools.NewMessageProvider(nil, sender, agenttest.MessageReactor{}, agenttest.ChannelParser{}, nil),
 	})
 	svc.agent = agent
+	rewirePlan(svc)
 	useDecisions(svc, func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{} })
 	return &discussProcess{svc: svc, manager: manager, provider: provider, sender: sender}
 }

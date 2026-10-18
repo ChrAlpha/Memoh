@@ -1,4 +1,4 @@
-package application
+package plan
 
 import (
 	"context"
@@ -10,14 +10,16 @@ import (
 	"github.com/felinics/memoh/internal/agent/transcript"
 )
 
-func (s *Service) prepareContinuationRunConfig(
+// assembleContinuation is the context a decision continuation resumes from:
+// the session's history up to and including the stored result of the answered
+// call, and no query of its own.
+func (p *Planner) assembleContinuation(
 	ctx context.Context,
 	base native.RunConfig,
 	fallback historyfrag.ScopeFallback,
 	summaryScope contextfrag.Scope,
-	live bool,
 ) (native.RunConfig, error) {
-	assembled, err := s.transcript.Assemble(ctx, transcript.Request{
+	assembled, err := p.transcript.Assemble(ctx, transcript.Request{
 		Purpose:  transcript.PurposeContinuation,
 		Fallback: fallback,
 		Scope:    summaryScope,
@@ -46,9 +48,5 @@ func (s *Service) prepareContinuationRunConfig(
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil
 	base.Query = ""
-	// A question asked with nobody receiving the run's events could never be
-	// answered, so asking one is only offered to a run someone follows live.
-	base.LiveToolStream = live
-	base.CanRequestUserInput = live
-	return s.runconfig.Prepare(ctx, base), nil
+	return base, nil
 }
