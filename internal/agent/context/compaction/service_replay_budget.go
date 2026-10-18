@@ -36,7 +36,8 @@ func keptReplayTokens(messages []CompactionCandidate, sources []turn.ContextMess
 
 // currentRequestEntries renders what the work continues from, so the
 // summarizer knows the goal its summary serves: the protected rows, or the
-// request itself before it is stored.
+// request itself before it is stored. It stays raw beside the summary and is
+// never part of what the summary covers.
 func currentRequestEntries(messages []CompactionCandidate, sources []turn.ContextMessageSource, request string) []messageEntry {
 	var entries []messageEntry
 	for _, message := range messages {
