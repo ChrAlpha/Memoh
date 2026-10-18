@@ -120,12 +120,17 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if readWindow <= 0 {
 		return Result{}, fmt.Errorf("%w: window=%d current_request_tokens=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens, entriesPromptCost(current))
 	}
-	// A summary is shorter than what it replaces, so reading r tokens leaves
-	// room for r plus min(summaryLimit, r).
-	inputTokens := readWindow - min(summaryLimit, readWindow/2)
-
 	foldable := foldableItems(messages)
-	toCompact := trimCompactMessages(foldable, inputTokens-earlierSummariesCost(earlier))
+	earlierCost := earlierSummariesCost(earlier)
+	// The window holds what a pass reads and the summary written from it. A
+	// summary is shorter than what it replaces, so reading r tokens may need
+	// min(summaryLimit, r) beside it, and later groups are read only while that
+	// fits. No pass progresses without the earlier summaries and the first
+	// group, so they need only some room left beside them.
+	required := earlierCost + leadingGroupCost(foldable)
+	inputTokens := readWindow - max(min(summaryLimit, readWindow/2, readWindow-required), 1)
+
+	toCompact := trimCompactMessages(foldable, inputTokens-earlierCost)
 	entries, compactedMessageIDs := buildEntriesAndIDs(toCompact)
 	if len(compactedMessageIDs) == 0 {
 		if _, pending := buildEntriesAndIDs(foldable); len(pending) > 0 {
@@ -137,7 +142,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			return Result{Status: StatusNoop}, nil
 		}
 	}
-	readTokens := entriesPromptCost(entries) + earlierSummariesCost(earlier)
+	readTokens := entriesPromptCost(entries) + earlierCost
 	if readTokens > inputTokens {
 		return Result{}, fmt.Errorf("%w: entries=%d entry_tokens=%d input_tokens=%d", errCompactionInputOverflow, len(entries), readTokens, inputTokens)
 	}
