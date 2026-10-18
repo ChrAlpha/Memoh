@@ -3,6 +3,7 @@ package compaction
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -119,8 +120,8 @@ func TestSummaryRecoveryBoundsActualReplay(t *testing.T) {
 		parents := fusionParentLogs(t, cfg, strings.Repeat("p", 8000))
 		q := &fakeQueries{priorLogs: parents}
 		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-		if stub.maxTokens > 200 {
-			t.Fatalf("output cap=%d exceeds target=200", stub.maxTokens)
+		if limit := statedSummaryLimit(t, stub.prompt); limit > 200 {
+			t.Fatalf("stated summary limit=%d exceeds target=200", limit)
 		}
 		if len(summary) > 200 {
 			if err == nil || result.Status == StatusOK || len(q.rollupCalls) > 0 {
@@ -131,6 +132,36 @@ func TestSummaryRecoveryBoundsActualReplay(t *testing.T) {
 			t.Fatalf("fitting summary rejected: result=%+v err=%v", result, err)
 		}
 	}
+}
+
+func TestSummaryBudgetIsStatedNotUsedAsOutputCap(t *testing.T) {
+	stub := &stubModel{summary: "short summary", reasoning: 300}
+	cfg := machineryConfig(stub, 200)
+	cfg.HistoryBudgetTokens = 500
+	q := &fakeQueries{uncompacted: qualityRows(t)}
+	result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
+	if err != nil || result.Status != StatusOK {
+		t.Fatalf("reasoning summarizer failed under a small replay budget: result=%+v err=%v", result, err)
+	}
+	if stub.maxTokens != maxCompactionSummaryTokens {
+		t.Fatalf("output cap=%d, want the summarizer cap %d", stub.maxTokens, maxCompactionSummaryTokens)
+	}
+	if limit := statedSummaryLimit(t, stub.prompt); limit <= 0 || limit > 200 {
+		t.Fatalf("stated summary limit=%d, want within the 200-token target", limit)
+	}
+}
+
+func statedSummaryLimit(t *testing.T, prompt string) int {
+	t.Helper()
+	at := strings.LastIndex(prompt, "Keep the summary under ")
+	var limit int
+	if at < 0 {
+		t.Fatal("prompt does not state the summary limit")
+	}
+	if _, err := fmt.Sscanf(prompt[at:], "Keep the summary under %d tokens.", &limit); err != nil {
+		t.Fatalf("parse stated summary limit: %v", err)
+	}
+	return limit
 }
 
 func TestSummaryRecoveryReservesRetainedRawReplay(t *testing.T) {
@@ -150,8 +181,8 @@ func TestSummaryRecoveryReservesRetainedRawReplay(t *testing.T) {
 				t.Fatalf("reported admission success despite retained overflow: %+v", result)
 			}
 		} else {
-			if result.Status != StatusOK || stub.maxTokens >= 100 {
-				t.Fatalf("failed to reserve retained raw: result=%+v cap=%d", result, stub.maxTokens)
+			if limit := statedSummaryLimit(t, stub.prompt); result.Status != StatusOK || limit >= 100 {
+				t.Fatalf("failed to reserve retained raw: result=%+v stated limit=%d", result, limit)
 			}
 		}
 	}

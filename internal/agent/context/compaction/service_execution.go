@@ -90,13 +90,16 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if cfg.SummaryWindowTokens > 0 {
 		maxOutputTokens = min(maxCompactionSummaryTokens, max(1, cfg.SummaryWindowTokens/10))
 	}
+	// The replay budget is a length the prompt states, never the request cap: a
+	// reasoning model spends the cap before it writes any summary text.
+	summaryLimit := maxOutputTokens
 	if cfg.HistoryBudgetTokens > 0 {
 		outputBudget := cfg.HistoryBudgetTokens
 		if cfg.TargetTokens > 0 {
 			outputBudget = min(outputBudget, cfg.TargetTokens)
 		}
-		maxOutputTokens = summaryOutputLimit(outputBudget, maxOutputTokens)
-		if maxOutputTokens <= 0 {
+		summaryLimit = summaryOutputLimit(outputBudget, maxOutputTokens)
+		if summaryLimit <= 0 {
 			return Result{Status: StatusNoop}, nil
 		}
 	}
@@ -234,8 +237,8 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		if remaining := cfg.HistoryBudgetTokens - retainedTokens; remaining > summaryProviderReplayTokens("") {
 			replayBudget = min(replayBudget, remaining)
 		}
-		maxOutputTokens = summaryOutputLimit(replayBudget, maxOutputTokens)
-		if maxOutputTokens <= 0 {
+		summaryLimit = summaryOutputLimit(replayBudget, maxOutputTokens)
+		if summaryLimit <= 0 {
 			return Result{Status: StatusNoop}, nil
 		}
 	}
@@ -317,6 +320,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if fusing {
 		userPrompt = buildFusionUserPrompt(priorSummaries, absorbedSegments, entries)
 	}
+	userPrompt += fmt.Sprintf("\nKeep the summary under %d tokens.\n", summaryLimit)
 
 	model := models.NewSDKChatModel(models.SDKModelConfig{
 		ClientType:            cfg.ClientType,
