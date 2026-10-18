@@ -20,6 +20,7 @@ import (
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 func TestDriveCompletesAndDeliversTheTerminalLast(t *testing.T) {
@@ -1045,5 +1046,117 @@ func TestDriveDeliveredFailureKeepsItsCodeAfterALaterHistoryFailure(t *testing.T
 				t.Fatalf("delivered %d failure events, want the one the stream raised", failures)
 			}
 		})
+	}
+}
+
+// Only a failed run's terminal carries a code and args. A parked, completed or
+// stopped terminal is published without them, even when the runtime stamped a
+// stale one, and every terminal says the run's owner named the ending.
+func TestDriveStampsACodeOnlyOnFailedTerminals(t *testing.T) {
+	t.Parallel()
+
+	failedCause := apperror.Wrap(apperror.CodeAgentDependencyMissing, errors.New("missing"), map[string]string{"dep_id": "python"})
+	stale := func(ev native.StreamEvent) native.StreamEvent {
+		ev.Code, ev.Args = "stale.code", map[string]string{"k": "v"}
+		return ev
+	}
+	cases := []struct {
+		name       string
+		exec       *drivetest.ScriptedExecutor
+		stopped    bool
+		wantEnd    outcome.RunEnd
+		wantCode   string
+		wantArgs   map[string]string
+		wantReason event.EndReason
+	}{
+		{
+			name: "failed",
+			exec: &drivetest.ScriptedExecutor{
+				Events:   []native.StreamEvent{{Type: native.EventError, Code: string(apperror.CodeAgentDependencyMissing), Args: map[string]string{"dep_id": "python"}, Cause: failedCause}},
+				Terminal: ptr(native.StreamEvent{Type: native.EventAgentAbort}),
+			},
+			wantEnd:    outcome.EndFailed,
+			wantCode:   string(apperror.CodeAgentDependencyMissing),
+			wantArgs:   map[string]string{"dep_id": "python"},
+			wantReason: event.EndFailed,
+		},
+		{
+			name:       "parked on a decision",
+			exec:       &drivetest.ScriptedExecutor{Terminal: ptr(stale(native.StreamEvent{Type: native.EventAgentEnd, ApprovalID: "approval-1"})), Deferred: true},
+			wantEnd:    outcome.EndParked,
+			wantReason: event.EndAwaitingDecision,
+		},
+		{
+			name:       "completed",
+			exec:       &drivetest.ScriptedExecutor{Terminal: ptr(stale(native.StreamEvent{Type: native.EventAgentEnd}))},
+			wantEnd:    outcome.EndCompleted,
+			wantReason: event.EndCompleted,
+		},
+		{
+			name:       "stopped",
+			exec:       &drivetest.ScriptedExecutor{Terminal: ptr(stale(native.StreamEvent{Type: native.EventAgentAbort}))},
+			stopped:    true,
+			wantEnd:    outcome.EndStopped,
+			wantReason: event.EndCanceled,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			pub := &agenttest.EventRecorder{}
+			svc := newDriveService(pub, &agenttest.ScriptedAdmitter{Started: true})
+			runCtx, stop := context.WithCancelCause(context.Background())
+			defer stop(nil)
+			if tc.stopped {
+				stop(outcome.ErrRunStopped)
+			}
+
+			result := svc.Drive(runCtx, drivetest.ScheduledSpec(tc.exec, &drivetest.RecordingDelivery{}))
+
+			if result.End != tc.wantEnd {
+				t.Fatalf("end = %s, want %s (failure %#v)", result.End, tc.wantEnd, result.Failure)
+			}
+			var terminal *native.StreamEvent
+			for _, ev := range pub.Published() {
+				if ev.IsTerminal() {
+					terminal = &ev
+				}
+			}
+			if terminal == nil {
+				t.Fatal("no terminal event was published")
+			}
+			if !terminal.OwnerNamed {
+				t.Fatal("terminal is not owner-named")
+			}
+			if terminal.Code != tc.wantCode {
+				t.Fatalf("terminal code = %q, want %q", terminal.Code, tc.wantCode)
+			}
+			if len(terminal.Args) != len(tc.wantArgs) || terminal.Args["dep_id"] != tc.wantArgs["dep_id"] {
+				t.Fatalf("terminal args = %#v, want %#v", terminal.Args, tc.wantArgs)
+			}
+			if terminal.EndReason != tc.wantReason {
+				t.Fatalf("terminal end reason = %q, want %q", terminal.EndReason, tc.wantReason)
+			}
+		})
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// The failure the delivery end is told about carries the run's code and is
+// marked as already recorded, and a run that did not fail reports none.
+func TestPublicRunFailureIsCodedAndMarkedRecorded(t *testing.T) {
+	t.Parallel()
+
+	if err := drive.PublicRunFailure(nil); err != nil {
+		t.Fatalf("PublicRunFailure(nil) = %v, want none", err)
+	}
+	err := drive.PublicRunFailure(&outcome.RunFailure{Code: apperror.CodeAgentProviderOverloaded, Cause: errors.New("upstream 503"), Phase: outcome.PhaseExecution})
+	if apperror.CodeOf(err) != apperror.CodeAgentProviderOverloaded {
+		t.Fatalf("PublicRunFailure = %v, want the run's code", err)
+	}
+	if !errs.Analyze(context.Background(), err).Recorded {
+		t.Fatalf("PublicRunFailure = %v, want it marked recorded", err)
 	}
 }

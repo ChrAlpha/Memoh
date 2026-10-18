@@ -285,3 +285,53 @@ func TestResumedRunSnapshotWithoutOutputWritesOneRow(t *testing.T) {
 		t.Fatalf("failure row code = %#v, want %s", got, apperror.CodeAgentProviderAuthFailed)
 	}
 }
+
+// A run that ends cleanly without a snapshot and without anything the user
+// could see has nothing to write: it commits without error and leaves no
+// synthetic row. A run that showed output but has no snapshot to write it from
+// is a history failure, not a success.
+func TestNativeExecutorCommitWithoutASnapshot(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		stream  fixedStream
+		wantErr bool
+	}{
+		{
+			name:   "clean end with no output",
+			stream: fixedStream{{Type: native.EventAgentStart}, {Type: native.EventAgentEnd}},
+		},
+		{
+			name:    "visible output but no snapshot",
+			stream:  fixedStream{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "partial"}, {Type: native.EventAgentEnd}},
+			wantErr: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			messages := &agenttest.RecordingMessages{}
+			exec := &nativeExecutor{
+				agent:   tc.stream,
+				timing:  persist.NewReasoningTimingTracker(nil),
+				persist: testWriter(t, messages),
+			}
+
+			ending := exec.Execute(context.Background(), func(native.StreamEvent) {})
+			_, err := ending.Commit(context.Background(), nil, false)
+
+			if tc.wantErr {
+				if err == nil || apperror.CodeOf(err) != apperror.CodeSessionHistoryInconsistent {
+					t.Fatalf("Commit() error = %v, want a history failure", err)
+				}
+			} else if err != nil {
+				t.Fatalf("Commit() error = %v, want a clean commit", err)
+			}
+			if len(messages.Persisted) != 0 {
+				t.Fatalf("persisted %#v, want no row without a snapshot", messages.Persisted)
+			}
+		})
+	}
+}

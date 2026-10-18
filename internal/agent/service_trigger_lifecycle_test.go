@@ -382,3 +382,29 @@ func TestTriggerScheduleRuntimeRejectsIncompleteTurn(t *testing.T) {
 		t.Fatalf("aborted lifecycle assistant message ID = %q, want message-id", snapshot.AssistantMessageID)
 	}
 }
+
+// A completed scheduled run reports the final assistant text and the run's
+// usage to the schedule's log, and its round is written to history as the
+// user's turn followed by the answer.
+func TestTriggerScheduleReportsTheFinalTextAndUsage(t *testing.T) {
+	_, contextView := triggerLifecycleContextView(nil)
+	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess, contextView)
+
+	result, err := triggerDirectSchedule(t, fixture.service)
+	if err != nil || result.Status != "ok" {
+		t.Fatalf("TriggerSchedule() = %q, %v; want the run to complete", result.Status, err)
+	}
+	if result.Text != directLifecycleResponse {
+		t.Fatalf("result.Text = %q, want the final assistant text %q", result.Text, directLifecycleResponse)
+	}
+	if len(result.UsageBytes) == 0 {
+		t.Fatal("result.UsageBytes is empty, want the run's usage payload")
+	}
+	var roles []string
+	for _, row := range fixture.messages.Persisted {
+		roles = append(roles, row.Role)
+	}
+	if len(roles) != 2 || roles[0] != "user" || roles[1] != "assistant" {
+		t.Fatalf("persisted roles = %q, want user then assistant", roles)
+	}
+}

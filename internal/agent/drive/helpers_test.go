@@ -17,6 +17,7 @@ type driverConfig struct {
 	messages messagepkg.Service
 	media    drive.OutputMediaStore
 	speech   drive.OutputSpeech
+	idle     time.Duration
 }
 
 type driverOption func(*driverConfig)
@@ -27,6 +28,11 @@ func withMessages(messages messagepkg.Service) driverOption {
 
 func withOutput(media drive.OutputMediaStore, speech drive.OutputSpeech) driverOption {
 	return func(c *driverConfig) { c.media, c.speech = media, speech }
+}
+
+// withIdleWindow sets the model's silence window for every effort level.
+func withIdleWindow(window time.Duration) driverOption {
+	return func(c *driverConfig) { c.idle = window }
 }
 
 func withEvents(events drive.EventSink) driverOption {
@@ -55,11 +61,13 @@ func newDriveService(pub *agenttest.EventRecorder, admitter *agenttest.ScriptedA
 		admitter = &agenttest.ScriptedAdmitter{}
 	}
 	return drive.New(drive.Deps{
-		Logger:       logger,
-		Runtime:      admitter,
-		Events:       cfg.events,
-		OutputMedia:  cfg.media,
-		OutputSpeech: cfg.speech,
+		Logger:               logger,
+		Runtime:              admitter,
+		Events:               cfg.events,
+		OutputMedia:          cfg.media,
+		OutputSpeech:         cfg.speech,
+		StreamIdleTimeout:    cfg.idle,
+		StreamIdleTimeoutMax: cfg.idle * 100,
 		Lifecycle: lifecycle.New(lifecycle.Deps{
 			Store: &agenttest.RecordingLifecycleStore{}, Runs: agenttest.NoRuns{}, Decisions: agenttest.NoDecisions{}, Logger: logger,
 		}),

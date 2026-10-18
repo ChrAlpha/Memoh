@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/drive"
@@ -346,4 +347,56 @@ func TestTurnRunSlowCallerKeepsTheRunGoing(t *testing.T) {
 	if len(events) != 1 || events[0].Kind != turn.EventRunTerminal {
 		t.Fatalf("events = %+v, want just the terminal that fit", events)
 	}
+}
+
+// The caller's channel is bounded. A caller that stopped reading while events
+// kept coming leaves the run's delivery blocked on a full channel, and the
+// caller's own stop must release it: Deliver reports the caller gone, and the
+// run can still end and close its channels.
+func TestTurnRunCancelUnblocksAFullEventBuffer(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runCtx, cancelCause := context.WithCancelCause(t.Context())
+		defer cancelCause(nil)
+		handle := newTurnRun(
+			runCtx, "run-1", "team-1", "thread-1",
+			make(chan turn.Event, 2), make(chan error, 1), make(chan turn.InjectMessage, 1), cancelCause,
+		)
+
+		var delivered []bool
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for range 6 {
+				ok := handle.Deliver(context.Background(), drive.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
+				delivered = append(delivered, ok)
+				if !ok {
+					return
+				}
+			}
+		}()
+		synctest.Wait()
+		select {
+		case <-done:
+			t.Fatal("Deliver returned while the buffer was full and the caller still live")
+		default:
+		}
+
+		handle.Cancel()
+		synctest.Wait()
+
+		select {
+		case <-done:
+		default:
+			t.Fatal("Deliver is still blocked after the caller cancelled the run")
+		}
+		if len(delivered) != 3 || !delivered[0] || !delivered[1] || delivered[2] {
+			t.Fatalf("Deliver results = %v, want two accepted into the buffer, then the caller gone", delivered)
+		}
+		handle.Settle()
+		handle.Ended(context.Background(), drive.RunEnded{State: turn.RunStateAborted})
+		events, errs := drainTurnRun(t, handle)
+		if len(events) != 2 || len(errs) != 0 {
+			t.Fatalf("events = %d errors = %v, want the two buffered events and closed channels", len(events), errs)
+		}
+	})
 }
