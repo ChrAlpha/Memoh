@@ -108,7 +108,7 @@ func (t *Reader) Assemble(ctx context.Context, r Request) (Assembled, error) {
 // session has no stored history.
 func (t *Reader) loadContextRecords(ctx context.Context, r Request) ([]historyfrag.HistoryRecord, bool, error) {
 	sessionID := strings.TrimSpace(r.Scope.SessionID)
-	if t.messages == nil || sessionID == "" {
+	if sessionID == "" {
 		return nil, false, nil
 	}
 	var (

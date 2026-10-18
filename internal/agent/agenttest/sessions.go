@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	session "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
 // Sessions is a session-service double driven by per-method functions.
@@ -37,4 +38,21 @@ func (f *Sessions) MergeRuntimeMetadata(ctx context.Context, sessionID, runtimeT
 		return session.Thread{}, errors.New("unexpected MergeRuntimeMetadata call")
 	}
 	return f.mergeRuntimeMetadataFn(ctx, sessionID, runtimeType, delta)
+}
+
+// NewChatSessions is a session service that holds every session as an
+// ordinary chat conversation on the built-in model runtime and accepts every
+// metadata update.
+func NewChatSessions() *Sessions {
+	return &Sessions{
+		GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+			return session.Thread{
+				ID: sessionID, Type: session.TypeChat, SessionMode: session.TypeChat, RuntimeType: session.RuntimeModel,
+				Facts: sessionfacts.Preset(session.TypeChat),
+			}, nil
+		},
+		UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+			return session.Thread{ID: sessionID}, nil
+		},
+	}
 }

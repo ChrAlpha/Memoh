@@ -19,7 +19,7 @@ func (b *Builder) RejectRequestedSkillsIfUnsupportedContext(ctx context.Context,
 	if mode := strings.TrimSpace(req.SessionType); mode != "" && mode != sessionpkg.TypeChat {
 		return slash.NewError(slash.CodeUnsupportedSkillSlashContext)
 	}
-	if b.sessions == nil || strings.TrimSpace(req.ThreadID) == "" {
+	if strings.TrimSpace(req.ThreadID) == "" {
 		return slash.NewError(slash.CodeUnsupportedSkillSlashContext)
 	}
 

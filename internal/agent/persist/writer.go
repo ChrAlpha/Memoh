@@ -65,7 +65,7 @@ type Deps struct {
 	Sessions Sessions
 	// Bot resolves the bot settings and identities a row is stamped with.
 	Bot *botenv.Env
-	// Runtime is the live steer queue; without it a run steers nothing.
+	// Runtime is the live steer queue.
 	Runtime SteerRuntime
 	// Events broadcasts the rows of a replaced turn; without it none are sent.
 	Events messageevent.Publisher
@@ -94,8 +94,12 @@ type Writer struct {
 // New returns a Writer. Optional dependencies left nil become stand-ins that
 // do nothing.
 func New(d Deps) *Writer {
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	w := &Writer{
-		logger:   d.Logger,
+		logger:   logger,
 		messages: d.Messages,
 		sessions: d.Sessions,
 		botenv:   d.Bot,

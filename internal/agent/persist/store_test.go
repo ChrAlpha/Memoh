@@ -10,12 +10,10 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/botenv"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
-	"github.com/felinics/memoh/internal/settings"
 )
 
 func TestBuildInteractionMetadataIncludesForwardConversation(t *testing.T) {
@@ -214,10 +212,7 @@ func TestStoreMessagesResultUsesToolTailBatch(t *testing.T) {
 func TestBuildPersistInputsKeepsAttachmentOnlyUserDisplayTextEmpty(t *testing.T) {
 	t.Parallel()
 
-	service := newTestWriter(Deps{Bot: botenv.New(botenv.Deps{
-		Logger:   slog.New(slog.DiscardHandler),
-		Settings: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-	})})
+	service := newTestWriter(Deps{})
 	// resolve() replaces ChatRequest.Query with the headerified envelope before
 	// the round is stored; an image with no caption leaves RawQuery empty.
 	headerified := turnpkg.FormatUserHeader(turnpkg.UserMessageHeaderInput{
@@ -253,10 +248,7 @@ func TestBuildPersistInputsKeepsAttachmentOnlyUserDisplayTextEmpty(t *testing.T)
 func TestBuildPersistInputsLiftsToolCallDiffsToRowMetadata(t *testing.T) {
 	t.Parallel()
 
-	service := newTestWriter(Deps{Bot: botenv.New(botenv.Deps{
-		Logger:   slog.New(slog.DiscardHandler),
-		Settings: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
-	})})
+	service := newTestWriter(Deps{})
 	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
 	parts, err := json.Marshal([]map[string]any{{
 		"type":       "tool-call",

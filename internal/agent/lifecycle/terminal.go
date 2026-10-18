@@ -103,9 +103,6 @@ func (r *Recorder) StageCandidate(
 	cause error,
 	quality CandidateQuality,
 ) bool {
-	if r.store == nil {
-		return false
-	}
 	fence, fenced := runtimefence.FromContext(runreq.NonNilContext(ctx))
 	if !fenced {
 		return false
@@ -177,7 +174,7 @@ func (r *Recorder) EnsureTerminal(
 	runID, botID, sessionID string,
 	cause error,
 ) {
-	if r.store == nil || contextLifecycleOwnershipLost(ctx, cause) {
+	if contextLifecycleOwnershipLost(ctx, cause) {
 		return
 	}
 	ctx = runreq.NonNilContext(ctx)
@@ -247,7 +244,7 @@ func (r *Recorder) recoverFromAssistantMetadata(
 	runID, botID, sessionID string,
 	cause error,
 ) {
-	if r.store == nil || contextLifecycleOwnershipLost(ctx, cause) {
+	if contextLifecycleOwnershipLost(ctx, cause) {
 		return
 	}
 	ctx = runreq.NonNilContext(ctx)
@@ -291,7 +288,7 @@ func (r *Recorder) PersistSnapshot(
 	cause error,
 	authoritative bool,
 ) {
-	if r.store == nil || snapshot == nil || contextLifecycleOwnershipLost(ctx, cause) {
+	if snapshot == nil || contextLifecycleOwnershipLost(ctx, cause) {
 		return
 	}
 	ctx = runreq.NonNilContext(ctx)
@@ -376,9 +373,6 @@ func (r *Recorder) PersistSnapshot(
 // transition was accepted, choosing between the staged candidate, the existing
 // row and what the assistant message recorded.
 func (r *Recorder) ReconcileTerminal(ctx context.Context, run sessionruntime.TerminalRun) {
-	if r.store == nil {
-		return
-	}
 	status, ok := contextLifecycleStatusForTerminalRun(run.State)
 	if !ok {
 		return
@@ -501,9 +495,6 @@ func (r *Recorder) ReconcileTerminal(ctx context.Context, run sessionruntime.Ter
 // ReconcileTerminals repairs the terminal runs that have no lifecycle row, one
 // bounded batch per call.
 func (r *Recorder) ReconcileTerminals(ctx context.Context) error {
-	if r.store == nil {
-		return nil
-	}
 	repairCtx, cancel := contextLifecycleBoundedContext(ctx)
 	defer cancel()
 	rows, err := r.store.ListTerminalSessionRunsNeedingContextLifecycle(
@@ -765,9 +756,6 @@ func (r *Recorder) recordContextLifecyclePersistenceError(
 	runID, botID, sessionID, status string,
 ) {
 	count := r.persistenceErrors.Add(1)
-	if r.logger == nil {
-		return
-	}
 	r.logger.Error("persist context lifecycle failed",
 		slog.Any("error", err),
 		slog.String("run_id", runID),

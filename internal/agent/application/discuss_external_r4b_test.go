@@ -62,6 +62,9 @@ func r4bExternalDiscuss(t *testing.T, env discussEnv) (*discussProcess, *recordi
 				},
 			}, nil
 		},
+		UpdateMetadataFn: func(_ context.Context, id string, _ map[string]any) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{ID: id}, nil
+		},
 	}
 	proc.svc.botPermissions = allowWorkspaceExecForBot(env.botID, env.ownerID)
 	rewireComponents(proc.svc)

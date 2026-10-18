@@ -101,7 +101,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &agenttest.RecordingLifecycleStore{}
-	service := wireComponents(&Service{lifecycle: lifecycle.New(lifecycle.Deps{Store: lifecycles})})
+	service := wireComponents(&Service{lifecycle: newTestRecorder(lifecycles)})
 	bindRuntime(service, manager)
 
 	ownerCtx, cancelOwner := context.WithCancelCause(context.Background())
@@ -257,7 +257,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	})
 	t.Cleanup(func() { _ = manager.Close() })
 	lifecycles := &agenttest.RecordingLifecycleStore{}
-	service := wireComponents(&Service{lifecycle: lifecycle.New(lifecycle.Deps{Store: lifecycles})})
+	service := wireComponents(&Service{lifecycle: newTestRecorder(lifecycles)})
 	bindRuntime(service, manager)
 
 	ownerCtx, cancelOwner := context.WithCancelCause(context.Background())

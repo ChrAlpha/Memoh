@@ -72,9 +72,7 @@ func (w *Writer) publishReplacementMessageCreated(botID string, persisted []mess
 	}
 	data, err := json.Marshal(latest)
 	if err != nil {
-		if w.logger != nil {
-			w.logger.Warn("marshal replacement message event failed", slog.Any("error", err))
-		}
+		w.logger.Warn("marshal replacement message event failed", slog.Any("error", err))
 		return
 	}
 	w.events.Publish(messageevent.Event{
@@ -91,7 +89,7 @@ type ForkAnchorUpdate struct {
 func (w *Writer) PrepareForkAnchorUpdate(ctx context.Context, sessionID string, replacedTailStartMessageID string) *ForkAnchorUpdate {
 	sessionID = strings.TrimSpace(sessionID)
 	replacedTailStartMessageID = strings.TrimSpace(replacedTailStartMessageID)
-	if w.sessions == nil || w.messages == nil || sessionID == "" || replacedTailStartMessageID == "" {
+	if sessionID == "" || replacedTailStartMessageID == "" {
 		return nil
 	}
 
@@ -137,7 +135,7 @@ func (w *Writer) PrepareForkAnchorUpdate(ctx context.Context, sessionID string, 
 
 func (w *Writer) applyForkAnchorUpdate(ctx context.Context, sessionID string, update *ForkAnchorUpdate) {
 	sessionID = strings.TrimSpace(sessionID)
-	if w.sessions == nil || update == nil || sessionID == "" {
+	if update == nil || sessionID == "" {
 		return
 	}
 	if _, err := w.sessions.UpdateMetadata(ctx, sessionID, update.Metadata); err != nil {
@@ -208,13 +206,11 @@ func forkMetadataString(metadata map[string]any, key string) string {
 }
 
 func (w *Writer) logForkAnchorUpdateWarning(message string, sessionID string, err error) {
-	if w.logger != nil {
-		w.logger.Warn("fork anchor update skipped", slog.String("reason", message), slog.String("session_id", sessionID), slog.Any("error", err))
-	}
+	w.logger.Warn("fork anchor update skipped", slog.String("reason", message), slog.String("session_id", sessionID), slog.Any("error", err))
 }
 
 func (w *Writer) CleanupReplacementMessages(ctx context.Context, persisted []messagepkg.Message) {
-	if w.messages == nil || len(persisted) == 0 {
+	if len(persisted) == 0 {
 		return
 	}
 	ids := make([]string, 0, len(persisted))

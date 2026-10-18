@@ -50,7 +50,7 @@ func TestSubagentTerminalPersistsSnapshotAndPreContextFallbackExactlyOnce(t *tes
 			admission := lifecycleTestAdmission()
 			admitter := &agenttest.LifecycleAdmitter{Admission: admission}
 			store := &agenttest.RecordingLifecycleStore{}
-			service := wireComponents(&Service{sessionRuntime: admitter, lifecycle: lifecycle.New(lifecycle.Deps{Store: store})})
+			service := wireComponents(&Service{sessionRuntime: admitter, lifecycle: newTestRecorder(store)})
 
 			_, subagentAdmission, terminal, err := service.AdmitSubagentRun(
 				context.Background(),
@@ -88,7 +88,7 @@ func TestSubagentTerminalPersistsSnapshotAndPreContextFallbackExactlyOnce(t *tes
 func TestCanceledSubagentUsesOwningContextToPersistAborted(t *testing.T) {
 	admitter := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
 	store := &agenttest.RecordingLifecycleStore{}
-	service := wireComponents(&Service{sessionRuntime: admitter, lifecycle: lifecycle.New(lifecycle.Deps{Store: store})})
+	service := wireComponents(&Service{sessionRuntime: admitter, lifecycle: newTestRecorder(store)})
 	runCtx, _, terminal, err := service.AdmitSubagentRun(
 		context.Background(),
 		agenttest.LifecycleBotID,

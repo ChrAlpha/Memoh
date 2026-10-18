@@ -22,9 +22,6 @@ func (b *Builder) ValidateWorkspaceTarget(ctx context.Context, botID, targetID s
 	if targetID == "" {
 		return nil
 	}
-	if b.targets == nil {
-		return errors.New("workspace target resolver not configured")
-	}
 	_, err := b.targets.ResolveWorkspaceTarget(ctx, strings.TrimSpace(botID), targetID)
 	return err
 }
@@ -95,9 +92,6 @@ func (b *Builder) ResolveWorkspace(ctx context.Context, in WorkspaceInput) (cont
 		if strings.TrimSpace(in.Principal.UserID) == "" {
 			return ctx, out, errors.New("user id is required to select a computer")
 		}
-		if b.permissions == nil {
-			return ctx, out, errors.New("workspace target permission checker not configured")
-		}
 		allowed, err := b.permissions.HasBotPermission(ctx, in.BotID, in.Principal.UserID, bots.PermissionWorkspaceRead)
 		if err != nil {
 			return ctx, out, fmt.Errorf("check workspace target permission: %w", err)
@@ -105,12 +99,6 @@ func (b *Builder) ResolveWorkspace(ctx context.Context, in WorkspaceInput) (cont
 		if !allowed {
 			return ctx, out, errors.New("workspace_read permission is required to select a computer")
 		}
-	}
-	if b.targets == nil {
-		if out.TargetID != "" {
-			return ctx, out, errors.New("workspace target resolver not configured")
-		}
-		return ctx, out, nil
 	}
 	if out.TargetID != "" {
 		// Pin first so the resolution below, and its error path, run against
@@ -158,12 +146,6 @@ func UserPrincipal(req runreq.ChatRequest) *WorkspacePrincipal {
 }
 
 func (b *Builder) ResolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*runreq.WorkspaceTarget, error) {
-	if b.targets == nil {
-		if strings.TrimSpace(targetID) == "" {
-			return nil, nil
-		}
-		return nil, errors.New("workspace target resolver not configured")
-	}
 	resolved, err := b.targets.ResolveWorkspaceTarget(ctx, botID, targetID)
 	if err != nil {
 		return nil, err

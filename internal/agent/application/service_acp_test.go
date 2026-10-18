@@ -61,6 +61,9 @@ func TestStreamACPAgentWSPromptBytesMatchQuery(t *testing.T) {
 					},
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: slog.New(slog.DiscardHandler),
 	})
@@ -90,7 +93,7 @@ func newACPLifecycleService(
 	t.Helper()
 	service := wireComponents(&Service{
 		messageService: messages,
-		lifecycle:      lifecycle.New(lifecycle.Deps{Store: lifecycles}),
+		lifecycle:      newTestRecorder(lifecycles),
 		botPermissions: allowWorkspaceExecForBot(agenttest.LifecycleBotID, "user-1"),
 		sessionService: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {
@@ -104,6 +107,9 @@ func newACPLifecycleService(
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
+			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
@@ -294,6 +300,9 @@ func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 					},
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: slog.New(slog.DiscardHandler),
 	})
@@ -410,6 +419,9 @@ func TestWebSendRoutesDiscussACPAgentSessionToACPPool(t *testing.T) {
 					},
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: slog.New(slog.DiscardHandler),
 	})
@@ -461,6 +473,9 @@ func TestWebSendRejectsACPBotMismatchBeforePersistence(t *testing.T) {
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
+			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
@@ -660,6 +675,9 @@ func TestWebSendPersistsACPUserInputProjectionOnceBeforePromptReturns(t *testing
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
+			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
@@ -945,6 +963,9 @@ func TestWebSendPersistsACPApprovalProjectionOnce(t *testing.T) {
 					},
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: slog.New(slog.DiscardHandler),
 	})
@@ -1020,6 +1041,9 @@ func TestStreamACPAgentWSRequestsAutoTitle(t *testing.T) {
 					},
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: slog.New(slog.DiscardHandler),
 	})
@@ -1081,6 +1105,9 @@ func TestStreamACPAgentWSPropagatesContextBudgetDefaults(t *testing.T) {
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
+			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
@@ -1151,6 +1178,9 @@ func TestStreamACPAgentWSFailurePersistsRoundAndSkipsMemory(t *testing.T) {
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
+			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
@@ -1242,6 +1272,9 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 					},
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: slog.New(slog.DiscardHandler),
 	}), registry)
@@ -1319,6 +1352,9 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
+			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),
@@ -1415,6 +1451,9 @@ func TestStreamACPAgentWSImageCapabilityErrorCarriesItsCode(t *testing.T) {
 					},
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: slog.New(slog.DiscardHandler),
 	})
@@ -1477,6 +1516,9 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 						"runtime_owner_account_id": "user-1",
 					},
 				}, nil
+			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (session.Thread, error) {
+				return session.Thread{ID: sessionID}, nil
 			},
 		},
 		logger: slog.New(slog.DiscardHandler),

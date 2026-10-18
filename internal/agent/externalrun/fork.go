@@ -31,9 +31,6 @@ var ErrExternalForkAnchorMissing = errors.New("fork source turn has no runtime t
 // must carry. The anchor turn's recorded runtime turn id bounds the
 // runtime-side fork to the same cut as the visible history.
 func (h *Host) PrepareFork(ctx context.Context, botID, sessionID, turnID string) (map[string]any, error) {
-	if h.sessions == nil {
-		return nil, errors.New("session service not configured")
-	}
 	sess, err := h.sessions.Get(ctx, sessionID)
 	if err != nil {
 		return nil, err
@@ -76,9 +73,6 @@ func (h *Host) PrepareFork(ctx context.Context, botID, sessionID, turnID string)
 // a missing anchor is an error rather than a silent fork at the runtime
 // head.
 func (h *Host) runtimeTurnIDForTurn(ctx context.Context, botID, sessionID, turnID string) (string, error) {
-	if h.store == nil {
-		return "", errors.New("queries not configured")
-	}
 	pgBotID, err := db.ParseUUID(botID)
 	if err != nil {
 		return "", fmt.Errorf("invalid bot id: %w", err)

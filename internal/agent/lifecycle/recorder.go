@@ -55,11 +55,15 @@ type Recorder struct {
 
 // New returns a Recorder.
 func New(d Deps) *Recorder {
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &Recorder{
 		store:     d.Store,
 		runs:      d.Runs,
 		decisions: d.Decisions,
-		logger:    d.Logger,
+		logger:    logger,
 	}
 }
 

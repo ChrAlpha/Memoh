@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/transcript"
@@ -171,6 +172,12 @@ type fixture struct {
 // rewire rebuilds the Compactor from the fixture's dependencies, as New does
 // for the ones a test replaced.
 func (f *fixture) rewire() {
+	if f.messages == nil {
+		f.messages = &agenttest.RecordingMessages{}
+	}
+	if f.sessions == nil {
+		f.sessions = &agenttest.Sessions{}
+	}
 	f.Compactor = New(Deps{
 		Logger: f.logger, Settings: f.settings, Models: f.models, Queries: f.queries, Runner: f.engine,
 		Transcript: transcript.New(transcript.Deps{Logger: f.logger, Messages: f.messages, Queries: f.queries, Sessions: f.sessions}),

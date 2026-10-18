@@ -191,9 +191,7 @@ func (e *Executor) Execute(ctx context.Context, emit func(native.StreamEvent)) d
 	// External drivers block their turn inline on decisions; declare it
 	// before the first prompt so the manager resumes on terminal decision
 	// statuses instead of waiting for a native-style re-entry.
-	if e.host.admitter != nil {
-		e.host.admitter.MarkInlineDecisionRun(e.req.BotID, e.req.ThreadID, e.req.RunID)
-	}
+	e.host.admitter.MarkInlineDecisionRun(e.req.BotID, e.req.ThreadID, e.req.RunID)
 	emit(native.StreamEvent{Type: native.EventStart})
 
 	result, promptErr := e.plan.driver.Prompt(ctx, e.promptInput(ctx, emit))
@@ -455,7 +453,7 @@ func (e *Executor) promptInput(ctx context.Context, emit func(native.StreamEvent
 		SessionToken:             e.req.Token,
 		ToolHTTPURL:              e.req.ToolHTTPURL,
 		ToolOutputLimit:          e.host.decider.ToolOutputLimit(),
-		CanRequestUserInput:      !e.unattended && e.host.decider.CanDeliverUserInputStream(),
+		CanRequestUserInput:      !e.unattended,
 		Sink:                     external.EventSinkFunc(func(ev native.StreamEvent) { e.deliver(ctx, emit, ev) }),
 	}
 }

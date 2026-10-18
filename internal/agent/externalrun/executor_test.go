@@ -2,12 +2,10 @@ package externalrun
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -18,29 +16,18 @@ import (
 func TestExternalPromptInputCarriesWhetherTheRunCanAskTheUser(t *testing.T) {
 	t.Parallel()
 
-	newExecutor := func(unattended bool, hasInputPort bool) *Executor {
-		dd := decide.Deps{Logger: slog.New(slog.DiscardHandler)}
-		if hasInputPort {
-			dd.UserInput = &agenttest.UserInput{}
-		}
-		return &Executor{host: testHost(t, Deps{Decider: decide.New(dd)}), unattended: unattended}
-	}
-
 	cases := []struct {
-		name         string
-		unattended   bool
-		hasInputPort bool
-		want         bool
+		name       string
+		unattended bool
+		want       bool
 	}{
-		{name: "interactive with a port", unattended: false, hasInputPort: true, want: true},
-		{name: "interactive without a port", unattended: false, hasInputPort: false, want: false},
-		{name: "unattended with a port", unattended: true, hasInputPort: true, want: false},
-		{name: "unattended without a port", unattended: true, hasInputPort: false, want: false},
+		{name: "interactive", unattended: false, want: true},
+		{name: "unattended", unattended: true, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			exec := newExecutor(tc.unattended, tc.hasInputPort)
+			exec := &Executor{host: testHost(t, Deps{}), unattended: tc.unattended}
 			got := exec.promptInput(context.Background(), func(native.StreamEvent) {}).CanRequestUserInput
 			if got != tc.want {
 				t.Fatalf("CanRequestUserInput = %v, want %v", got, tc.want)

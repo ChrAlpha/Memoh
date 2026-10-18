@@ -6,6 +6,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
@@ -138,4 +139,18 @@ func (s *RecordingLifecycleStore) ListTerminalSessionRunsNeedingContextLifecycle
 		return nil, ctx.Err()
 	}
 	return append([]sqlc.ListTerminalSessionRunsNeedingContextLifecycleRow(nil), s.TerminalRows...), s.TerminalListErr
+}
+
+// NoRuns is a run ledger that holds no runs.
+type NoRuns struct{}
+
+func (NoRuns) GetSessionRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
+	return sqlc.SessionRun{}, pgx.ErrNoRows
+}
+
+// NoDecisions is a run with nothing parked.
+type NoDecisions struct{}
+
+func (NoDecisions) PendingRuntimeDecisions(context.Context, string) ([]sessionruntime.DecisionTarget, error) {
+	return nil, nil
 }

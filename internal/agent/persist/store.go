@@ -121,9 +121,6 @@ func (opts RoundOptions) withContextLifecycleMetadata(logger *slog.Logger, req r
 }
 
 func logContextLifecycleMetadataSkipped(logger *slog.Logger, req runreq.ChatRequest, reason string, messages int) {
-	if logger == nil {
-		return
-	}
 	logger.Debug("context lifecycle metadata not persisted",
 		slog.String("reason", reason),
 		slog.String("bot_id", req.BotID),
@@ -142,9 +139,6 @@ func lastAssistantMessageIndex(messages []runreq.ModelMessage) int {
 }
 
 func (w *Writer) storeMessagesResult(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts RoundOptions) ([]messagepkg.Message, error) {
-	if w.messages == nil {
-		return nil, nil
-	}
 	if strings.TrimSpace(req.BotID) == "" {
 		return nil, nil
 	}
@@ -358,7 +352,7 @@ func workspaceTargetMetadata(target *runreq.WorkspaceTarget) map[string]any {
 }
 
 func (w *Writer) persistSessionWorkspaceTarget(ctx context.Context, req runreq.ChatRequest) error {
-	if w.sessions == nil || req.WorkspaceTarget == nil || strings.TrimSpace(req.ThreadID) == "" {
+	if req.WorkspaceTarget == nil || strings.TrimSpace(req.ThreadID) == "" {
 		return nil
 	}
 	sess, err := w.sessions.Get(ctx, req.ThreadID)
@@ -406,7 +400,7 @@ func (w *Writer) SessionRuntimeSnapshot(ctx context.Context, req runreq.ChatRequ
 	if sessionMode != "" && runtimeType != "" {
 		return sessionMode, runtimeType
 	}
-	if w.sessions != nil && strings.TrimSpace(req.ThreadID) != "" {
+	if strings.TrimSpace(req.ThreadID) != "" {
 		if sess, err := w.sessions.Get(ctx, req.ThreadID); err == nil {
 			if sessionMode == "" {
 				sessionMode = strings.TrimSpace(sess.SessionMode)
@@ -618,7 +612,7 @@ func (w *Writer) SenderIDs(ctx context.Context, req runreq.ChatRequest) (string,
 // Used by the WebSocket path where attachment ingestion happens after message
 // persistence.
 func (w *Writer) LinkOutboundAssets(ctx context.Context, botID, sessionID string, assets []messagepkg.AssetRef) {
-	if w.messages == nil || len(assets) == 0 || strings.TrimSpace(botID) == "" {
+	if len(assets) == 0 || strings.TrimSpace(botID) == "" {
 		return
 	}
 	var (
@@ -703,7 +697,7 @@ func findAssistantMessageForToolCall(msgs []messagepkg.Message, toolCallID strin
 // matches nothing. A failure leaves the record to the sweep, which reads the
 // steer.
 func (w *Writer) consumePromoted(ctx context.Context, steerID string) {
-	if err := w.promoted.ConsumePromoted(context.WithoutCancel(ctx), steerID); err != nil && w.logger != nil {
+	if err := w.promoted.ConsumePromoted(context.WithoutCancel(ctx), steerID); err != nil {
 		w.logger.WarnContext(ctx, "record applied promoted input failed",
 			slog.String("item_id", steerID), slog.Any("error", err))
 	}

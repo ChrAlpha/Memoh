@@ -26,9 +26,6 @@ func (h *Host) runtimeControlSession(ctx context.Context, request turn.RuntimeCo
 	if request.TeamID != "" && h.allowedTeam != "" && request.TeamID != h.allowedTeam {
 		return session.Thread{}, turn.ErrTeamNotServed
 	}
-	if h.sessions == nil || h.permissions == nil {
-		return session.Thread{}, external.ErrControlUnsupported
-	}
 	sess, err := h.sessions.Get(ctx, request.ThreadID)
 	if err != nil {
 		return sess, err

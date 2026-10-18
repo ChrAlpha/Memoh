@@ -96,7 +96,7 @@ func (t *Reader) CurrentWorkspaceMessage(ctx context.Context, req runreq.ChatReq
 		return nil
 	}
 	var previous *runreq.WorkspaceTarget
-	if t.sessions != nil && strings.TrimSpace(req.ThreadID) != "" {
+	if strings.TrimSpace(req.ThreadID) != "" {
 		if sess, err := t.sessions.Get(ctx, req.ThreadID); err == nil {
 			if raw, ok := sess.Metadata["workspace_target"].(map[string]any); ok {
 				previous = workspaceTargetFromMetadata(map[string]any{"execution_location": raw})
@@ -141,7 +141,7 @@ func ScopeFallbackFromToolApprovalRequest(req toolapproval.Request) historyfrag.
 // is not visible.
 func (t *Reader) ensureRequiredHistoryMessage(ctx context.Context, messages []historyfrag.HistoryRecord, req runreq.ChatRequest) ([]historyfrag.HistoryRecord, error) {
 	messageID := strings.TrimSpace(req.RequiredHistoryMessageID)
-	if messageID == "" || t.messages == nil || strings.TrimSpace(req.ThreadID) == "" {
+	if messageID == "" || strings.TrimSpace(req.ThreadID) == "" {
 		return messages, nil
 	}
 	for i, item := range messages {

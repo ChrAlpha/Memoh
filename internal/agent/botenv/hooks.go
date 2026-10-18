@@ -135,7 +135,7 @@ func (e *Env) hookWorkspace(ctx context.Context, botID string) hooks.WorkspaceIn
 }
 
 func (e *Env) LogHookWarn(eventName, botID, sessionID string, err error) {
-	if e.logger == nil || err == nil {
+	if err == nil {
 		return
 	}
 	e.logger.Warn("hook failed",

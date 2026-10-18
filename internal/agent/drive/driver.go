@@ -35,7 +35,7 @@ type Deps struct {
 	Logger *slog.Logger
 	// Runtime writes the terminal state of a run.
 	Runtime Runtime
-	// Events receives the events of a run; without it a run publishes nothing.
+	// Events receives the events of a run.
 	Events EventSink
 	// Lifecycle records how the context of a run ended.
 	Lifecycle *lifecycle.Recorder
@@ -67,11 +67,14 @@ type Driver struct {
 	streamIdleTimeoutMax time.Duration
 }
 
-// New returns a Driver. A missing logger discards the driver's records, and a
-// missing event sink drops the events a run publishes.
+// New returns a Driver. A missing logger discards the driver's records.
 func New(d Deps) *Driver {
-	driver := &Driver{
-		logger:               d.Logger,
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &Driver{
+		logger:               logger,
 		runtime:              d.Runtime,
 		events:               d.Events,
 		lifecycle:            d.Lifecycle,
@@ -81,17 +84,4 @@ func New(d Deps) *Driver {
 		streamIdleTimeout:    d.StreamIdleTimeout,
 		streamIdleTimeoutMax: d.StreamIdleTimeoutMax,
 	}
-	if driver.logger == nil {
-		driver.logger = slog.New(slog.DiscardHandler)
-	}
-	if driver.events == nil {
-		driver.events = noEvents{}
-	}
-	return driver
-}
-
-type noEvents struct{}
-
-func (noEvents) HandleAgentEvent(context.Context, sessionruntime.RunHandle, native.StreamEvent) ([]chatview.UIMessage, error) {
-	return nil, nil
 }

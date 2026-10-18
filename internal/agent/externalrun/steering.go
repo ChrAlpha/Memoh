@@ -26,7 +26,7 @@ type runtimeSteerClaim struct {
 }
 
 func (h *Host) runtimeSteering(req runreq.ChatRequest) external.Steering {
-	if h.runtime == nil || req.RunHandle.RunID == "" || req.AgentCommand != "" {
+	if req.RunHandle.RunID == "" || req.AgentCommand != "" {
 		return nil
 	}
 	return &runtimeSteering{manager: h.runtime, run: req.RunHandle, pending: make(map[string]runtimeSteerClaim)}
@@ -81,7 +81,7 @@ func (q *runtimeSteering) Close(ctx context.Context) error {
 // Reconcile provisional steer bubbles to the identities assigned by the normal
 // round transaction before publishing terminal state.
 func (h *Host) publishRuntimeSteerHistory(ctx context.Context, req runreq.ChatRequest, ids []string, persisted []messagepkg.Message) {
-	if len(ids) == 0 || h.runtime == nil {
+	if len(ids) == 0 {
 		return
 	}
 	var users []chatview.UITurn

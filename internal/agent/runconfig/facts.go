@@ -34,7 +34,7 @@ func runFacts(session sessionfacts.Facts, runMode string) sessionfacts.Facts {
 
 func (b *Builder) sessionDescriptor(ctx context.Context, sessionID string) (string, string, sessionfacts.Facts) {
 	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" || b.sessions == nil {
+	if sessionID == "" {
 		return sessionpkg.TypeChat, sessionpkg.RuntimeModel, sessionfacts.Preset(sessionpkg.TypeChat)
 	}
 	sess, err := b.sessions.Get(ctx, sessionID)

@@ -121,7 +121,7 @@ func TestPostgresToolApprovalAuthority(t *testing.T) {
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{Ledger: runs, Fence: runtimefence.NewActivator(store)})
 	t.Cleanup(func() { _ = manager.CloseContext(context.Background()) })
 	approvals := toolapproval.NewService(nil, store, nil)
-	svc := New(Deps{
+	svc := newTestDecider(Deps{
 		Queries:        store,
 		BotPermissions: grantPermissionChecker{bots: bots.NewService(slog.Default(), store)},
 		ToolApproval:   approvals,

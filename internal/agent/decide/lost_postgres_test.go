@@ -49,7 +49,7 @@ func TestNonInteractiveApprovalIsRecordedAsSystemRejection(t *testing.T) {
 
 	store := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))
 	approvals := toolapproval.NewService(slog.New(slog.DiscardHandler), store, askWritePolicyProvider{})
-	svc := New(Deps{Logger: slog.New(slog.DiscardHandler), ToolApproval: approvals})
+	svc := newTestDecider(Deps{Logger: slog.New(slog.DiscardHandler), ToolApproval: approvals})
 
 	for _, mode := range []string{sessionmode.Discuss, sessionmode.Schedule, sessionmode.Subagent} {
 		handler := svc.ApprovalHandler(HandlerParams{
@@ -123,7 +123,7 @@ func TestLostRunCancelsApprovalAndAskUser(t *testing.T) {
 	log := slog.New(slog.DiscardHandler)
 	inputs := userinput.NewService(log, store)
 	approvals := toolapproval.NewService(log, store, nil)
-	svc := New(Deps{Logger: log, UserInput: inputs, ToolApproval: approvals})
+	svc := newTestDecider(Deps{Logger: log, UserInput: inputs, ToolApproval: approvals})
 	admission, err := manager.Admit(ctx, sessionruntime.AdmitInput{
 		BotID: botID, SessionID: sessionID, InvocationID: "ext-lost", Payload: []byte(`{"query":"hi"}`),
 		Execution: sessionruntime.Execution{Admission: func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {

@@ -56,6 +56,10 @@ type Env struct {
 
 // New returns an Env.
 func New(d Deps) *Env {
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	clockLocation := d.ClockLocation
 	if clockLocation == nil {
 		clockLocation = time.UTC
@@ -65,7 +69,7 @@ func New(d Deps) *Env {
 		runner = serviceHooks{service: d.Hooks}
 	}
 	return &Env{
-		logger:        d.Logger,
+		logger:        logger,
 		queries:       d.Queries,
 		settings:      d.Settings,
 		accounts:      d.Accounts,

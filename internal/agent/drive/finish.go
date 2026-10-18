@@ -100,7 +100,7 @@ func FromOutcome(ended outcome.RunOutcome) Termination {
 // staged already is better and stays. A run that cannot stage one, because it
 // has no fence, gets its row written after the terminal write.
 func (d *Driver) Finish(ctx context.Context, run AdmittedRun, t Termination) sessionruntime.TerminalRun {
-	if d.runtime == nil || run.Handle.FencingToken <= 0 || t.lost {
+	if run.Handle.FencingToken <= 0 || t.lost {
 		return sessionruntime.TerminalRun{}
 	}
 	handle := run.Handle

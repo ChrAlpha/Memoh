@@ -468,6 +468,9 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 				Facts: sessionfacts.Preset(sessionpkg.TypeDiscuss),
 			}, nil
 		},
+		UpdateMetadataFn: func(_ context.Context, id string, _ map[string]any) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{ID: id}, nil
+		},
 	}
 	rewireComponents(svc)
 

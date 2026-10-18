@@ -358,7 +358,7 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 		agent:           native.New(native.Deps{Logger: logger}),
 		modelsService:   models.NewService(logger, queries),
 		queries:         queries,
-		lifecycle:       lifecycle.New(lifecycle.Deps{Store: lifecycles}),
+		lifecycle:       newTestRecorder(lifecycles),
 		messageService:  messages,
 		settingsService: settings.NewService(logger, queries, nil, nil),
 		sessionRuntime:  runtime,

@@ -177,17 +177,13 @@ func TestPrepareWorkspaceRequestRequiresWorkspaceRead(t *testing.T) {
 
 	resolver := newBuilder(func(d *Deps) {
 		d.WorkspaceTargets = workspaceRequestTargetService{}
+		d.BotPermissions = workspaceRequestPermission(false)
 	})
 	if _, _, err := resolver.BindRequestWorkspace(t.Context(), base, UserPrincipal(base), false); err == nil || !strings.Contains(err.Error(), "user id") {
 		t.Fatalf("missing user error = %v", err)
 	}
 
 	base.UserID = "user-1"
-	if _, _, err := resolver.BindRequestWorkspace(t.Context(), base, UserPrincipal(base), false); err == nil || !strings.Contains(err.Error(), "permission checker") {
-		t.Fatalf("missing checker error = %v", err)
-	}
-
-	resolver.permissions = workspaceRequestPermission(false)
 	if _, _, err := resolver.BindRequestWorkspace(t.Context(), base, UserPrincipal(base), false); err == nil || !strings.Contains(err.Error(), "workspace_read") {
 		t.Fatalf("denied permission error = %v", err)
 	}

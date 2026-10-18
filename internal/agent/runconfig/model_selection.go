@@ -20,9 +20,6 @@ import (
 var errChatModelNotConfigured = errors.New("chat model not configured: specify model in request or bot settings")
 
 func (b *Builder) selectChatModel(ctx context.Context, req runreq.ChatRequest, botSettings settings.Settings, sessionPrefModelID string) (models.GetResponse, sqlc.Provider, error) {
-	if b.models == nil {
-		return models.GetResponse{}, sqlc.Provider{}, errors.New("models service not configured")
-	}
 	modelID := strings.TrimSpace(req.Model)
 	providerFilter := strings.TrimSpace(req.Provider)
 

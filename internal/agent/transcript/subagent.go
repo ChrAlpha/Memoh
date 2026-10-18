@@ -34,9 +34,6 @@ func (t *Reader) ApplySubagentDefaults(ctx context.Context, req runreq.ChatReque
 	if strings.TrimSpace(req.SessionType) != "" || strings.TrimSpace(req.ThreadID) == "" {
 		return req
 	}
-	if t.sessions == nil {
-		return req
-	}
 	sess, err := t.sessions.Get(ctx, req.ThreadID)
 	if err != nil || !strings.EqualFold(strings.TrimSpace(sess.Type), sessionpkg.TypeSubagent) {
 		return req

@@ -52,7 +52,7 @@ type StepCommitter struct {
 // request does not call for one: no run identity, no fence, a message store that
 // cannot write steps, or an input whose turn is not named.
 func (w *Writer) NewStepCommitter(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext) *StepCommitter {
-	if w.messages == nil || strings.TrimSpace(req.RunID) == "" ||
+	if strings.TrimSpace(req.RunID) == "" ||
 		strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" ||
 		(req.SkipHistoryTurn && req.TurnReplacement == nil) {
 		return nil
@@ -68,9 +68,7 @@ func (w *Writer) NewStepCommitter(ctx context.Context, req runreq.ChatRequest, r
 	if queueStep != nil && queueStep.steerEnabled {
 		if err := w.runtime.EnableSteer(ctx, req.RunHandle); err != nil {
 			queueStep.steerEnabled = false
-			if w.logger != nil {
-				w.logger.WarnContext(ctx, "steer consumer could not be published", slog.String("run_id", req.RunID), slog.Any("error", err))
-			}
+			w.logger.WarnContext(ctx, "steer consumer could not be published", slog.String("run_id", req.RunID), slog.Any("error", err))
 		}
 	}
 	if req.TurnReplacement != nil && queueStep == nil {
@@ -351,7 +349,7 @@ func (c *StepCommitter) stampSteerTurn(inputs []messagepkg.PersistInput) {
 }
 
 func (c *StepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int, result queueStepOutcome) {
-	if c == nil || c.writer == nil || c.writer.runtime == nil {
+	if c == nil {
 		return
 	}
 	projected := chatview.ConvertMessagesToUITurns(result.persisted)

@@ -114,7 +114,7 @@ type Host struct {
 	allowedTeam string
 }
 
-// New returns a Host. A missing logger discards the host's records.
+// New returns a Host.
 func New(d Deps) *Host {
 	logger := d.Logger
 	if logger == nil {

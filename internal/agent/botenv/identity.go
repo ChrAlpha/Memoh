@@ -12,9 +12,6 @@ func (e *Env) ResolveDisplayName(ctx context.Context, req runreq.ChatRequest) st
 	if name := strings.TrimSpace(req.DisplayName); name != "" {
 		return name
 	}
-	if e.queries == nil {
-		return "User"
-	}
 	channelIdentityID := strings.TrimSpace(req.SourceChannelIdentityID)
 	if channelIdentityID == "" {
 		return "User"
@@ -33,9 +30,6 @@ func (e *Env) ResolveDisplayName(ctx context.Context, req runreq.ChatRequest) st
 }
 
 func (e *Env) IsExistingChannelIdentity(ctx context.Context, id string) bool {
-	if e.queries == nil {
-		return false
-	}
 	pgID, err := runreq.ParseServiceUUID(id)
 	if err != nil {
 		return false
@@ -45,9 +39,6 @@ func (e *Env) IsExistingChannelIdentity(ctx context.Context, id string) bool {
 }
 
 func (e *Env) IsExistingUser(ctx context.Context, id string) bool {
-	if e.queries == nil {
-		return false
-	}
 	pgID, err := runreq.ParseServiceUUID(id)
 	if err != nil {
 		return false

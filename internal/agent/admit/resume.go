@@ -39,7 +39,7 @@ type ResumeContext struct {
 // when the run starts. A resumed run and a run without a durable fence store
 // nothing.
 func (a *Admitter) RecordResume(ctx context.Context, req runreq.ChatRequest) error {
-	if a.queries == nil || req.RunID == "" || req.ShutdownResume {
+	if req.RunID == "" || req.ShutdownResume {
 		return nil
 	}
 	fence, ok := runtimefence.FromContext(ctx)

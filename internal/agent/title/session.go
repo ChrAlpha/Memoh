@@ -85,7 +85,7 @@ func (g *Generator) MaybeGenerate(ctx context.Context, req runreq.ChatRequest, u
 		return
 	}
 	sessionID := strings.TrimSpace(req.ThreadID)
-	if sessionID == "" || g.sessions == nil {
+	if sessionID == "" {
 		return
 	}
 	userQuery = strings.TrimSpace(userQuery)
@@ -148,9 +148,6 @@ func (g *Generator) generateSessionTitle(ctx context.Context, req runreq.ChatReq
 }
 
 func (g *Generator) resolveTitleModel(ctx context.Context, botID string) (modelID, ownerUserID string, err error) {
-	if g.store == nil || g.accounts == nil {
-		return "", "", errors.New("title model profile dependencies are not configured")
-	}
 	parsedBotID, err := db.ParseUUID(botID)
 	if err != nil {
 		return "", "", err

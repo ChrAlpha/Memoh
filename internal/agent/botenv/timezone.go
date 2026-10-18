@@ -29,14 +29,11 @@ func (e *Env) ResolveTimezone(ctx context.Context, botID, userID string) (string
 }
 
 func (e *Env) systemTimezoneDefaults() (string, *time.Location) {
-	if e.clockLocation != nil {
-		return e.clockLocation.String(), e.clockLocation
-	}
-	return timezone.DefaultName, timezone.MustResolve(timezone.DefaultName)
+	return e.clockLocation.String(), e.clockLocation
 }
 
 func (e *Env) loadBotTimezone(ctx context.Context, botID string) (string, *time.Location, bool) {
-	if e.queries == nil || strings.TrimSpace(botID) == "" {
+	if strings.TrimSpace(botID) == "" {
 		return "", nil, false
 	}
 	botUUID, err := db.ParseUUID(botID)
@@ -56,20 +53,18 @@ func (e *Env) loadBotTimezone(ctx context.Context, botID string) (string, *time.
 	}
 	loc, name, err := timezone.Resolve(tz)
 	if err != nil {
-		if e.logger != nil {
-			e.logger.WarnContext(ctx, "resolve bot timezone failed",
-				slog.String("bot_id", botID),
-				slog.String("timezone", tz),
-				slog.Any("error", err),
-			)
-		}
+		e.logger.WarnContext(ctx, "resolve bot timezone failed",
+			slog.String("bot_id", botID),
+			slog.String("timezone", tz),
+			slog.Any("error", err),
+		)
 		return "", nil, false
 	}
 	return name, loc, true
 }
 
 func (e *Env) loadUserTimezone(ctx context.Context, userID string) (string, *time.Location, bool) {
-	if e.accounts == nil || strings.TrimSpace(userID) == "" {
+	if strings.TrimSpace(userID) == "" {
 		return "", nil, false
 	}
 	account, err := e.accounts.Get(ctx, strings.TrimSpace(userID))
@@ -82,13 +77,11 @@ func (e *Env) loadUserTimezone(ctx context.Context, userID string) (string, *tim
 	}
 	loc, name, err := timezone.Resolve(tz)
 	if err != nil {
-		if e.logger != nil {
-			e.logger.WarnContext(ctx, "resolve user timezone failed",
-				slog.String("user_id", userID),
-				slog.String("timezone", tz),
-				slog.Any("error", err),
-			)
-		}
+		e.logger.WarnContext(ctx, "resolve user timezone failed",
+			slog.String("user_id", userID),
+			slog.String("timezone", tz),
+			slog.Any("error", err),
+		)
 		return "", nil, false
 	}
 	return name, loc, true

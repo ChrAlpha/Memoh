@@ -40,7 +40,7 @@ type Deps struct {
 	Compact *compact.Compactor
 	// ActiveTurns keeps the process open until the run's persistence is done.
 	ActiveTurns *runreq.ActiveTurnTracker
-	// Events receives the run's events. A host without it publishes nothing.
+	// Events receives the run's events.
 	Events Events
 	// Steps persists one fenced step at a time. A host without it declines
 	// incremental persistence, and the terminal snapshot writes the run.

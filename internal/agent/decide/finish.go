@@ -23,9 +23,6 @@ import (
 // come from #1107 (a23d24a1f). This callback adds decision cleanup to owner-side
 // finalization; it does not replace that protocol or run on direct reaper finalization.
 func (d *Decider) FinalizeRuntimeDecisions(ctx context.Context, handle sessionruntime.RunHandle) error {
-	if d.queries == nil {
-		return nil
-	}
 	targets, err := d.runtimeDecisionsForFinish(ctx, handle.RunID)
 	if err != nil {
 		return err
@@ -53,9 +50,6 @@ func (d *Decider) FinalizeRuntimeDecisions(ctx context.Context, handle sessionru
 		var event native.StreamEvent
 		switch target.Type {
 		case sessionruntime.CommandUserInputResponse:
-			if d.userInput == nil {
-				return errors.New("user input service not configured")
-			}
 			var req userinput.Request
 			var err error
 			if strings.EqualFold(target.Status, userinput.StatusPending) {
@@ -78,9 +72,6 @@ func (d *Decider) FinalizeRuntimeDecisions(ctx context.Context, handle sessionru
 				Input: req.Input, Metadata: userinput.DeferredMetadata(req),
 			}
 		case sessionruntime.CommandToolApprovalResponse:
-			if d.toolApproval == nil {
-				return errors.New("tool approval service not configured")
-			}
 			var req toolapproval.Request
 			var err error
 			if strings.EqualFold(target.Status, toolapproval.StatusPending) {

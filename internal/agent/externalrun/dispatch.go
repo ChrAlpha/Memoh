@@ -39,9 +39,6 @@ func (h *Host) ResolveDispatch(ctx context.Context, req runreq.ChatRequest) (Dis
 	if strings.TrimSpace(req.ThreadID) == "" {
 		return Dispatch{Kind: DispatchNative}, nil
 	}
-	if h.sessions == nil {
-		return Dispatch{Kind: DispatchNative}, nil
-	}
 	sess, err := h.sessions.Get(ctx, req.ThreadID)
 	if err != nil {
 		return Dispatch{}, err
@@ -79,9 +76,6 @@ const abortSettleWait = 30 * time.Second
 // A run that cannot settle inside the window fails the call rather than
 // letting the caller proceed over a still-running turn.
 func (h *Host) AbortSessionRuns(ctx context.Context, botID, sessionID string) error {
-	if h.runtime == nil {
-		return nil
-	}
 	snapshot, err := h.runtime.Snapshot(ctx, botID, sessionID)
 	if err != nil {
 		return err

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -46,22 +45,32 @@ func newDriveService(pub *agenttest.EventRecorder, admitter *agenttest.ScriptedA
 		opt(&cfg)
 	}
 	logger := slog.New(slog.DiscardHandler)
-	deps := drive.Deps{
+	if cfg.events == nil {
+		cfg.events = &agenttest.EventRecorder{}
+	}
+	if cfg.messages == nil {
+		cfg.messages = &agenttest.RecordingMessages{}
+	}
+	if admitter == nil {
+		admitter = &agenttest.ScriptedAdmitter{}
+	}
+	return drive.New(drive.Deps{
 		Logger:       logger,
+		Runtime:      admitter,
 		Events:       cfg.events,
 		OutputMedia:  cfg.media,
 		OutputSpeech: cfg.speech,
-		Lifecycle:    lifecycle.New(lifecycle.Deps{Logger: logger}),
+		Lifecycle: lifecycle.New(lifecycle.Deps{
+			Store: &agenttest.RecordingLifecycleStore{}, Runs: agenttest.NoRuns{}, Decisions: agenttest.NoDecisions{}, Logger: logger,
+		}),
 		Persist: persist.New(persist.Deps{
 			Logger:   logger,
 			Messages: cfg.messages,
-			Bot:      botenv.New(botenv.Deps{Logger: logger}),
+			Sessions: &agenttest.Sessions{},
+			Bot:      agenttest.BotEnv(logger),
+			Runtime:  steerRuntimeUnused{},
 		}),
-	}
-	if admitter != nil {
-		deps.Runtime = admitter
-	}
-	return drive.New(deps)
+	})
 }
 
 var _ runreq.TurnAdmitter = (*agenttest.ScriptedAdmitter)(nil)
@@ -69,3 +78,7 @@ var _ runreq.TurnAdmitter = (*agenttest.ScriptedAdmitter)(nil)
 const drivePrompt = "answer the question"
 
 var _ = time.Second
+
+// steerRuntimeUnused is the steer queue of a driver whose runs never steer;
+// any call into it panics.
+type steerRuntimeUnused struct{ persist.SteerRuntime }

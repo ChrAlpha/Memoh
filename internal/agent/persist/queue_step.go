@@ -46,7 +46,7 @@ func newQueueStepCoordinator(w *Writer, req runreq.ChatRequest) *queueStepCoordi
 	if !req.QueueSteerEnabled && req.TurnReplacement == nil {
 		return nil
 	}
-	if w.runtime == nil || w.messages == nil || req.RunHandle.RunID == "" || req.RunHandle.OwnerID == "" || req.RunHandle.FencingToken <= 0 {
+	if req.RunHandle.RunID == "" || req.RunHandle.OwnerID == "" || req.RunHandle.FencingToken <= 0 {
 		return nil
 	}
 	persister, ok := w.messages.(messagepkg.AgentStepPersister)
@@ -87,10 +87,8 @@ func (q *queueStepCoordinator) allocateSteerTurn(ctx context.Context) *messagepk
 	}
 	slot, err := allocator.AllocateTurnSlot(context.WithoutCancel(ctx), q.run.SessionID)
 	if err != nil {
-		if q.writer.logger != nil {
-			q.writer.logger.WarnContext(ctx, "allocate steer turn slot failed",
-				slog.String("session_id", q.run.SessionID), slog.Any("error", err))
-		}
+		q.writer.logger.WarnContext(ctx, "allocate steer turn slot failed",
+			slog.String("session_id", q.run.SessionID), slog.Any("error", err))
 		return nil
 	}
 	return &slot
@@ -106,7 +104,7 @@ func (q *queueStepCoordinator) steerTurnForStep() *messagepkg.TurnSlot {
 }
 
 func (q *queueStepCoordinator) releaseSteerClaim(ctx context.Context) {
-	if q == nil || q.pendingSteer == nil || q.writer == nil || q.writer.runtime == nil {
+	if q == nil || q.pendingSteer == nil {
 		return
 	}
 	_ = q.writer.runtime.ReleaseSteer(ctx, sessionruntime.Key{BotID: q.run.BotID, SessionID: q.run.SessionID}, *q.pendingSteer)
@@ -122,7 +120,7 @@ func (q *queueStepCoordinator) commit(
 	previouslyPersisted []messagepkg.Message,
 ) (queueStepOutcome, error) {
 	var outcome queueStepOutcome
-	if q == nil || q.writer == nil || q.writer.runtime == nil {
+	if q == nil {
 		return outcome, errors.New("live queue step transaction is unavailable")
 	}
 	persisted, err := q.persistHistory(context.WithoutCancel(ctx), agentStep)

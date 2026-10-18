@@ -9,7 +9,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -279,7 +278,7 @@ func newPreferenceHost(t *testing.T, fake *agenttest.ModelQueries) *Host {
 		Store:  fake,
 		Runconfig: runconfig.New(runconfig.Deps{
 			Logger: logger, Credentials: providers.NewService(nil, nil, ""), Queries: fake,
-			Models: models.NewService(logger, fake), Bot: botenv.New(botenv.Deps{Logger: logger}),
+			Models: models.NewService(logger, fake), Bot: agenttest.BotEnv(logger),
 		}),
 	})
 }

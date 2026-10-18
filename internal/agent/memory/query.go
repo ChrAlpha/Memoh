@@ -47,9 +47,6 @@ func (k *Keeper) buildQuery(ctx context.Context, req runreq.ChatRequest) query {
 	if text == "" {
 		return query{}
 	}
-	if k.messages == nil {
-		return builder.Build(req, nil)
-	}
 	assembled, err := k.transcript.Assemble(ctx, transcript.ForChat(transcript.PurposeMemoryQuery, req, 0))
 	if err != nil {
 		k.logger.WarnContext(ctx, "memory query history load failed",

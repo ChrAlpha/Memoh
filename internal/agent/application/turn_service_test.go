@@ -62,6 +62,9 @@ func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode) chatTurnFix
 				SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,
 			}, nil
 		},
+		UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{ID: sessionID}, nil
+		},
 	}
 	rewireComponents(fixture.service)
 	// The composition root compiles the run's context fragments into the

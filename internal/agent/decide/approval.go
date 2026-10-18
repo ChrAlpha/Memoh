@@ -41,9 +41,6 @@ func NewCommittedToolApproval(request toolapproval.Request, input ToolApprovalRe
 }
 
 func (d *Decider) CommitToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput) (CommittedToolApprovalResponse, error) {
-	if d.toolApproval == nil {
-		return CommittedToolApprovalResponse{}, errors.New("tool approval service not configured")
-	}
 	target, err := d.toolApproval.ResolveTarget(ctx, toolapproval.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.ThreadID,
@@ -187,9 +184,6 @@ func legacyPermissionOptionID(options []toolapproval.PermissionOption, decision 
 }
 
 func (d *Decider) isExternalAgentToolApprovalSession(ctx context.Context, sessionID string) (bool, error) {
-	if d.sessions == nil {
-		return false, nil
-	}
 	sess, err := d.sessions.Get(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -198,9 +192,6 @@ func (d *Decider) isExternalAgentToolApprovalSession(ctx context.Context, sessio
 }
 
 func (d *Decider) authorizeExternalAgentToolApprovalResponse(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput) error {
-	if d.sessions == nil {
-		return errors.New("session service not configured")
-	}
 	sessionID := runreq.FirstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := d.sessions.Get(ctx, sessionID)
 	if err != nil {

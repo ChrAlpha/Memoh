@@ -154,6 +154,9 @@ func newRPCChatService(t *testing.T) (*Service, *recordingModelServer) {
 					SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,
 				}, nil
 			},
+			UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (sessionpkg.Thread, error) {
+				return sessionpkg.Thread{ID: sessionID}, nil
+			},
 		},
 		logger: logger,
 	})

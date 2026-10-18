@@ -17,10 +17,6 @@ import (
 	"github.com/felinics/memoh/internal/workspace"
 )
 
-func (d *Decider) CanDeliverUserInputStream() bool {
-	return d.userInput != nil
-}
-
 // approvalHandlerParams is what the approval handler of one run needs to know
 // about the run: the session and route a decision is requested on, and whether
 // the run may park to wait for it.
@@ -42,12 +38,6 @@ func (d *Decider) ApprovalHandler(p HandlerParams) func(context.Context, sdk.Too
 				// Let the tool's Execute handler return an instructional tool result
 				// to the model instead of creating a fake pending request.
 				return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
-			}
-			if d.userInput == nil {
-				return d.limitToolApprovalResult(toolexec.ToolApprovalResult{
-					Decision: toolexec.ToolApprovalDecisionRejected,
-					Reason:   "user input service is not configured",
-				}, call.ToolName), nil
 			}
 			if p.DecisionMode != sessionfacts.DecisionPark {
 				return d.limitToolApprovalResult(toolexec.ToolApprovalResult{
@@ -104,16 +94,7 @@ func (d *Decider) ApprovalHandler(p HandlerParams) func(context.Context, sdk.Too
 			WorkspaceTargeted:            isWorkspaceTargetTool(call.ToolName),
 			WorkspaceTargetID:            workspace.WorkspaceTargetFromContext(ctx),
 		}
-		forcedApprovalReason, forcedApproval := native.HookForcedApprovalReason(ctx)
-		if d.toolApproval == nil {
-			if forcedApproval {
-				return d.limitToolApprovalResult(toolexec.ToolApprovalResult{
-					Decision: toolexec.ToolApprovalDecisionRejected,
-					Reason:   runreq.FirstNonEmpty(forcedApprovalReason, "hook requested approval but tool approval is not configured"),
-				}, call.ToolName), nil
-			}
-			return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
-		}
+		_, forcedApproval := native.HookForcedApprovalReason(ctx)
 		eval, err := d.toolApproval.EvaluatePolicy(ctx, input)
 		if err != nil {
 			if input.WorkspaceTargeted && errors.Is(err, workspace.ErrWorkspaceTargetNotFound) {
@@ -121,14 +102,12 @@ func (d *Decider) ApprovalHandler(p HandlerParams) func(context.Context, sdk.Too
 				if args, ok := toolexec.ArgumentsValue(call.Input).(map[string]any); ok {
 					requestedTargetID = strings.TrimSpace(runreq.ReadAnyString(args["target_id"]))
 				}
-				if d.logger != nil {
-					d.logger.Warn("workspace tool target not found during approval",
-						slog.String("bot_id", p.BotID),
-						slog.String("tool_name", call.ToolName),
-						slog.String("tool_call_id", call.ToolCallID),
-						slog.String("requested_target_id", requestedTargetID),
-					)
-				}
+				d.logger.Warn("workspace tool target not found during approval",
+					slog.String("bot_id", p.BotID),
+					slog.String("tool_name", call.ToolName),
+					slog.String("tool_call_id", call.ToolCallID),
+					slog.String("requested_target_id", requestedTargetID),
+				)
 				// Twilight treats approval handler errors as fatal to the whole run.
 				// A missing target is invalid model input, so let the tool execute
 				// and return its normal, instructional error instead. This is safe

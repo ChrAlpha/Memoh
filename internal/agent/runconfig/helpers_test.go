@@ -3,12 +3,16 @@ package runconfig
 import (
 	"log/slog"
 
-	"github.com/felinics/memoh/internal/agent/botenv"
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/memory"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/transcript"
 )
+
+// discardLogger is the logger of tests that call package functions directly.
+var discardLogger = slog.New(slog.DiscardHandler)
 
 // newBuilder returns a Builder over collaborators built on nothing, which
 // answer as an unconfigured deployment does. A test names only what it reads:
@@ -20,8 +24,11 @@ func newBuilder(adjust ...func(*Deps)) *Builder {
 	for _, a := range adjust {
 		a(&d)
 	}
+	if d.Agent == nil {
+		d.Agent = &native.Agent{}
+	}
 	if d.Bot == nil {
-		d.Bot = botenv.New(botenv.Deps{Logger: logger})
+		d.Bot = agenttest.BotEnv(logger)
 	}
 	if d.Transcript == nil {
 		d.Transcript = transcript.New(transcript.Deps{Logger: logger})

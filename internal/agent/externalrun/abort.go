@@ -2,7 +2,6 @@ package externalrun
 
 import (
 	"context"
-	"errors"
 
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -17,9 +16,6 @@ func (h *Host) AbortRuntimeRun(
 	ctx context.Context,
 	botID, sessionID, runID, controlID string,
 ) (bool, error) {
-	if h.aborter == nil {
-		return false, errors.New("session runtime abort is not configured")
-	}
 	ctx = runreq.NonNilContext(ctx)
 	applied, err := h.aborter.AbortControl(ctx, botID, sessionID, runID, controlID)
 	if applied || err != nil {

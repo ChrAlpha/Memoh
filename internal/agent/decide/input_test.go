@@ -127,7 +127,7 @@ func TestACPDecisionAuthorityRequiresLiveWorkspaceExec(t *testing.T) {
 			"bot-1:" + chatOnlyID + ":" + bots.PermissionChat:        true,
 		},
 	}
-	svc := New(Deps{
+	svc := newTestDecider(Deps{
 		BotPermissions: perms,
 		Sessions: &agenttest.Sessions{
 			GetFn: func(_ context.Context, sessionID string) (session.Thread, error) {

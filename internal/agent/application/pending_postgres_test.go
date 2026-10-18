@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/lifecycle"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -79,6 +78,9 @@ func chatSessionService(botID string) *agenttest.Sessions {
 				ID: id, BotID: botID, Type: sessionpkg.TypeChat, SessionMode: sessionpkg.TypeChat,
 				RuntimeType: sessionpkg.RuntimeModel, Facts: sessionfacts.Preset(sessionpkg.TypeChat),
 			}, nil
+		},
+		UpdateMetadataFn: func(_ context.Context, id string, _ map[string]any) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{ID: id}, nil
 		},
 	}
 }
@@ -964,7 +966,7 @@ func TestPromotedFollowUpThatTheRunNeverTookIsStartedAfterIt(t *testing.T) {
 	held := heldStep("never delivered")
 	proc := newQueueProcess(t, env, held, &discussStep{text: "answered after the stop"})
 	// A stopped run's context lifecycle record is not what this case is about.
-	proc.svc.lifecycle = lifecycle.New(lifecycle.Deps{})
+	proc.svc.lifecycle = newTestRecorder(&agenttest.RecordingLifecycleStore{})
 	rewireRun(proc.svc)
 	startHeldRun(t, proc, env, held)
 	item := env.promotable(t, proc, "g")

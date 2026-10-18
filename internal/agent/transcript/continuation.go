@@ -13,7 +13,7 @@ type continuationTurnRequestMessageResolver interface {
 
 func (t *Reader) ContinuationRequestMessageID(ctx context.Context, sessionID string, runHandle sessionruntime.RunHandle) (string, error) {
 	turnID := strings.TrimSpace(runHandle.TurnID)
-	if turnID == "" || t.messages == nil {
+	if turnID == "" {
 		return "", nil
 	}
 	resolver, ok := t.messages.(continuationTurnRequestMessageResolver)

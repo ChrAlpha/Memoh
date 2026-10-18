@@ -34,46 +34,12 @@ func (r workspaceTargetPolicyErrorResolver) ResolveWorkspaceTargetPolicy(context
 	return toolapproval.WorkspaceTargetPolicy{}, r.err
 }
 
-func TestToolApprovalHandlerLimitsForcedApprovalRejectionReason(t *testing.T) {
-	t.Parallel()
-
-	large := "HEAD\n" + strings.Repeat("rejected detail ", 300) + "\nTAIL"
-	resolver := New(Deps{
-		Limits: native.New(native.Deps{
-			Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80},
-		}),
-	})
-	handler := resolver.ApprovalHandler(HandlerParams{
-		BotID:        "bot-1",
-		SessionID:    "session-1",
-		DecisionMode: sessionfacts.Preset(sessionmode.Chat).DecisionMode,
-	})
-
-	result, err := handler(native.ContextWithHookForcedApproval(context.Background(), large), sdk.ToolCall{
-		ToolCallID: "call-1",
-		ToolName:   "write",
-		Input:      toolexec.ArgumentsFromValue(map[string]any{}),
-	})
-	if err != nil {
-		t.Fatalf("handler returned error: %v", err)
-	}
-	if result.Decision != toolexec.ToolApprovalDecisionRejected {
-		t.Fatalf("decision = %q, want rejected", result.Decision)
-	}
-	if len(result.Reason) >= len(large) {
-		t.Fatalf("approval reason was not pruned: got %d bytes, original %d", len(result.Reason), len(large))
-	}
-	if !strings.Contains(result.Reason, "[memoh pruned]") {
-		t.Fatalf("approval reason missing prune marker:\n%s", result.Reason)
-	}
-}
-
 func TestToolApprovalPolicyDenyWinsOverHookForcedApproval(t *testing.T) {
 	t.Parallel()
 
 	log := slog.New(slog.DiscardHandler)
 	approvalService := toolapproval.NewService(log, nil, denyToolApprovalPolicyProvider{})
-	resolver := New(Deps{ToolApproval: approvalService})
+	resolver := newTestDecider(Deps{ToolApproval: approvalService})
 	handler := resolver.ApprovalHandler(HandlerParams{
 		BotID:        "11111111-1111-1111-1111-111111111111",
 		SessionID:    "22222222-2222-2222-2222-222222222222",
@@ -113,7 +79,7 @@ func TestToolApprovalHandlerOnlyRecoversMissingWorkspaceTarget(t *testing.T) {
 			log := slog.New(slog.DiscardHandler)
 			approvalService := toolapproval.NewService(log, nil, nil)
 			approvalService.SetWorkspaceTargetPolicyResolver(workspaceTargetPolicyErrorResolver{err: tt.resolveErr})
-			resolver := New(Deps{ToolApproval: approvalService, Logger: log})
+			resolver := newTestDecider(Deps{ToolApproval: approvalService, Logger: log})
 			handler := resolver.ApprovalHandler(HandlerParams{
 				BotID:        "bot-1",
 				SessionID:    "session-1",
@@ -165,7 +131,7 @@ func TestApprovalResultMetadata(t *testing.T) {
 func TestServiceLimitToolResultTextUsesAgentLimits(t *testing.T) {
 	t.Parallel()
 
-	r := New(Deps{
+	r := newTestDecider(Deps{
 		Limits: native.New(native.Deps{
 			Limits: native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80},
 		}),
@@ -203,7 +169,7 @@ func TestToolApprovalHandlerPinsWorkspaceTargetOnBypass(t *testing.T) {
 		Name:     "Office Mac",
 		Config:   toolapproval.PolicyConfig{Enabled: true, Read: toolapproval.FilePolicy{Mode: toolapproval.PolicyModeAllow}},
 	}})
-	resolver := New(Deps{ToolApproval: approvalService, Logger: log})
+	resolver := newTestDecider(Deps{ToolApproval: approvalService, Logger: log})
 	handler := resolver.ApprovalHandler(HandlerParams{
 		BotID:        "bot-1",
 		SessionID:    "session-1",

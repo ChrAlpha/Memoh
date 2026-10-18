@@ -35,9 +35,6 @@ func (r *Recorder) ReconcileAborted(
 	ctx context.Context,
 	runID, botID, sessionID string,
 ) {
-	if r.runs == nil || r.store == nil {
-		return
-	}
 	runUUID, botUUID, sessionUUID, err := parseIDs(runID, botID, sessionID)
 	if err != nil {
 		r.recordContextLifecyclePersistenceError(err, runID, botID, sessionID, StatusAborted)

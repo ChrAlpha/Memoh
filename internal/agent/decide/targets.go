@@ -18,9 +18,6 @@ import (
 // owner lookup. Terminal rows are returned too: the router needs to distinguish
 // a known, already-decided request from an unfenced ACP/MCP request.
 func (d *Decider) ResolveRuntimeDecision(ctx context.Context, commandType, decisionID string) (sessionruntime.DecisionTarget, error) {
-	if d.queries == nil {
-		return sessionruntime.DecisionTarget{}, errors.New("runtime decision store is not configured")
-	}
 	id, err := db.ParseUUID(decisionID)
 	if err != nil {
 		return sessionruntime.DecisionTarget{}, fmt.Errorf("%w: %w", sessionruntime.ErrDecisionNotFound, err)
@@ -49,9 +46,6 @@ func (d *Decider) ResolveRuntimeDecision(ctx context.Context, commandType, decis
 // several approvals and user inputs at once, and dropping any of them here
 // would supersede a decision the user can still answer.
 func (d *Decider) PendingRuntimeDecisions(ctx context.Context, runID string) ([]sessionruntime.DecisionTarget, error) {
-	if d.queries == nil {
-		return nil, errors.New("runtime decision store is not configured")
-	}
 	id, err := db.ParseUUID(runID)
 	if err != nil {
 		return nil, err
@@ -73,7 +67,7 @@ func (d *Decider) PendingRuntimeDecisions(ctx context.Context, runID string) ([]
 	}
 	// Recovery decides by session runtime whether the parked run is
 	// resumable at all; every pending decision here shares one session.
-	if len(out) > 0 && d.sessions != nil {
+	if len(out) > 0 {
 		sess, sessErr := d.sessions.Get(ctx, out[0].SessionID)
 		if sessErr != nil {
 			return nil, fmt.Errorf("read waiting-decision session runtime: %w", sessErr)

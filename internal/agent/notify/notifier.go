@@ -53,9 +53,6 @@ func (n *Notifier) Handle(ctx context.Context, evt background.TaskEvent) error {
 	if text == "" {
 		return nil
 	}
-	if n == nil || n.messages == nil || n.sessions == nil {
-		return errors.New("background task notifications are not configured")
-	}
 	if strings.TrimSpace(evt.BotID) == "" || strings.TrimSpace(evt.TaskID) == "" {
 		return errors.New("background task notification is missing its identity")
 	}

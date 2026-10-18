@@ -115,7 +115,7 @@ func compactionArtifactBoundaryBeforeMessage(messages []historyfrag.HistoryRecor
 
 func (t *Reader) LoadArtifactBoundary(ctx context.Context, messages []historyfrag.HistoryRecord, sessionID, messageID string) ArtifactBoundary {
 	boundary := compactionArtifactBoundaryBeforeMessage(messages, messageID)
-	if !boundary.HasCutoff || boundary.CutoffMs > 0 || t.messages == nil || strings.TrimSpace(sessionID) == "" {
+	if !boundary.HasCutoff || boundary.CutoffMs > 0 || strings.TrimSpace(sessionID) == "" {
 		return boundary
 	}
 	message, err := t.messages.GetByIDBySession(ctx, sessionID, messageID)
@@ -136,9 +136,6 @@ func (b ArtifactBoundary) includes(artifact compaction.Artifact) bool {
 }
 
 func (t *Reader) replaceCompactedMessages(ctx context.Context, sessionID string, scope contextfrag.Scope, messages []historyfrag.HistoryRecord, boundary ArtifactBoundary) ([]historyfrag.HistoryRecord, error) {
-	if t.queries == nil {
-		return messages, nil
-	}
 	if strings.TrimSpace(sessionID) == "" {
 		// Sessionless (chat-scoped) loads have no session log list to draw from;
 		// resolve each in-window compact group individually.
@@ -201,10 +198,6 @@ func missingCompactionArtifacts(messages []historyfrag.HistoryRecord, artifacts 
 }
 
 func (t *Reader) replaceRecentCompactedMessages(ctx context.Context, scope contextfrag.Scope, messages []historyfrag.HistoryRecord, boundary ArtifactBoundary) ([]historyfrag.HistoryRecord, error) {
-	if t.queries == nil {
-		return messages, nil
-	}
-
 	compactGroups := make(map[string][]int) // compact_id -> indices
 	for i, m := range messages {
 		if m.CompactID != "" {
@@ -232,9 +225,7 @@ func (t *Reader) replaceRecentCompactedMessages(ctx context.Context, scope conte
 	for compactID := range compactGroups {
 		owner, consistent := compactGroupOwner(messages, compactGroups[compactID], scope)
 		if !consistent {
-			if t.logger != nil {
-				t.logger.WarnContext(ctx, "replaceCompactedMessages: compact group spans owners", slog.String("compact_id", compactID))
-			}
+			t.logger.WarnContext(ctx, "replaceCompactedMessages: compact group spans owners", slog.String("compact_id", compactID))
 			continue
 		}
 		if _, loaded := loadedFrontiers[owner]; loaded {
@@ -246,14 +237,12 @@ func (t *Reader) replaceRecentCompactedMessages(ctx context.Context, scope conte
 			if !errors.As(err, &lineageErr) {
 				return nil, err
 			}
-			if t.logger != nil {
-				t.logger.WarnContext(ctx, "replaceCompactedMessages: failed to load compaction artifact", slog.String("compact_id", compactID), slog.Any("error", err))
-			}
+			t.logger.WarnContext(ctx, "replaceCompactedMessages: failed to load compaction artifact", slog.String("compact_id", compactID), slog.Any("error", err))
 			continue
 		}
 		merged := catalog.Add(owner, compaction.NewArtifactAliasFrontier(compactID, artifact))
 		for _, issue := range merged.Issues {
-			if t.logger != nil && (issue.Kind == compaction.LineageIssueCoverageOverlap || issue.Kind == compaction.LineageIssueAliasConflict) {
+			if issue.Kind == compaction.LineageIssueCoverageOverlap || issue.Kind == compaction.LineageIssueAliasConflict {
 				t.logger.WarnContext(ctx, "replaceCompactedMessages: owner frontier conflict", slog.String("issue", issue.Error()))
 			}
 		}
@@ -317,12 +306,10 @@ func (t *Reader) loadActiveCompactionFrontier(ctx context.Context, botID, sessio
 		return compaction.ArtifactFrontier{}, err
 	}
 	for _, issue := range frontier.Issues {
-		if t.logger != nil {
-			t.logger.WarnContext(ctx, "loadActiveCompactionFrontier: ignored invalid lineage", slog.String("issue", issue.Error()))
-		}
+		t.logger.WarnContext(ctx, "loadActiveCompactionFrontier: ignored invalid lineage", slog.String("issue", issue.Error()))
 	}
 	for _, artifact := range frontier.Artifacts {
-		if artifact.CoverageMalformed && t.logger != nil {
+		if artifact.CoverageMalformed {
 			t.logger.WarnContext(ctx, "loadActiveCompactionFrontier: malformed coverage requires legacy backfill", slog.String("compact_id", artifact.ID))
 		}
 	}
@@ -383,9 +370,6 @@ func summaryRecordsFromArtifacts(artifacts []compaction.Artifact, scope contextf
 // persisted artifact coverage. New artifacts already carry immutable refs and
 // avoid this per-summary query.
 func (t *Reader) refreshCompactedSummaryCoverage(ctx context.Context, messages []historyfrag.HistoryRecord, resolve func(historyfrag.HistoryRecord) (compaction.Artifact, bool)) []historyfrag.HistoryRecord {
-	if t.queries == nil {
-		return messages
-	}
 	for i := range messages {
 		record := &messages[i]
 		if record.SourceKind != historyfrag.SourceCompactionLog || record.Kind != contextfrag.KindConversationSummary {
@@ -405,23 +389,19 @@ func (t *Reader) refreshCompactedSummaryCoverage(ctx context.Context, messages [
 }
 
 func (t *Reader) coveredRefsForCompact(ctx context.Context, compactID pgtype.UUID) []contextfrag.ContextRef {
-	if t.queries == nil || !compactID.Valid {
+	if !compactID.Valid {
 		return nil
 	}
 	rows, err := t.queries.ListMessageRefsByCompactID(ctx, compactID)
 	if err != nil {
-		if t.logger != nil {
-			t.logger.WarnContext(ctx, "coveredRefsForCompact: failed to load compacted message refs", slog.String("compact_id", runreq.PGUUIDString(compactID)), slog.Any("error", err))
-		}
+		t.logger.WarnContext(ctx, "coveredRefsForCompact: failed to load compacted message refs", slog.String("compact_id", runreq.PGUUIDString(compactID)), slog.Any("error", err))
 		return nil
 	}
 	refs := make([]contextfrag.ContextRef, 0, len(rows))
 	for _, row := range rows {
 		ref, err := historyfrag.DBMessageIdentityRef(runreq.PGUUIDString(row.ID))
 		if err != nil {
-			if t.logger != nil {
-				t.logger.WarnContext(ctx, "coveredRefsForCompact: skipped compacted message ref", slog.String("compact_id", runreq.PGUUIDString(compactID)), slog.Any("error", err))
-			}
+			t.logger.WarnContext(ctx, "coveredRefsForCompact: skipped compacted message ref", slog.String("compact_id", runreq.PGUUIDString(compactID)), slog.Any("error", err))
 			continue
 		}
 		refs = append(refs, ref)

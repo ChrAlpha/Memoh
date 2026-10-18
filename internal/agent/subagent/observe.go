@@ -31,9 +31,6 @@ func Failure(event native.StreamEvent) error {
 // the ones a subscriber must see); and a lost ownership stops publishing
 // outright because every later event would fail identically.
 func (h *Host) Observer(ctx context.Context) native.SpawnRunObserver {
-	if h.events == nil {
-		return nil
-	}
 	handle, ok := HandleFromContext(ctx)
 	if !ok || strings.TrimSpace(handle.RunID) == "" || handle.FencingToken <= 0 {
 		return nil

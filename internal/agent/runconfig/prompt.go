@@ -25,17 +25,13 @@ func (b *Builder) Prepare(ctx context.Context, cfg native.RunConfig) native.RunC
 		MessageCount: len(cfg.Messages),
 	}, hooks.EventBeforePromptBuild)
 	beforePromptContext := beforePromptResult.AppendContext
-	var files []native.SystemFile
-	limits := native.DefaultLimits()
-	if b.agent != nil {
-		limits = b.agent.Limits()
-		nowFn := time.Now
-		if cfg.Identity.TimezoneLocation != nil {
-			nowFn = func() time.Time { return time.Now().In(cfg.Identity.TimezoneLocation) }
-		}
-		fs := native.NewFSClient(b.agent.BridgeProvider(), cfg.Identity.BotID, nowFn)
-		files = fs.LoadSystemFiles(ctx)
+	limits := b.agent.Limits()
+	nowFn := time.Now
+	if cfg.Identity.TimezoneLocation != nil {
+		nowFn = func() time.Time { return time.Now().In(cfg.Identity.TimezoneLocation) }
 	}
+	fs := native.NewFSClient(b.agent.BridgeProvider(), cfg.Identity.BotID, nowFn)
+	files := fs.LoadSystemFiles(ctx)
 
 	platformIdentitiesSection := ""
 	var platformIdentityItems []native.SystemPromptItem

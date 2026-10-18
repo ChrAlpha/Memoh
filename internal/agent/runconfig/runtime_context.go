@@ -46,17 +46,13 @@ type runtimeContextRenderInput struct {
 func (b *Builder) BuildRuntimeContextSections(ctx context.Context, req runreq.ChatRequest, agentID, projectPath string) ([]contextview.RuntimeSection, *contextfrag.MemoryRecallTrace) {
 	timezoneName, timezoneLocation := b.bot.ResolveTimezone(ctx, req.BotID, req.UserID)
 
-	var files []native.SystemFile
-	limits := native.DefaultLimits()
-	if b.agent != nil {
-		limits = b.agent.Limits()
-		nowFn := time.Now
-		if timezoneLocation != nil {
-			nowFn = func() time.Time { return time.Now().In(timezoneLocation) }
-		}
-		fs := native.NewFSClient(b.agent.BridgeProvider(), req.BotID, nowFn)
-		files = fs.LoadSystemFiles(ctx)
+	limits := b.agent.Limits()
+	nowFn := time.Now
+	if timezoneLocation != nil {
+		nowFn = func() time.Time { return time.Now().In(timezoneLocation) }
 	}
+	fs := native.NewFSClient(b.agent.BridgeProvider(), req.BotID, nowFn)
+	files := fs.LoadSystemFiles(ctx)
 
 	platformIdentitiesSection := ""
 	identities, err := b.identities.ListPlatformIdentities(ctx, req.BotID)

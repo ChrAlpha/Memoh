@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/botenv"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/transcript"
@@ -294,7 +293,7 @@ func newTestKeeper(t *testing.T, mutate func(*Deps)) *Keeper {
 	d := Deps{
 		Logger:     logger,
 		Settings:   st,
-		Bot:        botenv.New(botenv.Deps{Logger: logger, Settings: st}),
+		Bot:        agenttest.BotEnvWithSettings(logger, st),
 		Transcript: transcript.New(transcript.Deps{Logger: logger}),
 	}
 	if mutate != nil {

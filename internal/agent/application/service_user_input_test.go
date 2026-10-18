@@ -196,7 +196,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	const (
 		botID     = "bot-1"
 		sessionID = "session-1"
-		runID     = "run-1"
+		runID     = "55555555-5555-4555-8555-555555555555"
 		inputID   = "input-1"
 	)
 	fake := &agenttest.UserInput{

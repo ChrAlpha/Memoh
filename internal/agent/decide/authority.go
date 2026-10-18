@@ -29,9 +29,6 @@ import (
 // acting for another D). A run with no recorded initiator, admitted before the
 // ledger kept one or started by a schedule, is decided by a manager only.
 func (d *Decider) CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal ToolApprovalPrincipal) (bool, error) {
-	if d.botPermissions == nil {
-		return false, errors.New("bot permission checker not configured")
-	}
 	botID := strings.TrimSpace(approval.BotID)
 	actorID := principal.subject()
 	if botID == "" || actorID == "" {
@@ -55,9 +52,6 @@ func (d *Decider) CanDecideToolApproval(ctx context.Context, approval toolapprov
 // ViewerCanDecideToolApproval answers CanDecideToolApproval for an approval a
 // live frame names only by id.
 func (d *Decider) ViewerCanDecideToolApproval(ctx context.Context, approvalID string, principal ToolApprovalPrincipal) (bool, error) {
-	if d.toolApproval == nil {
-		return false, errors.New("tool approval service not configured")
-	}
 	approval, err := d.toolApproval.Get(ctx, approvalID)
 	if err != nil {
 		return false, err
@@ -69,9 +63,6 @@ func (d *Decider) runInitiator(ctx context.Context, runID string) (string, error
 	runID = strings.TrimSpace(runID)
 	if runID == "" {
 		return "", nil
-	}
-	if d.queries == nil {
-		return "", errors.New("session run store not configured")
 	}
 	id, err := db.ParseUUID(runID)
 	if err != nil {

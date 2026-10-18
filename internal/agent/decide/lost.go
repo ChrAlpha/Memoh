@@ -15,9 +15,6 @@ import (
 // left pending, the persisted card would stay actionable forever and a late
 // approve would flip a row nobody executes.
 func (d *Decider) CancelPendingApprovals(ctx context.Context, req runreq.ChatRequest, reason string) {
-	if d.toolApproval == nil {
-		return
-	}
 	cancelled, err := d.toolApproval.CancelPendingForSession(ctx, req.BotID, req.ThreadID, reason)
 	if err != nil {
 		d.logger.WarnContext(ctx, "cancel pending External Agent approvals failed",
@@ -44,9 +41,7 @@ func (d *Decider) CancelLostRunDecisions(ctx context.Context, botID, sessionID, 
 		_, err := canceller.CancelPendingForRun(ctx, botID, sessionID, runID, fencingToken, reason)
 		errs = append(errs, err)
 	}
-	if d.toolApproval != nil {
-		_, err := d.toolApproval.CancelPendingForRun(ctx, botID, sessionID, runID, fencingToken, reason)
-		errs = append(errs, err)
-	}
+	_, err := d.toolApproval.CancelPendingForRun(ctx, botID, sessionID, runID, fencingToken, reason)
+	errs = append(errs, err)
 	return errors.Join(errs...)
 }

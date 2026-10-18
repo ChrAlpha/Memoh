@@ -3,7 +3,6 @@ package botenv
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
 	"strings"
 
@@ -13,17 +12,11 @@ import (
 )
 
 func (e *Env) LoadSettings(ctx context.Context, botID string) (settings.Settings, error) {
-	if e.settings == nil {
-		return settings.Settings{}, errors.New("settings service not configured")
-	}
 	return e.settings.GetBot(ctx, botID)
 }
 
 func (e *Env) LoadRuntimeInfo(ctx context.Context, botID string) (native.BotInfo, bool) {
 	info := native.BotInfo{ID: strings.TrimSpace(botID)}
-	if e.queries == nil {
-		return info, false
-	}
 	botUUID, err := db.ParseUUID(botID)
 	if err != nil {
 		return info, false

@@ -45,7 +45,7 @@ func approvalAuthorityService(grants map[string][]string) *Decider {
 			values["bot-1:"+actor+":"+permission] = true
 		}
 	}
-	return New(Deps{
+	return newTestDecider(Deps{
 		BotPermissions: &agenttest.PermissionChecker{Values: values},
 		Queries: runInitiatorQueries{initiators: map[string]string{
 			approvalTestRunID:       approvalTestInitiator,
@@ -147,7 +147,7 @@ func TestCanDecideToolApprovalFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	checker := &agenttest.RecordingPermissionChecker{Allow: true}
-	resolver := New(Deps{BotPermissions: checker})
+	resolver := newTestDecider(Deps{BotPermissions: checker})
 	for _, tc := range []struct {
 		approval  toolapproval.Request
 		principal ToolApprovalPrincipal
@@ -159,13 +159,18 @@ func TestCanDecideToolApprovalFailsClosed(t *testing.T) {
 			t.Fatalf("CanDecideToolApproval(%+v, %+v) = %t, %v; want refused", tc.approval, tc.principal, ok, err)
 		}
 	}
-	// A run id cannot be resolved without the run store.
+	// A run id cannot be resolved while the run store fails.
+	resolver = newTestDecider(Deps{BotPermissions: checker, Queries: &failingRunQueries{}})
 	if _, err := resolver.CanDecideToolApproval(context.Background(), toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID}, ToolApprovalPrincipal{UserID: "user-1"}); err == nil {
 		t.Fatal("unresolvable initiator was treated as absent")
 	}
-	if ok, err := New(Deps{}).CanDecideToolApproval(context.Background(), toolapproval.Request{BotID: "bot-1"}, ToolApprovalPrincipal{UserID: "user-1"}); ok || err == nil {
-		t.Fatalf("missing permission checker = %t, %v; want error", ok, err)
-	}
+}
+
+// failingRunQueries is a run ledger that cannot be read.
+type failingRunQueries struct{ agenttest.DecisionQueries }
+
+func (*failingRunQueries) GetSessionRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
+	return sqlc.SessionRun{}, errors.New("run store unavailable")
 }
 
 func TestCapabilityApprovalRequiresManage(t *testing.T) {
@@ -173,7 +178,7 @@ func TestCapabilityApprovalRequiresManage(t *testing.T) {
 	for _, name := range []string{"mcp_manage", "app_manage"} {
 		t.Run(name, func(t *testing.T) {
 			checker := &agenttest.RecordingPermissionChecker{Allow: false}
-			d := New(Deps{BotPermissions: checker})
+			d := newTestDecider(Deps{BotPermissions: checker})
 			target := toolapproval.Request{ID: "approval-1", BotID: "bot-1", ToolName: name, Operation: toolapproval.OperationPermission, Status: toolapproval.StatusApproved}
 			input := ToolApprovalResponseInput{ActorUserID: "user-1"}
 			if err := d.authorizeToolApprovalResponse(context.Background(), target, input); !errors.Is(err, toolapproval.ErrForbidden) || checker.Permission != bots.PermissionManage {

@@ -62,8 +62,12 @@ type Reader struct {
 
 // New returns a Reader.
 func New(d Deps) *Reader {
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &Reader{
-		logger:         d.Logger,
+		logger:         logger,
 		messages:       d.Messages,
 		queries:        d.Queries,
 		sessions:       d.Sessions,

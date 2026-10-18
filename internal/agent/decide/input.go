@@ -31,9 +31,6 @@ type UserInputs interface {
 }
 
 func (d *Decider) AdvancePlainTextUserInput(ctx context.Context, input userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error) {
-	if d.userInput == nil {
-		return userinput.AdvanceTextResult{}, errors.New("user input service not configured")
-	}
 	return d.userInput.AdvanceText(ctx, input)
 }
 
@@ -63,9 +60,6 @@ func NewCommittedUserInput(request userinput.Request, input UserInputResponseInp
 }
 
 func (d *Decider) CommitUserInputResponse(ctx context.Context, input UserInputResponseInput) (CommittedUserInputResponse, error) {
-	if d.userInput == nil {
-		return CommittedUserInputResponse{}, errors.New("user input service not configured")
-	}
 	target, err := d.userInput.ResolveTarget(ctx, userinput.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.ThreadID,
@@ -155,9 +149,6 @@ func (d *Decider) CommitUserInputResponse(ctx context.Context, input UserInputRe
 // runtime consumes the answer inside the blocked turn, so it must not become
 // a native model continuation.
 func (d *Decider) isExternalAgentUserInputSession(ctx context.Context, sessionID string) (bool, error) {
-	if d.sessions == nil {
-		return false, nil
-	}
 	sess, err := d.sessions.Get(ctx, sessionID)
 	if err != nil {
 		return false, err
@@ -166,9 +157,6 @@ func (d *Decider) isExternalAgentUserInputSession(ctx context.Context, sessionID
 }
 
 func (d *Decider) authorizeExternalAgentUserInputResponse(ctx context.Context, target userinput.Request, input UserInputResponseInput) error {
-	if d.sessions == nil {
-		return errors.New("session service not configured")
-	}
 	sessionID := runreq.FirstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := d.sessions.Get(ctx, sessionID)
 	if err != nil {
@@ -198,9 +186,6 @@ func (d *Decider) authorizeExternalAgentUserInputResponse(ctx context.Context, t
 	// The runtime owner has no standing beyond their live grants: a revoked
 	// or offboarded owner must lose response authority at decision time, so
 	// every actor — owner included — passes the permission check.
-	if d.botPermissions == nil {
-		return errors.New("bot permission checker not configured")
-	}
 	if ok, err := d.botPermissions.HasBotPermission(ctx, botID, actorID, bots.PermissionWorkspaceExec); err != nil {
 		return err
 	} else if !ok {

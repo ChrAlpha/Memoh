@@ -37,6 +37,7 @@ import (
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
@@ -427,7 +428,7 @@ func wireComponents(s *Service) *Service {
 	}
 	if s.lifecycle == nil {
 		// A Service built from a literal records no lifecycle rows, as before.
-		s.lifecycle = lifecycle.New(lifecycle.Deps{Runs: s.queries, Decisions: s.decider, Logger: s.logger})
+		s.lifecycle = lifecycle.New(lifecycle.Deps{Store: &agenttest.RecordingLifecycleStore{}, Runs: agenttest.NoRuns{}, Decisions: s.decider, Logger: s.logger})
 	}
 	if s.runconfig == nil {
 		s.runconfig = runconfigOf(s)
@@ -585,21 +586,31 @@ func bindRuntime(s *Service, manager *sessionruntime.Manager) {
 }
 
 func persistOf(s *Service) *persist.Writer {
-	var runtime persist.SteerRuntime
+	runtime := persist.SteerRuntime(standInSteerRuntime())
 	if s.sessionManager != nil {
 		runtime = s.sessionManager
 	}
-	return persist.New(persist.Deps{
+	d := persist.Deps{
 		Logger: s.logger, Messages: s.messageService, Sessions: s.sessionService, Bot: s.botenv,
 		Runtime: runtime, Events: s.eventPublisher, Rounds: s.memory, Commits: s.compact, Promoted: s.queue,
-	})
+	}
+	if d.Messages == nil {
+		d.Messages = &agenttest.RecordingMessages{}
+	}
+	if d.Sessions == nil {
+		d.Sessions = agenttest.NewChatSessions()
+	}
+	return persist.New(d)
 }
 
 // driveDepsOf is what the driver of a Service built from a literal is given:
 // the session runtime ends runs, and the events go nowhere until the service is
 // bound to a manager (bindRuntime) or a test names an intake.
 func driveDepsOf(s *Service) drive.Deps {
-	deps := drive.Deps{Logger: s.logger, Lifecycle: s.lifecycle, Persist: s.persist}
+	deps := drive.Deps{
+		Logger: s.logger, Lifecycle: s.lifecycle, Persist: s.persist,
+		Events: agenttest.EventFunc(func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error { return nil }),
+	}
 	if s.sessionRuntime != nil {
 		deps.Runtime = s.sessionRuntime
 	}
@@ -616,11 +627,37 @@ func botenvOf(s *Service) *botenv.Env {
 	if s.agent != nil {
 		bridgeProvider = s.agent.BridgeProvider()
 	}
-	return botenv.New(botenv.Deps{Logger: s.logger, Queries: s.queries, Settings: s.settingsService, Accounts: s.accountService, Bridge: bridgeProvider})
+	logger := s.logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	d := botenv.Deps{Logger: s.logger, Settings: s.settingsService, Accounts: s.accountService, Bridge: bridgeProvider}
+	if s.queries != nil {
+		d.Queries = s.queries
+	} else {
+		d.Queries = agenttest.NoBotQueries{}
+	}
+	if d.Settings == nil {
+		d.Settings = settings.NewService(logger, agenttest.BotSettingsQueries{}, nil, nil)
+	}
+	if d.Accounts == nil {
+		d.Accounts = accounts.NewService(logger, nil)
+	}
+	return botenv.New(d)
 }
 
 func transcriptOf(s *Service) *transcript.Reader {
-	return transcript.New(transcript.Deps{Logger: s.logger, Messages: s.messageService, Queries: s.queries, Sessions: s.sessionService})
+	d := transcript.Deps{Logger: s.logger, Messages: s.messageService, Queries: s.queries, Sessions: s.sessionService}
+	if d.Messages == nil {
+		d.Messages = &agenttest.RecordingMessages{}
+	}
+	if d.Queries == nil {
+		d.Queries = &agenttest.RecordingCompactionLog{}
+	}
+	if d.Sessions == nil {
+		d.Sessions = agenttest.NewChatSessions()
+	}
+	return transcript.New(d)
 }
 
 func memoryOf(s *Service) *memory.Keeper {
@@ -659,6 +696,25 @@ func decideOf(s *Service) *decide.Decider {
 	if adjust, ok := decideAdjustments.Load(s); ok {
 		adjust.(func(*decide.Deps))(&d)
 	}
+	// What a literal Service does not name is an explicit stand-in.
+	if d.Queries == nil {
+		d.Queries = &agenttest.DecisionQueries{}
+	}
+	if d.Sessions == nil {
+		d.Sessions = agenttest.NewChatSessions()
+	}
+	if d.ToolApproval == nil {
+		d.ToolApproval = &toolapproval.Service{}
+	}
+	if d.UserInput == nil {
+		d.UserInput = &agenttest.UserInput{}
+	}
+	if d.Events == nil {
+		d.Events = agenttest.EventFunc(func(context.Context, sessionruntime.RunHandle, native.StreamEvent) error { return nil })
+	}
+	if d.Limits == nil {
+		d.Limits = &native.Agent{}
+	}
 	return decide.New(d)
 }
 
@@ -673,6 +729,15 @@ func runconfigOf(s *Service) *runconfig.Builder {
 	}
 	if adjust, ok := runconfigAdjustments.Load(s); ok {
 		adjust.(func(*runconfig.Deps))(&d)
+	}
+	if d.Sessions == nil {
+		d.Sessions = agenttest.NewChatSessions()
+	}
+	if d.WorkspaceTargets == nil {
+		d.WorkspaceTargets = stubWorkspaceTargets{}
+	}
+	if d.Agent == nil {
+		d.Agent = &native.Agent{}
 	}
 	return runconfig.New(d)
 }
@@ -711,6 +776,28 @@ func externalOf(s *Service) *externalrun.Host {
 	if drivers, ok := externalDrivers.Load(s); ok {
 		d.Drivers = drivers.([]external.Driver)
 	}
+	// What a literal Service does not name is an explicit stand-in.
+	if d.Store == nil {
+		d.Store = agenttest.EmptyStore{}
+	}
+	if d.Sessions == nil {
+		d.Sessions = agenttest.NewChatSessions()
+	}
+	if d.Messages == nil {
+		d.Messages = &agenttest.RecordingMessages{}
+	}
+	if d.BotPermissions == nil {
+		d.BotPermissions = &agenttest.PermissionChecker{}
+	}
+	if d.Runtime == nil {
+		d.Runtime = standInSteerRuntime()
+	}
+	if d.Admitter == nil {
+		d.Admitter = d.Runtime
+	}
+	if d.Aborter == nil {
+		d.Aborter = d.Runtime
+	}
 	return externalrun.New(d)
 }
 
@@ -727,6 +814,13 @@ func titleOf(s *Service) *title.Generator {
 	}
 	if s.accountService != nil {
 		d.Accounts = s.accountService
+	}
+	// A literal Service that names no session service holds sessions that
+	// already carry a title, so no test starts a title run it did not ask for.
+	if d.Sessions == nil {
+		d.Sessions = &agenttest.Sessions{GetFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{ID: sessionID, Title: "titled"}, nil
+		}}
 	}
 	return title.New(d)
 }
@@ -760,4 +854,26 @@ type titleModelAccountStore struct {
 
 func (s titleModelAccountStore) GetByUserID(context.Context, string) (dbstore.AccountRecord, error) {
 	return s.account, nil
+}
+
+var (
+	standInManager     *sessionruntime.Manager
+	standInManagerOnce sync.Once
+)
+
+// standInSteerRuntime is the live queue of a literal Service that bound no
+// session runtime: an in-memory one that nothing else uses.
+func standInSteerRuntime() *sessionruntime.Manager {
+	standInManagerOnce.Do(func() {
+		standInManager = sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{})
+	})
+	return standInManager
+}
+
+// newTestRecorder is a lifecycle recorder over store whose run ledger holds no
+// runs and whose runs park on no decisions.
+func newTestRecorder(store lifecycle.Store) *lifecycle.Recorder {
+	return lifecycle.New(lifecycle.Deps{
+		Store: store, Runs: agenttest.NoRuns{}, Decisions: agenttest.NoDecisions{}, Logger: slog.New(slog.DiscardHandler),
+	})
 }

@@ -46,9 +46,6 @@ type SessionExecutionInfo struct {
 // SessionExecutionInfo reads the execution facts of a session; one that is not on an
 // external runtime reports none.
 func (h *Host) SessionExecutionInfo(ctx context.Context, sessionID string) (SessionExecutionInfo, error) {
-	if h.sessions == nil {
-		return SessionExecutionInfo{}, nil
-	}
 	if strings.TrimSpace(sessionID) == "" {
 		return SessionExecutionInfo{}, nil
 	}
@@ -126,9 +123,6 @@ type reconcileTx interface {
 }
 
 func (h *Host) reconcileRuntimeRoundOutcome(ctx context.Context, req runreq.ChatRequest) (string, error) {
-	if h.store == nil {
-		return "", errors.New("external agent round reconciliation store is unavailable")
-	}
 	botID, err := db.ParseUUID(strings.TrimSpace(req.BotID))
 	if err != nil {
 		return "", err
@@ -232,9 +226,6 @@ func (h *Host) retryRuntimeRoundOutcome(ctx context.Context, req runreq.ChatRequ
 }
 
 func (h *Host) reconcileRuntimeLeadingUserMessage(ctx context.Context, req runreq.ChatRequest) (string, error) {
-	if h.store == nil {
-		return "", errors.New("external agent leading-user reconciliation store is unavailable")
-	}
 	botID, err := db.ParseUUID(strings.TrimSpace(req.BotID))
 	if err != nil {
 		return "", err
@@ -317,9 +308,6 @@ func (h *Host) cleanupUncertainRuntimeLeadingUser(ctx context.Context, req runre
 }
 
 func (h *Host) cleanupRuntimeDecisionProjectionRows(ctx context.Context, req runreq.ChatRequest) {
-	if h.store == nil {
-		return
-	}
 	botID, err := db.ParseUUID(strings.TrimSpace(req.BotID))
 	if err != nil {
 		return
@@ -436,9 +424,6 @@ func runtimePromptImageFromDataURL(payload, fallbackMime string) (external.Image
 }
 
 func (h *Host) requireRuntimeOwnerWorkspaceExec(ctx context.Context, botID, runtimeOwnerAccountID string) error {
-	if h.permissions == nil {
-		return errors.New("bot permission checker not configured")
-	}
 	runtimeOwnerAccountID = strings.TrimSpace(runtimeOwnerAccountID)
 	if runtimeOwnerAccountID == "" {
 		return apperror.New(apperror.CodeACPRuntimeOwnerMissing, nil)
@@ -463,7 +448,7 @@ func isRuntimeDecisionProjectionEvent(ev native.StreamEvent) bool {
 }
 
 func (h *Host) persistRuntimeLeadingUserMessage(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, *messagepkg.Message, error) {
-	if req.UserMessagePersisted || h.messages == nil || strings.TrimSpace(req.BotID) == "" {
+	if req.UserMessagePersisted || strings.TrimSpace(req.BotID) == "" {
 		return req, nil, nil
 	}
 	displayText := strings.TrimSpace(req.RawQuery)
@@ -538,7 +523,7 @@ func (h *Host) persistRuntimeLeadingUserMessage(ctx context.Context, req runreq.
 }
 
 func (h *Host) persistRuntimeDecisionProjection(ctx context.Context, req runreq.ChatRequest, ev native.StreamEvent) *messagepkg.Message {
-	if h.messages == nil || strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
+	if strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
 		return nil
 	}
 	output := runreq.SDKMessagesToModelMessages(external.TranscriptFromEvents([]event.StreamEvent{ev}, ""))

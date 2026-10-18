@@ -13,9 +13,6 @@ import (
 // UserTurn writes a user turn before agent execution. It is used after
 // the user-message hook has already accepted the request.
 func (w *Writer) UserTurn(ctx context.Context, req runreq.ChatRequest) (messagepkg.Message, error) {
-	if w.messages == nil {
-		return messagepkg.Message{}, errors.New("message service not configured")
-	}
 	if strings.TrimSpace(req.BotID) == "" {
 		return messagepkg.Message{}, errors.New("bot id is required")
 	}

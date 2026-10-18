@@ -125,8 +125,12 @@ type Builder struct {
 // New returns a Builder. Absent optional dependencies become implementations
 // that answer as an unconfigured feature does.
 func New(d Deps) *Builder {
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	b := &Builder{
-		logger:      d.Logger,
+		logger:      logger,
 		queries:     d.Queries,
 		credentials: d.Credentials,
 		models:      d.Models,
@@ -145,9 +149,6 @@ func New(d Deps) *Builder {
 		background:  d.Background,
 		httpClient:  d.HTTPClient,
 	}
-	if b.logger == nil {
-		b.logger = slog.New(slog.DiscardHandler)
-	}
 	if b.skills == nil {
 		b.skills = noSkills{}
 	}
@@ -158,7 +159,7 @@ func New(d Deps) *Builder {
 		b.identities = noIdentities{}
 	}
 	b.workdirs = noWorkdirs{}
-	if d.Workdirs != nil && d.Sessions != nil {
+	if d.Workdirs != nil {
 		b.workdirs = sessionWorkdirs{sessions: d.Sessions, workdirs: d.Workdirs}
 	}
 	if b.httpClient == nil {

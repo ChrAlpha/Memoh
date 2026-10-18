@@ -101,7 +101,7 @@ func TestRenderRuntimeContextMarkdownRespectsSystemFilesBudget(t *testing.T) {
 
 func acpMarkdownViaSections(t *testing.T, input runtimeContextRenderInput) string {
 	t.Helper()
-	markdown, uri, _ := RuntimeContextViaContextView(context.Background(), nil, buildRuntimeContextSections(input), "")
+	markdown, uri, _ := RuntimeContextViaContextView(context.Background(), discardLogger, buildRuntimeContextSections(input), "")
 	if uri != runtimeContextURI {
 		t.Fatalf("uri = %q, want %q", uri, runtimeContextURI)
 	}
@@ -115,8 +115,8 @@ func TestRuntimeContextViaContextViewKeepsQueryOutsideMarkdown(t *testing.T) {
 		{ID: "runtime.preamble", Text: "# Memoh Runtime Context\n\npreamble body"},
 		{ID: "runtime.section.current-runtime", Text: "## Current Runtime\n\n- Bot ID: bot-1"},
 	}
-	baseMarkdown, _, _ := RuntimeContextViaContextView(context.Background(), nil, sections, "")
-	markdown, uri, _ := RuntimeContextViaContextView(context.Background(), nil, sections, "deploy the fix")
+	baseMarkdown, _, _ := RuntimeContextViaContextView(context.Background(), discardLogger, sections, "")
+	markdown, uri, _ := RuntimeContextViaContextView(context.Background(), discardLogger, sections, "deploy the fix")
 
 	if strings.Contains(markdown, "deploy the fix") {
 		t.Fatalf("query must not join the context document: %q", markdown)
@@ -245,7 +245,7 @@ func TestRuntimeContextDropsOversizedMemoryRecall(t *testing.T) {
 		BotID:      "bot-1",
 		MemoryText: strings.Repeat("oversized-memory ", runtimeDynamicContextMaxChars),
 	})
-	markdown, _, manifest := RuntimeContextViaContextView(context.Background(), nil, sections, "current question")
+	markdown, _, manifest := RuntimeContextViaContextView(context.Background(), discardLogger, sections, "current question")
 	if strings.Contains(markdown, "oversized-memory") || strings.Contains(markdown, "Retrieved Memory") {
 		t.Fatalf("oversized memory survived runtime context selection: %q", markdown)
 	}
@@ -329,7 +329,7 @@ func TestRuntimeContextViaContextViewAuditsFinalPruneOnLiveLedger(t *testing.T) 
 			return attachments
 		}(),
 	})
-	markdown, _, manifest := RuntimeContextViaContextView(context.Background(), nil, sections, "hello")
+	markdown, _, manifest := RuntimeContextViaContextView(context.Background(), discardLogger, sections, "hello")
 	if len(markdown) > 64*1024 {
 		t.Fatalf("final markdown = %d bytes, want bounded", len(markdown))
 	}

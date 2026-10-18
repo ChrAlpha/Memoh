@@ -102,17 +102,6 @@ func TestFinishWritesEachTerminationOnce(t *testing.T) {
 	}
 }
 
-// A driver without a runtime writes nothing: an admitted run's terminal state
-// is the runtime's to record.
-func TestFinishWithoutARuntimeWritesNothing(t *testing.T) {
-	t.Parallel()
-
-	driver := newFinishDriver(nil)
-	if terminal := driver.Finish(context.Background(), admittedForFinish(1), fromEnd(outcome.EndCompleted, nil)); terminal.State != "" {
-		t.Fatalf("terminal = %+v, want none", terminal)
-	}
-}
-
 // observingRuntime ends runs the way the session runtime does: the terminal
 // observer settles the run's lifecycle row inside the write.
 type observingRuntime struct{ lifecycle *lifecycle.Recorder }

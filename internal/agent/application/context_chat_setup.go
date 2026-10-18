@@ -101,7 +101,7 @@ func (s *Service) chatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	// Whether this run may park on a question follows the process's user input
 	// port, not its delivery end: an interruption resumed from the last process
 	// keeps asking the same way the inbound message that started it did.
-	cfg.CanRequestUserInput = s.decider.CanDeliverUserInputStream()
+	cfg.CanRequestUserInput = true
 
 	reasoningTiming := persist.NewReasoningTimingTracker(nil)
 	var stepCommitter *persist.StepCommitter

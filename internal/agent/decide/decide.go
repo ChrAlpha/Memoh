@@ -63,11 +63,9 @@ type Deps struct {
 	// ActivePrompts is where a response stream reattaches to the live prompt
 	// of an external agent.
 	ActivePrompts *activeprompt.Registry
-	// Events publishes the final state of a run's decisions; without it none
-	// is published.
+	// Events publishes the final state of a run's decisions.
 	Events Events
-	// Limits sizes the tool results a decision produces; without it the
-	// defaults apply.
+	// Limits sizes the tool results a decision produces.
 	Limits Limits
 }
 
@@ -84,11 +82,14 @@ type Decider struct {
 	limits         Limits
 }
 
-// New returns a Decider. Optional dependencies left nil become stand-ins that
-// do nothing.
+// New returns a Decider. A nil Logger discards the decider's records.
 func New(d Deps) *Decider {
-	decider := &Decider{
-		logger:         d.Logger,
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
+	return &Decider{
+		logger:         logger,
 		queries:        d.Queries,
 		sessions:       d.Sessions,
 		toolApproval:   d.ToolApproval,
@@ -98,21 +99,4 @@ func New(d Deps) *Decider {
 		events:         d.Events,
 		limits:         d.Limits,
 	}
-	if decider.events == nil {
-		decider.events = noEvents{}
-	}
-	if decider.limits == nil {
-		decider.limits = defaultLimits{}
-	}
-	return decider
 }
-
-type noEvents struct{}
-
-func (noEvents) HandleAgentEvent(context.Context, sessionruntime.RunHandle, native.StreamEvent) ([]chatview.UIMessage, error) {
-	return nil, nil
-}
-
-type defaultLimits struct{}
-
-func (defaultLimits) Limits() native.Limits { return native.DefaultLimits() }
