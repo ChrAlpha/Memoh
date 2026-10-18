@@ -332,3 +332,78 @@ func countFileParts(messages []sdk.Message) int {
 	}
 	return count
 }
+
+// A file read by the read tool is admitted again on the retry of a retryable
+// failure, and the committed steps and the terminal messages hold one copy.
+func TestAgentStreamRetryAfterRetryableFailureKeepsReadMediaOnce(t *testing.T) {
+	t.Parallel()
+
+	pdfBytes := []byte("%PDF-1.4\nretry admission\n%%EOF\n")
+	var attemptFiles []int
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
+		switch call {
+		case 1:
+			return sdk.ModelResult{
+				FinishReason: sdk.FinishReasonToolCalls,
+				ToolCalls: []sdk.ToolCall{{
+					ToolCallID: "call-retry-pdf",
+					ToolName:   "read",
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/retry.pdf"}),
+				}},
+			}, nil
+		case 2:
+			attemptFiles = append(attemptFiles, countFileParts(params.Messages))
+			return sdk.ModelResult{}, serverErr()
+		default:
+			attemptFiles = append(attemptFiles, countFileParts(params.Messages))
+			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		}
+	}}
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{
+		agenttools.NewContainerProvider(nil, newAgentReadMediaBridgeProvider(t, map[string][]byte{
+			"retry.pdf": pdfBytes,
+		}), nil, "/data"),
+	})
+
+	var committed []step.Record
+	var terminal StreamEvent
+	for event := range a.Stream(context.Background(), RunConfig{
+		Model:             &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:          []sdk.Message{sdk.UserMessage("inspect the document")},
+		SupportsFileInput: true,
+		SupportsToolCall:  true,
+		Identity:          SessionContext{BotID: "bot-1"},
+		ContextMutations:  contextfrag.NewMutationLedger(),
+		OnStepCommitted: func(_ context.Context, _ int, record *step.Record) (StepDirective, error) {
+			committed = append(committed, *record)
+			return StepDirective{}, nil
+		},
+	}) {
+		if event.IsTerminal() {
+			terminal = event
+		}
+	}
+
+	if modelProvider.calls.Load() != 3 {
+		t.Fatalf("provider calls = %d, want 3", modelProvider.calls.Load())
+	}
+	if len(attemptFiles) != 2 || attemptFiles[0] != 1 || attemptFiles[1] != 1 {
+		t.Fatalf("file parts per attempt = %v, want [1 1]", attemptFiles)
+	}
+	files := 0
+	for _, record := range committed {
+		files += countFileParts(record.Messages)
+	}
+	if files != 1 {
+		t.Fatalf("committed steps carry %d file parts, want one", files)
+	}
+	var terminalMessages []sdk.Message
+	if terminal.Type != EventAgentEnd || json.Unmarshal(terminal.Messages, &terminalMessages) != nil {
+		t.Fatalf("terminal event/messages = %#v / %#v", terminal, terminalMessages)
+	}
+	if got := countFileParts(terminalMessages); got != 1 {
+		t.Fatalf("terminal messages carry %d file parts, want one", got)
+	}
+}
