@@ -116,10 +116,10 @@ func TestToolBoundaryGuardRequiresToolClosurePolicy(t *testing.T) {
 func TestTrimCompactMessagesKeepsOldestAndToolExchangeIntact(t *testing.T) {
 	t.Parallel()
 
-	// compact input (oldest -> newest): a tool exchange (~110 rendered tokens
-	// with its role prefixes), then two ~100-token text rows. maxTokens 320
-	// keeps the oldest groups within budget — the whole exchange plus the
-	// first text row — and defers the newest overflow to a later pass.
+	// compact input (oldest -> newest): a small tool exchange, then two text
+	// rows of ~130 rendered tokens. maxTokens 150 keeps the oldest groups
+	// within budget — the whole exchange plus the first text row — and defers
+	// the newest overflow to a later pass.
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		toolCallRow(t, 0),
 		toolResultRow(t, 0),
@@ -127,7 +127,7 @@ func TestTrimCompactMessagesKeepsOldestAndToolExchangeIntact(t *testing.T) {
 		textRow(t, "assistant", 100),
 	}
 	items, _ := candidatesFromRows(rows)
-	trimmed := trimCompactMessages(items, 120)
+	trimmed := trimCompactMessages(items, 150)
 	if len(trimmed) != 3 {
 		t.Fatalf("trimmed = %d, want the oldest exchange plus the first text row", len(trimmed))
 	}
@@ -163,7 +163,7 @@ func TestTrimCompactMessagesMustKeepRowsCostNoBudget(t *testing.T) {
 		textRow(t, "user", 100),
 	}
 	items, _ := candidatesFromRows(rows)
-	trimmed := trimCompactMessages(items, 250)
+	trimmed := trimCompactMessages(items, 300)
 	if len(trimmed) != 3 {
 		t.Fatalf("trimmed = %d, want must-keep island (free) plus two rows within budget", len(trimmed))
 	}

@@ -10,6 +10,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
@@ -152,6 +153,10 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	replacedTokens := max(entriesPromptCost(entries), compactedReplayTokens(messages, compactedMessageIDs)) + earlierTokens
 	maxTokens := min(capability, readWindow-readTokens)
 	room.SummaryTokens = min(summaryLimit, replacedTokens-1, maxTokens)
+	userPrompt := buildUserPrompt(earlier, entries, current, room)
+	if request := contextfrag.ProviderEnvelopeTokens(systemPrompt, []sdk.Message{sdk.UserMessage(userPrompt)}, nil); request+maxTokens > cfg.SummaryWindowTokens {
+		return Result{}, fmt.Errorf("%w: request_tokens=%d max_tokens=%d window=%d", errCompactionInputOverflow, request, maxTokens, cfg.SummaryWindowTokens)
+	}
 
 	expectedCompactIDs, err := expectedCompactionClaims(rows, compactedMessageIDs)
 	if err != nil {
@@ -238,7 +243,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	systemPromptDecorated, sdkMessages, _ := models.ApplyPromptCache(
 		model, cfg.PromptCacheTTL,
-		systemPrompt, []sdk.Message{sdk.UserMessage(buildUserPrompt(earlier, entries, current, room))}, nil,
+		systemPrompt, []sdk.Message{sdk.UserMessage(userPrompt)}, nil,
 	)
 
 	request := sdk.Request{
@@ -454,8 +459,3 @@ func (s *Service) completeRollupLog(
 func estimateSummaryReplayTokens(summary string) int {
 	return estimateBytesAsTokens("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")
 }
-
-// compactionPromptFramingTokens is a fixed safety allowance for the user
-// prompt wrapper, entry headers, and provider framing that the byte estimator
-// does not attribute to any single entry.
-const compactionPromptFramingTokens = 512

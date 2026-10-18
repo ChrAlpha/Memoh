@@ -5,6 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 )
@@ -186,11 +187,10 @@ func isAskUserToolName(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), userinput.ToolNameAskUser)
 }
 
+// estimateBytesAsTokens prices text the way every provider request is
+// priced, so a summarizer call is sized for the window it is sent to.
 func estimateBytesAsTokens(value string) int {
-	if value == "" {
-		return 0
-	}
-	return (len(value) + 3) / 4
+	return contextfrag.ProviderBudgetTokensFromBytes(len(value))
 }
 
 // foldableItems is the history before the first row a compaction must keep,
@@ -311,24 +311,23 @@ func leadingGroupCost(items []CompactionCandidate) int {
 }
 
 // markableGroupCost is the summarizer-prompt cost of one tool-exchange group:
-// zero for a must-keep group, otherwise each rendered entry's text — what
-// buildUserPrompt actually emits, headers included — plus its role prefix,
-// with a floor of one token per entry so tiny-but-real entries can never ride
-// along for free. Rows that render nothing cost nothing. Costing the rendered
-// bytes rather than the raw usage estimate matters: a row whose generation
-// cost five tokens can still render a two-kilobyte tool outcome into the
-// prompt.
+// zero for a must-keep group, otherwise the line buildUserPrompt emits for
+// each rendered entry, as entriesPromptCost prices it, so tiny-but-real
+// entries can never ride along for free. Rows that render nothing cost
+// nothing. Costing the rendered bytes rather than the raw usage estimate
+// matters: a row whose generation cost five tokens can still render a
+// two-kilobyte tool outcome into the prompt.
 func markableGroupCost(items []CompactionCandidate, group []int) int {
 	cost := 0
 	for _, idx := range group {
 		if items[idx].HasPolicy(CompactPolicyMustKeep) {
 			return 0
 		}
-		rendered := strings.TrimSpace(renderCandidateEntry(items[idx].Record))
-		if rendered == "" {
+		rendered := renderCandidateEntry(items[idx].Record)
+		if strings.TrimSpace(rendered) == "" {
 			continue
 		}
-		cost += estimateBytesAsTokens(rendered) + estimateBytesAsTokens(items[idx].Record.ModelMessage.Role) + 1
+		cost += entryPromptCost(messageEntry{Role: items[idx].Record.ModelMessage.Role, Content: rendered})
 	}
 	return cost
 }

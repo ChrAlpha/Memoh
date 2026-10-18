@@ -331,7 +331,7 @@ func TestTrimCompactMessagesAccountsForDirectedSignalHeaders(t *testing.T) {
 	}
 	items, _ := candidatesFromRows(rows)
 
-	trimmed := trimCompactMessages(items, 300)
+	trimmed := trimCompactMessages(items, 375)
 	if len(trimmed) != 2 {
 		t.Fatalf("trimmed count = %d, want 2 after accounting for header tokens", len(trimmed))
 	}
