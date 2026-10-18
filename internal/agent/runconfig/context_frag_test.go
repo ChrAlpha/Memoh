@@ -179,6 +179,35 @@ func TestPrepareRunConfigPreservesPipelineFileAttachmentBytes(t *testing.T) {
 	}
 }
 
+// On the Query lane the request's own query becomes the current user message
+// and carries the inline images and file attachments (a PDF) with their bytes.
+func TestPrepareRunConfigQueryCarriesInlineImagesAndAttachments(t *testing.T) {
+	t.Parallel()
+
+	image := sdk.ImagePart{Image: "data:image/png;base64,iVBORw0KGgo=", MediaType: "image/png"}
+	file := sdk.FilePart{
+		Data:      "JVBERi0xLjQ=",
+		MediaType: "application/pdf",
+		Filename:  "report.pdf",
+	}
+	cfg := native.RunConfig{
+		Query:             "summarize the report",
+		InlineImages:      []sdk.ImagePart{image, {}},
+		InlineAttachments: []sdk.MessagePart{file},
+	}
+
+	prepared := newBuilder().Prepare(context.Background(), cfg)
+	got := contextview.ApplyProviderRunConfig(context.Background(), nil, prepared)
+	want := []sdk.Message{sdk.UserMessage("summarize the report", image, file)}
+
+	if !reflect.DeepEqual(got.Messages, want) {
+		t.Fatalf("provider messages: got %#v want %#v", got.Messages, want)
+	}
+	if prepared.ContextCurrentUserMessageIndex == nil || *prepared.ContextCurrentUserMessageIndex != 0 {
+		t.Fatalf("current user message index = %v, want 0", prepared.ContextCurrentUserMessageIndex)
+	}
+}
+
 func TestPrepareRunConfigClearsStaleContextHookText(t *testing.T) {
 	t.Parallel()
 

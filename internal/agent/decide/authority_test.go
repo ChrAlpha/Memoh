@@ -66,6 +66,7 @@ func TestCanDecideToolApprovalAdmitsInitiatorAndManagerOnly(t *testing.T) {
 	exec := toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID, Operation: toolapproval.OperationExec}
 	legacy := toolapproval.Request{BotID: "bot-1", RunID: approvalTestLegacyRunID, Operation: toolapproval.OperationExec}
 	unfenced := toolapproval.Request{BotID: "bot-1", Operation: toolapproval.OperationExec}
+	unknown := toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID, Operation: "unknown"}
 	cases := []struct {
 		name     string
 		approval toolapproval.Request
@@ -80,6 +81,8 @@ func TestCanDecideToolApprovalAdmitsInitiatorAndManagerOnly(t *testing.T) {
 		{"run without initiator: manager", legacy, approvalTestManager, true},
 		{"approval outside a run: grant holder", unfenced, approvalTestGrantHolder, false},
 		{"approval outside a run: manager", unfenced, approvalTestManager, true},
+		{"unknown operation: initiator without manage", unknown, approvalTestInitiator, false},
+		{"unknown operation: manager", unknown, approvalTestManager, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

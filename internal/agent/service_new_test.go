@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/compact"
+	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -376,6 +377,28 @@ func TestNewAcceptsMissingOptionalDependencies(t *testing.T) {
 	}
 	if service.pending.Queueing() {
 		t.Fatal("optional dependencies must stay nil when absent")
+	}
+}
+
+// An unset Compaction must reach the compactor as an absent runner, not as a
+// typed nil that reads as configured.
+func TestNewHandsTheCompactorNoRunnerWithoutCompaction(t *testing.T) {
+	cases := []struct {
+		name       string
+		compaction *compaction.Service
+		wantRunner bool
+	}{
+		{"unset", nil, false},
+		{"configured", &compaction.Service{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got compact.Runner
+			newTestService(t, Deps{Compaction: tc.compaction}, withCompact(func(d *compact.Deps) { got = d.Runner }))
+			if (got != nil) != tc.wantRunner {
+				t.Fatalf("compactor runner = %#v, want present=%t", got, tc.wantRunner)
+			}
+		})
 	}
 }
 
