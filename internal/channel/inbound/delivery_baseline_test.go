@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -26,9 +27,10 @@ import (
 //
 // The changes:
 //
-//   - later assistant outputs are new messages: the first output is the
-//     preview's final, and each later one used to be a further final on the same
-//     preview, overwriting it.
+//   - the assistant outputs after a run's last tool call are one message: each
+//     used to be a further final on the same preview, overwriting it. Text
+//     before a tool call is delivered by the stream as a segment, so the final
+//     does not repeat it.
 //   - a run that a messaging tool answered flushes the text the preview shows.
 //   - an error after the preview shows text is a message of its own: it used to
 //     be pushed into the stream, where it overwrote the text. The text is
@@ -41,8 +43,8 @@ import (
 //     stream session took it as an event, and a preview is never handed
 //     attachments.
 var allowedDifferences = map[string]func(t *testing.T, calls []recordedCall, sc deliveryScenario) []recordedCall{
-	"multi_assistant":            laterOutputsAreMessages,
-	"multi_assistant_with_tool":  laterOutputsAreMessages,
+	"multi_assistant":            turnTailIsOneMessage("first\nsecond\nthird"),
+	"multi_assistant_with_tool":  turnTailIsOneMessage("second"),
 	"suppress_tail":              suppressedRunFlushes,
 	"error_after_text":           errorEndingRunIsMessage,
 	"long_stream_then_error":     errorEndingRunIsMessage,
@@ -111,22 +113,59 @@ func insertAfterLast(calls []recordedCall, op string, items ...recordedCall) []r
 	return append(out, calls[at:]...)
 }
 
-func laterOutputsAreMessages(t *testing.T, calls []recordedCall, _ deliveryScenario) []recordedCall {
-	t.Helper()
-	var out, sends []recordedCall
-	seen := false
-	for _, call := range calls {
-		if isPush(call, "final") && call.Event.Final != nil && call.Event.Final.Text != "" {
-			if seen {
-				final := call.Event.Final
-				sends = append(sends, recordedCall{Op: "send", Target: targetOf(calls), Message: final})
-				continue
+// observedFinals rewrites the finals observers saw in the baseline into the
+// turn's one final: a final whose text is a key of rename takes the value, and
+// one whose text is in drop is gone.
+func observedFinals(rename map[string]string, drop ...string) func([]recordedEvent) []recordedEvent {
+	return func(events []recordedEvent) []recordedEvent {
+		var out []recordedEvent
+		for _, event := range events {
+			if event.Type == "final" && event.Final != nil {
+				if slices.Contains(drop, event.Final.Text) {
+					continue
+				}
+				if text, ok := rename[event.Final.Text]; ok {
+					final := *event.Final
+					final.Text = text
+					event.Final = &final
+				}
 			}
-			seen = true
+			out = append(out, event)
 		}
-		out = append(out, call)
+		return out
 	}
-	return insertAfterLast(out, "close", sends...)
+}
+
+// observedDifferences are the changes allowedDifferences names, as observers
+// saw them.
+var observedDifferences = map[string]func([]recordedEvent) []recordedEvent{
+	"multi_assistant":           observedFinals(map[string]string{"first": "first\nsecond\nthird"}, "second", "third"),
+	"multi_assistant_with_tool": observedFinals(nil, "first"),
+}
+
+// turnTailIsOneMessage rewrites the finals of the baseline into the one final
+// with text, the message the turn's outputs after its last tool call make up.
+func turnTailIsOneMessage(text string) func(t *testing.T, calls []recordedCall, sc deliveryScenario) []recordedCall {
+	return func(t *testing.T, calls []recordedCall, _ deliveryScenario) []recordedCall {
+		t.Helper()
+		var out []recordedCall
+		seen := false
+		for _, call := range calls {
+			if isPush(call, "final") && call.Event.Final != nil && call.Event.Final.Text != "" {
+				if seen {
+					continue
+				}
+				seen = true
+				final := *call.Event.Final
+				final.Text = text
+				event := *call.Event
+				event.Final = &final
+				call.Event = &event
+			}
+			out = append(out, call)
+		}
+		return out
+	}
 }
 
 func suppressedRunFlushes(t *testing.T, calls []recordedCall, _ deliveryScenario) []recordedCall {
@@ -289,6 +328,9 @@ func TestDeliveryMatchesBaseline(t *testing.T) {
 			}
 			if rewrite := allowedDifferences[sc.name]; rewrite != nil {
 				want.Calls = rewrite(t, want.Calls, sc)
+			}
+			if rewrite := observedDifferences[sc.name]; rewrite != nil {
+				want.Observed = rewrite(want.Observed)
 			}
 			want.Calls = previewShape(want.Calls)
 			got := runDeliveryScenario(t, sc)

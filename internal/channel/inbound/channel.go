@@ -1273,8 +1273,10 @@ func interceptStatusEvents(ctx context.Context, events <-chan turn.Event, status
 	return out
 }
 
-// runReplyMessages selects the assistant outputs a run replies with. A run
-// whose replies a messaging tool already sent replies with none.
+// runReplyMessages selects the message a turn replies with, for a run and for
+// the continuation of a decision alike. A turn whose replies a messaging tool
+// already sent replies with none; otherwise it replies with the one message
+// assistantReply builds.
 func (p *ChannelInboundProcessor) runReplyMessages(
 	channelType channel.ChannelType,
 	caps channel.ChannelCapabilities,
@@ -1285,28 +1287,14 @@ func (p *ChannelInboundProcessor) runReplyMessages(
 	if suppressReplies {
 		return nil, true
 	}
-	var out []channel.Message
-	for _, output := range turn.ExtractAssistantOutputs(messages) {
-		outMessage := buildChannelMessage(output, caps)
-		if outMessage.IsEmpty() {
-			continue
-		}
-		plainText := strings.TrimSpace(outMessage.PlainText())
-		if isSilentReplyText(plainText) {
-			continue
-		}
-		if isMessagingToolDuplicate(plainText, sentTexts) {
-			continue
-		}
-		if outMessage.Reply == nil && sourceMessageID != "" {
-			outMessage.Reply = &channel.ReplyRef{
-				Target:    target,
-				MessageID: sourceMessageID,
-			}
-		}
-		out = append(out, outMessage)
+	reply, ok := assistantReply(messages, caps, sentTexts)
+	if !ok {
+		return nil, false
 	}
-	return out, false
+	if reply.Reply == nil && sourceMessageID != "" {
+		reply.Reply = &channel.ReplyRef{Target: target, MessageID: sourceMessageID}
+	}
+	return []channel.Message{reply}, false
 }
 
 // startTurn starts a turn. A session that is busy answers with
@@ -3336,7 +3324,6 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 	if sourceMessageID != "" {
 		replyRef.MessageID = sourceMessageID
 	}
-	hideToolCalls := !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID)
 	stream, err := delivery.OpenStream(ctx, delivery.Config{
 		Surface:         sender,
 		Target:          target,
@@ -3346,7 +3333,7 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 			"conversation_type": msg.Conversation.Type,
 		},
 		ReceivedAt:    msg.ReceivedAt,
-		HideToolCalls: hideToolCalls,
+		HideToolCalls: !isLocalChannelType(msg.Channel) && !p.shouldShowToolCallsInIM(ctx, identity.BotID),
 	})
 	if err != nil {
 		return err
@@ -3409,17 +3396,6 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 				if isUserInputEvent(&event) {
 					event.ToolCall.Locale = loc.Locale()
 				}
-				// Approval continuations should not flash transient "running"
-				// tool messages in IM. If tool visibility is enabled, the
-				// completed tool state may still be shown on tool_call_end.
-				// A hidden start is still handed over: the mapping layer does
-				// not show it either, and it is the boundary that ends the text
-				// streamed before the call.
-				ordinaryStart := event.Type == channel.StreamEventToolCallStart &&
-					(event.ToolCall == nil || (strings.TrimSpace(event.ToolCall.ApprovalID) == "" && !hasUserInputAction(event.ToolCall.Actions)))
-				if ordinaryStart && !hideToolCalls {
-					continue
-				}
 				if event.Type == channel.StreamEventReaction && len(event.Reactions) > 0 {
 					p.dispatchReactions(ctx, identity.BotID, msg.Channel, target, sourceMessageID, event.Reactions)
 					continue
@@ -3452,19 +3428,14 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 		}
 		return closeStream()
 	}
-	sentTexts, suppressReplies := collectMessageToolContext(p.registry, finalMessages, msg.Channel, target)
-	if !suppressReplies {
-		capabilities := channel.ChannelCapabilities{Text: true, Markdown: true, Reply: true}
-		if outMessage, ok := assistantReply(finalMessages, capabilities, sentTexts); ok {
-			if outMessage.Reply == nil && sourceMessageID != "" {
-				outMessage.Reply = &channel.ReplyRef{Target: target, MessageID: sourceMessageID}
-			}
-			if err := stream.Push(ctx, channel.StreamEvent{
-				Type:  channel.StreamEventFinal,
-				Final: &channel.StreamFinalizePayload{Message: outMessage},
-			}); err != nil {
-				return err
-			}
+	capabilities := channel.ChannelCapabilities{Text: true, Markdown: true, Reply: true}
+	replies, _ := p.runReplyMessages(msg.Channel, capabilities, target, sourceMessageID, finalMessages)
+	for _, reply := range replies {
+		if err := stream.Push(ctx, channel.StreamEvent{
+			Type:  channel.StreamEventFinal,
+			Final: &channel.StreamFinalizePayload{Message: reply},
+		}); err != nil {
+			return err
 		}
 	}
 	if err := stream.Push(ctx, channel.StreamEvent{Type: channel.StreamEventStatus, Status: channel.StreamStatusCompleted}); err != nil {

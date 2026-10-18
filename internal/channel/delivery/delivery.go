@@ -108,9 +108,9 @@ type State struct {
 	// it again.
 	pending   string
 	delivered string
-	// segment is the text the open preview shows that a hidden tool call has not
-	// ended yet. committed is the text of the segments hidden tool calls already
-	// ended, each of which is a message of its own by the time the run ends.
+	// segment is the text the open preview shows that a tool call has not ended
+	// yet. committed is the text of the segments tool calls already ended, each
+	// of which is a message of its own by the time the run ends.
 	segment   string
 	committed []string
 }
@@ -169,14 +169,14 @@ func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([
 	case ev.Type == channel.StreamEventToolCallStart && ev.ToolCall != nil && needsAnswer(ev.ToolCall):
 		return planPrompt(ev, caps, st)
 	case ev.Type == channel.StreamEventToolCallStart || ev.Type == channel.StreamEventToolCallEnd:
+		if ev.Type == channel.StreamEventToolCallStart && caps.Preview != channel.PreviewNone && st.streamed {
+			// The text before the call is not the reply's own text: it ends as a
+			// message of its own, and what follows opens a new preview. The
+			// call itself is shown after it, or only observed when the channel
+			// hides tool calls.
+			return planSegmentBreak(ev, st)
+		}
 		if st.HideToolCalls {
-			if ev.Type == channel.StreamEventToolCallStart && caps.Preview != channel.PreviewNone && st.streamed {
-				// The text before the call is not the reply's own text, but the
-				// channel hides the call, so nothing would mark the boundary:
-				// the text ends as a message of its own and what follows opens
-				// a new preview.
-				return planSegmentBreak(ev, st)
-			}
 			return observe(ev), st
 		}
 		if ev.Type == channel.StreamEventToolCallEnd && caps.Preview == channel.PreviewNone {
@@ -188,9 +188,7 @@ func Plan(ev channel.StreamEvent, caps channel.ChannelCapabilities, st State) ([
 				st.pending += ev.Delta
 			} else {
 				st.streamed = true
-				if st.HideToolCalls {
-					st.segment += ev.Delta
-				}
+				st.segment += ev.Delta
 			}
 		}
 	case ev.Type == channel.StreamEventReset:
@@ -345,8 +343,7 @@ func SetFailure(st State, ev channel.StreamEvent) State {
 	return st
 }
 
-// planSegmentBreak ends the text that a tool call the channel hides
-// interrupts. The preview that shows that text ends holding it, so the text
+// planSegmentBreak ends the text that a tool call interrupts. The preview that shows that text ends holding it, so the text
 // stands as a message of its own, and a new preview carries what follows. The
 // text is remembered so that a run repeating it at the end does not deliver it
 // twice.
@@ -356,10 +353,17 @@ func planSegmentBreak(ev channel.StreamEvent, st State) ([]Action, State) {
 		st.committed = append(st.committed, text)
 	}
 	st.segment, st.streamed = "", false
+	if st.HideToolCalls {
+		return []Action{
+			{Kind: KindObserve, Event: ev},
+			{Kind: KindEndPreview, Final: &flush},
+			{Kind: KindOpenPreview},
+		}, st
+	}
 	return []Action{
-		{Kind: KindObserve, Event: ev},
 		{Kind: KindEndPreview, Final: &flush},
 		{Kind: KindOpenPreview},
+		{Kind: KindUpdate, Event: ev},
 	}, st
 }
 

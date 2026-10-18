@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/channel"
 )
 
@@ -63,46 +64,61 @@ func TestContinuationSendsPlainPromptWhenChannelHasNoNativeQuestion(t *testing.T
 	}
 }
 
-// A continuation that hides tool calls still hands the hidden ordinary
-// tool_call_start to the mapping layer, so the text streamed before it ends
-// there rather than being overwritten by the reply. A channel that shows the
-// tool calls keeps dropping the start, so the continuation stream never
-// flashes a tool message a completed tool state is about to replace.
-func TestContinuationHiddenToolCallEndsIMTextSegment(t *testing.T) {
+// What a turn with text before a tool call and two outputs after it (reasoning
+// between them) shows: the text before the call ends as a segment of its own,
+// the call follows it when the channel shows tool calls, and the final is the
+// one message the two later outputs make up, without the text before the call.
+var turnWithToolCall = []string{
+	textDelta("Let me check."), toolStart, toolEnd, reasoningDelta("hm"), textDelta("Part one."), textDelta("Part two."),
+}
+
+func turnWithToolCallEnd() string {
+	return agentEnd(assistantText("Let me check."), sendToolCallOther(),
+		turn.ModelMessage{Role: "tool", Content: turn.NewTextContent("ok")},
+		assistantText("Part one."), assistantText("Part two."))
+}
+
+func TestContinuationToolCallEndsIMTextSegment(t *testing.T) {
 	for _, tc := range []struct {
 		channel channel.ChannelType
 		want    []string
 	}{
-		{channel: channel.ChannelType("telegram"), want: []string{"Here is the answer."}},
-		{channel: channel.ChannelType("web"), want: []string{"Let me check.", "Here is the answer."}},
+		{channel: channel.ChannelType("telegram"), want: []string{
+			"delta:Let me check.", "final:", "delta:hm", "delta:Part one.", "delta:Part two.", "final:Part one.\nPart two.",
+		}},
+		{channel: channel.ChannelType("web"), want: []string{
+			"delta:Let me check.", "final:", "tool_call_start", "tool_call_end", "delta:hm", "delta:Part one.", "delta:Part two.", "final:Part one.\nPart two.",
+		}},
 	} {
 		processor := NewChannelInboundProcessor(slog.Default(), nil, nil, nil, nil, nil, nil, "", 0)
 		sender := &fakeReplySender{}
 		msg := channel.InboundMessage{Channel: tc.channel, ReplyTarget: "test-chat", Message: channel.Message{ID: "approve"}}
 		err := processor.streamContinuationCommand(context.Background(), msg, sender, InboundIdentity{BotID: "bot"}, func(_ context.Context, ch chan<- json.RawMessage) error {
-			ch <- json.RawMessage(`{"type":"text_delta","delta":"Let me check."}`)
-			ch <- json.RawMessage(`{"type":"tool_call_start","toolName":"read","toolCallId":"call-1"}`)
-			ch <- json.RawMessage(`{"type":"text_delta","delta":"Here is the answer."}`)
-			ch <- json.RawMessage(agentEnd(assistantText("Let me check."), assistantText("Here is the answer.")))
+			for _, payload := range append(append([]string{}, turnWithToolCall...), turnWithToolCallEnd()) {
+				ch <- json.RawMessage(payload)
+			}
 			return nil
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
+		var got []string
 		for _, event := range sender.events {
-			if event.Type == channel.StreamEventToolCallStart {
-				t.Fatalf("%s: an ordinary tool call start reached the stream: %+v", tc.channel, event)
+			switch event.Type {
+			case channel.StreamEventDelta:
+				got = append(got, "delta:"+event.Delta)
+			case channel.StreamEventFinal:
+				text := ""
+				if event.Final != nil {
+					text = event.Final.Message.Text
+				}
+				got = append(got, "final:"+text)
+			case channel.StreamEventToolCallStart, channel.StreamEventToolCallEnd:
+				got = append(got, string(event.Type))
 			}
 		}
-		var sent []string
-		for _, out := range sender.sent {
-			if out.Message.IsEmpty() {
-				continue
-			}
-			sent = append(sent, out.Message.PlainText())
-		}
-		if !reflect.DeepEqual(sent, tc.want) {
-			t.Fatalf("%s: delivered %v, want %v", tc.channel, sent, tc.want)
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: stream = %v, want %v", tc.channel, got, tc.want)
 		}
 	}
 }

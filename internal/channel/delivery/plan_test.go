@@ -692,6 +692,27 @@ func TestPlanMasksSecretsInErrors(t *testing.T) {
 	})
 }
 
+// A tool call the channel shows ends the text before it the same way: the text
+// is a message of its own, and the call opens the next preview.
+func TestPlanShownToolCallEndsThePreviewSegment(t *testing.T) {
+	text := channel.StreamEvent{Type: channel.StreamEventDelta, Delta: "Let me check.", Phase: channel.StreamPhaseText}
+	_, st := Plan(text, previewCaps, state(t0))
+	actions, st := Plan(toolStart(), previewCaps, st)
+	if !sameKinds(actions, KindEndPreview, KindOpenPreview, KindUpdate) {
+		t.Fatalf("actions = %v", kinds(actions))
+	}
+	if actions[2].Event.Type != channel.StreamEventToolCallStart {
+		t.Fatalf("the call is shown by the preview that opens, got %+v", actions[2].Event)
+	}
+	if len(st.committed) != 1 || st.committed[0] != "Let me check." || st.streamed {
+		t.Fatalf("committed = %q streamed = %v", st.committed, st.streamed)
+	}
+	actions, _ = Plan(toolStart(), previewCaps, state(t0))
+	if !sameKinds(actions, KindUpdate) {
+		t.Fatalf("a call with no text before it: actions = %v", kinds(actions))
+	}
+}
+
 // A tool call the channel hides is a boundary the channel cannot show. The
 // text the preview shows before it ends as a message of its own, and what
 // follows opens a new preview, so the text is not overwritten by the run's
