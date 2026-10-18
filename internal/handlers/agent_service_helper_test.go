@@ -9,12 +9,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent"
+	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/externalrun"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -90,7 +97,7 @@ func (stubAgentWorkspaceTargets) ResolveWorkspaceTarget(context.Context, string,
 // newTestAgentService builds an application service through New. Required
 // dependencies the test leaves zero take stand-ins, and the session runtime
 // defaults to a fresh in-memory manager.
-func newTestAgentService(t *testing.T, d application.Deps) *application.Service {
+func newTestAgentService(t *testing.T, d agent.Deps) *agent.Service {
 	t.Helper()
 	if d.Logger == nil {
 		d.Logger = slog.New(slog.DiscardHandler)
@@ -135,9 +142,145 @@ func newTestAgentService(t *testing.T, d application.Deps) *application.Service 
 	if d.RunCredentialSecret == "" {
 		d.RunCredentialSecret = "handlers-test-secret"
 	}
-	service, err := application.New(d)
+	service, err := agent.New(d)
 	if err != nil {
-		t.Fatalf("application.New: %v", err)
+		t.Fatalf("agent.New: %v", err)
 	}
 	return service
 }
+
+// inertAgent stands in for the agent service in handler tests that never reach
+// it: every call fails the test loudly instead of acting on a zero service.
+type inertAgent struct{}
+
+func (inertAgent) fail() { panic("handler test reached the agent service") }
+
+func (a inertAgent) AdmitWebRun(context.Context, web.AdmitInput) (*web.Admission, error) {
+	a.fail()
+	return nil, nil
+}
+func (a inertAgent) RunWebSend(*web.Admission, runreq.ChatRequest, drive.RunDelivery) { a.fail() }
+func (a inertAgent) RunWebRetry(*web.Admission, web.RetryLatestMessageInput, drive.RunDelivery) {
+	a.fail()
+}
+
+func (a inertAgent) RunWebEdit(*web.Admission, web.EditLatestMessageInput, drive.RunDelivery) {
+	a.fail()
+}
+
+func (a inertAgent) PrepareRetryLatestTurnOperation(context.Context, string, string) (string, error) {
+	a.fail()
+	return "", nil
+}
+
+func (a inertAgent) PrepareEditLatestTurnOperation(context.Context, string, string) (string, error) {
+	a.fail()
+	return "", nil
+}
+
+func (a inertAgent) ResolveTurnIDForMessage(context.Context, string, string) (string, error) {
+	a.fail()
+	return "", nil
+}
+
+func (a inertAgent) ApplyUserMessageHookAndPersistUserTurn(context.Context, runreq.ChatRequest) (runreq.ChatRequest, messagepkg.Message, error) {
+	a.fail()
+	return runreq.ChatRequest{}, messagepkg.Message{}, nil
+}
+
+func (a inertAgent) ValidateWorkspaceTarget(context.Context, string, string) error {
+	a.fail()
+	return nil
+}
+
+func (a inertAgent) ReconcileSessionModelPreference(context.Context, string, string, string) (string, string, error) {
+	a.fail()
+	return "", "", nil
+}
+
+func (a inertAgent) EnqueueSteer(context.Context, pending.QueueInput) (sessionruntime.SteerItem, error) {
+	a.fail()
+	return sessionruntime.SteerItem{}, nil
+}
+
+func (a inertAgent) EnqueueFollowUp(context.Context, pending.QueueInput) (sessionruntime.FollowUpItem, error) {
+	a.fail()
+	return sessionruntime.FollowUpItem{}, nil
+}
+
+func (a inertAgent) ListSessionQueues(context.Context, string, string) (pending.SessionQueues, error) {
+	a.fail()
+	return pending.SessionQueues{}, nil
+}
+
+func (a inertAgent) ReorderSteer(context.Context, string, string, sessionruntime.SteerPendingRef, sessionruntime.SteerPendingRef) ([]sessionruntime.SteerItem, error) {
+	a.fail()
+	return nil, nil
+}
+
+func (a inertAgent) UpdateSteer(context.Context, string, string, string, string, string) (sessionruntime.SteerItem, error) {
+	a.fail()
+	return sessionruntime.SteerItem{}, nil
+}
+
+func (a inertAgent) CancelSteer(context.Context, string, string, string) error {
+	a.fail()
+	return nil
+}
+
+func (a inertAgent) ReorderFollowUp(context.Context, string, string, sessionruntime.FollowUpPendingRef, sessionruntime.FollowUpPendingRef) ([]sessionruntime.FollowUpItem, error) {
+	a.fail()
+	return nil, nil
+}
+
+func (a inertAgent) UpdateFollowUp(context.Context, string, string, string, string, string) (sessionruntime.FollowUpItem, error) {
+	a.fail()
+	return sessionruntime.FollowUpItem{}, nil
+}
+
+func (a inertAgent) CancelFollowUp(context.Context, string, string, string) error {
+	a.fail()
+	return nil
+}
+
+func (a inertAgent) PromoteFollowUpToSteer(context.Context, string, string, sessionruntime.FollowUpPendingRef) (sessionruntime.PromoteFollowUpResult, error) {
+	a.fail()
+	return sessionruntime.PromoteFollowUpResult{}, nil
+}
+
+func (a inertAgent) RuntimeControls(context.Context, turn.RuntimeControlRequest) (external.Controls, error) {
+	a.fail()
+	return external.Controls{}, nil
+}
+
+func (a inertAgent) SetRuntimeMode(context.Context, turn.RuntimeControlRequest) (external.ModeState, error) {
+	a.fail()
+	return external.ModeState{}, nil
+}
+
+func (a inertAgent) ExecuteRuntimeCommand(context.Context, turn.RuntimeControlRequest) (turn.RuntimeCommandResult, error) {
+	a.fail()
+	return turn.RuntimeCommandResult{}, nil
+}
+
+func (a inertAgent) AbortRuntimeRun(context.Context, string, string, string, string) (bool, error) {
+	a.fail()
+	return false, nil
+}
+
+func (a inertAgent) RuntimeSessionExecutionInfo(context.Context, string) (externalrun.SessionExecutionInfo, error) {
+	a.fail()
+	return externalrun.SessionExecutionInfo{}, nil
+}
+
+func (a inertAgent) ViewerCanDecideToolApproval(context.Context, string, decide.ToolApprovalPrincipal) (bool, error) {
+	a.fail()
+	return false, nil
+}
+
+var (
+	_ webRunService         = inertAgent{}
+	_ queueService          = inertAgent{}
+	_ runtimeControlService = inertAgent{}
+	_ decisionService       = inertAgent{}
+)

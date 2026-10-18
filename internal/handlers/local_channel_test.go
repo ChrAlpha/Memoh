@@ -22,7 +22,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -741,8 +740,8 @@ func TestLocalChannelWSRoutesUserInputResponseByRunAndDecision(t *testing.T) {
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
 		sessionRuntime: runtime,
-		agentService:   &application.Service{},
-		logger:         slog.Default(),
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
+		logger: slog.Default(),
 	}
 
 	client := openLocalChannelTestWS(t, handler, botID, currentUser)
@@ -900,7 +899,7 @@ func TestLocalChannelWSMessageAuthorizesSessionBeforeSlashCommand(t *testing.T) 
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		agentService:   &application.Service{},
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
 		commandHandler: command.NewHandler(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		logger:         slog.Default(),
 	}
@@ -978,8 +977,8 @@ func TestLocalChannelWSQuickActionRequiresChatAccessWithoutSession(t *testing.T)
 		channelType:    channel.ChannelTypeLocal,
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
-		agentService:   &application.Service{},
-		logger:         slog.Default(),
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
+		logger: slog.Default(),
 	}
 
 	e := echo.New()
@@ -1060,7 +1059,7 @@ func TestLocalChannelWSQuickActionHelpOmitsSkillsForACPSession(t *testing.T) {
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		agentService:   &application.Service{},
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
 		skillResolver: testRuntimeSkillResolver{catalog: []skillset.SafeCatalogItem{
 			{Name: "alpha", DisplayName: "alpha", Description: "Alpha", State: skillset.StateEffective},
 		}},
@@ -1131,7 +1130,7 @@ func TestLocalChannelWSQuickActionSkillListRejectsACPSession(t *testing.T) {
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		agentService:   &application.Service{},
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
 		skillResolver: testRuntimeSkillResolver{catalog: []skillset.SafeCatalogItem{
 			{Name: "alpha", DisplayName: "alpha", Description: "Alpha", State: skillset.StateEffective},
 		}},
@@ -1198,8 +1197,8 @@ func TestLocalChannelWSRejectsClientSuppliedStreamID(t *testing.T) {
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		agentService:   &application.Service{},
-		logger:         slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
+		logger: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 
 	client := openLocalChannelTestWS(t, handler, botID, currentUser)

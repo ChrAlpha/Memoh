@@ -11,7 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/web"
@@ -58,11 +58,11 @@ func TestAdmitWSRunAnswersASendQueuedBehindARunWithRunQueued(t *testing.T) {
 		OwnerID: "owner-ws-queued", OwnerLeaseTTL: time.Minute, Ledger: sessionledger.New(), Fence: wsAdmissionFence{},
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	service := newTestAgentService(t, application.Deps{
+	service := newTestAgentService(t, agent.Deps{
 		SessionRuntime: manager,
 		QueuedInputs:   sessionruntime.NewQueuedInputs(dbsqlc.New(pool), pool),
 	})
-	handler := &LocalChannelHandler{logger: slog.New(slog.DiscardHandler), agentService: service, sessionRuntime: manager}
+	handler := &LocalChannelHandler{logger: slog.New(slog.DiscardHandler), webRuns: service, queue: service, runtimeOps: service, decisions: service, sessionRuntime: manager}
 	writer := &wsWriter{ch: make(chan []byte, 32), stop: make(chan struct{}), done: make(chan struct{})}
 	h := wsRunHarness{handler: handler, manager: manager, writer: writer}
 

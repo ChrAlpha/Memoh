@@ -68,7 +68,7 @@ The Discuss native chain:
    fully materializes `[]ContextMessage` with **no admission check of any kind**. The
    `EstimatedTokens` it computes is consumed by exactly one call site repo-wide: a
    `slog.Int` in `worker.go`. It is never compared against anything.
-3. `internal/agent/application/turn_discuss.go` converts to SDK messages and collects
+3. `internal/agent/pending/discuss.go` converts to SDK messages and collects
    source fragments; only then does `internal/contextview/provider_run_config.go`
    apply the `ContextBudgetPlan` (from PR #1039) at the provider stage — after the
    entire context has been materialized and copied several times.

@@ -3,6 +3,7 @@ package agenttest
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -33,4 +34,10 @@ func (q *DecisionQueries) ListUserInputsByRun(_ context.Context, runID pgtype.UU
 
 func (q *DecisionQueries) GetToolApprovalRequest(context.Context, pgtype.UUID) (sqlc.ToolApprovalRequest, error) {
 	return q.Approval, nil
+}
+
+// GetDiscussSession reports no discuss session: a service built on these
+// queries asks for one when a run ends.
+func (*DecisionQueries) GetDiscussSession(context.Context, sqlc.GetDiscussSessionParams) (sqlc.GetDiscussSessionRow, error) {
+	return sqlc.GetDiscussSessionRow{}, pgx.ErrNoRows
 }

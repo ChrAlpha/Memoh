@@ -14,7 +14,6 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -46,9 +45,9 @@ func heartbeatTestHandler(logs *lockedBuffer) (*LocalChannelHandler, string, str
 		channelType:    channel.ChannelTypeLocal,
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
-		agentService:   &application.Service{},
-		logger:         logger.New(logs, "info", "json"),
-		wsHeartbeat:    testWSHeartbeat,
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
+		logger:      logger.New(logs, "info", "json"),
+		wsHeartbeat: testWSHeartbeat,
 	}, botID, currentUser
 }
 

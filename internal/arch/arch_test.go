@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -152,11 +153,16 @@ func TestChatStorageDomainsDoNotDependOnUpperLayers(t *testing.T) {
 	}
 }
 
-// applicationLayerDirs are the packages that make up turn orchestration: what
-// is left in application and the packages split out of it. Rules that bind
-// orchestration, or keep lower layers from reaching it, cover all of them.
+// agentParent is the parent package internal/agent: the Service facade and the
+// turn port. Its path is the prefix of every package under it, so a rule about
+// the parent alone must compare the path exactly, never with isPackageOrChild.
+const agentParent = "internal/agent"
+
+// applicationLayerDirs are the packages that make up turn orchestration besides
+// the parent package: the components split out of it. Rules that bind
+// orchestration, or keep lower layers from reaching it, cover the parent
+// (applicationLayerFiles, isApplicationLayer) and all of them.
 var applicationLayerDirs = []string{
-	"internal/agent/application",
 	"internal/agent/runreq",
 	"internal/agent/outcome",
 	"internal/agent/activeprompt",
@@ -184,8 +190,33 @@ var applicationLayerDirs = []string{
 	"internal/agent/agenttest",
 }
 
-// isApplicationLayer reports whether imp is one of applicationLayerDirs.
+// applicationLayerFiles lists the Go files of the parent package itself and of
+// every package in applicationLayerDirs. The parent's own files are only those
+// directly in internal/agent.
+func applicationLayerFiles(t *testing.T, root string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(root, agentParent))
+	if err != nil {
+		t.Fatalf("read %s: %v", agentParent, err)
+	}
+	var files []string
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
+			files = append(files, agentParent+"/"+entry.Name())
+		}
+	}
+	for _, dir := range applicationLayerDirs {
+		files = append(files, allGoFiles(t, root, dir)...)
+	}
+	return files
+}
+
+// isApplicationLayer reports whether imp is the parent package or one of
+// applicationLayerDirs.
 func isApplicationLayer(imp string) bool {
+	if imp == modulePrefix+agentParent {
+		return true
+	}
 	for _, dir := range applicationLayerDirs {
 		if isPackageOrChild(imp, modulePrefix+dir) {
 			return true
@@ -199,12 +230,10 @@ func isApplicationLayer(imp string) bool {
 // must enter through adapters at the composition root.
 func TestApplicationDoesNotDependOnChannel(t *testing.T) {
 	root := repoRoot(t)
-	for _, dir := range applicationLayerDirs {
-		for _, file := range allGoFiles(t, root, dir) {
-			for _, imp := range imports(t, root, file) {
-				if isPackageOrChild(imp, modulePrefix+"internal/channel") {
-					t.Errorf("%s imports %s: Agent application must consume neutral ports, not Channel", file, imp)
-				}
+	for _, file := range applicationLayerFiles(t, root) {
+		for _, imp := range imports(t, root, file) {
+			if isPackageOrChild(imp, modulePrefix+"internal/channel") {
+				t.Errorf("%s imports %s: Agent application must consume neutral ports, not Channel", file, imp)
 			}
 		}
 	}
@@ -459,18 +488,92 @@ func TestRetiredDomainPackagesStayRemoved(t *testing.T) {
 	}
 }
 
-// TestAgentRootContainsNoGoFiles reserves internal/agent as a package
-// namespace. Executable code must live in one of its explicit subpackages.
-func TestAgentRootContainsNoGoFiles(t *testing.T) {
-	root := repoRoot(t)
-	entries, err := os.ReadDir(filepath.Join(root, "internal/agent"))
-	if err != nil {
-		t.Fatalf("read internal/agent: %v", err)
+// agentLayers is the order of the packages split out of the agent application.
+// A package imports only packages of a lower layer; packages of one layer do not
+// import each other, and none imports the parent package internal/agent.
+var agentLayers = map[string]int{
+	"runreq":       0,
+	"outcome":      1,
+	"activeprompt": 1,
+	"botenv":       1,
+	"transcript":   2,
+	"lifecycle":    2,
+	"persist":      2,
+	"memory":       3,
+	"compact":      3,
+	"decide":       3,
+	"admit":        3,
+	"runconfig":    4,
+	"drive":        4,
+	"title":        5,
+	"notify":       5,
+	"externalrun":  6,
+	"plan":         7,
+	"pending":      8,
+	"web":          9,
+	"schedule":     9,
+	"resume":       9,
+	"answer":       9,
+	"subagent":     9,
+}
+
+// agentSubpackage names the agentLayers package imp belongs to, if any.
+func agentSubpackage(imp string) (string, bool) {
+	rest, ok := strings.CutPrefix(imp, modulePrefix+agentParent+"/")
+	if !ok {
+		return "", false
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".go") {
-			t.Errorf("internal/agent/%s: Agent root must not contain Go files", entry.Name())
+	name, _, _ := strings.Cut(rest, "/")
+	_, layered := agentLayers[name]
+	return name, layered
+}
+
+// TestAgentSubpackagesImportDownward keeps the components of the agent in one
+// direction: the facade at internal/agent assembles them, and they never reach
+// back into it or sideways into a package of their own layer.
+func TestAgentSubpackagesImportDownward(t *testing.T) {
+	root := repoRoot(t)
+	for name, layer := range agentLayers {
+		for _, file := range allGoFiles(t, root, agentParent+"/"+name) {
+			for _, imp := range imports(t, root, file) {
+				if imp == modulePrefix+agentParent {
+					t.Errorf("%s imports %s: a component must not import the agent facade", file, imp)
+					continue
+				}
+				other, layered := agentSubpackage(imp)
+				if layered && other != name && agentLayers[other] >= layer {
+					t.Errorf("%s imports %s: %s (layer %d) may import only packages of a lower layer, %s is layer %d",
+						file, imp, name, layer, other, agentLayers[other])
+				}
+			}
 		}
+	}
+}
+
+// TestAgentEntryPackagesDoNotImportEachOther keeps the packages that start a
+// run apart: each is an entry into the same lower components, and an entry that
+// called another would start a run through a path the lower layers do not know.
+func TestAgentEntryPackagesDoNotImportEachOther(t *testing.T) {
+	entries := []string{"web", "schedule", "resume", "answer", "subagent"}
+	root := repoRoot(t)
+	for _, name := range entries {
+		for _, file := range allGoFiles(t, root, agentParent+"/"+name) {
+			for _, imp := range imports(t, root, file) {
+				other, layered := agentSubpackage(imp)
+				if layered && other != name && slices.Contains(entries, other) {
+					t.Errorf("%s imports %s: entry packages must not import each other", file, imp)
+				}
+			}
+		}
+	}
+}
+
+// TestRetiredAgentApplicationStaysRemoved keeps the directory the orchestration
+// used to live in from coming back.
+func TestRetiredAgentApplicationStaysRemoved(t *testing.T) {
+	root := repoRoot(t)
+	if _, err := os.Stat(filepath.Join(root, agentParent, "application")); !os.IsNotExist(err) {
+		t.Errorf("%s/application exists: the orchestration is the package %s itself", agentParent, agentParent)
 	}
 }
 
@@ -541,15 +644,19 @@ func TestStandaloneChannelDoesNotOwnStorageBackends(t *testing.T) {
 func TestRouteCredentialsHaveOneIssuer(t *testing.T) {
 	root := repoRoot(t)
 	forbidden := regexp.MustCompile(`\bauth\.(GenerateChatToken|GenerateToken)\b`)
-	for _, dir := range append([]string{"internal/channel"}, applicationLayerDirs...) {
-		for _, file := range goFiles(t, root, dir) {
-			data, err := os.ReadFile(filepath.Join(root, file)) //nolint:gosec // guard test walks repo-tracked files by design
-			if err != nil {
-				t.Fatalf("read %s: %v", file, err)
-			}
-			if found := forbidden.Find(data); found != nil {
-				t.Errorf("%s calls %s: sign a turn's credentials through auth.IssueRouteCredentials", file, found)
-			}
+	files := goFiles(t, root, "internal/channel")
+	for _, file := range applicationLayerFiles(t, root) {
+		if !strings.HasSuffix(file, "_test.go") {
+			files = append(files, file)
+		}
+	}
+	for _, file := range files {
+		data, err := os.ReadFile(filepath.Join(root, file)) //nolint:gosec // guard test walks repo-tracked files by design
+		if err != nil {
+			t.Fatalf("read %s: %v", file, err)
+		}
+		if found := forbidden.Find(data); found != nil {
+			t.Errorf("%s calls %s: sign a turn's credentials through auth.IssueRouteCredentials", file, found)
 		}
 	}
 }

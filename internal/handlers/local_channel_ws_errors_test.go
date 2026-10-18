@@ -14,7 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -197,11 +197,11 @@ func TestPermissionQuickActionFailureIsRecordedOnceByTheRequest(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	agentService := newTestAgentService(t, application.Deps{
+	agentService := newTestAgentService(t, agent.Deps{
 		Sessions:       failingSessionService{err: errors.New("SECRET session store unreachable")},
 		BotPermissions: allowAllPermissions{},
 	})
-	handler := &LocalChannelHandler{agentService: agentService, logger: logger}
+	handler := &LocalChannelHandler{webRuns: agentService, queue: agentService, runtimeOps: agentService, decisions: agentService, logger: logger}
 
 	_, err := handler.executeWebPermissionQuickAction(context.Background(), "bot-1", webQuickActionContext{SessionID: "session-1", ActorID: "user-1"})
 	if apperror.CodeOf(err) != apperror.CodeRuntimeControlFailed {
@@ -228,8 +228,8 @@ func TestResolveWSTargetTurnIDFailureReachesTheResultRecord(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	agentService := newTestAgentService(t, application.Deps{Messages: unresolvableTurnMessages{}})
-	handler := &LocalChannelHandler{logger: logger, agentService: agentService}
+	agentService := newTestAgentService(t, agent.Deps{Messages: unresolvableTurnMessages{}})
+	handler := &LocalChannelHandler{logger: logger, webRuns: agentService, queue: agentService, runtimeOps: agentService, decisions: agentService}
 
 	_, err := handler.resolveWSTargetTurnID(context.Background(), "session-1", "", "message-1")
 	if err == nil {

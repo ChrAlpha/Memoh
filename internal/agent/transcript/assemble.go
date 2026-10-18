@@ -30,8 +30,7 @@ type Request struct {
 	Purpose Purpose
 	// Chat carries the retry/edit cutoff, the required row, and the persisted
 	// current row. It is zero for a continuation.
-	Chat     runreq.ChatRequest
-	Fallback historyfrag.ScopeFallback
+	Chat runreq.ChatRequest
 	// Scope is the summary scope; Scope.SessionID is the session being read.
 	Scope contextfrag.Scope
 	// Budget is the model's token budget. It bounds what one load may
@@ -55,11 +54,10 @@ type Assembled struct {
 
 func ForChat(purpose Purpose, req runreq.ChatRequest, budget int) Request {
 	return Request{
-		Purpose:  purpose,
-		Chat:     req,
-		Fallback: scopeFallbackFromChatRequest(req),
-		Scope:    SummaryScope(req.BotID, req.ChatID, req.ThreadID, req.ConversationType, req.ConversationName, req.ReplyTarget),
-		Budget:   budget,
+		Purpose: purpose,
+		Chat:    req,
+		Scope:   SummaryScope(req.BotID, req.ChatID, req.ThreadID, req.ConversationType, req.ConversationName, req.ReplyTarget),
+		Budget:  budget,
 	}
 }
 
@@ -143,7 +141,7 @@ func (t *Reader) loadContextRecords(ctx context.Context, r Request) ([]historyfr
 				slog.Int64("max_bytes", maxBytes))
 		}
 	}
-	result, err := t.recordsFromMessages(msgs, r.Fallback)
+	result, err := t.recordsFromMessages(msgs)
 	if err != nil {
 		return nil, false, err
 	}
@@ -157,10 +155,10 @@ func (t *Reader) loadContextRecords(ctx context.Context, r Request) ([]historyfr
 // before any byte budget or row limit is applied. The budget covers content
 // only and metadata arrives undecoded, so each source row is released once
 // converted and at most one row's metadata is decoded at a time.
-func (t *Reader) recordsFromMessages(msgs []messagepkg.Message, fallback historyfrag.ScopeFallback) ([]historyfrag.HistoryRecord, error) {
+func (t *Reader) recordsFromMessages(msgs []messagepkg.Message) ([]historyfrag.HistoryRecord, error) {
 	result := make([]historyfrag.HistoryRecord, 0, len(msgs))
 	for i := range msgs {
-		record, err := historyfrag.FromDBMessageWithLogger(t.logger, msgs[i], fallback)
+		record, err := historyfrag.FromDBMessageWithLogger(t.logger, msgs[i], historyfrag.ScopeFallback{})
 		if err != nil {
 			return nil, err
 		}

@@ -23,13 +23,13 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/acl"
+	"github.com/felinics/memoh/internal/agent"
 	acpprofileadapter "github.com/felinics/memoh/internal/agent/adapter/acpprofile"
 	agentsessionadapter "github.com/felinics/memoh/internal/agent/adapter/agentsession"
 	channelcontactadapter "github.com/felinics/memoh/internal/agent/adapter/channelcontact"
 	channelidentityadapter "github.com/felinics/memoh/internal/agent/adapter/channelidentity"
 	channelmessagingadapter "github.com/felinics/memoh/internal/agent/adapter/channelmessaging"
 	channelthreadadapter "github.com/felinics/memoh/internal/agent/adapter/channelthread"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
@@ -459,7 +459,7 @@ func provideMessageService(log *slog.Logger, queries dbstore.Queries, hub *event
 	return message.NewService(log, queries, hub)
 }
 
-func provideScheduleTriggerer(service *application.Service) schedule.Triggerer {
+func provideScheduleTriggerer(service *agent.Service) schedule.Triggerer {
 	return service
 }
 
@@ -544,7 +544,7 @@ func agentLimitsFromConfig(cfg config.AgentConfig) native.Limits {
 	)
 }
 
-func injectToolProviders(a *native.Agent, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider) {
+func injectToolProviders(a *native.Agent, msgService *message.DBService, hookService *hookspkg.Service, agentService *agent.Service, providers []agenttools.ToolProvider) {
 	a.SetToolProviders(providers)
 	for _, p := range providers {
 		if cp, ok := p.(*agenttools.ContainerProvider); ok {
@@ -792,7 +792,7 @@ func provideCompactionService(log *slog.Logger, queries dbstore.Queries, cfg con
 	return service
 }
 
-func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, audioService *audiopkg.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, queuedInputs *sessionruntime.QueuedInputs, workdirService *workdir.Service, cfg config.Config) (*application.Service, error) {
+func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, audioService *audiopkg.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, queuedInputs *sessionruntime.QueuedInputs, workdirService *workdir.Service, cfg config.Config) (*agent.Service, error) {
 	if sessionService != nil {
 		sessionService.SetHookService(hookService)
 	}
@@ -807,7 +807,7 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 		toolApproval.SetHookService(hookService)
 		toolApproval.SetWorkspaceTargetPolicyResolver(workspaceTargetPolicyResolver{manager: workspaceManager})
 	}
-	return application.New(application.Deps{
+	return agent.New(agent.Deps{
 		Logger:              log,
 		Queries:             queries,
 		Messages:            msgService,
@@ -1628,7 +1628,7 @@ func (a *gatewayAssetLoaderAdapter) AccessPathForGateway(ctx context.Context, bo
 
 // provideTurnService exposes the application service as Channel's only Agent
 // surface. Both chat and discuss turns run directly on the same service.
-func provideTurnService(service *application.Service) turn.Service {
+func provideTurnService(service *agent.Service) turn.Service {
 	return service
 }
 

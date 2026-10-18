@@ -2,7 +2,7 @@ package reasoning
 
 import "testing"
 
-// Moved verbatim from internal/agent/application when the resolver became a leaf
+// Moved verbatim from internal/agent when the resolver became a leaf
 // package; the assertions are unchanged.
 
 func TestOffEffortFor(t *testing.T) {

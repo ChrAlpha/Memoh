@@ -18,7 +18,7 @@ import (
 // Characterization tests for the upstream half of the subagent reasoning drop.
 //
 // The reasoning decision the parent turn resolves
-// (internal/agent/application/service.go:718 -> *models.ReasoningConfig) has two
+// (internal/agent/service.go:718 -> *models.ReasoningConfig) has two
 // carriers into a provider request:
 //
 //  1. Provider construction — models.NewSDKChatModel wires Anthropic

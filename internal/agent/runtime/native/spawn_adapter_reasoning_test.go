@@ -167,7 +167,7 @@ func TestSpawnDisabledReasoningReachesOpenAIWire(t *testing.T) {
 
 // TestParentTurnSendsReasoningForSameDecision is the contrast case that proves
 // the drop is a spawn-path defect and not a global "we never send reasoning".
-// A native.RunConfig built the way application.Service builds it (service.go:
+// A native.RunConfig built the way agent.Service builds it (service.go:
 // 757-761) does reach the wire; only the spawn-converted one does not.
 func TestParentTurnSendsReasoningForSameDecision(t *testing.T) {
 	t.Parallel()

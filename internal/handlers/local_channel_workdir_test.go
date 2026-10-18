@@ -10,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -125,10 +124,10 @@ func TestLocalChannelWSFirstSendBindsRequestedWorkdir(t *testing.T) {
 				botService:     bots.NewService(nil, queries),
 				accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 				sessionService: sessionpkg.NewService(nil, queries, nil),
-				agentService:   &application.Service{},
-				workdirs:       workdirs,
-				wsSkillTurns:   newWSRequestedSkillTurnRegistry(),
-				logger:         slog.Default(),
+				webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
+				workdirs:     workdirs,
+				wsSkillTurns: newWSRequestedSkillTurnRegistry(),
+				logger:       slog.Default(),
 			}
 			client := openLocalChannelTestWS(t, handler, botID, currentUser)
 

@@ -18,7 +18,7 @@
 |---|---|---|
 | `internal/models/types.go` | effort 词表、ThinkingMode、校验、NearestEffortToMedium、normalize | 定义层,基本合理,但和下面几处互相抄 |
 | `internal/models/sdk.go` | ReasoningConfig 类型、wire 编码(BuildReasoningOptions 等) | wire 层,合理;但 `openAIWireEffort` 和 service.go 的 `normalizesMaxReasoningEffort` 是同一逻辑两份 |
-| `internal/agent/application/service.go` | **全部调用时决策**:resolveReasoningConfig / pickEffort / offEffortFor / effectiveReasoningEfforts / anthropicEffortEra 等 7 个函数 | 住在一个 1594 行的编排文件里,但它们是纯函数,只依赖 models + 一个 settings 字符串——**放错了地方** |
+| `internal/agent/service.go` | **全部调用时决策**:resolveReasoningConfig / pickEffort / offEffortFor / effectiveReasoningEfforts / anthropicEffortEra 等 7 个函数 | 住在一个 1594 行的编排文件里,但它们是纯函数,只依赖 models + 一个 settings 字符串——**放错了地方** |
 | `internal/capabilities/` + `cmd/synccaps/` | build-time 能力发现(LiteLLM → YAML) | 自己维护了第三份 effort 顺序表 `effortOrder` |
 | `internal/command/reasoning.go` | `/reasoning` 命令 | 自己维护第四份词表 `reasoningChoices`(用字面 `"off"`,少 minimal/max),完全不看模型 |
 | `internal/settings/` | 存储层 | `isValidReasoningEffort` 与 models 包**同名不同义**(一个只拒空,一个严格词表) |
@@ -55,7 +55,7 @@ internal/reasoning/
 ├── vocabulary.go   # effort 常量、有序 tier 表、IsDisabled、IsValidDeclarable、
 │                   # NearestToMedium、NormalizeAdvertised(自 models/types.go 迁入)
 ├── mode.go         # ThinkingMode 常量 + ResolveMode(mode, compats)(自 models/types.go 迁入)
-├── resolve.go      # 调用时决策(自 agent/application/service.go 迁入):
+├── resolve.go      # 调用时决策(自 agent/service.go 迁入):
 │                   # ResolveConfig(mode, advertised, stored, requested, clientType) → *Config
 │                   # 内含 pickEffort / effectiveEfforts / offEffortFor / anthropicEffortEra
 ├── options.go      # ★新增,第一步的核心:

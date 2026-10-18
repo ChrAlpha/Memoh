@@ -6,7 +6,7 @@ import (
 
 // ResolveRunConfigResult holds a fully resolved run configuration for one
 // agent request, together with the selected model and session runtime.
-// Produced by application.Service.ResolveRunConfig and consumed by the turn
+// Produced by agent.Service.ResolveRunConfig and consumed by the turn
 // runtime adapters.
 type SessionRunConfig struct {
 	RunConfig              native.RunConfig

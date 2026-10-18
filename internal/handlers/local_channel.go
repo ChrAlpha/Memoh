@@ -23,7 +23,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent"
 	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/externalrun"
@@ -65,7 +65,10 @@ type LocalChannelHandler struct {
 	accountService  *accounts.Service
 	sessionService  *sessionpkg.Service
 	workdirs        sessionWorkdirService
-	agentService    *application.Service
+	webRuns         webRunService
+	queue           queueEnqueuer
+	runtimeOps      runtimeControlService
+	decisions       decisionService
 	sessionRuntime  runtimeControlRouter
 	commandHandler  *command.Handler
 	skillResolver   runtimeSkillResolver
@@ -106,9 +109,12 @@ func NewLocalChannelHandler(channelType channel.ChannelType, channelManager *cha
 	}
 }
 
-// SetAgentService configures the application service used for WebSocket turns.
-func (h *LocalChannelHandler) SetAgentService(service *application.Service) {
-	h.agentService = service
+// SetAgentService configures the agent service used for WebSocket turns.
+func (h *LocalChannelHandler) SetAgentService(service *agent.Service) {
+	h.webRuns = service
+	h.queue = service
+	h.runtimeOps = service
+	h.decisions = service
 	h.runtimeControls = service
 }
 
@@ -355,7 +361,7 @@ func (h *LocalChannelHandler) executeWebQuickAction(ctx context.Context, botID, 
 }
 
 func (h *LocalChannelHandler) executeWebPermissionQuickAction(ctx context.Context, botID string, control webQuickActionContext) (*CommandActionResult, error) {
-	if h == nil || h.agentService == nil {
+	if h == nil {
 		return nil, errs.New("agent service not configured")
 	}
 	if strings.TrimSpace(control.SessionID) == "" {
@@ -366,13 +372,13 @@ func (h *LocalChannelHandler) executeWebPermissionQuickAction(ctx context.Contex
 	var err error
 	if strings.TrimSpace(control.ModeID) == "" {
 		var controls external.Controls
-		controls, err = h.agentService.RuntimeControls(ctx, request)
+		controls, err = h.runtimeOps.RuntimeControls(ctx, request)
 		state = controls.Modes
 		if err == nil && !state.Supported {
 			err = external.ErrControlUnsupported
 		}
 	} else {
-		state, err = h.agentService.SetRuntimeMode(ctx, request)
+		state, err = h.runtimeOps.SetRuntimeMode(ctx, request)
 	}
 
 	if err != nil {
@@ -597,9 +603,9 @@ func (h *LocalChannelHandler) executeWSQueueCommand(ctx context.Context, writer 
 			Text:                    text,
 		}
 		if actionID == "steer" {
-			_, err = h.agentService.EnqueueSteer(ctx, input)
+			_, err = h.queue.EnqueueSteer(ctx, input)
 		} else {
-			_, err = h.agentService.EnqueueFollowUp(ctx, input)
+			_, err = h.queue.EnqueueFollowUp(ctx, input)
 		}
 		err = queueAdmissionError(err)
 		if err != nil && apperror.CodeOf(err) == "" {
@@ -754,10 +760,7 @@ func (h *LocalChannelHandler) PostMessage(c echo.Context) error {
 		if err := authorizeWorkspaceTargetSelection(perms, workspaceTargetID); err != nil {
 			return err
 		}
-		if h.agentService == nil {
-			return echo.NewHTTPError(http.StatusInternalServerError, "resolver not configured")
-		}
-		if err := h.agentService.ValidateWorkspaceTarget(c.Request().Context(), botID, workspaceTargetID); err != nil {
+		if err := h.webRuns.ValidateWorkspaceTarget(c.Request().Context(), botID, workspaceTargetID); err != nil {
 			return workspaceTargetError(err)
 		}
 	}
@@ -1187,7 +1190,7 @@ func (h *LocalChannelHandler) resolveWSTargetTurnID(ctx context.Context, session
 	if legacy == "" {
 		return "", apperror.FieldRequired("turn_id")
 	}
-	resolved, err := h.agentService.ResolveTurnIDForMessage(ctx, sessionID, legacy)
+	resolved, err := h.webRuns.ResolveTurnIDForMessage(ctx, sessionID, legacy)
 	if err != nil {
 		return "", apperror.Wrap(apperror.CodeSessionTurnNotFound, err, nil)
 	}
@@ -1444,22 +1447,13 @@ func (h *LocalChannelHandler) abortWSRun(ctx context.Context, writer *wsWriter, 
 	controlID := strings.TrimSpace(msg.ControlID)
 	ref := wsTurn(msg.InvocationID, sessionID).withRun(runID)
 
-	controller := h.sessionRuntimeController()
-	if sessionID == "" || (h.agentService == nil && controller == nil) {
+	if sessionID == "" {
 		if controlID != "" {
 			sendWSControlAck(writer, ref, "abort", controlID, false, "")
 		}
 		return
 	}
-	var (
-		applied bool
-		err     error
-	)
-	if h.agentService != nil {
-		applied, err = h.agentService.AbortRuntimeRun(ctx, botID, sessionID, runID, controlID)
-	} else {
-		applied, err = controller.AbortControl(ctx, botID, sessionID, runID, controlID)
-	}
+	applied, err := h.runtimeOps.AbortRuntimeRun(ctx, botID, sessionID, runID, controlID)
 	if err != nil {
 		failWSControl(ctx, h.logger, writer, botID, ref, "ws.control.abort", "abort", controlID, string(apperror.CodeOf(err)), err)
 		return
@@ -1487,7 +1481,7 @@ func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, 
 	if release == nil {
 		release = func() {}
 	}
-	admitted, err := h.agentService.AdmitWebRun(ctx, web.AdmitInput{
+	admitted, err := h.webRuns.AdmitWebRun(ctx, web.AdmitInput{
 		BotID:        botID,
 		SessionID:    ref.SessionID,
 		InvocationID: ref.InvocationID,
@@ -1607,10 +1601,6 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 	if !canOpenLocalWebSocket(perms) {
 		return echo.NewHTTPError(http.StatusForbidden, "bot access denied")
 	}
-	if h.agentService == nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "resolver not configured")
-	}
-
 	// The handshake gets a span; the connection does not. telemetry.EchoServer
 	// skips upgrades because a span covering this handler would run for the
 	// life of the socket — see its comment. This one ends where the protocol
@@ -1843,7 +1833,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			if workspaceTargetID != "" {
-				if err := h.agentService.ValidateWorkspaceTarget(streamBaseCtx, botID, workspaceTargetID); err != nil {
+				if err := h.webRuns.ValidateWorkspaceTarget(streamBaseCtx, botID, workspaceTargetID); err != nil {
 					failWSRequest(streamBaseCtx, h.logger, writer, botID, ref, "ws.message", workspaceTargetError(err))
 					continue
 				}
@@ -1871,7 +1861,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 							event.Result = &CommandActionResult{Kind: "runtime_command", Title: "/" + request.Command, Text: command.RunningText, TextKey: runtimeCommandTextKey(command, "running_text")}
 							writer.SendJSON(event)
 						}
-						result, err := h.agentService.ExecuteRuntimeCommand(controlCtx, request)
+						result, err := h.runtimeOps.ExecuteRuntimeCommand(controlCtx, request)
 						if err != nil {
 							mapped := runtimeControlError(err)
 							writer.SendJSON(commandErrorEvent(controlCtx, message, request.Command, mapped))
@@ -2130,7 +2120,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 					RequestedSkills:         requestedSkillContexts,
 					WorkspaceTargetID:       workspaceTargetID,
 				}
-				preparedReq, persisted, persistErr := h.agentService.ApplyUserMessageHookAndPersistUserTurn(streamBaseCtx, userReq)
+				preparedReq, persisted, persistErr := h.webRuns.ApplyUserMessageHookAndPersistUserTurn(streamBaseCtx, userReq)
 				if persistErr != nil {
 					failWSRequest(streamBaseCtx, h.logger, writer, botID, ref, "ws.message", persistErr)
 					releaseActiveWSTurnNow()
@@ -2224,7 +2214,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				req.WorkspaceTargetID = preparedActivationReq.WorkspaceTargetID
 				req.WorkspaceTarget = preparedActivationReq.WorkspaceTarget
 			}
-			h.agentService.RunWebSend(admitted, req, newWSRunDelivery(writer, runRef, releaseActiveWSTurn))
+			h.webRuns.RunWebSend(admitted, req, newWSRunDelivery(writer, runRef, releaseActiveWSTurn))
 
 		case "retry_message":
 			sessionID := strings.TrimSpace(msg.SessionID)
@@ -2248,7 +2238,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			if workspaceTargetID != "" {
-				if err := h.agentService.ValidateWorkspaceTarget(streamBaseCtx, botID, workspaceTargetID); err != nil {
+				if err := h.webRuns.ValidateWorkspaceTarget(streamBaseCtx, botID, workspaceTargetID); err != nil {
 					failWSRequest(streamBaseCtx, h.logger, writer, botID, ref, "ws.retry_message", workspaceTargetError(err))
 					continue
 				}
@@ -2279,7 +2269,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 			retryAdmission := &wsReplacementAdmission{
 				kind: sessionruntime.RunOperationRetry,
 				prepareAnchor: func(ctx context.Context) (string, error) {
-					return h.agentService.PrepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
+					return h.webRuns.PrepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
 				},
 			}
 			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil, nil)
@@ -2287,7 +2277,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			retryInput.OnModelPreferenceSettled = wsModelPreferenceSettled(writer, runRef)
-			h.agentService.RunWebRetry(admitted, retryInput, newWSRunDelivery(writer, runRef, nil))
+			h.webRuns.RunWebRetry(admitted, retryInput, newWSRunDelivery(writer, runRef, nil))
 
 		case "edit_message":
 			text := strings.TrimSpace(msg.Text)
@@ -2321,7 +2311,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				continue
 			}
 			if workspaceTargetID != "" {
-				if err := h.agentService.ValidateWorkspaceTarget(streamBaseCtx, botID, workspaceTargetID); err != nil {
+				if err := h.webRuns.ValidateWorkspaceTarget(streamBaseCtx, botID, workspaceTargetID); err != nil {
 					failWSRequest(streamBaseCtx, h.logger, writer, botID, ref, "ws.edit_message", workspaceTargetError(err))
 					continue
 				}
@@ -2357,7 +2347,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				botID:   botID,
 				kind:    sessionruntime.RunOperationEdit,
 				prepareAnchor: func(ctx context.Context) (string, error) {
-					return h.agentService.PrepareEditLatestTurnOperation(ctx, sessionID, targetTurnID)
+					return h.webRuns.PrepareEditLatestTurnOperation(ctx, sessionID, targetTurnID)
 				},
 				replacementUserTurn: &chatview.UITurn{
 					Role:         "user",
@@ -2374,7 +2364,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 			}
 			editInput.Attachments = editAdmission.preparedAttachments()
 			editInput.OnModelPreferenceSettled = wsModelPreferenceSettled(writer, runRef)
-			h.agentService.RunWebEdit(admitted, editInput, newWSRunDelivery(writer, runRef, nil))
+			h.webRuns.RunWebEdit(admitted, editInput, newWSRunDelivery(writer, runRef, nil))
 
 		default:
 			failWSRequest(streamBaseCtx, h.logger, writer, botID, wsTurn(msg.InvocationID, msg.SessionID), "ws.unknown_message", apperror.FieldInvalid("type", nil))
@@ -2432,10 +2422,7 @@ func (h *LocalChannelHandler) createWSChatSession(ctx context.Context, botID, ch
 	// that omit the pair (default-sourced) keep both fields empty → NULL
 	// preference, and the session follows the bot default live.
 	if strings.TrimSpace(modelID) != "" || strings.TrimSpace(reasoningEffort) != "" {
-		if h.agentService == nil {
-			return sessionpkg.Thread{}, errors.New("agent service not configured")
-		}
-		prefModelID, prefEffort, err := h.agentService.ReconcileSessionModelPreference(ctx, input.BotID, modelID, reasoningEffort)
+		prefModelID, prefEffort, err := h.webRuns.ReconcileSessionModelPreference(ctx, input.BotID, modelID, reasoningEffort)
 		if err != nil {
 			return sessionpkg.Thread{}, err
 		}
@@ -2457,10 +2444,10 @@ func (h *LocalChannelHandler) wsSessionSupportsRequestedSkills(ctx context.Conte
 }
 
 func (h *LocalChannelHandler) authorizeWSRuntimeExecution(ctx context.Context, channelIdentityID, botID, sessionID string) (externalrun.SessionExecutionInfo, error) {
-	if h == nil || h.agentService == nil {
+	if h == nil {
 		return externalrun.SessionExecutionInfo{}, nil
 	}
-	info, err := h.agentService.RuntimeSessionExecutionInfo(ctx, sessionID)
+	info, err := h.runtimeOps.RuntimeSessionExecutionInfo(ctx, sessionID)
 	if err != nil || !info.RequiresWorkspaceExec {
 		return info, err
 	}
@@ -2518,12 +2505,9 @@ func (h *LocalChannelHandler) authorizeWSChatAccess(ctx context.Context, channel
 // connection. A failed check renders the approval read-only; the decision is
 // authorized again when it is submitted.
 func (h *LocalChannelHandler) runtimeViewerDecider(channelIdentityID string) runtimeViewerDecider {
-	if h.agentService == nil {
-		return nil
-	}
 	viewer := decide.ToolApprovalPrincipal{UserID: channelIdentityID, ChannelIdentityID: channelIdentityID}
 	return func(ctx context.Context, approvalID string) bool {
-		allowed, err := h.agentService.ViewerCanDecideToolApproval(ctx, approvalID, viewer)
+		allowed, err := h.decisions.ViewerCanDecideToolApproval(ctx, approvalID, viewer)
 		if err != nil {
 			h.logger.WarnContext(ctx, "resolve viewer tool approval authority failed",
 				slog.Any("error", err), slog.String("approval_id", approvalID))

@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -114,13 +114,13 @@ func newWSRunHarness(t *testing.T, queries dbstore.Queries) wsRunHarness {
 	t.Cleanup(func() { _ = manager.Close() })
 	// The run's setup reads the session first; failing that read ends every
 	// run these tests start in its setup, before anything executes.
-	agentService := newTestAgentService(t, application.Deps{
+	agentService := newTestAgentService(t, agent.Deps{
 		Queries:        queries,
 		SessionRuntime: manager,
 		Sessions:       failingSessionService{err: errors.New("resolve: model not found")},
 	})
 	return wsRunHarness{
-		handler: &LocalChannelHandler{logger: slog.New(slog.DiscardHandler), agentService: agentService, sessionRuntime: manager},
+		handler: &LocalChannelHandler{logger: slog.New(slog.DiscardHandler), webRuns: agentService, queue: agentService, runtimeOps: agentService, decisions: agentService, sessionRuntime: manager},
 		manager: manager,
 		runs:    runs,
 		writer:  &wsWriter{ch: make(chan []byte, 32), stop: make(chan struct{}), done: make(chan struct{})},
@@ -149,7 +149,7 @@ func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context
 func (h wsRunHarness) send(t *testing.T, admitted *web.Admission, ref wsTurnRef) {
 	t.Helper()
 	ended := make(chan struct{})
-	h.handler.agentService.RunWebSend(admitted, runreq.ChatRequest{
+	h.handler.webRuns.RunWebSend(admitted, runreq.ChatRequest{
 		BotID: wsAdmissionBotID, ChatID: wsAdmissionBotID, ThreadID: wsAdmissionSessionID, Query: "hi",
 	}, newWSRunDelivery(h.writer, ref, func() { close(ended) }))
 	select {

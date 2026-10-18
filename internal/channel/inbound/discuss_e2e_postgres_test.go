@@ -20,10 +20,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -339,7 +338,7 @@ type discussE2E struct {
 	ownerID   string
 	suffix    string
 
-	service    *application.Service
+	service    *agent.Service
 	manager    *sessionruntime.Manager
 	model      *e2eModel
 	sender     *e2eSender
@@ -407,7 +406,7 @@ func newDiscussE2EWith(t *testing.T, deployment e2eDeployment, codex *e2eCodex, 
 	t.Cleanup(func() { _ = e.manager.Close() })
 
 	applier := contextview.ProviderRunConfigApplier(e.logger)
-	agent := native.New(native.Deps{
+	nativeAgent := native.New(native.Deps{
 		Logger: e.logger,
 		ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) native.RunConfig {
 			out := applier(ctx, cfg)
@@ -419,11 +418,11 @@ func newDiscussE2EWith(t *testing.T, deployment e2eDeployment, codex *e2eCodex, 
 			return out
 		},
 	})
-	agent.SetToolProviders([]tools.ToolProvider{
+	nativeAgent.SetToolProviders([]tools.ToolProvider{
 		tools.NewMessageProvider(nil, e.sender, e2eReactor{}, e2eChannelResolver{}, nil),
 	})
 	e.sessions = sessionpkg.NewService(e.logger, e.queries, nil)
-	deps := application.Deps{
+	deps := agent.Deps{
 		Logger:              e.logger,
 		Queries:             e.queries,
 		Messages:            messagepkg.NewService(e.logger, e.queries),
@@ -431,7 +430,7 @@ func newDiscussE2EWith(t *testing.T, deployment e2eDeployment, codex *e2eCodex, 
 		Settings:            settings.NewService(e.logger, e.queries, nil, nil),
 		Accounts:            &accounts.Service{},
 		Models:              models.NewService(e.logger, e.queries),
-		Agent:               agent,
+		Agent:               nativeAgent,
 		SessionRuntime:      e.manager,
 		BotPermissions:      e2eDenyPermissions{},
 		WorkspaceTargets:    e2eWorkspaceTargets{},
@@ -445,9 +444,9 @@ func newDiscussE2EWith(t *testing.T, deployment e2eDeployment, codex *e2eCodex, 
 		deps.ExternalRuntimes = []external.Driver{e.codex}
 		deps.BotPermissions = e2ePermissions{}
 	}
-	service, err := application.New(deps)
+	service, err := agent.New(deps)
 	if err != nil {
-		t.Fatalf("application.New: %v", err)
+		t.Fatalf("agent.New: %v", err)
 	}
 	e.service = service
 
@@ -956,11 +955,10 @@ func TestDiscussE2ESweepAnswersWhatNoWakeDid(t *testing.T) {
 		t.Fatalf("runs = %v, cover = %d without a wake, want none", got, e.cover())
 	}
 
-	sweep := pending.NewDiscussSweep(e.service.Pending())
-	if err := sweep.Start(context.Background()); err != nil {
+	if err := e.service.StartDiscussSweep(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	t.Cleanup(sweep.Stop)
+	t.Cleanup(e.service.StopDiscussSweep)
 	hw := e.position()
 	eventually(t, "the sweep to answer the recorded input", func() bool { return e.cover() == hw })
 

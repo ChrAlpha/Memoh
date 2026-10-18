@@ -1,0 +1,298 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/runconfig"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
+	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/testutil/sessionledger"
+)
+
+// scriptedFailureTransport answers the first streaming model requests with
+// the scripted HTTP statuses and passes every later request to the real test
+// provider. A 503 is retryable in the native runtime and a 400 is not, so the
+// event order comes from production code: a single 503 gives
+// EventRetry -> AgentEnd, and 503 then 400 gives
+// EventRetry -> EventError -> AgentAbort.
+type scriptedFailureTransport struct {
+	base     http.RoundTripper
+	statuses []int
+	calls    atomic.Int32
+}
+
+func (t *scriptedFailureTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	call := int(t.calls.Add(1))
+	if call > len(t.statuses) {
+		return t.base.RoundTrip(r)
+	}
+	if r.Body != nil {
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = r.Body.Close()
+	}
+	status := t.statuses[call-1]
+	return &http.Response{
+		StatusCode: status,
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"` + http.StatusText(status) + `"}}`)),
+		Request:    r,
+	}, nil
+}
+
+// noDecisionQueries reports that the run has no pending decisions.
+type noDecisionQueries struct{ *directLifecycleQueries }
+
+func (noDecisionQueries) ListToolApprovalsByRun(context.Context, pgtype.UUID) ([]sqlc.ToolApprovalRequest, error) {
+	return nil, nil
+}
+
+func (noDecisionQueries) ListUserInputsByRun(context.Context, pgtype.UUID) ([]sqlc.UserInputRequest, error) {
+	return nil, nil
+}
+
+// proposalRecordingLedger records every finish proposal the manager makes, in
+// order, so the test can show which outcome reached the ledger first.
+type proposalRecordingLedger struct {
+	*sessionledger.Store
+	mu        sync.Mutex
+	proposals [][2]string
+	// failFirst makes the first proposal write fail, as a transient database
+	// error would, so the terminal event defers the outcome to finish.
+	failFirst bool
+}
+
+func (l *proposalRecordingLedger) PrepareFinish(ctx context.Context, params ledger.PrepareFinishParams) (ledger.Run, bool, error) {
+	l.mu.Lock()
+	l.proposals = append(l.proposals, [2]string{string(params.State), params.ErrorCode})
+	failFirst := l.failFirst && len(l.proposals) == 1
+	l.mu.Unlock()
+	if failFirst {
+		return ledger.Run{}, false, errors.New("proposal write temporarily unavailable")
+	}
+	return l.Store.PrepareFinish(ctx, params)
+}
+
+func (l *proposalRecordingLedger) snapshot() [][2]string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([][2]string(nil), l.proposals...)
+}
+
+// nativeTurnFixture is a direct lifecycle service on a real session runtime,
+// whose ledger records every finish proposal.
+type nativeTurnFixture struct {
+	directLifecycleFixture
+	runs *proposalRecordingLedger
+}
+
+// newScriptedFailureFixture answers the model requests with statuses in order,
+// then with the fixture's own reply. A nil runs is a recording ledger of its own
+// and a nil logger discards the service's records.
+func newScriptedFailureFixture(t *testing.T, runs *proposalRecordingLedger, logger *slog.Logger, statuses ...int) (nativeTurnFixture, *scriptedFailureTransport) {
+	t.Helper()
+	if runs == nil {
+		runs = &proposalRecordingLedger{Store: sessionledger.New()}
+	}
+	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+		OwnerID: "owner-retry-turn", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: abortAlignmentFence{},
+	})
+	t.Cleanup(func() { _ = manager.Close() })
+	// The transport wraps the fixture's own, which exists only once the fixture
+	// does, so the client is filled in by the runconfig option below.
+	transport := &scriptedFailureTransport{statuses: statuses}
+	client := &http.Client{Transport: transport}
+	options := []directLifecycleOption{
+		withFixtureRuntime(manager),
+		withFixtureOptions(withRunconfig(func(d *runconfig.Deps) { d.HTTPClient = client })),
+	}
+	if logger != nil {
+		options = append(options, withFixtureDeps(func(d *Deps) { d.Logger = logger }))
+	}
+	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess, options...)
+	transport.base = fixture.httpClient.Transport
+	return nativeTurnFixture{directLifecycleFixture: fixture, runs: runs}, transport
+}
+
+func eventTypes(t *testing.T, payloads []json.RawMessage) []string {
+	t.Helper()
+	types := make([]string, 0, len(payloads))
+	for _, payload := range payloads {
+		var env struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(payload, &env); err != nil {
+			t.Fatalf("decode event %s: %v", payload, err)
+		}
+		types = append(types, env.Type)
+	}
+	return types
+}
+
+// nativeTurnRun is what one native turn through the turn port produced. It is
+// named apart from the turn contract's own delivery end, which the driver owns.
+type nativeTurnRun struct {
+	types     []string
+	errCodes  []string
+	errs      []error
+	proposals [][2]string
+	ledger    [3]string
+}
+
+// runNativeTurn drives StartTurn against a real session runtime
+// manager and an in-memory ledger that records every finish proposal.
+func runNativeTurn(t *testing.T, fixture nativeTurnFixture) nativeTurnRun {
+	t.Helper()
+	runs := fixture.runs
+	handle, err := fixture.service.StartTurn(context.Background(), turn.StartTurnCommand{
+		SchemaVersion:        1,
+		TeamID:               "retry-team",
+		Mode:                 turn.ModeChat,
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
+		Query:                directLifecyclePrompt,
+		UserMessagePersisted: true,
+	})
+	if err != nil {
+		t.Fatalf("StartTurn() error = %v", err)
+	}
+	var payloads []json.RawMessage
+	var out nativeTurnRun
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for event := range handle.Events() {
+			payloads = append(payloads, event.Payload)
+		}
+		for err := range handle.Errs() {
+			out.errCodes = append(out.errCodes, string(apperror.CodeOf(err)))
+			out.errs = append(out.errs, err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("turn did not finish")
+	}
+	out.types = eventTypes(t, payloads)
+	out.proposals = runs.snapshot()
+	run, err := runs.Get(context.Background(), handle.RunID())
+	if err != nil {
+		t.Fatalf("load ledger run: %v", err)
+	}
+	out.ledger = [3]string{string(run.State), run.ErrorCode, run.ErrorMessage}
+	return out
+}
+
+// X4, turn RPC (IM) native path: a stream error that the runtime retried and
+// recovered from is not reported. The stream carries the retry and no error,
+// the caller's Errs() stays empty, both finish proposals say completed, and
+// session_runs ends completed.
+func TestChatTurnRetrySuccessReportsNoError(t *testing.T) {
+	fixture, transport := newScriptedFailureFixture(t, nil, nil, http.StatusServiceUnavailable)
+	got := runNativeTurn(t, fixture)
+
+	if calls := transport.calls.Load(); calls < 2 {
+		t.Fatalf("model requests = %d, want the failed attempt and its retry", calls)
+	}
+	assertOrdered(t, got.types, "retry", "agent_end")
+	assertCount(t, got.types, "error", 0)
+	if len(fixture.messages.Persisted) == 0 {
+		t.Fatal("the recovered answer was not stored")
+	}
+	assertStrings(t, "turn error codes", got.errCodes, nil)
+	// The AgentEnd event proposes completed through HandleAgentEvent, and the
+	// run's terminal write proposes the same outcome afterwards.
+	wantProposals := [][2]string{{"completed", ""}, {"completed", ""}}
+	if len(got.proposals) != len(wantProposals) || got.proposals[0] != wantProposals[0] || got.proposals[1] != wantProposals[1] {
+		t.Fatalf("finish proposals = %q, want %q", got.proposals, wantProposals)
+	}
+	if want := [3]string{"completed", "", ""}; got.ledger != want {
+		t.Fatalf("session_runs = %q, want %q", got.ledger, want)
+	}
+}
+
+// A retry that does not recover still fails the turn: the retried 503 is
+// followed by a non-retryable 400, the run ends with agent_abort, and the
+// caller's Errs() reports it.
+func TestChatTurnRetryFailureReportsError(t *testing.T) {
+	fixture, transport := newScriptedFailureFixture(t, nil, nil, http.StatusServiceUnavailable, http.StatusBadRequest)
+	got := runNativeTurn(t, fixture)
+
+	if calls := transport.calls.Load(); calls != 2 {
+		t.Fatalf("model requests = %d, want the retried attempt and the final one", calls)
+	}
+	assertOrdered(t, got.types, "retry", "error", "agent_abort")
+	assertCount(t, got.types, "error", 1)
+	// The 400 the provider answered last names the run's failure.
+	assertStrings(t, "turn error codes", got.errCodes, []string{string(apperror.CodeAgentProviderRequestRejected)})
+	if want := [3]string{"failed", got.errCodes[0], ""}; got.ledger != want {
+		t.Fatalf("session_runs = %q, want %q", got.ledger, want)
+	}
+}
+
+// assertCount checks that value appears in got exactly want times.
+func assertCount(t *testing.T, got []string, value string, want int) {
+	t.Helper()
+	count := 0
+	for _, item := range got {
+		if item == value {
+			count++
+		}
+	}
+	if count != want {
+		t.Fatalf("event types = %q, want %d %q", got, want, value)
+	}
+}
+
+// assertOrdered checks that want appears in got as a subsequence.
+func assertOrdered(t *testing.T, got []string, want ...string) {
+	t.Helper()
+	i := 0
+	for _, value := range got {
+		if i < len(want) && value == want[i] {
+			i++
+		}
+	}
+	if i != len(want) {
+		t.Fatalf("event types = %q, want %q in order", got, want)
+	}
+}
+
+// When the terminal event's proposal write fails, the run's outcome is deferred
+// to finish. The turn port's finish already holds the delivered failure, so the
+// row still records the code the caller was told about.
+func TestChatTurnDeferredProposalFinishKeepsDeliveredCode(t *testing.T) {
+	runs := &proposalRecordingLedger{Store: sessionledger.New(), failFirst: true}
+	fixture, _ := newScriptedFailureFixture(t, runs, nil, http.StatusServiceUnavailable, http.StatusBadRequest)
+	got := runNativeTurn(t, fixture)
+
+	assertOrdered(t, got.types, "retry", "error", "agent_abort")
+	if len(got.errCodes) != 1 || got.errCodes[0] == "" {
+		t.Fatalf("turn error codes = %q, want exactly one coded error", got.errCodes)
+	}
+	if len(got.proposals) != 2 || got.proposals[1] != [2]string{"failed", got.errCodes[0]} {
+		t.Fatalf("finish proposals = %q, want the deferred one from finish with %q", got.proposals, got.errCodes[0])
+	}
+	if want := [3]string{"failed", got.errCodes[0], ""}; got.ledger != want {
+		t.Fatalf("session_runs = %q, want %q", got.ledger, want)
+	}
+}

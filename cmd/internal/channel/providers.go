@@ -19,10 +19,10 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/acl"
+	"github.com/felinics/memoh/internal/agent"
 	acpprofileadapter "github.com/felinics/memoh/internal/agent/adapter/acpprofile"
 	"github.com/felinics/memoh/internal/agent/adapter/channelbusyqueue"
 	"github.com/felinics/memoh/internal/agent/adapter/channelqueue"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -601,7 +601,7 @@ func provideLocalChannelAudio(service *audiopkg.Service) channelAudio {
 
 func provideLocalCommandHandler(handler *command.Handler) inbound.CommandHandler { return handler }
 
-func provideLocalQueueCommandHandler(service *application.Service) inbound.QueueCommandHandler {
+func provideLocalQueueCommandHandler(service *agent.Service) inbound.QueueCommandHandler {
 	return channelqueue.New(service)
 }
 

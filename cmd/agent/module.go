@@ -12,8 +12,7 @@ import (
 
 	channelmodule "github.com/felinics/memoh/cmd/internal/channel"
 	coremodule "github.com/felinics/memoh/cmd/internal/core"
-	"github.com/felinics/memoh/internal/agent/application"
-	"github.com/felinics/memoh/internal/agent/pending"
+	"github.com/felinics/memoh/internal/agent"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	channelpkg "github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/adapters/weixin"
@@ -88,7 +87,7 @@ func commonOptions() fx.Option {
 			provideServerHandler(provideMessageHandler),
 			provideServerHandler(provideSessionHandler),
 			provideServerHandler(provideSessionQueueHandler),
-			provideServerHandler(handlers.NewStarterPromptsHandler),
+			provideServerHandler(provideStarterPromptsHandler),
 			provideServerHandler(handlers.NewUserRuntimeHandler),
 			provideServerHandler(handlers.NewUserComputerAccessHandler),
 			provideServerHandler(handlers.NewRuntimeConnectHandler),
@@ -145,7 +144,7 @@ func commonOptions() fx.Option {
 
 // Registered last: stop admission and persist interruptions before HTTP/gRPC,
 // schedule, external runtime and workspace shutdown hooks tear down producers.
-func startSessionResume(lc fx.Lifecycle, service *application.Service, manager *sessionruntime.Manager) {
+func startSessionResume(lc fx.Lifecycle, service *agent.Service, manager *sessionruntime.Manager) {
 	lc.Append(fx.Hook{
 		OnStart: service.StartSessionResume,
 		OnStop: func(ctx context.Context) error {
@@ -159,12 +158,11 @@ func startSessionResume(lc fx.Lifecycle, service *application.Service, manager *
 // shape: it is the server that admits discuss runs, and several servers may
 // sweep at once. Registered after the session resume so that it stops first and
 // no new run is admitted while the manager interrupts the active ones.
-func startDiscussSweep(lc fx.Lifecycle, service *application.Service) {
-	sweep := pending.NewDiscussSweep(service.Pending())
+func startDiscussSweep(lc fx.Lifecycle, service *agent.Service) {
 	lc.Append(fx.Hook{
-		OnStart: sweep.Start,
+		OnStart: service.StartDiscussSweep,
 		OnStop: func(context.Context) error {
-			sweep.Stop()
+			service.StopDiscussSweep()
 			return nil
 		},
 	})
@@ -175,12 +173,11 @@ func startDiscussSweep(lc fx.Lifecycle, service *application.Service) {
 // their process, and takes in the follow-ups servers of the previous release
 // left in Redis. Registered with the discuss sweep, so that it stops before
 // the manager interrupts the active runs.
-func startQueueSweep(lc fx.Lifecycle, service *application.Service) {
-	sweep := pending.NewQueueSweep(service.Pending())
+func startQueueSweep(lc fx.Lifecycle, service *agent.Service) {
 	lc.Append(fx.Hook{
-		OnStart: sweep.Start,
+		OnStart: service.StartQueueSweep,
 		OnStop: func(context.Context) error {
-			sweep.Stop()
+			service.StopQueueSweep()
 			return nil
 		},
 	})

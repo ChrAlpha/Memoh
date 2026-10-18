@@ -27,3 +27,16 @@ func (h *Host) AbortRuntimeRun(
 	}
 	return applied, err
 }
+
+// AbortCurrentRun aborts the run in flight on a session and reports whether
+// one was there to abort.
+func (h *Host) AbortCurrentRun(ctx context.Context, botID, sessionID string) (bool, error) {
+	snapshot, err := h.runtime.Snapshot(ctx, botID, sessionID)
+	if err != nil {
+		return false, err
+	}
+	if snapshot.CurrentRunView == nil {
+		return false, nil
+	}
+	return h.AbortRuntimeRun(ctx, botID, sessionID, snapshot.CurrentRunView.RunID, "")
+}

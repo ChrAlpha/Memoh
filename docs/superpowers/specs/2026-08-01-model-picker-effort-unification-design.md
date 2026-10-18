@@ -78,7 +78,7 @@ medium，应作为独立的一次迁移，而不是混在本次结构变更里�
 
 ### 2. 后端语义
 
-`internal/agent/application/service.go` 的 `resolveReasoningConfig` 只改分支条件：
+`internal/agent/service.go` 的 `resolveReasoningConfig` 只改分支条件：
 
 ```go
 case reasoningEffortDisabled(botSettings.ReasoningEffort):
@@ -162,7 +162,7 @@ ACP composer 继续通过 `reasoningOptions` prop 提供外部上报的档位，
 
 ## 测试
 
-Go 侧需同步修改的既有用例：`internal/agent/application/service_model_selection_test.go`、
+Go 侧需同步修改的既有用例：`internal/agent/service_model_selection_test.go`、
 `internal/settings/service_test.go`、`internal/command` 相关用例、
 `internal/botbackup/backup_flow_test.go`、`internal/channel/inbound/result_render_test.go`、
 `internal/bots/service_test.go`、`internal/agent/runtime/session/acceptance/api_test.go`。

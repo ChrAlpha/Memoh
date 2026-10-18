@@ -14,7 +14,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -128,7 +127,7 @@ func TestSessionQueueAuthorizeSeparatesAMissingSessionFromAFailedLookup(t *testi
 		{name: "failed lookup", queries: queueSessionQueries{err: lookupFailure}, cause: lookupFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := &SessionQueueHandler{queries: tc.queries, agentService: &application.Service{}}
+			h := &SessionQueueHandler{queries: tc.queries, queue: inertAgent{}}
 			e := echo.New()
 			c := testAuthContext(e, httptest.NewRequest(http.MethodGet, "/", nil), httptest.NewRecorder(), "user-1")
 			c.SetParamNames("bot_id", "session_id")

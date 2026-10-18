@@ -210,24 +210,6 @@ func TestTotalCompactableHistoryTokensExcludesSummaries(t *testing.T) {
 	}
 }
 
-func TestHistoryScopeFallbackFromChatRequestUsesRequestTopology(t *testing.T) {
-	t.Parallel()
-
-	got := scopeFallbackFromChatRequest(runreq.ChatRequest{
-		ChatID:           " chat-1 ",
-		ConversationType: " group ",
-		ConversationName: " Dev Chat ",
-		ReplyTarget:      " target-1 ",
-	})
-
-	if got.ChatID != "chat-1" ||
-		got.ConversationType != "group" ||
-		got.ConversationName != "Dev Chat" ||
-		got.ReplyTarget != "target-1" {
-		t.Fatalf("unexpected fallback: %#v", got)
-	}
-}
-
 func dbHistoryRow(t *testing.T, id string, role string, content json.RawMessage, mutate func(*messagepkg.Message)) messagepkg.Message {
 	t.Helper()
 	msg := messagepkg.Message{

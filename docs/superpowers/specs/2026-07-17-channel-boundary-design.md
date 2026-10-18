@@ -12,7 +12,7 @@
 选择Channel先行的依据（基于2026-07-17对main分支的耦合摸底）：
 
 - Channel与Agent之间的直接耦合集中且可枚举：出站已经通过`messaging.Sender`接口解耦（`internal/agent/tool/message.go`依赖接口，`channel.Manager`是实现）；入站的ACL、identity、route、slash命令等横切逻辑已全部位于`internal/channel/inbound/`，与RFC所有权表一致，无需搬迁。
-- 当时唯一的硬连线是入站Processor直接构建`conversation.ChatRequest`并调用`flow.Runner.StreamChat()`（`internal/channel/inbound/channel.go`）。该路径现已由`agent/turn.Service`替代，具体编排归`internal/agent/application`。
+- 当时唯一的硬连线是入站Processor直接构建`conversation.ChatRequest`并调用`flow.Runner.StreamChat()`（`internal/channel/inbound/channel.go`）。该路径现已由`agent/turn.Service`替代，具体编排归`internal/agent`。
 - Web Chat（`internal/handlers/local_channel.go`）仍属于Agent边界，但现在同样依赖Application服务，不再依赖旧Conversation Resolver。
 - Bridge已成熟无需重写；Agent需先完成Turn契约设计；API Server的拆分是别人搬走后的减法。
 
@@ -45,7 +45,7 @@ PR #791引入的多租户数据面（team GUC连接绑定、RLS、`TeamIDResolve
 | --- | --- | --- | --- |
 | `bot_session_events` | 入站观察事实（DCP事件源，含不触发Turn的被动消息） | Channel | `internal/chat/timeline/persistence.go`，由`channel/inbound/channel.go`调用 |
 | `bot_history_messages`被动行（role=user、无Turn关联） | 入站观察事实 | Channel | `persistPassiveMessage`（`channel/inbound/channel.go`） |
-| `bot_history_messages` Turn行（触发Turn的用户消息、assistant／tool输出） | Turn产物 | Agent | `internal/agent/application/service_user_persist.go`的`persistUserTurn`及stream落库 |
+| `bot_history_messages` Turn行（触发Turn的用户消息、assistant／tool输出） | Turn产物 | Agent | `internal/agent/service_user_persist.go`的`persistUserTurn`及stream落库 |
 | Compaction、Turn元数据 | Turn产物 | Agent | `internal/agent/context/compaction` |
 
 规则表述：**Turn产物唯一写入方是Agent；入站事实唯一写入方是Channel。**
@@ -171,7 +171,7 @@ type Service interface {
 
 `RunHandle.Events()`的Go channel是**进程内适配器的实现细节**，不属于命令契约本身；跨进程spec将定义等价的流式传输，事件结构（含Seq）不变。
 
-### 5.3 进程内实现（`internal/agent/application`）
+### 5.3 进程内实现（`internal/agent`）
 
 - `application.Service`直接实现`turn.Service`，将`StartTurnCommand`翻译为Application内部的`ChatRequest`并驱动Native或ACP runtime。
 - 旧`turn/inprocess`与`conversation/flow`已经删除，不保留兼容包装。

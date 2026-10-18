@@ -40,7 +40,7 @@ func UIAttachmentsFromTurnAttachments(botID string, attachments []turn.Attachmen
 // Two invariants keep the live bubble seamless with the settled one:
 //
 //  1. The result is nil exactly when the turn will not persist a user
-//     message (mirrors prependTurnUserMessage in internal/agent/application):
+//     message (mirrors runreq.PrependTurnUserMessage):
 //     an attachment-only command produces no history turn,
 //     so projecting one would make a bubble vanish at the database handover.
 //  2. The text is the same display text the persistence layer stores

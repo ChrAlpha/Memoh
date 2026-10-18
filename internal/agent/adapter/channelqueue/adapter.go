@@ -6,14 +6,14 @@ import (
 	"context"
 	"strings"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/channel/inbound"
 )
 
-type Adapter struct{ service *application.Service }
+type Adapter struct{ service *agent.Service }
 
-func New(service *application.Service) *Adapter { return &Adapter{service: service} }
+func New(service *agent.Service) *Adapter { return &Adapter{service: service} }
 
 func (a *Adapter) EnqueueSteer(ctx context.Context, input inbound.QueueCommandInput) error {
 	return a.enqueue(input, func(queued pending.QueueInput) error {

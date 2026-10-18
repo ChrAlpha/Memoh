@@ -6,7 +6,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/title"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
@@ -18,13 +17,13 @@ import (
 // authorization and response mapping; the material, hashing and generation
 // live in the application service.
 type StarterPromptsHandler struct {
-	agentService   *application.Service
+	prompts        starterPromptService
 	botService     *bots.Service
 	accountService *accounts.Service
 }
 
-func NewStarterPromptsHandler(agentService *application.Service, botService *bots.Service, accountService *accounts.Service) *StarterPromptsHandler {
-	return &StarterPromptsHandler{agentService: agentService, botService: botService, accountService: accountService}
+func NewStarterPromptsHandler(prompts starterPromptService, botService *bots.Service, accountService *accounts.Service) *StarterPromptsHandler {
+	return &StarterPromptsHandler{prompts: prompts, botService: botService, accountService: accountService}
 }
 
 func (h *StarterPromptsHandler) Register(e *echo.Echo) {
@@ -120,7 +119,7 @@ func (h *StarterPromptsHandler) respond(c echo.Context, build func(botID, userID
 	if _, err := AuthorizeBotAccessWithPermission(ctx, h.botService, h.accountService, userID, botID, bots.PermissionChat); err != nil {
 		return err
 	}
-	result, err := h.agentService.StarterPrompts(ctx, build(botID, userID))
+	result, err := h.prompts.StarterPrompts(ctx, build(botID, userID))
 	if err != nil {
 		return errs.Wrap(err, "starter prompts")
 	}

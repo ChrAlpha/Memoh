@@ -20,7 +20,6 @@ import (
 // snapshots that are SDK JSON by construction.
 var sdkMessageDecodeAllowlist = map[string]string{
 	"internal/agent/persist/snapshot.go":             "stream envelope Messages",
-	"internal/agent/application/turn_discuss.go":     "terminal stream event Messages",
 	"internal/agent/runtime/native/spawn_adapter.go": "terminal stream event Messages",
 	"internal/agent/tool/types.go":                   "in-memory context snapshot",
 	"internal/messageconv/messageconv.go":            "the codec itself",

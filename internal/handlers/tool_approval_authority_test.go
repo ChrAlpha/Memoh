@@ -14,7 +14,6 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -100,8 +99,8 @@ func TestToolApprovalWSEntryAnswersWithTheOwnerVerdict(t *testing.T) {
 				accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 				sessionService: sessionpkg.NewService(nil, queries, nil),
 				sessionRuntime: &verdictDecisionRuntime{},
-				agentService:   &application.Service{},
-				logger:         slog.Default(),
+				webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
+				logger: slog.Default(),
 			}
 			client := openLocalChannelTestWS(t, handler, approvalEntryBotID, tc.actor)
 			if err := client.WriteJSON(map[string]any{

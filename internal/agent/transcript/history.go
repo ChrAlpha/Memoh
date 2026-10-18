@@ -109,15 +109,6 @@ func (t *Reader) CurrentWorkspaceMessage(ctx context.Context, req runreq.ChatReq
 	return &message
 }
 
-func scopeFallbackFromChatRequest(req runreq.ChatRequest) historyfrag.ScopeFallback {
-	return historyfrag.ScopeFallback{
-		ChatID:           strings.TrimSpace(req.ChatID),
-		ConversationType: strings.TrimSpace(req.ConversationType),
-		ConversationName: strings.TrimSpace(req.ConversationName),
-		ReplyTarget:      strings.TrimSpace(req.ReplyTarget),
-	}
-}
-
 // ensureRequiredHistoryMessage keeps the request's own row in the context when
 // the load left it out (compacted away or past the byte budget) by re-reading
 // the window from that row. A required row refused at admission is not in the
@@ -138,7 +129,7 @@ func (t *Reader) ensureRequiredHistoryMessage(ctx context.Context, messages []hi
 	if err != nil {
 		return nil, err
 	}
-	required, err := t.recordsFromMessages(window, scopeFallbackFromChatRequest(req))
+	required, err := t.recordsFromMessages(window)
 	if err != nil {
 		return nil, err
 	}

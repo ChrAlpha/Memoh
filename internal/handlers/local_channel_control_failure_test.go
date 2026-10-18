@@ -37,6 +37,17 @@ func (r *controlFailureRuntime) AbortControl(context.Context, string, string, st
 	return r.abortApplied, r.abortErr
 }
 
+// abortingAgent answers an abort with the configured outcome.
+type abortingAgent struct {
+	inertAgent
+	applied bool
+	err     error
+}
+
+func (a abortingAgent) AbortRuntimeRun(context.Context, string, string, string, string) (bool, error) {
+	return a.applied, a.err
+}
+
 func (r *controlFailureRuntime) RouteDecisionResponse(context.Context, sessionruntime.DecisionResponse) (sessionruntime.DecisionResponseResult, error) {
 	return sessionruntime.DecisionResponseResult{Handled: true}, r.routeErr
 }
@@ -241,8 +252,8 @@ func TestAbortWSRunFailureWritesOneResultRecord(t *testing.T) {
 
 	var logs bytes.Buffer
 	handler := &LocalChannelHandler{
-		logger:         slog.New(slog.NewJSONHandler(&logs, nil)),
-		sessionRuntime: &controlFailureRuntime{abortErr: errors.New("owner unreachable")},
+		logger:     slog.New(slog.NewJSONHandler(&logs, nil)),
+		runtimeOps: abortingAgent{err: errors.New("owner unreachable")},
 	}
 	frame := decodeWSTestEvent(t, func(writer *wsWriter) {
 		handler.abortWSRun(context.Background(), writer, "bot-1", msg, runID)
@@ -259,7 +270,7 @@ func TestAbortWSRunFailureWritesOneResultRecord(t *testing.T) {
 	}
 
 	logs.Reset()
-	handler.sessionRuntime = &controlFailureRuntime{}
+	handler.runtimeOps = abortingAgent{}
 	frame = decodeWSTestEvent(t, func(writer *wsWriter) {
 		handler.abortWSRun(context.Background(), writer, "bot-1", msg, runID)
 	})

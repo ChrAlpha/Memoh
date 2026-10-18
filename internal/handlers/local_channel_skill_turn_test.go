@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
@@ -52,8 +51,8 @@ func TestWSSkillActivationOnBusySessionAnswersSessionBusy(t *testing.T) {
 		botService:     bots.NewService(nil, queries),
 		accountService: accounts.NewService(nil, testAdminAccountStore{role: "user"}),
 		sessionService: sessionpkg.NewService(nil, queries, nil),
-		agentService:   &application.Service{},
-		logger:         slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		webRuns:        inertAgent{}, queue: inertAgent{}, runtimeOps: inertAgent{}, decisions: inertAgent{},
+		logger: slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	}
 	// Another skill turn of the same session holds the reservation.
 	release, reserved := handler.reserveWSRequestedSkillTurn(botID, sessionID, "invocation-running")
