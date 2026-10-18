@@ -218,6 +218,22 @@ func (s discussStore) SaveSessionRunResumeContext(ctx context.Context, p dbsqlc.
 	return s.pg.SaveSessionRunResumeContext(ctx, p)
 }
 
+func (s discussStore) ListInterruptedSessionRuns(ctx context.Context, after pgtype.UUID) ([]dbsqlc.SessionRun, error) {
+	return s.pg.ListInterruptedSessionRuns(ctx, after)
+}
+
+func (s discussStore) GetSessionInterruptedRun(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.SessionRun, error) {
+	return s.pg.GetSessionInterruptedRun(ctx, sessionID)
+}
+
+func (s discussStore) RetireSupersededInterruptedSessionRuns(ctx context.Context) (int64, error) {
+	return s.pg.RetireSupersededInterruptedSessionRuns(ctx)
+}
+
+func (s discussStore) RetireInterruptedSessionRun(ctx context.Context, runID pgtype.UUID) (int64, error) {
+	return s.pg.RetireInterruptedSessionRun(ctx, runID)
+}
+
 // discussEnv is one discuss session in a group conversation, reached through a
 // channel route, with the bot's owner.
 type discussEnv struct {
@@ -1062,7 +1078,7 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 			d.BotPermissions = &agenttest.PermissionChecker{Values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
 		}),
 	})
-	resumed, err := proc.svc.resume.Resume(ctx, row)
+	resumed, err := startContinuation(ctx, proc.svc, row)
 	if err != nil {
 		t.Fatalf("resumeInterruptedSession() error = %v", err)
 	}

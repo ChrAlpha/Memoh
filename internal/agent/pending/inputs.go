@@ -41,7 +41,8 @@ type TurnStarter interface {
 	StartTurn(context.Context, turn.StartTurnCommand) (turn.RunHandle, error)
 }
 
-// Deps is everything New needs. Queue is optional; the rest is required.
+// Deps is everything New needs. Queue and WorkspaceReadiness are optional; the
+// rest is required.
 type Deps struct {
 	// Logger receives the component's own records.
 	Logger *slog.Logger
@@ -76,6 +77,12 @@ type Deps struct {
 	Messages messagepkg.Service
 	// TeamScopes names the scopes the sweeps cover.
 	TeamScopes runreq.TeamScopes
+	// Continuations are the interrupted runs sessions are owed a continuation of.
+	Continuations Continuations
+	// WorkspaceReadiness is asked before work the system owes a session starts:
+	// a continuation, a queued follow-up batch, a discuss batch. A turn the user
+	// starts directly is not checked. Without it the workspace is always ready.
+	WorkspaceReadiness WorkspaceReadiness
 }
 
 // Inputs admits what waits on a session.
@@ -96,6 +103,10 @@ type Inputs struct {
 	persist     *persist.Writer
 	messages    messagepkg.Service
 	teamScopes  runreq.TeamScopes
+	// continuations and readiness decide what the session is owed and whether
+	// it can start now.
+	continuations Continuations
+	readiness     WorkspaceReadiness
 	// sessions serializes the admission of what waits on one session.
 	sessions sessionLocks
 }
@@ -120,9 +131,15 @@ func New(d Deps) *Inputs {
 		persist:     d.Persist,
 		messages:    d.Messages,
 		teamScopes:  d.TeamScopes,
+
+		continuations: d.Continuations,
+		readiness:     d.WorkspaceReadiness,
 	}
 	if in.queue == nil {
 		in.queue = noQueue{}
+	}
+	if in.readiness == nil {
+		in.readiness = func(context.Context, string, string) error { return nil }
 	}
 	return in
 }

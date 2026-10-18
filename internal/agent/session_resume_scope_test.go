@@ -80,6 +80,13 @@ func (q *tenantResumeQueries) ListInterruptedSessionRuns(ctx context.Context, af
 	return q.q.ListInterruptedSessionRuns(ctx, after)
 }
 
+func (q *tenantResumeQueries) GetSessionInterruptedRun(ctx context.Context, sessionID pgtype.UUID) (sqlc.SessionRun, error) {
+	if scope, _ := ctx.Value(resumeScopeKey{}).(string); scope == "" {
+		return sqlc.SessionRun{}, errors.New("unbound tenant query")
+	}
+	return q.q.GetSessionInterruptedRun(ctx, sessionID)
+}
+
 func (q *tenantResumeQueries) RetireSupersededInterruptedSessionRuns(ctx context.Context) (int64, error) {
 	if scope, _ := ctx.Value(resumeScopeKey{}).(string); scope == "" {
 		return 0, errors.New("unbound tenant retirement")
@@ -121,7 +128,7 @@ func TestResumeScopeBindingFailsClosed(t *testing.T) {
 		t.Fatalf("missing binding=%v", err)
 	}
 	s := newTestService(t, Deps{}, withTeamScopes(testResumeScopes{}))
-	if _, err := s.resume.Resume(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
+	if _, err := startContinuation(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), s, sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("cross-team row=%v", err)
 	}
 	if err := runreq.ValidateTeamScopePage(runreq.TeamScopePage{NextCursor: "same"}, "same"); err == nil {
@@ -230,9 +237,8 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	s, admitter := newAdmittedTurnTestService(t, withLogger(slog.Default()),
 		withDeps(func(d *Deps) { d.Queries = q }), withTeamScopes(scopes))
 	scan := resume.Scan{}
-	slots := make(chan struct{}, 4)
 	for range 2 {
-		if err := s.resume.ScanInterrupted(ctx, &scan, slots); err != nil {
+		if err := s.resume.ScanInterrupted(ctx, &scan); err != nil {
 			t.Fatal(err)
 		}
 	}

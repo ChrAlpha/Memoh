@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -43,8 +44,9 @@ const (
 	// the session again.
 	DiscussBusy
 	// DiscussSkipped means the pending input is not answered now: the session
-	// does not answer uncovered events, its batch was already admitted once, or
-	// an External Agent runtime was not addressed.
+	// does not answer uncovered events, its batch was already admitted once, an
+	// External Agent runtime was not addressed, or the workspace is not ready.
+	// A session whose continuation or queued batch waits is also skipped.
 	DiscussSkipped
 )
 
@@ -83,9 +85,9 @@ func (a DiscussAdmission) String() string {
 // batch addresses the bot; otherwise no run is written and the batch stays
 // pending.
 //
-// The check is the discuss half of the session's pending admission: queued
-// follow-ups are started first, and a session that has one holds its slot for
-// that run, which is DiscussBusy here.
+// The check is the discuss half of the session's pending admission: an owed
+// continuation and queued follow-ups are started first, and a session that has
+// one holds its slot for that run, which is DiscussBusy here.
 func (in *Inputs) CheckAndAdmitDiscuss(ctx context.Context, botID, sessionID string) (DiscussAdmission, error) {
 	return in.admitPending(ctx, botID, sessionID)
 }
@@ -137,6 +139,12 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 		if !addressed {
 			return DiscussSkipped, nil, nil
 		}
+	}
+
+	if err := in.workspaceReady(ctx, botID, ""); err != nil {
+		in.logger.InfoContext(ctx, "workspace not ready; discuss batch deferred",
+			slog.String("session_id", sessionID), slog.Any("error", err))
+		return DiscussSkipped, nil, nil
 	}
 
 	req, err := in.discussRequest(ctx, botID, sessionID, pgBotID, sess, head, externalRuntime)

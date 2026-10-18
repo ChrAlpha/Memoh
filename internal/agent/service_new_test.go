@@ -49,6 +49,10 @@ func (stubQueries) ListToolApprovalsByRun(context.Context, pgtype.UUID) ([]sqlc.
 	return nil, nil
 }
 
+func (stubQueries) GetSessionInterruptedRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
+	return sqlc.SessionRun{}, pgx.ErrNoRows
+}
+
 func (stubQueries) GetDiscussSession(context.Context, sqlc.GetDiscussSessionParams) (sqlc.GetDiscussSessionRow, error) {
 	return sqlc.GetDiscussSessionRow{}, pgx.ErrNoRows
 }
@@ -184,9 +188,10 @@ func withTeamScopes(scopes runreq.TeamScopes) testOption {
 	return withDeps(func(d *Deps) { d.TeamScopes = scopes })
 }
 
-// withResumeReadiness makes ready the check a resume runs before claiming a run.
-func withResumeReadiness(ready func(ctx context.Context, botID, targetID string) error) testOption {
-	return withDeps(func(d *Deps) { d.ResumeReadiness = ready })
+// withWorkspaceReadiness makes ready the check run before work the system owes
+// a session starts.
+func withWorkspaceReadiness(ready func(ctx context.Context, botID, targetID string) error) testOption {
+	return withDeps(func(d *Deps) { d.WorkspaceReadiness = ready })
 }
 
 // withLogger sets the logger the service writes its records to.

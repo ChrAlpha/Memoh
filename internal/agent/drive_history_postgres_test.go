@@ -173,7 +173,7 @@ func TestDriveHistoryResumeWritesNoConversationRows(t *testing.T) {
 		t.Fatalf("seed interrupted run: %v", err)
 	}
 
-	done, err := service.resume.Resume(ctx, dbsqlc.SessionRun{
+	done, err := startContinuation(ctx, service, dbsqlc.SessionRun{
 		TeamID:    db.ParseUUIDOrEmpty(runreq.SingleTeam("").CurrentScope(ctx)),
 		RunID:     db.ParseUUIDOrEmpty(interruptedID),
 		BotID:     db.ParseUUIDOrEmpty(botID),

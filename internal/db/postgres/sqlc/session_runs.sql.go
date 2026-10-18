@@ -492,6 +492,53 @@ func (q *Queries) GetLatestSessionRun(ctx context.Context, sessionID pgtype.UUID
 	return i, err
 }
 
+const getSessionInterruptedRun = `-- name: GetSessionInterruptedRun :one
+SELECT r.run_id, r.team_id, r.bot_id, r.session_id, r.invocation_id, r.turn_id, r.turn_position, r.state, r.input_json, r.input_fingerprint, r.owner_id, r.fencing_token, r.owner_since, r.live_generation, r.abort_requested_at, r.proposed_terminal_state, r.proposed_error_code, r.proposed_error_message, r.finish_proposed_at, r.error_code, r.error_message, r.created_at, r.updated_at, r.initiator_id FROM session_runs r
+JOIN bot_sessions s ON s.team_id = r.team_id AND s.id = r.session_id
+JOIN bots b ON b.team_id = r.team_id AND b.id = r.bot_id
+WHERE r.team_id = public.memoh_current_team_id()
+  AND r.session_id = $1
+  AND r.state = 'lost' AND r.error_code = 'session_runtime.interrupted'
+  AND r.input_json ? 'resume' AND s.deleted_at IS NULL AND b.status <> 'deleting'
+  AND NOT EXISTS (SELECT 1 FROM session_runs later WHERE later.team_id = r.team_id
+    AND later.session_id = r.session_id AND later.turn_position > r.turn_position)
+ORDER BY r.turn_position DESC LIMIT 1
+`
+
+// The continuation one session is owed: the run ListInterruptedSessionRuns
+// lists for it, under the same conditions.
+func (q *Queries) GetSessionInterruptedRun(ctx context.Context, sessionID pgtype.UUID) (SessionRun, error) {
+	row := q.db.QueryRow(ctx, getSessionInterruptedRun, sessionID)
+	var i SessionRun
+	err := row.Scan(
+		&i.RunID,
+		&i.TeamID,
+		&i.BotID,
+		&i.SessionID,
+		&i.InvocationID,
+		&i.TurnID,
+		&i.TurnPosition,
+		&i.State,
+		&i.InputJson,
+		&i.InputFingerprint,
+		&i.OwnerID,
+		&i.FencingToken,
+		&i.OwnerSince,
+		&i.LiveGeneration,
+		&i.AbortRequestedAt,
+		&i.ProposedTerminalState,
+		&i.ProposedErrorCode,
+		&i.ProposedErrorMessage,
+		&i.FinishProposedAt,
+		&i.ErrorCode,
+		&i.ErrorMessage,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.InitiatorID,
+	)
+	return i, err
+}
+
 const getSessionRun = `-- name: GetSessionRun :one
 SELECT run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 FROM session_runs
@@ -588,7 +635,9 @@ SELECT EXISTS (
 `
 
 // Called under the same parent lock as admission. A newer accepted turn must
-// supersede recovery even if it has already completed since discovery.
+// supersede recovery even if it has already completed since discovery. While a
+// continuation is owed pending starts nothing ahead of it, so a newer turn is
+// one the user started directly.
 func (q *Queries) IsInterruptedSessionRunLatest(ctx context.Context, runID pgtype.UUID) (bool, error) {
 	row := q.db.QueryRow(ctx, isInterruptedSessionRunLatest, runID)
 	var column_1 bool
@@ -742,8 +791,11 @@ WHERE r.team_id = public.memoh_current_team_id()
 ORDER BY r.run_id LIMIT 100
 `
 
-// A later user turn supersedes the old intent. Admission's existing unique
-// invocation index arbitrates concurrent startup workers without another lease.
+// A later turn supersedes the old intent. While a continuation is owed, pending
+// starts nothing on the session, so the only turn that can rank ahead of it is
+// one the user started directly: the user has taken the session over.
+// Admission's existing unique invocation index arbitrates concurrent startup
+// workers without another lease.
 func (q *Queries) ListInterruptedSessionRuns(ctx context.Context, afterRunID pgtype.UUID) ([]SessionRun, error) {
 	rows, err := q.db.Query(ctx, listInterruptedSessionRuns, afterRunID)
 	if err != nil {
@@ -1364,9 +1416,12 @@ WHERE r.team_id = public.memoh_current_team_id()
       AND s.id = r.session_id AND s.deleted_at IS NOT NULL))
 `
 
-// Drops the resume intent of interrupted runs a later turn has answered or whose
-// session was deleted. Interrupted runs stay lost forever; retiring the intent
-// keeps idx_session_runs_resume_pending limited to work that can still continue.
+// Drops the resume intent of interrupted runs a later turn has superseded or
+// whose session was deleted. While a continuation is owed pending starts
+// nothing ahead of it, so a later turn is one the user started directly, and
+// the user has taken the session over whether that turn succeeded or not.
+// Interrupted runs stay lost forever; retiring the intent keeps
+// idx_session_runs_resume_pending limited to work that can still continue.
 func (q *Queries) RetireSupersededInterruptedSessionRuns(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, retireSupersededInterruptedSessionRuns)
 	if err != nil {

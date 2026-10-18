@@ -5,7 +5,6 @@
 package agent
 
 import (
-	"context"
 	"fmt"
 	"log/slog"
 	"time"
@@ -76,7 +75,8 @@ type Service struct {
 	pending       *pending.Inputs
 	web           *web.Runner
 	schedule      *schedule.Runner
-	resume        *resume.Worker
+	continuer     *resume.Continuer
+	resume        *resume.Scanner
 	answer        *answer.Responder
 	discussSweep  *pending.DiscussSweep
 	queueSweep    *pending.QueueSweep
@@ -155,9 +155,12 @@ type Deps struct {
 	// claude-code). A session whose runtime type has no driver fails with a
 	// stable "runtime unavailable" error.
 	ExternalRuntimes []external.Driver
-	// ResumeReadiness checks workspace transport before a continuation is
-	// claimed; without it resume skips the check.
-	ResumeReadiness func(ctx context.Context, botID, targetID string) error
+	// WorkspaceReadiness checks that the workspace a run would start on can be
+	// reached. It is asked before work the system owes a session starts (an
+	// interrupted run's continuation, a queued follow-up, an uncovered discuss
+	// batch), never before a turn the user starts directly; without it the
+	// workspace is always ready.
+	WorkspaceReadiness pending.WorkspaceReadiness
 	// TeamScopes is the tenancy provider of a hosted deployment; without it
 	// resume and the discuss sweep cover only AllowedTeam.
 	TeamScopes runreq.TeamScopes
@@ -415,6 +418,19 @@ func assemble(d Deps, w wiring) *Service {
 		External:   service.externalrun,
 		Title:      service.title,
 	}, w.plan))
+	service.continuer = resume.NewContinuer(resume.ContinuerDeps{
+		Logger:         log("resume"),
+		Queries:        d.Queries,
+		Accounts:       d.Accounts,
+		BotPermissions: d.BotPermissions,
+		Signer:         service.signer,
+		Admit:          service.admit,
+		Decider:        service.decider,
+		Transcript:     service.transcript,
+		Driver:         service.driver,
+		Plan:           service.plan,
+		TeamScopes:     teamScopes,
+	})
 	service.pending = pending.New(adjusted(pending.Deps{
 		Logger:      log("pending"),
 		Queries:     d.Queries,
@@ -431,7 +447,16 @@ func assemble(d Deps, w wiring) *Service {
 		Persist:     service.persist,
 		Messages:    d.Messages,
 		TeamScopes:  teamScopes,
+
+		Continuations:      service.continuer,
+		WorkspaceReadiness: d.WorkspaceReadiness,
 	}, w.pending))
+	service.resume = resume.NewScanner(resume.ScannerDeps{
+		Logger:     log("resume"),
+		Queries:    d.Queries,
+		Pending:    service.pending,
+		TeamScopes: teamScopes,
+	})
 	service.discussSweep = pending.NewDiscussSweep(service.pending)
 	service.queueSweep = pending.NewQueueSweep(service.pending)
 	service.web = web.New(web.Deps{
@@ -453,20 +478,6 @@ func assemble(d Deps, w wiring) *Service {
 		ExternalRun: service.externalrun,
 		Driver:      service.driver,
 		Plan:        service.plan,
-	})
-	service.resume = resume.New(resume.Deps{
-		Logger:         log("resume"),
-		Queries:        d.Queries,
-		Accounts:       d.Accounts,
-		BotPermissions: d.BotPermissions,
-		Signer:         service.signer,
-		Admit:          service.admit,
-		Decider:        service.decider,
-		Transcript:     service.transcript,
-		Driver:         service.driver,
-		Plan:           service.plan,
-		TeamScopes:     teamScopes,
-		Ready:          d.ResumeReadiness,
 	})
 	service.answer = answer.New(adjusted(answer.Deps{
 		Logger:     log("answer"),

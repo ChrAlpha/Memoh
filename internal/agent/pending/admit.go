@@ -66,12 +66,20 @@ func (in *Inputs) AfterSessionTerminal(ctx context.Context, terminal sessionrunt
 }
 
 // Kick asks, off the caller's goroutine, what waits for the session. The
-// call outlives the request that made it: its run does.
+// call outlives the request that made it: its run does. Once the active turns
+// are draining it asks nothing.
 func (in *Inputs) Kick(ctx context.Context, botID, sessionID string) {
 	// The input that waited is its own trace, linked to the run or request that
 	// let it start, rather than nested in a trace that has long ended.
 	ctx = telemetry.ContextWithTrigger(context.WithoutCancel(ctx), telemetry.TriggerFrom(ctx))
+	// The admission is tracked with the active turns, so a shutdown that drains
+	// them waits for it: it may claim queued input or start a run.
+	end, err := in.activeTurns.Begin()
+	if err != nil {
+		return
+	}
 	go func() {
+		defer end()
 		if _, err := in.admitPending(ctx, botID, sessionID); err != nil && !errors.Is(err, sessionruntime.ErrManagerClosed) {
 			in.logger.WarnContext(ctx, "admit pending input failed",
 				slog.String("session_id", sessionID), slog.Any("error", err))
@@ -79,18 +87,36 @@ func (in *Inputs) Kick(ctx context.Context, botID, sessionID string) {
 	}()
 }
 
-// admitPending is the one admission of what waits on a session: queued
-// follow-ups first, then, when there are none to start, the external input a
-// discuss session has not covered. It runs under a lock per session, so the
-// terminal observer, an enqueue, the sweep and a wake from the channel process
-// take turns instead of racing for the session's slot.
+// admitPending is the one admission of what waits on a session, in the one
+// order it is owed: the continuation of a run a shutdown interrupted, then the
+// queued follow-ups, then, when there are none to start, the external input a
+// discuss session has not covered. Whatever starts, the workspace it would run
+// on is checked first; when the work at the head cannot start now, nothing
+// behind it does either. It runs under a lock per session, so the terminal
+// observer, an enqueue, the sweeps, the resume scan and a wake from the channel
+// process take turns instead of racing for the session's slot.
 //
-// It reports the discuss outcome; a queued batch that was started is a run
-// that holds the session, which is DiscussBusy. That run's end asks again.
+// It reports the discuss outcome; a continuation or queued batch that was
+// started is a run that holds the session, which is DiscussBusy. That run's end
+// asks again.
 func (in *Inputs) admitPending(ctx context.Context, botID, sessionID string) (DiscussAdmission, error) {
 	unlock := in.sessions.lock(botID + ":" + sessionID)
 	defer unlock()
-	started, err := in.drainFollowUps(ctx, sessionruntime.Key{BotID: botID, SessionID: sessionID})
+	key := sessionruntime.Key{BotID: botID, SessionID: sessionID}
+	started, deferred, err := in.admitContinuation(ctx, key)
+	if errors.Is(err, sessionruntime.ErrManagerClosed) {
+		return 0, err
+	}
+	if started {
+		return DiscussBusy, nil
+	}
+	if deferred {
+		return DiscussSkipped, nil
+	}
+	started, deferred, err = in.drainFollowUps(ctx, key)
+	if errors.Is(err, sessionruntime.ErrManagerClosed) {
+		return 0, err
+	}
 	if err != nil {
 		// A queue that cannot be read must not stop discuss input from being
 		// answered.
@@ -99,6 +125,9 @@ func (in *Inputs) admitPending(ctx context.Context, botID, sessionID string) (Di
 	}
 	if started {
 		return DiscussBusy, nil
+	}
+	if deferred {
+		return DiscussSkipped, nil
 	}
 	outcome, _, err := in.admitDiscuss(ctx, botID, sessionID)
 	return outcome, err
@@ -115,25 +144,31 @@ const (
 	batchRejected
 	// batchDeferred means the batch could not start now and waits.
 	batchDeferred
+	// batchClosed means the process is stopping; the batch is back in the queue
+	// for the next one.
+	batchClosed
 )
 
 // drainFollowUps starts the next batch of queued follow-ups when the session is
-// free, and reports whether it started one.
-func (in *Inputs) drainFollowUps(ctx context.Context, key sessionruntime.Key) (bool, error) {
+// free. It reports whether it started one, and whether the batch at the head
+// had to wait, which holds back what is behind it.
+func (in *Inputs) drainFollowUps(ctx context.Context, key sessionruntime.Key) (started, deferred bool, err error) {
 	for ctx.Err() == nil {
 		batch, ok, err := in.queue.ClaimBatch(ctx, key, sessionruntime.QueueOriginFollowUp)
 		if err != nil || !ok {
-			return false, err
+			return false, false, err
 		}
 		switch in.startQueuedBatch(ctx, batch) {
 		case batchStarted:
-			return true, nil
+			return true, false, nil
 		case batchDeferred:
-			return false, nil
+			return false, true, nil
+		case batchClosed:
+			return false, true, sessionruntime.ErrManagerClosed
 		case batchRejected:
 		}
 	}
-	return false, ctx.Err()
+	return false, false, ctx.Err()
 }
 
 var (
@@ -190,6 +225,14 @@ func (in *Inputs) startQueuedBatch(ctx context.Context, batch sessionruntime.Que
 	cmd := merged.Command
 	cmd.NoDefer = true
 	cmd.IdempotencyKey = batch.InvocationID()
+	if err := in.workspaceReady(ctx, cmd.BotID, cmd.WorkspaceTargetID); err != nil {
+		// Not a failure of the input: it goes back to the queue and is tried
+		// again when something asks, with no row written for it.
+		in.logger.InfoContext(ctx, "workspace not ready; queued batch deferred",
+			slog.String("batch_id", batch.ID), slog.Any("error", err))
+		in.releaseQueuedBatch(ctx, batch, nil)
+		return batchDeferred
+	}
 	in.signQueuedCommand(ctx, &cmd, merged.Claims)
 	handle, err := in.turns.StartTurn(ctx, cmd)
 	switch {
@@ -209,6 +252,9 @@ func (in *Inputs) startQueuedBatch(ctx context.Context, batch sessionruntime.Que
 		return batchRejected
 	case errors.Is(err, turn.ErrSessionBusy):
 		in.releaseQueuedBatch(ctx, batch, nil)
+	case errors.Is(err, sessionruntime.ErrManagerClosed):
+		in.releaseQueuedBatch(ctx, batch, nil)
+		return batchClosed
 	default:
 		in.releaseQueuedBatch(ctx, batch, err)
 	}

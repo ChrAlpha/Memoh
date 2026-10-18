@@ -18,6 +18,11 @@ type DecisionQueries struct {
 	Approval sqlc.ToolApprovalRequest
 }
 
+// GetSessionInterruptedRun reports that no session is owed a continuation.
+func (*DecisionQueries) GetSessionInterruptedRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
+	return sqlc.SessionRun{}, pgx.ErrNoRows
+}
+
 func (q *DecisionQueries) ListToolApprovalsByRun(_ context.Context, runID pgtype.UUID) ([]sqlc.ToolApprovalRequest, error) {
 	if q.Approval.RunID == runID {
 		return []sqlc.ToolApprovalRequest{q.Approval}, nil

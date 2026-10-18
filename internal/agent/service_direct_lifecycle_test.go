@@ -65,6 +65,11 @@ func (*directLifecycleQueries) SaveSessionRunResumeContext(context.Context, sqlc
 	return 1, nil
 }
 
+// GetSessionInterruptedRun reports that no session is owed a continuation.
+func (*directLifecycleQueries) GetSessionInterruptedRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
+	return sqlc.SessionRun{}, pgx.ErrNoRows
+}
+
 func (*directLifecycleQueries) GetLatestContextLifecycleBySession(context.Context, pgtype.UUID) ([]byte, error) {
 	return nil, pgx.ErrNoRows
 }

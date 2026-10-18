@@ -66,6 +66,10 @@ func (stubAgentQueries) ListTerminalSessionRunsNeedingContextLifecycle(context.C
 	return nil, nil
 }
 
+func (stubAgentQueries) GetSessionInterruptedRun(context.Context, pgtype.UUID) (dbsqlc.SessionRun, error) {
+	return dbsqlc.SessionRun{}, pgx.ErrNoRows
+}
+
 func (stubAgentQueries) GetDiscussSession(context.Context, dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error) {
 	return dbsqlc.GetDiscussSessionRow{}, pgx.ErrNoRows
 }

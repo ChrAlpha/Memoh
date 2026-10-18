@@ -838,7 +838,7 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 		OutputSpeech:     &agentOutputSpeech{settings: settingsService, audio: audioService},
 		QueuedInputs:     queuedInputs,
 		ExternalRuntimes: append([]external.Driver{acpagent.NewDriver(acpPool)}, directAgents...),
-		ResumeReadiness: func(ctx context.Context, botID, targetID string) error {
+		WorkspaceReadiness: func(ctx context.Context, botID, targetID string) error {
 			client, err := workspaceManager.NativeMCPClient(ctx, botID)
 			if err != nil {
 				return err

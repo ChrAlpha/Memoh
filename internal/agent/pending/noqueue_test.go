@@ -15,7 +15,7 @@ import (
 // never held behind queued input, nothing is claimable, and every operation
 // that would use the queue says it is unavailable.
 func TestWithoutAQueueNothingWaitsAndQueueOperationsAreUnavailable(t *testing.T) {
-	inputs := New(Deps{Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}})
+	inputs := New(Deps{Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Continuations: noContinuations{}})
 	ctx := t.Context()
 	key := sessionruntime.Key{BotID: "bot-1", SessionID: "session-1"}
 
@@ -25,9 +25,10 @@ func TestWithoutAQueueNothingWaitsAndQueueOperationsAreUnavailable(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, sessionruntime.QueueGate{}, gate)
 
-	started, err := inputs.drainFollowUps(ctx, key)
+	started, deferred, err := inputs.drainFollowUps(ctx, key)
 	require.NoError(t, err)
 	require.False(t, started)
+	require.False(t, deferred)
 
 	_, err = inputs.EnqueueFollowUp(ctx, QueueInput{TeamID: "team-1", BotID: "bot-1", SessionID: "session-1", InvocationID: "m1", Text: "hello"})
 	require.ErrorIs(t, err, sessionruntime.ErrLiveQueueUnavailable)
@@ -43,7 +44,7 @@ func TestWithoutAQueueNothingWaitsAndQueueOperationsAreUnavailable(t *testing.T)
 // With a queue the same gate is the queue's own verdict.
 func TestWithAQueueTheGateIsTheQueuesVerdict(t *testing.T) {
 	queue := &gated{gate: sessionruntime.QueueGate{Waiting: true}}
-	inputs := New(Deps{Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Queue: queue})
+	inputs := New(Deps{Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Queue: queue, Continuations: noContinuations{}})
 
 	require.True(t, inputs.Queueing())
 	require.ErrorIs(t, inputs.GateTurn(t.Context(), turn.StartTurnCommand{BotID: "bot-1", ThreadID: "session-1", IdempotencyKey: "late"}), turn.ErrSessionBusy)

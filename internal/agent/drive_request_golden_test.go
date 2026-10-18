@@ -466,7 +466,7 @@ func driveResume(t *testing.T) []sdk.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done, err := fixture.service.resume.Resume(context.Background(), sqlc.SessionRun{
+	done, err := startContinuation(context.Background(), fixture.service, sqlc.SessionRun{
 		TeamID:    db.ParseUUIDOrEmpty(driveTeamID),
 		RunID:     db.ParseUUIDOrEmpty(driveInterruptedRunID),
 		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),

@@ -34,6 +34,10 @@ func (q resumeLedgerQueries) ListInterruptedSessionRuns(ctx context.Context, aft
 	return q.db.ListInterruptedSessionRuns(ctx, after)
 }
 
+func (q resumeLedgerQueries) GetSessionInterruptedRun(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.SessionRun, error) {
+	return q.db.GetSessionInterruptedRun(ctx, sessionID)
+}
+
 func (q resumeLedgerQueries) RetireSupersededInterruptedSessionRuns(ctx context.Context) (int64, error) {
 	return q.db.RetireSupersededInterruptedSessionRuns(ctx)
 }
@@ -102,8 +106,13 @@ func (h wsStepHistoryHarness) resumeScan(t *testing.T, p resumeProcess, runID st
 	t.Helper()
 	ctx := context.Background()
 	scan := resume.Scan{}
-	if err := p.service.resume.ScanInterrupted(ctx, &scan, make(chan struct{}, 4)); err != nil {
+	if err := p.service.resume.ScanInterrupted(ctx, &scan); err != nil {
 		t.Fatalf("resume scan: %v", err)
+	}
+	// The scan only wakes pending; asking it here as well settles the session
+	// before the ledger is read, whichever of the two gets there first.
+	if _, err := p.service.pending.CheckAndAdmitDiscuss(ctx, h.botID, h.sessionID); err != nil {
+		t.Fatalf("admit pending: %v", err)
 	}
 	var resumed string
 	err := h.pool.QueryRow(ctx, `SELECT run_id::text FROM session_runs WHERE session_id = $1 AND invocation_id = $2`, h.sessionID, "resume:"+runID).Scan(&resumed)

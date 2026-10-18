@@ -43,6 +43,11 @@ func (*wsLifecycleQueries) GetDiscussSession(context.Context, sqlc.GetDiscussSes
 	return sqlc.GetDiscussSessionRow{}, pgx.ErrNoRows
 }
 
+// GetSessionInterruptedRun reports that no session is owed a continuation.
+func (*wsLifecycleQueries) GetSessionInterruptedRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
+	return sqlc.SessionRun{}, pgx.ErrNoRows
+}
+
 func (q *wsLifecycleQueries) CreateContextLifecycle(
 	_ context.Context,
 	arg sqlc.CreateContextLifecycleParams,

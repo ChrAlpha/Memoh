@@ -22,6 +22,12 @@ type StandInQueries struct {
 	compact   RecordingCompactionLog
 }
 
+// GetSessionInterruptedRun finds no interrupted run: no session is owed a
+// continuation.
+func (*StandInQueries) GetSessionInterruptedRun(context.Context, pgtype.UUID) (sqlc.SessionRun, error) {
+	return sqlc.SessionRun{}, pgx.ErrNoRows
+}
+
 func (q *StandInQueries) GetBotByID(ctx context.Context, id pgtype.UUID) (sqlc.GetBotByIDRow, error) {
 	return q.bots.GetBotByID(ctx, id)
 }

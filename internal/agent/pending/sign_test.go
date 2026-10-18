@@ -2,6 +2,7 @@ package pending
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -20,6 +21,19 @@ import (
 // noDiscuss is the store of a bot with no discuss session: admission has
 // nothing to answer once the queue is drained.
 type noDiscuss struct{ Queries }
+
+// noContinuations is a deployment whose sessions are owed no continuation.
+type noContinuations struct{}
+
+func (noContinuations) Owed(context.Context, sessionruntime.Key) (Continuation, bool, error) {
+	return Continuation{}, false, nil
+}
+
+func (noContinuations) Start(context.Context, Continuation) (<-chan struct{}, error) {
+	return nil, errors.New("no continuation is owed")
+}
+
+func (noContinuations) Retire(context.Context, Continuation, error) error { return nil }
 
 func (noDiscuss) GetDiscussSession(context.Context, dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error) {
 	return dbsqlc.GetDiscussSessionRow{}, pgx.ErrNoRows
@@ -74,7 +88,7 @@ func startedAs(t *testing.T, claims *auth.RouteCredentials) turn.StartTurnComman
 	}}}}
 	turns := &recordedTurns{}
 	inputs := New(Deps{
-		Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Queue: queue, Turns: turns,
+		Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Queue: queue, Turns: turns, Continuations: noContinuations{},
 		Signer: admit.NewSigner("queue-test-secret"),
 	})
 	admission, err := inputs.CheckAndAdmitDiscuss(t.Context(), "bot-1", "session-1")

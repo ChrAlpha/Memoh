@@ -35,6 +35,7 @@ type Queries interface {
 	AcceptSessionRunDecisionContinuation(context.Context, dbsqlc.AcceptSessionRunDecisionContinuationParams) (dbsqlc.SessionRun, error)
 	MarkSessionRunDecisionExecuting(context.Context, dbsqlc.MarkSessionRunDecisionExecutingParams) (int64, error)
 	ListInterruptedSessionRuns(context.Context, pgtype.UUID) ([]dbsqlc.SessionRun, error)
+	GetSessionInterruptedRun(context.Context, pgtype.UUID) (dbsqlc.SessionRun, error)
 	RetireSupersededInterruptedSessionRuns(context.Context) (int64, error)
 	RetireInterruptedSessionRun(context.Context, pgtype.UUID) (int64, error)
 

@@ -342,7 +342,7 @@ func spanTestEntries() []spanTestEntry {
 			if err != nil {
 				t.Fatal(err)
 			}
-			done, err := service.resume.Resume(t.Context(), sqlc.SessionRun{
+			done, err := startContinuation(t.Context(), service, sqlc.SessionRun{
 				TeamID:    db.ParseUUIDOrEmpty(teamID),
 				RunID:     db.ParseUUIDOrEmpty(uuid.NewString()),
 				BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
