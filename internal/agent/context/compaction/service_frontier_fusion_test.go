@@ -28,10 +28,10 @@ func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *te
 	items, _ := candidatesFromRows(rows)
 	entries, ids := buildEntriesAndIDs(foldableItems(items))
 	raw := max(entriesPromptCost(entries), compactedReplayTokens(items, ids))
-	partialReplacement := raw + estimateSummaryReplayTokens(parents[0].Summary)
-	wholeReplacement := partialReplacement + estimateSummaryReplayTokens(parents[1].Summary)
+	partialReplacement := raw + summaryProviderReplayTokens(parents[0].Summary)
+	wholeReplacement := partialReplacement + summaryProviderReplayTokens(parents[1].Summary)
 	stub.summary = strings.Repeat("s", partialReplacement*4)
-	summaryTokens := estimateSummaryReplayTokens(stub.summary)
+	summaryTokens := summaryProviderReplayTokens(stub.summary)
 	if summaryTokens < partialReplacement || summaryTokens >= wholeReplacement {
 		t.Fatalf("test setup invalid: summary=%d partial=%d whole=%d", summaryTokens, partialReplacement, wholeReplacement)
 	}
@@ -132,6 +132,7 @@ func TestDoCompactionFoldsTheActiveSummaryIntoOneArtifact(t *testing.T) {
 		{name: "one parent and new rows", summaries: []string{"earlier decision: ship on friday"}, budget: 100000, newRows: true, wantFold: true},
 		{name: "legacy parents that fit without new rows", summaries: []string{"earlier decision: ship on friday", "later decision: freeze on thursday"}, budget: 100000},
 		{name: "parents that no longer fit without new rows", summaries: []string{strings.Repeat("a", 2000), strings.Repeat("b", 2000)}, budget: 800, wantFold: true},
+		{name: "parents that replay within the room but past the summary limit", summaries: []string{strings.Repeat("a", 2000), strings.Repeat("b", 2000)}, budget: 1400},
 		{name: "one parent without new rows", summaries: []string{"earlier decision: ship on friday"}, budget: 100000},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -274,9 +275,9 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 
 	items, _ := candidatesFromRows(rows)
 	entries, ids := buildEntriesAndIDs(foldableItems(items))
-	replacementTokens := max(entriesPromptCost(entries), compactedReplayTokens(items, ids)) + estimateSummaryReplayTokens(parents[0].Summary) + estimateSummaryReplayTokens(parents[1].Summary)
+	replacementTokens := max(entriesPromptCost(entries), compactedReplayTokens(items, ids)) + summaryProviderReplayTokens(parents[0].Summary) + summaryProviderReplayTokens(parents[1].Summary)
 	stub.summary = strings.Repeat("s", replacementTokens*4)
-	if summaryTokens := estimateSummaryReplayTokens(stub.summary); summaryTokens < replacementTokens {
+	if summaryTokens := summaryProviderReplayTokens(stub.summary); summaryTokens < replacementTokens {
 		t.Fatalf("test setup invalid: summary=%d replacement=%d", summaryTokens, replacementTokens)
 	}
 
