@@ -412,3 +412,23 @@ func TestAwaitSessionCompactionReportsWhetherItWaited(t *testing.T) {
 		t.Fatal("never resumed")
 	}
 }
+
+// A turn cancelled while its context is being compacted ends there. Sending the
+// uncompacted context on would start a model call for a turn nobody wants.
+func TestCompactBeforeTurnCancelledDuringCompactionEndsTheTurn(t *testing.T) {
+	t.Parallel()
+
+	service, runner, _, req := newSyncCompactionFixture(t, "")
+	stop := errors.New("stopped by the user")
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
+	runner.err = context.Canceled
+	runner.onRun = func() { cancel(stop) }
+	before := assembleForSyncTest(t, service, req)
+
+	_, err := service.BeforeTurn(ctx, req, "", syncTestBudget, before, syncTestEstimate(service, req))
+
+	if !errors.Is(err, stop) {
+		t.Fatalf("BeforeTurn error = %v, want the cancellation's cause", err)
+	}
+}

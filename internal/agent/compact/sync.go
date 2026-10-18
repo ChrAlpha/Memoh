@@ -85,7 +85,8 @@ func (c *Compactor) runSync(ctx context.Context, req runreq.ChatRequest, inputTo
 // any is sent as it is. A compaction already running is waited for and the
 // context is judged again, since it may have made this pass unnecessary.
 // Failure, cooldown, or a context that still does not fit send the request as
-// it is; the provider's own limit error is the outcome.
+// it is; the provider's own limit error is the outcome. A turn cancelled
+// during the pass ends with the cancellation's cause instead.
 func (c *Compactor) BeforeTurn(ctx context.Context, req runreq.ChatRequest, turnModelID string, contextTokenBudget int, assembled transcript.Assembled, estimate *Estimate) (transcript.Assembled, error) {
 	if assembled.CompactableTokens == 0 {
 		return assembled, nil
@@ -110,6 +111,12 @@ func (c *Compactor) BeforeTurn(ctx context.Context, req runreq.ChatRequest, turn
 	threshold := hardThreshold(contextTokenBudget)
 	start := time.Now()
 	res := c.runSync(ctx, req, pressure, fixedRequestTokens(pressure, assembled.Records), contextTokenBudget, turnModelID)
+	if ctx.Err() != nil {
+		// The turn was cancelled while its context was compacted. A failed pass
+		// is otherwise sent on as it is, but nobody is waiting for this turn's
+		// model call any more.
+		return transcript.Assembled{}, context.Cause(ctx)
+	}
 	c.logger.InfoContext(ctx, "sync_compaction_backstop",
 		slog.String("status", res.Status),
 		slog.String("reason", res.Reason),
