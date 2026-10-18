@@ -154,45 +154,65 @@ func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) 
 	}
 }
 
-func TestDoCompactionReadsAWholeEntryOnlyWhenTheRequestFitsTheWindow(t *testing.T) {
+func TestDoCompactionSharesTheWindowBetweenWholeGroupsAndTheSummary(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name    string
-		tokens  int
+		rows    []int // rendered tokens of each history row, oldest first
 		earlier int
-		fits    bool
+		output  int  // summarizer's declared output cap
+		read    int  // rows read whole; zero means the pass fails before any claim
+		reduced bool // later groups took part of the summary room
 	}{
-		{name: "over half the window", tokens: 4000, fits: true},
-		{name: "earlier summaries over half the window", tokens: 100, earlier: 4000, fits: true},
-		{name: "past the window", tokens: 6000},
+		{name: "first group over half the window", rows: []int{4000}, output: 100000, read: 1},
+		{name: "earlier summaries over half the window", rows: []int{100}, earlier: 4000, output: 100000, read: 1},
+		{name: "first group past the window", rows: []int{6000}, output: 100000},
+		{name: "later group within half the summary room", rows: []int{100, 4500}, output: 2000, read: 2, reduced: true},
+		{name: "later group past half the summary room", rows: []int{100, 5300}, output: 2000, read: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			rows := []sqlc.ListUncompactedMessagesBySessionRow{textRow(t, "user", tc.tokens), mkRow(t, "user", `"current"`, 40)}
+			var rows []sqlc.ListUncompactedMessagesBySessionRow
+			for _, tokens := range tc.rows {
+				rows = append(rows, textRow(t, "user", tokens))
+			}
+			rows = append(rows, mkRow(t, "user", `"current"`, 40))
 			stub := &stubModel{summary: "condensed"}
 			cfg := machineryConfig(stub, 100000)
-			cfg.SummaryWindowTokens, cfg.MaxOutputTokens = 8000, 100000
-			cfg.ProtectedSources = historySources(rows[1])
+			cfg.SummaryWindowTokens, cfg.MaxOutputTokens = 8000, tc.output
+			cfg.ProtectedSources = historySources(rows[len(rows)-1])
 			q := &fakeQueries{uncompacted: rows}
 			if tc.earlier > 0 {
 				q.priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", tc.earlier*4))
 			}
-			_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
-			if !tc.fits {
+			res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+			if tc.read == 0 {
 				if !errors.Is(err, errCompactionInputOverflow) || stub.calls != 0 || q.created || len(q.markedIDs) != 0 {
 					t.Fatalf("err=%v calls=%d created=%t marked=%v, want an overflow before any claim or call: a summary covers only what its model read", err, stub.calls, q.created, q.markedIDs)
 				}
 				return
 			}
-			if err != nil || len(q.markedIDs) != 1 || !strings.Contains(stub.prompt, strings.Repeat("x", tc.tokens*4)) || !strings.Contains(stub.prompt, strings.Repeat("p", tc.earlier*4)) {
-				t.Fatalf("err=%v marked=%d, want the whole entry and earlier summaries read in one call", err, len(q.markedIDs))
+			wantStatus := StatusOK
+			if tc.read < len(tc.rows) {
+				wantStatus = StatusProgress
+				if strings.Contains(stub.prompt, strings.Repeat("x", tc.rows[tc.read]*4)) {
+					t.Fatal("a deferred group reached the summarizer")
+				}
+			}
+			if err != nil || res.Status != wantStatus || len(q.markedIDs) != tc.read || !strings.Contains(stub.prompt, strings.Repeat("x", tc.rows[tc.read-1]*4)) || !strings.Contains(stub.prompt, strings.Repeat("p", tc.earlier*4)) {
+				t.Fatalf("err=%v status=%q marked=%d, want %d whole rows and the earlier summaries read in one call", err, res.Status, len(q.markedIDs), tc.read)
 			}
 			if request := contextfrag.ProviderBudgetTokensFromBytes(len(stub.prompt)); request+stub.maxTokens > cfg.SummaryWindowTokens {
 				t.Fatalf("request %d + max_tokens %d exceeds the %d window", request, stub.maxTokens, cfg.SummaryWindowTokens)
 			}
-			if !strings.Contains(stub.prompt, fmt.Sprintf("must stay under %d tokens", stub.maxTokens)) {
-				t.Fatalf("stated limit is not the %d tokens the window leaves:\n%s", stub.maxTokens, stub.prompt[len(stub.prompt)-400:])
+			var stated int
+			_, after, _ := strings.Cut(stub.prompt, "must stay under ")
+			if _, err := fmt.Sscanf(after, "%d", &stated); err != nil || stated > stub.maxTokens {
+				t.Fatalf("stated limit %d exceeds max_tokens %d", stated, stub.maxTokens)
+			}
+			if tc.reduced && (stub.maxTokens >= tc.output || stub.maxTokens*2 < tc.output) {
+				t.Fatalf("max_tokens = %d, want the %d summary room reduced by at most half", stub.maxTokens, tc.output)
 			}
 		})
 	}
