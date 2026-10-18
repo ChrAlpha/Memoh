@@ -41,8 +41,13 @@ func TestDropPreflightFailureTurns(t *testing.T) {
 func TestDropEmptyHistoryFailures(t *testing.T) {
 	empty := sdkMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("")})[0]
 	kept := sdkMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("hello")})[0]
+	var stepFailure ModelMessage
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":[]}`), &stepFailure); err != nil {
+		t.Fatal(err)
+	}
 	records := []historyfrag.HistoryRecord{
 		{ModelMessage: empty, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout"}},
+		{ModelMessage: stepFailure, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.provider_request_rejected", messagepkg.AgentStepInterruptedMetadataKey: true}},
 		{ModelMessage: kept, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout"}},
 		{ModelMessage: empty},
 	}
