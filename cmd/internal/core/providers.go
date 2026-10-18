@@ -460,7 +460,7 @@ func provideMessageService(log *slog.Logger, queries dbstore.Queries, hub *event
 }
 
 func provideScheduleTriggerer(service *application.Service) schedule.Triggerer {
-	return application.NewScheduleGateway(service)
+	return service
 }
 
 type sessionCreatorAdapter struct {

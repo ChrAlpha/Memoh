@@ -48,17 +48,6 @@ func (*fakeTriggeredAdmitter) FinishRunWithFailure(context.Context, sessionrunti
 
 func (*fakeTriggeredAdmitter) MarkInlineDecisionRun(string, string, string) {}
 
-func TestScheduleInvocationUsesFireIdentity(t *testing.T) {
-	a := scheduleInvocationID(schedule.TriggerPayload{ID: "schedule", SessionID: "shared", FireID: "fire-a"})
-	b := scheduleInvocationID(schedule.TriggerPayload{ID: "schedule", SessionID: "shared", FireID: "fire-b"})
-	if a == b {
-		t.Fatal("different fires collided in the same session")
-	}
-	if a != scheduleInvocationID(schedule.TriggerPayload{ID: "schedule", SessionID: "shared", FireID: "fire-a"}) {
-		t.Fatal("same fire lost retry identity")
-	}
-}
-
 // A fire that finds the session busy reports the schedule's busy sentinel,
 // which its unit treats as a skip. A failure before admission has no run
 // record, so it is not marked recorded.

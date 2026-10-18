@@ -26,6 +26,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/answer"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
@@ -412,7 +413,7 @@ func TestCharacterizeDecisionContinuationFailureColumns(t *testing.T) {
 				runCtx, stop = context.WithCancel(runCtx)
 				stop()
 			}
-			service.driveRoutedContinuation(runCtx, command, handle, decisionContinuation{
+			service.answer.DriveRouted(runCtx, command, handle, answer.Continuation{
 				Req: runreq.ChatRequest{BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
 				Setup: func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 					return drive.RunPlan{}, tc.cause

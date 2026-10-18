@@ -10,7 +10,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/transcript"
 )
@@ -48,7 +47,6 @@ func TestAssembleContinuationReplacesStaleContext(t *testing.T) {
 	got, err := assemblyPlanner(&agenttest.RecordingCompactionLog{}).assembleContinuation(
 		context.Background(),
 		base,
-		historyfrag.ScopeFallback{},
 		contextfrag.Scope{},
 	)
 	if err != nil {
@@ -81,7 +79,6 @@ func TestAssembleContinuationPropagatesArtifactProjectionFailure(t *testing.T) {
 	got, err := assemblyPlanner(&agenttest.RecordingCompactionLog{ListErr: sentinel}).assembleContinuation(
 		context.Background(),
 		native.RunConfig{Query: "must not survive"},
-		historyfrag.ScopeFallback{},
 		contextfrag.Scope{SessionID: "00000000-0000-0000-0000-00000000f401"},
 	)
 	if !errors.Is(err, sentinel) {

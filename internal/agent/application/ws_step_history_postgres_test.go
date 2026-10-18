@@ -28,6 +28,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	chatview "github.com/felinics/memoh/internal/agent/view"
+	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
@@ -273,7 +274,7 @@ func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, r
 		h.service.sessionRuntime = unfencedSessionRuntime{h.manager}
 		rewireRun(h.service)
 	}
-	admission, err := h.service.AdmitWebRun(baseCtx, WebAdmitInput{
+	admission, err := h.service.AdmitWebRun(baseCtx, web.AdmitInput{
 		BotID:        h.botID,
 		SessionID:    h.sessionID,
 		InvocationID: uuid.NewString(),

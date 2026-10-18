@@ -9,6 +9,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
@@ -157,7 +158,7 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 			rewireComponents(fixture.service)
 			req := continuationSessionRequest()
 
-			err := fixture.service.driveUnroutedContinuation(context.Background(), decisionContinuation{
+			err := fixture.service.answer.DriveUnrouted(context.Background(), answer.Continuation{
 				Req: req,
 				Setup: func(ctx context.Context, _ runreq.ChatRequest) (drive.RunPlan, error) {
 					return tt.resolve(ctx, fixture.service, req)

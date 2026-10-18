@@ -14,28 +14,12 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
-
-func TestResumeRenewalChecksScopeAndAuthorization(t *testing.T) {
-	s := wireComponents(&Service{signer: admit.NewSigner("resume-secret")})
-	if _, err := s.renewResumeCredential(t.Context(), "bot", map[string]string{"typ": "chat_route", "bot_id": "other", "chat_id": "chat"}); !errors.Is(err, runreq.ErrResumeUnrecoverable) {
-		t.Fatalf("cross-bot credential = %v, want an unrecoverable intent", err)
-	}
-	if _, err := s.renewResumeCredential(t.Context(), "bot", map[string]string{"sub": "account"}); err == nil {
-		t.Fatal("renewed account without reauthorization")
-	}
-	token, err := s.renewResumeCredential(t.Context(), "bot", map[string]string{"typ": "chat_route", "bot_id": "bot", "chat_id": "chat", "route_id": "route", "user_id": "sender"})
-	if err != nil || token == "" {
-		t.Fatalf("renewed chat-route credential = %q, %v", token, err)
-	}
-	if got, err := s.renewResumeCredential(t.Context(), "bot", nil); got != "" || err != nil {
-		t.Fatalf("no claims = %q, %v, want nothing to renew", got, err)
-	}
-}
 
 // A resume re-enters the session it saved, on the request the intent recorded,
 // and keeps the deadline the interrupted run was given. The turn resolves
@@ -58,7 +42,7 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
 		InputJson: raw,
 	}
-	done, err := service.resumeInterruptedSession(t.Context(), row)
+	done, err := service.resume.Resume(t.Context(), row)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +57,7 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	if len(requests) == 0 {
 		t.Fatal("the resumed run never reached the model provider")
 	}
-	if !strings.Contains(requests[0], "original task") || !strings.Contains(requests[0], resumeInstruction) {
+	if !strings.Contains(requests[0], "original task") || !strings.Contains(requests[0], resume.Instruction) {
 		t.Fatalf("model request lacks the resumed task: %s", requests[0])
 	}
 	// A resume writes no new user message: the input is synthetic, and the
@@ -91,13 +75,13 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	fixture.admitter.Mu.Lock()
 	fixture.admitter.Started = false
 	fixture.admitter.Mu.Unlock()
-	if _, err := service.resumeInterruptedSession(t.Context(), row); !errors.Is(err, runreq.ErrResumeUnrecoverable) {
+	if _, err := service.resume.Resume(t.Context(), row); !errors.Is(err, runreq.ErrResumeUnrecoverable) {
 		t.Fatalf("duplicate admission = %v, want an unrecoverable intent", err)
 	}
 	expired := time.Now().Add(-time.Second)
 	data.DeadlineAt = &expired
 	row.InputJson, _ = json.Marshal(map[string]any{"resume": data})
-	if done, err := service.resumeInterruptedSession(t.Context(), row); !errors.Is(err, runreq.ErrResumeUnrecoverable) || done != nil {
+	if done, err := service.resume.Resume(t.Context(), row); !errors.Is(err, runreq.ErrResumeUnrecoverable) || done != nil {
 		t.Fatalf("expired budget: done=%v err=%v, want an unrecoverable intent", done, err)
 	}
 	if len(fixture.admitter.Admitted()) != 2 {
@@ -108,9 +92,9 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 func TestResumeWaitsForWorkspaceBeforeAdmission(t *testing.T) {
 	s, admitter := newAdmittedTurnTestService()
 	setAllowedTeam(s, "00000000-0000-0000-0000-000000000001")
-	s.resumeReady = func(context.Context, string, string) error { return errors.New("bridge not ready") }
+	useResumeReadiness(s, func(context.Context, string, string) error { return errors.New("bridge not ready") })
 	raw, _ := json.Marshal(map[string]any{"resume": admit.ResumeContext{Version: 1, ChatID: "chat", Query: "work"}})
-	done, err := s.resumeInterruptedSession(t.Context(), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001"), InputJson: raw})
+	done, err := s.resume.Resume(t.Context(), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty("00000000-0000-0000-0000-000000000001"), InputJson: raw})
 	if err == nil || done != nil {
 		t.Fatal("unready workspace admitted")
 	}
@@ -151,12 +135,12 @@ func TestResumeScanRetiresIntentsThatCannotContinue(t *testing.T) {
 	s, admitter := fixture.fixture.service, fixture.admitter
 	setAllowedTeam(s, teamID)
 	unreadyBot := uuid.NewString()
-	s.resumeReady = func(_ context.Context, botID, _ string) error {
+	useResumeReadiness(s, func(_ context.Context, botID, _ string) error {
 		if botID == unreadyBot {
 			return errors.New("bridge not ready")
 		}
 		return nil
-	}
+	})
 	future, past := time.Now().Add(time.Minute), time.Now().Add(-time.Second)
 	row := func(botID string, data admit.ResumeContext) sqlc.SessionRun {
 		raw, err := json.Marshal(map[string]any{"resume": data})
@@ -175,8 +159,8 @@ func TestResumeScanRetiresIntentsThatCannotContinue(t *testing.T) {
 	s.queries = q
 	rewireComponents(s)
 
-	scan := sessionResumeScan{}
-	if err := s.scanInterruptedSessions(t.Context(), s.teamScopes, &scan, make(chan struct{}, 4)); err != nil {
+	scan := resume.Scan{}
+	if err := s.resume.ScanInterrupted(t.Context(), &scan, make(chan struct{}, 4)); err != nil {
 		t.Fatal(err)
 	}
 	if q.swept != 1 {

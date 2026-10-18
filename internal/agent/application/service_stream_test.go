@@ -16,6 +16,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
 	"github.com/felinics/memoh/internal/settings"
@@ -137,14 +138,14 @@ func TestWebRetryRejectsTurnReplacementForACP(t *testing.T) {
 		logger:         slog.New(slog.DiscardHandler),
 	})
 	registerACPPool(resolver, pool)
-	admission, err := resolver.AdmitWebRun(context.Background(), WebAdmitInput{
+	admission, err := resolver.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID: "bot-1", SessionID: "session-1", InvocationID: "retry-1", Payload: []byte(`{"kind":"retry_message"}`),
 	})
 	if err != nil {
 		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
 	delivery := newWebTestDelivery()
-	resolver.RunWebRetry(admission, RetryLatestMessageInput{
+	resolver.RunWebRetry(admission, web.RetryLatestMessageInput{
 		BotID: "bot-1", SessionID: "session-1", TargetTurnID: driveReplacedTurnID,
 	}, delivery)
 

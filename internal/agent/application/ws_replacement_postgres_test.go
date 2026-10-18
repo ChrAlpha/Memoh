@@ -12,6 +12,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/persist"
+	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -73,9 +74,9 @@ func (h wsReplacementHarness) latestTurnID(t *testing.T) string {
 }
 
 // replace admits one replacement run and runs it to its terminal write.
-func (h wsReplacementHarness) replace(t *testing.T, start func(*WebAdmission, drive.RunDelivery)) wsStepHistoryRun {
+func (h wsReplacementHarness) replace(t *testing.T, start func(*web.Admission, drive.RunDelivery)) wsStepHistoryRun {
 	t.Helper()
-	admission, err := h.service.AdmitWebRun(context.Background(), WebAdmitInput{
+	admission, err := h.service.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID:        h.botID,
 		SessionID:    h.sessionID,
 		InvocationID: uuid.NewString(),
@@ -102,8 +103,8 @@ func (h wsReplacementHarness) replace(t *testing.T, start func(*WebAdmission, dr
 func (h wsReplacementHarness) retry(t *testing.T) wsStepHistoryRun {
 	t.Helper()
 	target := h.latestTurnID(t)
-	return h.replace(t, func(admission *WebAdmission, delivery drive.RunDelivery) {
-		h.service.RunWebRetry(admission, RetryLatestMessageInput{
+	return h.replace(t, func(admission *web.Admission, delivery drive.RunDelivery) {
+		h.service.RunWebRetry(admission, web.RetryLatestMessageInput{
 			BotID: h.botID, SessionID: h.sessionID, TargetTurnID: target,
 		}, delivery)
 	})
@@ -112,8 +113,8 @@ func (h wsReplacementHarness) retry(t *testing.T) wsStepHistoryRun {
 func (h wsReplacementHarness) edit(t *testing.T, text string) wsStepHistoryRun {
 	t.Helper()
 	target := h.latestTurnID(t)
-	return h.replace(t, func(admission *WebAdmission, delivery drive.RunDelivery) {
-		h.service.RunWebEdit(admission, EditLatestMessageInput{
+	return h.replace(t, func(admission *web.Admission, delivery drive.RunDelivery) {
+		h.service.RunWebEdit(admission, web.EditLatestMessageInput{
 			BotID: h.botID, SessionID: h.sessionID, TargetTurnID: target, Text: text,
 		}, delivery)
 	})

@@ -118,16 +118,6 @@ func scopeFallbackFromChatRequest(req runreq.ChatRequest) historyfrag.ScopeFallb
 	}
 }
 
-// ScopeFallbackFromDecision is the conversation scope a decision continuation
-// falls back to when the history it reads names none: the conversation type and
-// reply target the decision recorded.
-func ScopeFallbackFromDecision(conversationType, replyTarget string) historyfrag.ScopeFallback {
-	return historyfrag.ScopeFallback{
-		ConversationType: strings.TrimSpace(conversationType),
-		ReplyTarget:      strings.TrimSpace(replyTarget),
-	}
-}
-
 // ensureRequiredHistoryMessage keeps the request's own row in the context when
 // the load left it out (compacted away or past the byte budget) by re-reading
 // the window from that row. A required row refused at admission is not in the

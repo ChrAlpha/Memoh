@@ -16,7 +16,9 @@ func (s *Service) bindSessionRuntime(manager *sessionruntime.Manager) {
 	s.decisionRuntime = manager
 	manager.SetDecisionStore(s.decider)
 	manager.SetLostRunDecisionCanceller(s.decider.CancelLostRunDecisions)
-	manager.SetCommandHandler(s.handleRuntimeDecisionCommand)
+	manager.SetCommandHandler(func(ctx context.Context, command sessionruntime.Command) error {
+		return s.answer.HandleCommand(ctx, command)
+	})
 	manager.SetDecisionFinalizer(s.decider.FinalizeRuntimeDecisions)
 	manager.SetTerminalObserver(terminalFanout(
 		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
@@ -25,7 +27,9 @@ func (s *Service) bindSessionRuntime(manager *sessionruntime.Manager) {
 		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 			s.lifecycle.ReconcileTerminal(ctx, terminal)
 		},
-		s.afterSessionTerminal,
+		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
+			s.pending.AfterSessionTerminal(ctx, terminal)
+		},
 	))
 	manager.SetTerminalReconciler(func(ctx context.Context) error {
 		return s.lifecycle.ReconcileTerminals(ctx)

@@ -25,6 +25,7 @@ Memoh/
 │   │   ├── activeprompt/       #     In-process output hub of the running external runtime prompt of a session
 │   │   ├── adapter/            #     Adapters from lower-level domain ports to runtime implementations
 │   │   ├── admit/              #     Admission of runs, the resume record of a run, signing of server-issued run credentials
+│   │   ├── answer/             #     Answers to parked tool approvals and questions: routing, commit, resuming the parked run
 │   │   ├── application/        #     Turn orchestration: context, persistence, memory, approvals, runtime dispatch
 │   │   ├── background/         #     Background task manager (spawned subagents, video tasks)
 │   │   ├── botenv/             #     Bot settings, time zone, display names, and workspace lifecycle hooks
@@ -37,7 +38,9 @@ Memoh/
 │   │   ├── lifecycle/          #     Context lifecycle ledger: per-run snapshot, terminal status, repair
 │   │   ├── memory/             #     Memory recall for a turn and hand-off of finished rounds to the memory provider
 │   │   ├── notify/             #     Background task notifications into the originating conversation
+│   │   ├── pending/            #     Input waiting for a session: follow-up and steer queues, discuss batches, their sweeps
 │   │   ├── persist/            #     History writes: turn and step rows, failure rows, terminal snapshots, replaced turns
+│   │   ├── resume/             #     Resume of runs a server shutdown interrupted
 │   │   ├── runtime/            #     Runtime implementations
 │   │   │   ├── acp/            #       ACP pool, client process manager, and the generic custom-agent profile
 │   │   │   ├── claudecode/     #       Claude Code direct runtime (external.Driver)
@@ -47,10 +50,12 @@ Memoh/
 │   │   │   ├── agentstate/     #       External Agent session publication heads and state storage port
 │   │   │   ├── session/        #       Per-thread runtime state and control
 │   │   │   └── toolmount/      #       Memoh tool gateway mounts for direct runtimes
+│   │   ├── schedule/           #     Scheduled fires run as agent turns
 │   │   ├── sessionmode/        #     Session mode resolution
 │   │   ├── partmeta/           #     Memoh annotations (approval, user input, execution location) on sdk.ProviderMetadata, plus the stored-shape fold/unfold
 │   │   ├── step/               #     Runtime-neutral step record (model result, tool results, messages, deferred approval)
 │   │   ├── transcript/         #     Conversation read path: assemble stored rows for the model, compaction replacement, window, admission filters
+│   │   ├── web/                #     Web client sends, retries and edits: admission, queueing behind a busy session, execution
 │   │   ├── tool/               #     Native tool providers (package name remains tools)
 │   │       ├── message.go      #       Send message tool
 │   │       ├── contacts.go     #       Contact list tool

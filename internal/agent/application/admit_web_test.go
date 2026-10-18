@@ -18,7 +18,9 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
@@ -92,7 +94,7 @@ func streamWebSend(ctx context.Context, t *testing.T, svc *Service, req runreq.C
 		svc.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: webTestAdmission(req)}
 		rewireRun(svc)
 	}
-	admission, err := svc.AdmitWebRun(ctx, WebAdmitInput{
+	admission, err := svc.AdmitWebRun(ctx, web.AdmitInput{
 		BotID:        req.BotID,
 		SessionID:    req.ThreadID,
 		InvocationID: "web-invocation",
@@ -149,9 +151,9 @@ func newWebTestService() *Service {
 	return wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 }
 
-func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *WebAdmission {
+func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *web.Admission {
 	t.Helper()
-	admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
+	admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID:        webTestBotID,
 		SessionID:    webTestSessionID,
 		InvocationID: invocationID,
@@ -164,8 +166,8 @@ func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *WebAdmiss
 }
 
 // webTestSpec is a Web send whose setup hands the driver exec.
-func webTestSpec(svc *Service, admission *WebAdmission, delivery drive.RunDelivery, exec drive.RunExecutor) drive.RunSpec {
-	spec := svc.webRunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
+func webTestSpec(admission *web.Admission, delivery drive.RunDelivery, exec drive.RunExecutor) drive.RunSpec {
+	spec := web.RunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
 	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		return drive.RunPlan{Exec: exec, Req: req}, nil
 	}
@@ -222,7 +224,7 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 	svc := newWebTestService()
 	newWebTestRuntime(t, svc)
 	var built sessionruntime.RunHandle
-	admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
+	admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID:        webTestBotID,
 		SessionID:    webTestSessionID,
 		InvocationID: "invocation-1",
@@ -247,7 +249,7 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 	executed := make(chan struct{})
 	exec := &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}
 	delivery := newWebTestDelivery()
-	spec := webTestSpec(svc, admission, delivery, exec)
+	spec := webTestSpec(admission, delivery, exec)
 	setup := spec.Setup
 	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		close(executed)
@@ -258,7 +260,7 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 		t.Fatal("the run executed before its entry started it")
 	default:
 	}
-	svc.startWebRun(admission, spec)
+	svc.web.Start(admission, spec)
 	if _, ended := delivery.wait(t); ended.State != string(ledger.StateCompleted) {
 		t.Fatalf("ended = %+v, want completed", ended)
 	}
@@ -271,7 +273,7 @@ func TestAdmitWebRunRecordsTheSenderAsInitiator(t *testing.T) {
 
 	svc := newWebTestService()
 	_, runs := newWebTestRuntime(t, svc)
-	admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
+	admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID:        webTestBotID,
 		SessionID:    webTestSessionID,
 		InvocationID: "invocation-1",
@@ -285,7 +287,7 @@ func TestAdmitWebRunRecordsTheSenderAsInitiator(t *testing.T) {
 		t.Fatalf("run initiator = %q, want account-1", got)
 	}
 	delivery := newWebTestDelivery()
-	svc.startWebRun(admission, webTestSpec(svc, admission, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
+	svc.web.Start(admission, webTestSpec(admission, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
 	delivery.wait(t)
 }
 
@@ -297,7 +299,7 @@ func TestAdmitWebRunRedeliveryIsADuplicate(t *testing.T) {
 	newWebTestRuntime(t, svc)
 	first := admitWebTestRun(t, svc, "invocation-1")
 	delivery := newWebTestDelivery()
-	svc.startWebRun(first, webTestSpec(svc, first, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
+	svc.web.Start(first, webTestSpec(first, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
 	delivery.wait(t)
 
 	again := admitWebTestRun(t, svc, "invocation-1")
@@ -319,19 +321,53 @@ func TestAdmitWebRunRefusesABusySession(t *testing.T) {
 	running := admitWebTestRun(t, svc, "invocation-1")
 	exec := &blockingExecutor{started: make(chan struct{})}
 	delivery := newWebTestDelivery()
-	svc.startWebRun(running, webTestSpec(svc, running, delivery, exec))
+	svc.web.Start(running, webTestSpec(running, delivery, exec))
 	awaitStarted(t, exec.started)
 	t.Cleanup(func() {
-		running.stop(outcome.ErrRunStopped)
+		running.Stop(outcome.ErrRunStopped)
 		delivery.wait(t)
 	})
 
-	_, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
+	_, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID: webTestBotID, SessionID: webTestSessionID, InvocationID: "invocation-2",
 		Payload: []byte(`{"kind":"message","text":"second"}`),
 	})
 	if !errors.Is(err, sessionruntime.ErrSessionBusy) {
 		t.Fatalf("AdmitWebRun(busy) error = %v, want ErrSessionBusy", err)
+	}
+}
+
+// Without a durable queue there is nowhere for a busy send to wait, so it is
+// refused as busy and the queue's turn is never built.
+func TestAdmitWebRunWithoutAQueueRefusesABusySendWithoutBuildingItsQueueTurn(t *testing.T) {
+	t.Parallel()
+
+	svc := newWebTestService()
+	newWebTestRuntime(t, svc)
+	running := admitWebTestRun(t, svc, "invocation-1")
+	exec := &blockingExecutor{started: make(chan struct{})}
+	delivery := newWebTestDelivery()
+	svc.web.Start(running, webTestSpec(running, delivery, exec))
+	awaitStarted(t, exec.started)
+	t.Cleanup(func() {
+		running.Stop(outcome.ErrRunStopped)
+		delivery.wait(t)
+	})
+
+	built := false
+	_, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
+		BotID: webTestBotID, SessionID: webTestSessionID, InvocationID: "invocation-2",
+		Payload: []byte(`{"kind":"message","text":"second"}`),
+		QueueTurn: func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
+			built = true
+			return turn.StartTurnCommand{}, nil, nil
+		},
+	})
+	if !errors.Is(err, sessionruntime.ErrSessionBusy) {
+		t.Fatalf("AdmitWebRun(busy, no queue) error = %v, want ErrSessionBusy", err)
+	}
+	if built {
+		t.Fatal("the queue's turn was built for a send that cannot wait")
 	}
 }
 
@@ -344,7 +380,7 @@ func TestWebRunEndReleasesTheSession(t *testing.T) {
 	_, runs := newWebTestRuntime(t, svc)
 	first := admitWebTestRun(t, svc, "invocation-1")
 	delivery := newWebTestDelivery()
-	svc.startWebRun(first, webTestSpec(svc, first, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
+	svc.web.Start(first, webTestSpec(first, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
 	delivery.wait(t)
 	if got := ledgerRun(t, runs, first.RunID).State; got != ledger.StateCompleted {
 		t.Fatalf("first run state = %q, want completed", got)
@@ -354,8 +390,8 @@ func TestWebRunEndReleasesTheSession(t *testing.T) {
 	if next.Duplicate || next.RunID == first.RunID {
 		t.Fatalf("next admission = %+v, want a new run", next)
 	}
-	next.stop(outcome.ErrRunStopped)
-	next.endActive()
+	next.Stop(outcome.ErrRunStopped)
+	next.Release()
 }
 
 // #1105: a Web run whose ending's history write fails must end failed, and its
@@ -388,7 +424,7 @@ func TestWebHistoryWriteFailureEndsTheRunFailedWithoutFinishing(t *testing.T) {
 		CommitErr: errors.New("history unavailable"),
 	}
 	delivery := newWebTestDelivery()
-	svc.startWebRun(admission, webTestSpec(svc, admission, delivery, exec))
+	svc.web.Start(admission, webTestSpec(admission, delivery, exec))
 	events, ended := delivery.wait(t)
 
 	run := ledgerRun(t, runs, admission.RunID)
@@ -460,7 +496,7 @@ func TestWebPublicationRefusalEndsTheRun(t *testing.T) {
 		events:  []native.StreamEvent{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "partial"}},
 	}
 	delivery := newWebTestDelivery()
-	svc.startWebRun(admission, webTestSpec(svc, admission, delivery, exec))
+	svc.web.Start(admission, webTestSpec(admission, delivery, exec))
 	events, _ := delivery.wait(t)
 
 	run := ledgerRun(t, runs, admission.RunID)
@@ -486,11 +522,11 @@ func TestWebStopIsRecordedAsAStop(t *testing.T) {
 
 	for _, tc := range []struct {
 		name string
-		stop func(t *testing.T, manager *sessionruntime.Manager, admission *WebAdmission, cancelCaller context.CancelFunc)
+		stop func(t *testing.T, manager *sessionruntime.Manager, admission *web.Admission, cancelCaller context.CancelFunc)
 	}{
 		{
 			name: "routed abort",
-			stop: func(t *testing.T, manager *sessionruntime.Manager, admission *WebAdmission, _ context.CancelFunc) {
+			stop: func(t *testing.T, manager *sessionruntime.Manager, admission *web.Admission, _ context.CancelFunc) {
 				t.Helper()
 				if _, err := manager.AbortControl(context.Background(), webTestBotID, webTestSessionID, admission.RunID, "control-1"); err != nil {
 					t.Fatalf("AbortControl() error = %v", err)
@@ -499,7 +535,7 @@ func TestWebStopIsRecordedAsAStop(t *testing.T) {
 		},
 		{
 			name: "caller context ending",
-			stop: func(_ *testing.T, _ *sessionruntime.Manager, _ *WebAdmission, cancelCaller context.CancelFunc) {
+			stop: func(_ *testing.T, _ *sessionruntime.Manager, _ *web.Admission, cancelCaller context.CancelFunc) {
 				cancelCaller()
 			},
 		},
@@ -511,7 +547,7 @@ func TestWebStopIsRecordedAsAStop(t *testing.T) {
 			manager, runs := newWebTestRuntime(t, svc)
 			callerCtx, cancelCaller := context.WithCancel(context.Background())
 			defer cancelCaller()
-			admission, err := svc.AdmitWebRun(callerCtx, WebAdmitInput{
+			admission, err := svc.AdmitWebRun(callerCtx, web.AdmitInput{
 				BotID: webTestBotID, SessionID: webTestSessionID, InvocationID: "invocation-1",
 				Payload: []byte(`{"kind":"message","text":"hi"}`),
 			})
@@ -520,7 +556,7 @@ func TestWebStopIsRecordedAsAStop(t *testing.T) {
 			}
 			exec := &blockingExecutor{started: make(chan struct{}), events: []native.StreamEvent{{Type: native.EventAgentStart}}}
 			delivery := newWebTestDelivery()
-			svc.startWebRun(admission, webTestSpec(svc, admission, delivery, exec))
+			svc.web.Start(admission, webTestSpec(admission, delivery, exec))
 			awaitStarted(t, exec.started)
 
 			tc.stop(t, manager, admission, cancelCaller)
@@ -556,7 +592,7 @@ func TestWebSendAssetsReachTheHistoryWrite(t *testing.T) {
 
 	var linked []turn.OutboundAssetRef
 	delivery := newWebTestDelivery()
-	spec := svc.webRunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
+	spec := web.RunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
 	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		exec := &collectingExecutor{
 			events: []native.StreamEvent{{
@@ -571,7 +607,7 @@ func TestWebSendAssetsReachTheHistoryWrite(t *testing.T) {
 		}
 		return drive.RunPlan{Exec: exec, Req: req}, nil
 	}
-	svc.startWebRun(admission, spec)
+	svc.web.Start(admission, spec)
 	delivery.wait(t)
 
 	if len(linked) != 1 || linked[0].ContentHash != "hash:/data/out.png" {

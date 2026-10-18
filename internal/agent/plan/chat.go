@@ -111,9 +111,6 @@ func (p *Planner) ChatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 	if err != nil {
 		return drive.RunPlan{}, err
 	}
-	if req.OnModelPreferenceSettled != nil {
-		req.OnModelPreferenceSettled()
-	}
 	return plan, nil
 }
 

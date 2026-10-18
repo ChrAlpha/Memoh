@@ -19,6 +19,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
+	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -139,13 +140,13 @@ func emptyWSAdmissionView(context.Context, sessionruntime.RunHandle) (sessionrun
 }
 
 // admit runs one admission the way the message case does.
-func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)) (*application.WebAdmission, wsTurnRef) {
+func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)) (*web.Admission, wsTurnRef) {
 	return h.handler.admitWSRun(context.Background(), h.writer, wsAdmissionBotID, "", ref, "ws.message", submission, build, nil, nil)
 }
 
 // send runs an admitted Web send to its end and returns once the session has
 // released it.
-func (h wsRunHarness) send(t *testing.T, admitted *application.WebAdmission, ref wsTurnRef) {
+func (h wsRunHarness) send(t *testing.T, admitted *web.Admission, ref wsTurnRef) {
 	t.Helper()
 	ended := make(chan struct{})
 	h.handler.agentService.RunWebSend(admitted, runreq.ChatRequest{

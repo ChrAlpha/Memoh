@@ -20,6 +20,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/drivetest"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -29,6 +30,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/agent/web"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -82,13 +84,13 @@ func TestTurnSpanCoversTheTurnNotItsSetup(t *testing.T) {
 	inTurn := make(chan struct{})
 	release := make(chan struct{})
 	admission := admitTracingWebRun(t, service)
-	spec := service.webRunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, nil, outcome.InputHeld)
+	spec := web.RunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, nil, outcome.InputHeld)
 	spec.Setup = func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 		close(inTurn)
 		<-release
 		return drive.RunPlan{}, errors.New("setup ends the turn")
 	}
-	service.startWebRun(admission, spec)
+	service.web.Start(admission, spec)
 
 	select {
 	case <-inTurn:
@@ -140,14 +142,14 @@ func TestTurnSpanSeparatesFailureFromCancellation(t *testing.T) {
 		service := newTracingTestService()
 		admission := admitTracingWebRun(t, service)
 		exec := &blockingExecutor{started: make(chan struct{})}
-		spec := service.webRunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, newWebTestDelivery(), outcome.InputHeld)
+		spec := web.RunSpec(admission, runreq.ChatRequest{BotID: "b", ThreadID: "s"}, newWebTestDelivery(), outcome.InputHeld)
 		spec.Setup = func(_ context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 			return drive.RunPlan{Exec: exec, Req: req}, nil
 		}
-		service.startWebRun(admission, spec)
+		service.web.Start(admission, spec)
 		awaitStarted(t, exec.started)
 
-		admission.stop(outcome.ErrRunStopped)
+		admission.Stop(outcome.ErrRunStopped)
 
 		span := turnSpan(t, recorder)
 		if got := spanAttr(span, "agent.turn.outcome").AsString(); got != "aborted" {
@@ -181,13 +183,13 @@ func TestTurnSpanCoversTheWebSocketEntryPoint(t *testing.T) {
 }
 
 // admitTracingWebRun admits a Web run on bot b, session s.
-func admitTracingWebRun(t *testing.T, service *Service) *WebAdmission {
+func admitTracingWebRun(t *testing.T, service *Service) *web.Admission {
 	t.Helper()
 	if service.sessionRuntime == nil {
 		service.sessionRuntime = agenttest.NewScriptedAdmitter()
 		rewireRun(service)
 	}
-	admission, err := service.AdmitWebRun(context.Background(), WebAdmitInput{
+	admission, err := service.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID: "b", SessionID: "s", InvocationID: "trace-1", Payload: []byte(`{"kind":"message"}`),
 	})
 	if err != nil {
@@ -236,10 +238,10 @@ func TestTurnSpanOutcomeSurvivesTheSessionRuntimeCancellingTheRun(t *testing.T) 
 			admission := admitWebTestRun(t, svc, "span-"+tc.name)
 			exec, started := tc.exec()
 			delivery := newWebTestDelivery()
-			svc.startWebRun(admission, webTestSpec(svc, admission, delivery, exec))
+			svc.web.Start(admission, webTestSpec(admission, delivery, exec))
 			if started != nil {
 				awaitStarted(t, started)
-				admission.stop(outcome.ErrRunStopped)
+				admission.Stop(outcome.ErrRunStopped)
 			}
 			delivery.wait(t)
 
@@ -300,7 +302,7 @@ func awaitEntryReturned(t *testing.T, done <-chan struct{}) {
 func spanTestEntries() []spanTestEntry {
 	return []spanTestEntry{
 		{name: "web_send", start: func(t *testing.T, service *Service) (func(), func()) {
-			admission, err := service.AdmitWebRun(context.Background(), WebAdmitInput{
+			admission, err := service.AdmitWebRun(context.Background(), web.AdmitInput{
 				BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 				InvocationID: "span-web", Payload: []byte(`{"kind":"message"}`),
 			})
@@ -312,7 +314,7 @@ func spanTestEntries() []spanTestEntry {
 				BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 				Query: directLifecyclePrompt,
 			}, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
-			return func() { admission.stop(outcome.ErrRunStopped) }, func() { delivery.wait(t) }
+			return func() { admission.Stop(outcome.ErrRunStopped) }, func() { delivery.wait(t) }
 		}},
 		{name: "im_start_turn", start: func(t *testing.T, service *Service) (func(), func()) {
 			handle, err := service.StartTurn(context.Background(), turn.StartTurnCommand{
@@ -347,7 +349,7 @@ func spanTestEntries() []spanTestEntry {
 			if err != nil {
 				t.Fatal(err)
 			}
-			done, err := service.resumeInterruptedSession(t.Context(), sqlc.SessionRun{
+			done, err := service.resume.Resume(t.Context(), sqlc.SessionRun{
 				TeamID:    db.ParseUUIDOrEmpty(teamID),
 				RunID:     db.ParseUUIDOrEmpty(uuid.NewString()),
 				BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
@@ -366,7 +368,7 @@ func spanTestEntries() []spanTestEntry {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				_ = service.driveUnroutedContinuation(ctx, decisionContinuation{
+				_ = service.answer.DriveUnrouted(ctx, answer.Continuation{
 					Req: runreq.ChatRequest{BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, Query: directLifecyclePrompt},
 					Setup: func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 						return service.plan.ChatSetup(ctx, req, drive.RunSpec{Input: outcome.InputAccepted})

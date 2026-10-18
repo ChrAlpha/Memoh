@@ -22,6 +22,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -29,6 +30,7 @@ import (
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
+	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/contextview"
@@ -349,10 +351,10 @@ func driveDecisionHistory(t *testing.T, toolName string, result sdk.ToolOutput) 
 }
 
 // runWebReplacement admits a Web retry or edit and runs it to its end.
-func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*WebAdmission, drive.RunDelivery)) {
+func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*web.Admission, drive.RunDelivery)) {
 	t.Helper()
 	withDriveRequestRuntime(t, fixture)
-	admission, err := fixture.service.AdmitWebRun(context.Background(), WebAdmitInput{
+	admission, err := fixture.service.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID:        agenttest.LifecycleBotID,
 		SessionID:    agenttest.LifecycleSessionID,
 		InvocationID: "web-replacement",
@@ -374,8 +376,8 @@ func driveWebRetry(t *testing.T) []sdk.Request {
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
 	rewireComponents(fixture.service)
-	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery drive.RunDelivery) {
-		fixture.service.RunWebRetry(admission, RetryLatestMessageInput{
+	runWebReplacement(t, fixture, func(admission *web.Admission, delivery drive.RunDelivery) {
+		fixture.service.RunWebRetry(admission, web.RetryLatestMessageInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,
 			TargetTurnID: driveReplacedTurnID,
@@ -390,8 +392,8 @@ func driveWebEdit(t *testing.T) []sdk.Request {
 	fixture, recorder := newDriveRequestFixture(t)
 	fixture.service.messageService = driveReplaceableHistory(t)
 	rewireComponents(fixture.service)
-	runWebReplacement(t, fixture, func(admission *WebAdmission, delivery drive.RunDelivery) {
-		fixture.service.RunWebEdit(admission, EditLatestMessageInput{
+	runWebReplacement(t, fixture, func(admission *web.Admission, delivery drive.RunDelivery) {
+		fixture.service.RunWebEdit(admission, web.EditLatestMessageInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,
 			TargetTurnID: driveReplacedTurnID,
@@ -423,8 +425,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 	setAllowedTeam(fixture.service, driveTeamID)
 
 	queue := &memoryQueuedInputs{}
-	fixture.service.queue = queue
-	rewireRun(fixture.service)
+	useQueue(fixture.service, queue)
 
 	ctx := context.Background()
 	payload, err := turnwire.NewQueuedInput(turn.StartTurnCommand{
@@ -454,8 +455,9 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 	}); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	if started, err := fixture.service.drainFollowUps(ctx, key); err != nil || !started {
-		t.Fatalf("drainFollowUps() = %v, %v, want a started batch", started, err)
+	// A started batch is a run that holds the session, which admission reports as busy.
+	if admission, err := fixture.service.pending.CheckAndAdmitDiscuss(ctx, key.BotID, key.SessionID); err != nil || admission != pending.DiscussBusy {
+		t.Fatalf("CheckAndAdmitDiscuss() = %v, %v, want a started batch", admission, err)
 	}
 	awaitDriveLifecycle(t, fixture)
 	return requireDriveRequests(t, recorder)
@@ -480,7 +482,7 @@ func driveResume(t *testing.T) []sdk.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	done, err := fixture.service.resumeInterruptedSession(context.Background(), sqlc.SessionRun{
+	done, err := fixture.service.resume.Resume(context.Background(), sqlc.SessionRun{
 		TeamID:    db.ParseUUIDOrEmpty(driveTeamID),
 		RunID:     db.ParseUUIDOrEmpty(driveInterruptedRunID),
 		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
@@ -576,9 +578,9 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 	}
 	call := fixture.service.decider.ToolApprovalCall(decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, sessionruntime.RunHandle{}))
 	call.Verdict, call.Result = decide.VerdictAnswered, result
-	cont := fixture.service.decidedContinuation(context.Background(), call, true)
+	cont := fixture.service.answer.DecidedContinuation(context.Background(), call, true)
 	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
-		return fixture.service.driveUnroutedContinuation(context.Background(), cont, eventCh)
+		return fixture.service.answer.DriveUnrouted(context.Background(), cont, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
 }

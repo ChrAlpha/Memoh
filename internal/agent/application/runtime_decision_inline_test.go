@@ -75,7 +75,7 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 					BotID: handle.BotID, SessionID: handle.SessionID, RunID: handle.RunID, Generation: handle.Generation,
 					TargetID: request.ID, Payload: payload, StreamOutput: true,
 				}
-				if err := service.handleRuntimeDecisionCommand(ctx, command); err != nil {
+				if err := service.answer.HandleCommand(ctx, command); err != nil {
 					t.Fatal(err)
 				}
 				page, err := backend.ReadDecisionOutput(ctx, sessionruntime.DecisionOutputRef{BotID: handle.BotID, CommandID: command.ID}, 0)

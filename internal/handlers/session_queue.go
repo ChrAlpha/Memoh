@@ -13,6 +13,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
@@ -102,8 +103,8 @@ type queueScope struct {
 	IdentityID string
 }
 
-func (s queueScope) input(invocationID, text string) application.QueueInput {
-	return application.QueueInput{
+func (s queueScope) input(invocationID, text string) pending.QueueInput {
+	return pending.QueueInput{
 		TeamID:                  s.TeamID,
 		BotID:                   s.BotID,
 		SessionID:               s.SessionID,
@@ -199,18 +200,18 @@ func decodeQueueRequest(c echo.Context) (enqueueQueueRequest, error) {
 
 // queueAdmissionCodes renders queue admission refusals in the HTTP
 // vocabulary. The values are published and do not follow the channel codes.
-var queueAdmissionCodes = map[application.QueueAdmissionFailure]apperror.Code{
-	application.QueueAdmissionSteerUnsupported:   apperror.CodeQueueSteerUnsupported,
-	application.QueueAdmissionNoActiveRun:        apperror.CodeQueueNoActiveRun,
-	application.QueueAdmissionInvocationConflict: apperror.CodeSessionInvocationConflict,
-	application.QueueAdmissionOverloaded:         apperror.CodeQueueAdmissionOverloaded,
-	application.QueueAdmissionCapacityExceeded:   apperror.CodeQueueCapacityExceeded,
-	application.QueueAdmissionInvalidReference:   apperror.CodeQueueRequestInvalid,
-	application.QueueAdmissionUnavailable:        apperror.CodeQueueAdmissionUnavailable,
+var queueAdmissionCodes = map[pending.QueueAdmissionFailure]apperror.Code{
+	pending.QueueAdmissionSteerUnsupported:   apperror.CodeQueueSteerUnsupported,
+	pending.QueueAdmissionNoActiveRun:        apperror.CodeQueueNoActiveRun,
+	pending.QueueAdmissionInvocationConflict: apperror.CodeSessionInvocationConflict,
+	pending.QueueAdmissionOverloaded:         apperror.CodeQueueAdmissionOverloaded,
+	pending.QueueAdmissionCapacityExceeded:   apperror.CodeQueueCapacityExceeded,
+	pending.QueueAdmissionInvalidReference:   apperror.CodeQueueRequestInvalid,
+	pending.QueueAdmissionUnavailable:        apperror.CodeQueueAdmissionUnavailable,
 }
 
 func queueAdmissionError(err error) error {
-	code, ok := queueAdmissionCodes[application.QueueAdmissionFailureOf(err)]
+	code, ok := queueAdmissionCodes[pending.QueueAdmissionFailureOf(err)]
 	if !ok {
 		return err
 	}

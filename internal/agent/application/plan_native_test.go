@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -91,14 +93,14 @@ func adaptContinueResume(ctx context.Context, s *Service, kind decisionKind, req
 
 // adaptApprovalContinuation builds the continuation of a committed approval
 // (toolApprovalContinuation).
-func adaptApprovalContinuation(ctx context.Context, s *Service, committed decide.CommittedToolApprovalResponse, live bool) decisionContinuation {
-	return s.toolApprovalContinuation(ctx, committed, live)
+func adaptApprovalContinuation(ctx context.Context, s *Service, committed decide.CommittedToolApprovalResponse, live bool) answer.Continuation {
+	return s.answer.ToolApprovalContinuation(ctx, committed, live)
 }
 
 // adaptUserInputContinuation builds the continuation of a committed answer
 // (userInputContinuation).
-func adaptUserInputContinuation(ctx context.Context, s *Service, committed decide.CommittedUserInputResponse, live bool) decisionContinuation {
-	return s.userInputContinuation(ctx, committed, live)
+func adaptUserInputContinuation(ctx context.Context, s *Service, committed decide.CommittedUserInputResponse, live bool) answer.Continuation {
+	return s.answer.UserInputContinuation(ctx, committed, live)
 }
 
 // adaptBindSessionManager makes the session manager the one the plan tail
@@ -263,6 +265,29 @@ func TestPlanNativeChatOffersLiveToolStreamAndUserInput(t *testing.T) {
 	cfg := capture.first(t)
 	if !cfg.LiveToolStream || !cfg.CanRequestUserInput {
 		t.Fatalf("chat LiveToolStream=%v CanRequestUserInput=%v, want both true", cfg.LiveToolStream, cfg.CanRequestUserInput)
+	}
+}
+
+// The callback's contract is that this turn's preference write-back has
+// finished, and that happens in one place while the turn is planned. A client
+// that takes a second call for a second frame would otherwise see two
+// model_preference_settled frames per turn.
+func TestPlanNativeChatSettlesTheModelPreferenceOnce(t *testing.T) {
+	t.Parallel()
+	service, _, _ := newChatPlanService(t, false)
+	var settled atomic.Int32
+	req := chatPlanRequest()
+	req.OnModelPreferenceSettled = func() { settled.Add(1) }
+	plan, err := adaptChat(context.Background(), service, req, drive.RunSpec{})
+	if err != nil {
+		t.Fatalf("chat plan error = %v", err)
+	}
+	if got := settled.Load(); got != 1 {
+		t.Fatalf("OnModelPreferenceSettled calls after planning = %d, want 1", got)
+	}
+	execute(context.Background(), plan)
+	if got := settled.Load(); got != 1 {
+		t.Fatalf("OnModelPreferenceSettled calls after the run = %d, want 1", got)
 	}
 }
 
@@ -711,7 +736,7 @@ func planApproval(status string) (toolapproval.Request, decide.ToolApprovalRespo
 	return approval, input
 }
 
-func approvalContinuation(ctx context.Context, h decisionHarness, approval toolapproval.Request, input decide.ToolApprovalResponseInput, live bool) decisionContinuation {
+func approvalContinuation(ctx context.Context, h decisionHarness, approval toolapproval.Request, input decide.ToolApprovalResponseInput, live bool) answer.Continuation {
 	committed := decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, planDecisionHandle())
 	return adaptApprovalContinuation(ctx, h.service, committed, live)
 }
@@ -726,7 +751,7 @@ func planAnswer(platform, replyTarget string) userinput.Request {
 	}
 }
 
-func userInputContinuation(ctx context.Context, h decisionHarness, answered userinput.Request, live bool) decisionContinuation {
+func userInputContinuation(ctx context.Context, h decisionHarness, answered userinput.Request, live bool) answer.Continuation {
 	input := decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	committed := decide.NewCommittedUserInput(answered, input).ForRun(agenttest.LifecycleRunID, planDecisionHandle())
 	return adaptUserInputContinuation(ctx, h.service, committed, live)
@@ -1008,7 +1033,7 @@ func TestPlanNativeUserInputContinuationStoresPlainAnswer(t *testing.T) {
 
 func TestPlanNativeContinuationRequestFieldsMatchTheCommittedRequest(t *testing.T) {
 	t.Parallel()
-	runBoth := func(t *testing.T, build func(h decisionHarness) decisionContinuation, toolName string) (decisionContinuation, drive.RunPlan) {
+	runBoth := func(t *testing.T, build func(h decisionHarness) answer.Continuation, toolName string) (answer.Continuation, drive.RunPlan) {
 		h := newDecisionHarness(t, toolName)
 		cont := build(h)
 		driver := cont.Req
@@ -1023,12 +1048,12 @@ func TestPlanNativeContinuationRequestFieldsMatchTheCommittedRequest(t *testing.
 		name    string
 		skipMem bool
 		tool    string
-		build   func(h decisionHarness) decisionContinuation
+		build   func(h decisionHarness) answer.Continuation
 	}{
-		{"user input", true, "ask_user", func(h decisionHarness) decisionContinuation {
+		{"user input", true, "ask_user", func(h decisionHarness) answer.Continuation {
 			return userInputContinuation(context.Background(), h, planAnswer("telegram", "im-chat-1"), true)
 		}},
-		{"tool approval", false, planApprovalToolName, func(h decisionHarness) decisionContinuation {
+		{"tool approval", false, planApprovalToolName, func(h decisionHarness) answer.Continuation {
 			approval, input := planApproval(toolapproval.StatusApproved)
 			return approvalContinuation(context.Background(), h, approval, input, true)
 		}},
@@ -1076,7 +1101,7 @@ func TestPlanNativeContinuationFailsBeforeAnyActionWhenTheRequestMessageIsUnread
 			unreadable := errors.New("transcript cannot name the request message")
 			h.history.err = unreadable
 
-			var cont decisionContinuation
+			var cont answer.Continuation
 			ctx := fencedContext(context.Background(), 9)
 			if kind == kindApproval {
 				approval, input := planApproval(toolapproval.StatusApproved)
@@ -1146,7 +1171,7 @@ func TestPlanNativeContinuationNormalizesAWebReplyTargetToTheBot(t *testing.T) {
 			t.Run(string(kind)+"/"+tc.name, func(t *testing.T) {
 				t.Parallel()
 				var h decisionHarness
-				var cont decisionContinuation
+				var cont answer.Continuation
 				if kind == kindApproval {
 					h = newDecisionHarness(t, planApprovalToolName)
 					approval, input := planApproval(toolapproval.StatusApproved)
@@ -1180,7 +1205,7 @@ func TestPlanNativeContinuationKeepsDriverRunIDAndResolvedWorkspaceTarget(t *tes
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
 			var h decisionHarness
-			var cont decisionContinuation
+			var cont answer.Continuation
 			if kind == kindApproval {
 				h = newDecisionHarness(t, planApprovalToolName)
 				approval, input := planApproval(toolapproval.StatusApproved)

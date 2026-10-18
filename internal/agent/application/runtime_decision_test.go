@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -59,7 +60,7 @@ func continueDecision(t *testing.T, service *Service, manager *sessionruntime.Ma
 		t.Fatalf("decision continuation context: %v", err)
 	}
 	defer cancel()
-	service.driveRoutedContinuation(runCtx, command, handle, decisionContinuation{
+	service.answer.DriveRouted(runCtx, command, handle, answer.Continuation{
 		Req:   runreq.ChatRequest{BotID: handle.BotID, ChatID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle, UserMessagePersisted: true},
 		Setup: setup,
 	})
@@ -506,9 +507,9 @@ func TestDecisionContinuationsResumeAsTheParkedTurn(t *testing.T) {
 	service := wireComponents(&Service{messageService: &continuationTurnRequestResolverService{requestMessageID: "request-message-id"}})
 	handle := sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-id"}
 	ctx := context.Background()
-	for name, cont := range map[string]decisionContinuation{
-		"tool approval": service.toolApprovalContinuation(ctx, decide.NewCommittedToolApproval(toolapproval.Request{ID: "approval", SessionID: agenttest.LifecycleSessionID}, decide.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID}, false).ForRun(handle.RunID, handle), true),
-		"user input":    service.userInputContinuation(ctx, decide.NewCommittedUserInput(userinput.Request{ID: "input", SessionID: agenttest.LifecycleSessionID}, decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID}).ForRun(handle.RunID, handle), true),
+	for name, cont := range map[string]answer.Continuation{
+		"tool approval": service.answer.ToolApprovalContinuation(ctx, decide.NewCommittedToolApproval(toolapproval.Request{ID: "approval", SessionID: agenttest.LifecycleSessionID}, decide.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID}, false).ForRun(handle.RunID, handle), true),
+		"user input":    service.answer.UserInputContinuation(ctx, decide.NewCommittedUserInput(userinput.Request{ID: "input", SessionID: agenttest.LifecycleSessionID}, decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID}).ForRun(handle.RunID, handle), true),
 	} {
 		req := cont.Req
 		if !req.UserMessagePersisted || req.PersistedUserMessageID != "request-message-id" {

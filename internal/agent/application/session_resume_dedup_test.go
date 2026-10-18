@@ -58,7 +58,7 @@ func resumeProviderRequests(t *testing.T, turnID string) []sdk.Request {
 	if turnID != "" {
 		row.TurnID = db.ParseUUIDOrEmpty(turnID)
 	}
-	done, err := fixture.service.resumeInterruptedSession(context.Background(), row)
+	done, err := fixture.service.resume.Resume(context.Background(), row)
 	if err != nil {
 		t.Fatalf("resumeInterruptedSession() error = %v", err)
 	}

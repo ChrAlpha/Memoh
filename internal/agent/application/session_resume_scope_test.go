@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -119,8 +120,9 @@ func TestResumeScopeBindingFailsClosed(t *testing.T) {
 	if _, err := runreq.BindTeamScope(ctx, testResumeScopes{broken: true}, uuid.NewString()); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("missing binding=%v", err)
 	}
-	s := wireComponents(&Service{teamScopes: testResumeScopes{}})
-	if _, err := s.resumeInterruptedSession(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
+	s := wireComponents(&Service{})
+	useTeamScopes(s, testResumeScopes{})
+	if _, err := s.resume.Resume(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("cross-team row=%v", err)
 	}
 	if err := runreq.ValidateTeamScopePage(runreq.TeamScopePage{NextCursor: "same"}, "same"); err == nil {
@@ -230,11 +232,11 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	s.logger = slog.Default()
 	s.queries = q
 	rewireComponents(s)
-	s.teamScopes = scopes
-	scan := sessionResumeScan{}
+	useTeamScopes(s, scopes)
+	scan := resume.Scan{}
 	slots := make(chan struct{}, 4)
 	for range 2 {
-		if err := s.scanInterruptedSessions(ctx, scopes, &scan, slots); err != nil {
+		if err := s.resume.ScanInterrupted(ctx, &scan, slots); err != nil {
 			t.Fatal(err)
 		}
 	}

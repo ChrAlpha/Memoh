@@ -13,6 +13,7 @@ import (
 	channelmodule "github.com/felinics/memoh/cmd/internal/channel"
 	coremodule "github.com/felinics/memoh/cmd/internal/core"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/pending"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	channelpkg "github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/adapters/weixin"
@@ -159,7 +160,7 @@ func startSessionResume(lc fx.Lifecycle, service *application.Service, manager *
 // sweep at once. Registered after the session resume so that it stops first and
 // no new run is admitted while the manager interrupts the active ones.
 func startDiscussSweep(lc fx.Lifecycle, service *application.Service) {
-	sweep := application.NewDiscussSweep(service)
+	sweep := pending.NewDiscussSweep(service.Pending())
 	lc.Append(fx.Hook{
 		OnStart: sweep.Start,
 		OnStop: func(context.Context) error {
@@ -175,7 +176,7 @@ func startDiscussSweep(lc fx.Lifecycle, service *application.Service) {
 // left in Redis. Registered with the discuss sweep, so that it stops before
 // the manager interrupts the active runs.
 func startQueueSweep(lc fx.Lifecycle, service *application.Service) {
-	sweep := application.NewQueueSweep(service)
+	sweep := pending.NewQueueSweep(service.Pending())
 	lc.Append(fx.Hook{
 		OnStart: sweep.Start,
 		OnStop: func(context.Context) error {

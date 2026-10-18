@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -52,7 +53,7 @@ func (h wsStepHistoryHarness) startProcess(t *testing.T) resumeProcess {
 	manager := h.restarted(t)
 	service, _ := newWSStepHistoryService(t, wsStepHistorySuccess, postgresstore.NewQueriesWithPool(h.pool, dbsqlc.New(h.pool)), manager)
 	useSecret(service, "history-reset-resume")
-	service.teamScopes = runreq.SingleTeam(team.DefaultTeamID)
+	useTeamScopes(service, runreq.SingleTeam(team.DefaultTeamID))
 	service.queries = resumeLedgerQueries{noDecisionQueries: service.queries.(noDecisionQueries), db: dbsqlc.New(h.pool)}
 	rewireComponents(service)
 	return resumeProcess{manager: manager, service: service}
@@ -97,8 +98,8 @@ func (h wsStepHistoryHarness) interruptedTurn(t *testing.T, p resumeProcess, tas
 func (h wsStepHistoryHarness) resumeScan(t *testing.T, p resumeProcess, runID string) bool {
 	t.Helper()
 	ctx := context.Background()
-	scan := sessionResumeScan{}
-	if err := p.service.scanInterruptedSessions(ctx, p.service.teamScopes, &scan, make(chan struct{}, 4)); err != nil {
+	scan := resume.Scan{}
+	if err := p.service.resume.ScanInterrupted(ctx, &scan, make(chan struct{}, 4)); err != nil {
 		t.Fatalf("resume scan: %v", err)
 	}
 	var resumed string

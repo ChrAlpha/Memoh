@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/pending"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -88,7 +89,7 @@ func TestR4bExternalDiscussPromptCarriesTheWholeBatch(t *testing.T) {
 	env.write(t, passiveInput{from: alice, externalID: "m2", mentionsMe: true, text: "@memoh when is the freeze?"})
 
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want the batch admitted", outcome)
 	}
 	if done != nil {
@@ -112,7 +113,7 @@ func TestR4bExternalDiscussPromptCarriesTheWholeBatch(t *testing.T) {
 	if first > second {
 		t.Fatalf("the batch reached the runtime out of order:\n%s", prompt)
 	}
-	if !strings.HasPrefix(prompt, discussPromptPrefix) || !strings.HasSuffix(strings.TrimSpace(prompt), discussPromptSuffix) {
+	if !strings.HasPrefix(prompt, pending.DiscussPromptPrefix) || !strings.HasSuffix(strings.TrimSpace(prompt), pending.DiscussPromptSuffix) {
 		t.Fatalf("prompt is not framed by the discuss contract:\n%s", prompt)
 	}
 	if !strings.Contains(prompt, "[user]") {
@@ -134,7 +135,7 @@ func TestR4bExternalDiscussBatchSurvivesAResumeRecord(t *testing.T) {
 	env.write(t, passiveInput{from: alice, externalID: "m1", text: "did anyone check the deploy?"})
 	env.write(t, passiveInput{from: alice, externalID: "m2", mentionsMe: true, text: "@memoh when is the freeze?"})
 
-	if outcome, done := proc.admit(t, env); outcome != DiscussAdmitted {
+	if outcome, done := proc.admit(t, env); outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want the batch admitted", outcome)
 	} else if done != nil {
 		waitDiscussRun(t, done)
@@ -156,7 +157,7 @@ func TestR4bExternalDiscussBatchSurvivesAResumeRecord(t *testing.T) {
 			t.Fatalf("the resume record lost batch input %q:\n%s", want, recorded)
 		}
 	}
-	if !strings.Contains(recorded, discussPromptSuffix) {
+	if !strings.Contains(recorded, pending.DiscussPromptSuffix) {
 		t.Fatalf("the resume record is not the text the run was prompted with:\n%s", recorded)
 	}
 }
@@ -173,7 +174,7 @@ func TestR4bExternalDiscussAsksForAFreshRuntime(t *testing.T) {
 	alice := env.participant(t, false)
 	env.write(t, passiveInput{from: alice, externalID: "m1", mentionsMe: true, text: "@memoh hello"})
 
-	if outcome, done := proc.admit(t, env); outcome != DiscussAdmitted {
+	if outcome, done := proc.admit(t, env); outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want the batch admitted", outcome)
 	} else if done != nil {
 		waitDiscussRun(t, done)

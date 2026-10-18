@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/activeprompt"
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/decide"
@@ -25,18 +27,22 @@ import (
 	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/plan"
+	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/schedule"
 	"github.com/felinics/memoh/internal/agent/subagent"
 	"github.com/felinics/memoh/internal/agent/title"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/transcript"
+	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -241,9 +247,7 @@ func TestNewAcceptsMissingOptionalDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if service.eventPublisher != nil ||
-		service.queue != nil ||
-		service.resumeReady != nil {
+	if service.eventPublisher != nil || service.pending.Queueing() {
 		t.Fatal("optional dependencies must stay nil when absent")
 	}
 }
@@ -454,7 +458,9 @@ func wireComponents(s *Service) *Service {
 	}
 	if s.plan == nil {
 		s.plan = planOf(s)
-		s.continuer = s.plan
+	}
+	if s.pending == nil {
+		rewireEntries(s)
 	}
 	return s
 }
@@ -605,7 +611,10 @@ func persistOf(s *Service) *persist.Writer {
 	}
 	d := persist.Deps{
 		Logger: s.logger, Messages: s.messageService, Sessions: s.sessionService, Bot: s.botenv,
-		Runtime: runtime, Events: s.eventPublisher, Rounds: s.memory, Commits: s.compact, Promoted: s.queue,
+		Runtime: runtime, Events: s.eventPublisher, Rounds: s.memory, Commits: s.compact,
+	}
+	if queue := queueOf(s); queue != nil {
+		d.Promoted = queue
 	}
 	if d.Messages == nil {
 		d.Messages = &agenttest.RecordingMessages{}
@@ -814,21 +823,153 @@ func externalOf(s *Service) *externalrun.Host {
 	return externalrun.New(d)
 }
 
-// rewirePlan rebuilds the planner, which copies the components it plans with.
-// A continuer a test installed stays; one that was the planner follows it.
+// rewirePlan rebuilds the planner, which copies the components it plans with,
+// and the entry components, which copy the planner.
 func rewirePlan(s *Service) {
-	previous := s.plan
 	s.plan = planOf(s)
-	if s.continuer == nil || s.continuer == continuer(previous) {
-		s.continuer = s.plan
-	}
+	rewireEntries(s)
 }
+
+// queues are the durable queues a test installed on a Service. They outlive a
+// rewire, which rebuilds the components from the service's fields alone.
+var queues sync.Map // *Service -> pending.Store
+
+// useQueue gives a Service built from a literal the durable queue of input.
+func useQueue(s *Service, queue pending.Store) {
+	queues.Store(s, queue)
+	rewireRun(s)
+}
+
+// queueOf is the durable queue a test installed, or nil.
+func queueOf(s *Service) pending.Store {
+	queue, _ := queues.Load(s)
+	store, _ := queue.(pending.Store)
+	return store
+}
+
+// continuers are the continuations a test installed in place of the planner.
+var continuers sync.Map // *Service -> answer.Continuer
 
 // useContinuer replaces what resumes an answered decision, so a test can see
 // the decided call and plan the resumed run itself.
-func useContinuer(s *Service, c continuer) *Service {
-	s.continuer = c
+func useContinuer(s *Service, c answer.Continuer) *Service {
+	continuers.Store(s, c)
+	s.answer = answerOf(s)
 	return s
+}
+
+// rewireEntries rebuilds the entry components, which copy what they run on.
+func rewireEntries(s *Service) {
+	s.pending = pendingOf(s)
+	s.web = webOf(s)
+	s.schedule = scheduleOf(s)
+	s.resume = resumeOf(s)
+	s.answer = answerOf(s)
+}
+
+// resumeReadiness is the workspace readiness check a test named for a service's
+// resume worker. It outlives a rewire.
+var resumeReadiness sync.Map // *Service -> resume.Ready
+
+// useResumeReadiness makes ready the check a resume runs before claiming a run.
+func useResumeReadiness(s *Service, ready resume.Ready) {
+	resumeReadiness.Store(s, ready)
+	s.resume = resumeOf(s)
+}
+
+func discardLogger(s *Service) *slog.Logger {
+	if s.logger != nil {
+		return s.logger
+	}
+	return slog.New(slog.DiscardHandler)
+}
+
+func pendingOf(s *Service) *pending.Inputs {
+	d := pending.Deps{
+		Logger: discardLogger(s), Queries: stubQueries{}, Queue: queueOf(s), Runtime: standInSteerRuntime(),
+		Turns: s, Admit: s.admit, Signer: s.signer, ActiveTurns: &s.activeTurns, Driver: s.driver, Plan: s.plan,
+		Transcript: s.transcript, Bot: s.botenv, Persist: s.persist, Messages: s.messageService, TeamScopes: s.teamScopes,
+	}
+	if s.queries != nil {
+		d.Queries = s.queries
+	}
+	if s.sessionManager != nil {
+		d.Runtime = s.sessionManager
+	}
+	if d.Messages == nil {
+		d.Messages = &agenttest.RecordingMessages{}
+	}
+	if d.TeamScopes == nil {
+		d.TeamScopes = runreq.SingleTeam("")
+	}
+	return pending.New(d)
+}
+
+func webOf(s *Service) *web.Runner {
+	d := web.Deps{
+		Runtime: s.sessionRuntime, Admit: s.admit, ActiveTurns: &s.activeTurns, Pending: s.pending, Compact: s.compact,
+		Driver: s.driver, Plan: s.plan, Messages: s.messageService, Persist: s.persist, Runconfig: s.runconfig, Bot: s.botenv,
+	}
+	if d.Runtime == nil {
+		d.Runtime = standInSteerRuntime()
+	}
+	if d.Messages == nil {
+		d.Messages = &agenttest.RecordingMessages{}
+	}
+	return web.New(d)
+}
+
+func scheduleOf(s *Service) *schedule.Runner {
+	return schedule.New(schedule.Deps{
+		Admit: s.admit, ActiveTurns: &s.activeTurns, ExternalRun: s.externalrun, Driver: s.driver, Plan: s.plan,
+	})
+}
+
+func resumeOf(s *Service) *resume.Worker {
+	d := resume.Deps{
+		Logger: discardLogger(s), Queries: stubQueries{}, Accounts: s.accountService, BotPermissions: s.botPermissions,
+		Signer: s.signer, Admit: s.admit, Decider: s.decider, Transcript: s.transcript, Driver: s.driver, Plan: s.plan,
+		TeamScopes: s.teamScopes,
+	}
+	if s.queries != nil {
+		d.Queries = s.queries
+	}
+	if d.TeamScopes == nil {
+		d.TeamScopes = runreq.SingleTeam("")
+	}
+	if d.BotPermissions == nil {
+		d.BotPermissions = &agenttest.PermissionChecker{}
+	}
+	if s.accountService == nil {
+		d.Accounts = refusedAccounts{}
+	}
+	if ready, ok := resumeReadiness.Load(s); ok {
+		d.Ready = ready.(resume.Ready)
+	}
+	return resume.New(d)
+}
+
+// refusedAccounts is the account check of a literal Service that named no
+// accounts: it lets no account act.
+type refusedAccounts struct{}
+
+func (refusedAccounts) ValidateSession(context.Context, string) error {
+	return errors.New("accounts are not configured")
+}
+
+func answerOf(s *Service) *answer.Responder {
+	var continuation answer.Continuer = s.plan
+	if installed, ok := continuers.Load(s); ok {
+		continuation = installed.(answer.Continuer)
+	}
+	runtime := standInSteerRuntime()
+	if s.decisionRuntime != nil {
+		runtime = s.decisionRuntime
+	}
+	return answer.New(answer.Deps{
+		Logger: discardLogger(s), Decider: s.decider, Runtime: runtime, Driver: s.driver, Transcript: s.transcript,
+		Continuer: continuation,
+	})
 }
 
 // continueFunc is a continuer made of a function.
@@ -935,4 +1076,10 @@ func newTestRecorder(store lifecycle.Store) *lifecycle.Recorder {
 	return lifecycle.New(lifecycle.Deps{
 		Store: store, Runs: agenttest.NoRuns{}, Decisions: agenttest.NoDecisions{}, Logger: slog.New(slog.DiscardHandler),
 	})
+}
+
+// useTeamScopes makes scopes the tenancy of a built service's entry components.
+func useTeamScopes(s *Service, scopes runreq.TeamScopes) {
+	s.teamScopes = scopes
+	rewireEntries(s)
 }

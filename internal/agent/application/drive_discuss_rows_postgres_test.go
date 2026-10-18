@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
@@ -41,7 +42,7 @@ func TestDriveDiscussRowsFromPostgres(t *testing.T) {
 	})})
 
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)

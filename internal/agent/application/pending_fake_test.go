@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"sync"
 
+	"github.com/felinics/memoh/internal/agent/pending"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
@@ -13,7 +14,7 @@ import (
 // and the order, is tested against PostgreSQL; a case that depends on it uses
 // the real queue.
 type memoryQueuedInputs struct {
-	queuedInputStore
+	pending.Store
 
 	mu       sync.Mutex
 	items    []sessionruntime.QueuedInput

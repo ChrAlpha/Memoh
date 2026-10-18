@@ -30,6 +30,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -1990,7 +1991,7 @@ func (s *Service) streamExternalWebSend(ctx context.Context, driver external.Dri
 		s.sessionRuntime = &agenttest.LifecycleAdmitter{Admission: webTestAdmission(req)}
 		rewireRun(s)
 	}
-	admission, err := s.AdmitWebRun(ctx, WebAdmitInput{
+	admission, err := s.AdmitWebRun(ctx, web.AdmitInput{
 		BotID:        req.BotID,
 		SessionID:    req.ThreadID,
 		InvocationID: "web-invocation",
@@ -2004,7 +2005,7 @@ func (s *Service) streamExternalWebSend(ctx context.Context, driver external.Dri
 	go func() {
 		select {
 		case <-abortCh:
-			admission.stop(outcome.ErrRunStopped)
+			admission.Stop(outcome.ErrRunStopped)
 		case <-runEnded:
 		}
 	}()

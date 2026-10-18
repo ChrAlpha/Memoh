@@ -18,9 +18,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/pending"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
+	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -65,8 +67,7 @@ func newQueueProcess(t *testing.T, env queueEnv, steps ...*discussStep) *discuss
 	proc := newDiscussProcess(t, env.discussEnv, steps...)
 	proc.svc.sessionService = chatSessionService(env.botID)
 	rewireComponents(proc.svc)
-	proc.svc.queue = env.store
-	rewireRun(proc.svc)
+	useQueue(proc.svc, env.store)
 	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	return proc
 }
@@ -102,7 +103,7 @@ func startHeldRun(t *testing.T, proc *discussProcess, env queueEnv, step *discus
 	cmd := env.turnCommand("first-"+env.sessionID, "the first question")
 	handle, err := proc.svc.StartTurn(context.Background(), cmd)
 	require.NoError(t, err)
-	go drainDeferredTurn(handle)
+	go drainRun(handle)
 	waitReached(t, step)
 	var once sync.Once
 	return func() { once.Do(func() { close(step.gate) }) }
@@ -175,8 +176,8 @@ func (e queueEnv) waitState(t *testing.T, invocation, want string) {
 	}
 }
 
-func (e queueEnv) input(invocation, text string) QueueInput {
-	return QueueInput{
+func (e queueEnv) input(invocation, text string) pending.QueueInput {
+	return pending.QueueInput{
 		TeamID: team.DefaultTeamID, BotID: e.botID, SessionID: e.sessionID, InvocationID: invocation,
 		UserID: "", SourceChannelIdentityID: "", Text: text,
 	}
@@ -407,7 +408,7 @@ func TestPrecedingRowsOfABatchAreWrittenOnce(t *testing.T) {
 	require.Len(t, batch.Items, 2)
 	var inputs []turnwire.QueuedInput
 	for _, item := range batch.Items {
-		input, err := queuedInput(item)
+		input, err := pending.RestoreInput(item)
 		require.NoError(t, err)
 		input.ItemID = item.ID
 		inputs = append(inputs, input)
@@ -418,8 +419,8 @@ func TestPrecedingRowsOfABatchAreWrittenOnce(t *testing.T) {
 	require.Equal(t, first.ID, merged.Command.Preceding[0].ID)
 
 	// The batch's drainer wrote the rows and died before it admitted the run.
-	require.NoError(t, proc.svc.persistPrecedingMessages(ctx, merged.Command))
-	require.NoError(t, proc.svc.persistPrecedingMessages(ctx, merged.Command))
+	require.NoError(t, proc.svc.pending.PersistPreceding(ctx, merged.Command))
+	require.NoError(t, proc.svc.pending.PersistPreceding(ctx, merged.Command))
 	var rows int
 	require.NoError(t, env.pool.QueryRow(ctx, `
 		SELECT count(*) FROM bot_history_messages WHERE session_id = $1 AND source_message_id = 'm1'
@@ -493,7 +494,7 @@ func TestQueuedBatchReadsLikeTheSameMessagesRecordedAsTheyCame(t *testing.T) {
 		passive.writeHeaded(t, passiveAlice, in.id, in.text, in.reply, in.mention, time.Unix(in.at, 0).UTC(), in.attachments)
 	}
 	outcome, done := passiveProc.admit(t, passive)
-	require.Equal(t, DiscussAdmitted, outcome)
+	require.Equal(t, pending.DiscussAdmitted, outcome)
 	waitDiscussRun(t, done)
 	recorded := passiveProc.provider.recorded()
 	require.Len(t, recorded, 1)
@@ -543,7 +544,7 @@ func TestAnIncomingTurnWaitsBehindQueuedInputAndRepeatsAreRecognized(t *testing.
 	_, err = proc.svc.StartTurn(ctx, env.turnCommand("queued-msg", "was here first"))
 	require.ErrorIs(t, err, turn.ErrDuplicateTurn, "the message is already in the queue")
 
-	started, err := proc.svc.drainFollowUps(ctx, env.key())
+	started, err := drainFollowUps(ctx, proc, env.key())
 	require.NoError(t, err)
 	require.True(t, started)
 	env.waitQueuedRuns(t, 1)
@@ -553,7 +554,7 @@ func TestAnIncomingTurnWaitsBehindQueuedInputAndRepeatsAreRecognized(t *testing.
 	require.ErrorIs(t, err, turn.ErrDuplicateTurn, "the message was taken, and answered once")
 	handle, err := proc.svc.StartTurn(ctx, env.turnCommand("late-msg", "now the queue is empty"))
 	require.NoError(t, err, "with the queue empty the turn runs at once")
-	go drainDeferredTurn(handle)
+	go drainRun(handle)
 }
 
 // An enqueue that saw a run in flight can land after the run ended, and then
@@ -593,7 +594,7 @@ func TestTwoServersDrainingTheSameQueueStartOneRun(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := proc.svc.admitPending(context.Background(), env.botID, env.sessionID)
+			_, err := proc.svc.pending.CheckAndAdmitDiscuss(context.Background(), env.botID, env.sessionID)
 			if err != nil {
 				t.Error(err)
 			}
@@ -608,7 +609,7 @@ func TestTwoServersDrainingTheSameQueueStartOneRun(t *testing.T) {
 
 // settleFailing is a queue whose drainer dies right after admitting the run.
 type settleFailing struct {
-	queuedInputStore
+	pending.Store
 	fail func() bool
 }
 
@@ -616,7 +617,7 @@ func (s *settleFailing) SettleBatch(ctx context.Context, batch sessionruntime.Qu
 	if s.fail() {
 		return errors.New("the process died before it settled the batch")
 	}
-	return s.queuedInputStore.SettleBatch(ctx, batch)
+	return s.Store.SettleBatch(ctx, batch)
 }
 
 // A drainer that dies after admitting the run and before recording it leaves
@@ -629,11 +630,10 @@ func TestBatchWhoseDrainerDiedAfterAdmissionIsSettledAndNotRunTwice(t *testing.T
 	short := sessionruntime.NewQueuedInputs(dbsqlc.New(env.pool), env.pool, sessionruntime.WithQueueClaimLease(300*time.Millisecond))
 	var dead sync.Mutex
 	crashed := true
-	proc.svc.queue = &settleFailing{queuedInputStore: short, fail: func() bool { dead.Lock(); defer dead.Unlock(); return crashed }}
-	rewireRun(proc.svc)
+	useQueue(proc.svc, &settleFailing{Store: short, fail: func() bool { dead.Lock(); defer dead.Unlock(); return crashed }})
 	env.park(t, "m1", "alice", "answered once")
 
-	_, err := proc.svc.admitPending(context.Background(), env.botID, env.sessionID)
+	_, err := proc.svc.pending.CheckAndAdmitDiscuss(context.Background(), env.botID, env.sessionID)
 	require.NoError(t, err)
 	env.waitQueuedRuns(t, 1)
 	require.Equal(t, "claimed", env.stateOf(t, "m1"), "the run exists and the batch was never settled")
@@ -642,7 +642,7 @@ func TestBatchWhoseDrainerDiedAfterAdmissionIsSettledAndNotRunTwice(t *testing.T
 	dead.Lock()
 	crashed = false
 	dead.Unlock()
-	_, err = proc.svc.admitPending(context.Background(), env.botID, env.sessionID)
+	_, err = proc.svc.pending.CheckAndAdmitDiscuss(context.Background(), env.botID, env.sessionID)
 	require.NoError(t, err)
 	env.waitState(t, "m1", "consumed")
 	time.Sleep(200 * time.Millisecond)
@@ -656,18 +656,17 @@ func TestBatchWhoseDrainerDiedBeforeAdmissionIsStartedByTheNextClaim(t *testing.
 	env := newQueueEnv(t)
 	short := sessionruntime.NewQueuedInputs(dbsqlc.New(env.pool), env.pool, sessionruntime.WithQueueClaimLease(300*time.Millisecond))
 	proc := newQueueProcess(t, env, &discussStep{text: "answered"})
-	proc.svc.queue = short
-	rewireRun(proc.svc)
+	useQueue(proc.svc, short)
 	env.park(t, "m1", "alice", "claimed by a process that died")
 	_, ok, err := short.ClaimBatch(context.Background(), env.key(), sessionruntime.QueueOriginFollowUp)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	started, err := proc.svc.drainFollowUps(context.Background(), env.key())
+	started, err := drainFollowUps(context.Background(), proc, env.key())
 	require.NoError(t, err)
 	require.False(t, started, "a live claim is another drainer's")
 	time.Sleep(400 * time.Millisecond)
-	started, err = proc.svc.drainFollowUps(context.Background(), env.key())
+	started, err = drainFollowUps(context.Background(), proc, env.key())
 	require.NoError(t, err)
 	require.True(t, started)
 	env.waitQueuedRuns(t, 1)
@@ -695,7 +694,7 @@ func TestUnstartableInputIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
 	require.NoError(t, err)
 	env.park(t, "fine", "", "this one starts")
 
-	started, err := proc.svc.drainFollowUps(ctx, env.key())
+	started, err := drainFollowUps(ctx, proc, env.key())
 	require.NoError(t, err)
 	require.True(t, started, "the drain moves past what it cannot start")
 	env.waitQueuedRuns(t, 1)
@@ -705,36 +704,6 @@ func TestUnstartableInputIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
 	var code string
 	require.NoError(t, env.pool.QueryRow(ctx, `SELECT error_code FROM session_queued_inputs WHERE session_id = $1 AND invocation_id = 'legacy'`, env.sessionID).Scan(&code))
 	require.Equal(t, sessionruntime.QueueErrorFollowUpCommandInvalid, code)
-}
-
-// A turn that was queued is started with credentials signed when it starts,
-// from the identities stored with it.
-func TestQueuedTurnIsSignedWhenItStartsNotWhenItWasQueued(t *testing.T) {
-	ctx := context.Background()
-	env := newQueueEnv(t)
-	proc := newQueueProcess(t, env)
-	useSecret(proc.svc, "queue-test-secret")
-	cmd := env.turnCommand("m1", "hello")
-	payload := queuedPayload(t, cmd, time.Now())
-	stored := turnwire.ParseQueuedInput(payload)
-	require.Empty(t, stored.Command.Token)
-	require.Empty(t, stored.Command.ChatToken)
-	require.NotContains(t, string(payload), "queue-test-secret")
-
-	var started turn.StartTurnCommand
-	merged, err := turnwire.MergeQueued([]turnwire.QueuedInput{stored})
-	require.NoError(t, err)
-	started = merged.Command
-	proc.svc.signQueuedCommand(ctx, &started, merged.Claims)
-	require.NotEmpty(t, started.ChatToken, "a turn that answers somewhere gets a chat token")
-	require.NotEmpty(t, started.Token)
-
-	unsigned := merged.Command
-	proc.svc.signQueuedCommand(ctx, &unsigned, nil)
-	require.Empty(t, unsigned.ChatToken, "a text typed into the queue panel never had credentials")
-	unbound := merged.Command
-	proc.svc.signQueuedCommand(ctx, &unbound, &auth.RouteCredentials{BotID: cmd.BotID, ChatID: cmd.ChatID, ReplyTarget: cmd.ReplyTarget})
-	require.Empty(t, unbound.ChatToken, "a sender no account is bound to starts without, as an inbound turn does")
 }
 
 // steerBackend is a live backend whose session has a run in flight that takes
@@ -776,7 +745,7 @@ func (steerWriteFails) EnqueueSteer(context.Context, sessionruntime.Key, string,
 
 // completeFails is a queue that cannot record a promotion, as when the
 // database refuses the write.
-type completeFails struct{ queuedInputStore }
+type completeFails struct{ pending.Store }
 
 func (completeFails) CompletePromotion(context.Context, string, string) error {
 	return errors.New("the database refused the write")
@@ -863,8 +832,7 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		backend, _ := steerBackend(t, env)
 		manager := useLiveBackend(t, proc, backend)
 		item := env.parked(t, "b")
-		proc.svc.queue = completeFails{env.store}
-		rewireRun(proc.svc)
+		useQueue(proc.svc, completeFails{env.store})
 		result, err := proc.svc.PromoteFollowUpToSteer(context.Background(), env.botID, env.sessionID, item)
 		require.NoError(t, err, "the steer exists, so the input was promoted")
 		require.NotEmpty(t, result.Steer.ID)
@@ -873,9 +841,8 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, steers, 1)
 
-		proc.svc.queue = env.store
-		rewireRun(proc.svc)
-		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(promotionGrace+time.Minute))
+		useQueue(proc.svc, env.store)
+		proc.svc.pending.ReconcileStalePromotions(context.Background(), time.Now().Add(pending.PromotionGrace+time.Minute))
 		require.Equal(t, "promoted", env.stateOf(t, "b"))
 		steers, err = manager.PendingSteers(context.Background(), steerKey(env), 0)
 		require.NoError(t, err)
@@ -892,9 +859,9 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "promoting", env.stateOf(t, "c"))
 
-		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(time.Minute))
+		proc.svc.pending.ReconcileStalePromotions(context.Background(), time.Now().Add(time.Minute))
 		require.Equal(t, "promoting", env.stateOf(t, "c"), "a promotion that is not old is still being made")
-		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(promotionGrace+time.Minute))
+		proc.svc.pending.ReconcileStalePromotions(context.Background(), time.Now().Add(pending.PromotionGrace+time.Minute))
 		require.Equal(t, "queued", env.stateOf(t, "c"))
 		steers, err := manager.PendingSteers(context.Background(), steerKey(env), 0)
 		require.NoError(t, err)
@@ -912,7 +879,7 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		_, err = manager.EnqueueSteer(context.Background(), env.key(), string(item.ItemID), "promote:"+string(item.ItemID), []byte(`{"text":"promote d"}`))
 		require.NoError(t, err)
 
-		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(promotionGrace+time.Minute))
+		proc.svc.pending.ReconcileStalePromotions(context.Background(), time.Now().Add(pending.PromotionGrace+time.Minute))
 		require.Equal(t, "promoted", env.stateOf(t, "d"))
 		require.Empty(t, mustPending(t, proc, env), "the input is in the steer queue only")
 	})
@@ -931,7 +898,7 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		require.NoError(t, manager.ApplySteer(context.Background(), env.key(), claim))
 		require.Equal(t, "promoted", env.stateOf(t, "e"), "the database was not told")
 
-		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(promotionGrace+time.Minute))
+		proc.svc.pending.ReconcileStalePromotions(context.Background(), time.Now().Add(pending.PromotionGrace+time.Minute))
 		require.Equal(t, "consumed", env.stateOf(t, "e"))
 	})
 
@@ -948,11 +915,11 @@ func TestPromotionFailuresLeaveTheInputDeliverableOnce(t *testing.T) {
 		// Redis flushed.
 		lost.forget.Store(true)
 
-		proc.svc.reconcileStalePromotions(context.Background(), time.Now().Add(promotionGrace+time.Minute))
+		proc.svc.pending.ReconcileStalePromotions(context.Background(), time.Now().Add(pending.PromotionGrace+time.Minute))
 		require.Equal(t, "queued", env.stateOf(t, "f"))
 		proc.svc.sessionManager = proc.manager
 		rewireRun(proc.svc)
-		started, err := proc.svc.drainFollowUps(context.Background(), env.key())
+		started, err := drainFollowUps(context.Background(), proc, env.key())
 		require.NoError(t, err)
 		require.True(t, started)
 		env.waitState(t, "f", "consumed")
@@ -990,11 +957,11 @@ func TestQueueAndDiscussAreAdmittedInTurnsQueueFirst(t *testing.T) {
 	env := newDiscussEnv(t, "group")
 	alice := env.participant(t, false)
 	proc := newDiscussProcess(t, env, &discussStep{text: "answer to the queued input"}, &discussStep{send: "answer to the group"})
-	proc.svc.queue = sessionruntime.NewQueuedInputs(dbsqlc.New(env.pool), env.pool)
-	rewireRun(proc.svc)
+	queueStore := sessionruntime.NewQueuedInputs(dbsqlc.New(env.pool), env.pool)
+	useQueue(proc.svc, queueStore)
 	setAllowedTeam(proc.svc, team.DefaultTeamID)
 	hw := env.write(t, passiveInput{from: alice, externalID: "g1", text: "someone in the group said this"})
-	queued := queueEnv{discussEnv: env, store: proc.svc.queue.(*sessionruntime.QueuedInputs)}
+	queued := queueEnv{discussEnv: env, store: queueStore}
 	queued.park(t, "q1", "", "a follow-up typed in the panel")
 
 	var wg sync.WaitGroup
@@ -1004,7 +971,7 @@ func TestQueueAndDiscussAreAdmittedInTurnsQueueFirst(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			if _, err := proc.svc.CheckAndAdmitDiscuss(context.Background(), env.botID, env.sessionID); err != nil {
+			if _, err := proc.svc.pending.CheckAndAdmitDiscuss(context.Background(), env.botID, env.sessionID); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -1032,13 +999,13 @@ func TestQueueSweepStartsWhatNothingStartedAndPurgesWhatIsOld(t *testing.T) {
 	ctx := context.Background()
 	env.park(t, "m1", "alice", "nobody kicked the drain")
 
-	proc.svc.sweepQueueScope(ctx, team.DefaultTeamID, time.Now())
+	proc.svc.pending.SweepQueueScope(ctx, team.DefaultTeamID, time.Now())
 	env.waitQueuedRuns(t, 1)
 	env.waitState(t, "m1", "consumed")
 
-	proc.svc.sweepQueueScope(ctx, team.DefaultTeamID, time.Now())
+	proc.svc.pending.SweepQueueScope(ctx, team.DefaultTeamID, time.Now())
 	require.Equal(t, "consumed", env.stateOf(t, "m1"), "a recent input is kept, so a redelivery is recognized")
-	proc.svc.sweepQueueScope(ctx, team.DefaultTeamID, time.Now().Add(queueSettledRetention+time.Hour))
+	proc.svc.pending.SweepQueueScope(ctx, team.DefaultTeamID, time.Now().Add(pending.QueueSettledRetention+time.Hour))
 	var rows int
 	require.NoError(t, env.pool.QueryRow(ctx, `SELECT count(*) FROM session_queued_inputs WHERE session_id = $1`, env.sessionID).Scan(&rows))
 	require.Zero(t, rows)
@@ -1048,15 +1015,15 @@ func TestQueueSweepRunsAtStartAndOnEveryTick(t *testing.T) {
 	env := newQueueEnv(t)
 	proc := newQueueProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a", "scope-b"}}
-	proc.svc.teamScopes = scopes
-	sweep := NewQueueSweep(proc.svc)
+	useTeamScopes(proc.svc, scopes)
+	sweep := pending.NewQueueSweep(proc.svc.pending)
 
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sweep.run(ctx, ticks, time.Now)
+		sweep.Run(ctx, ticks, time.Now)
 	}()
 	waitSweeps := func(want int) {
 		t.Helper()
@@ -1081,7 +1048,7 @@ func TestQueueSweepRunsAtStartAndOnEveryTick(t *testing.T) {
 
 // claimProbe counts the callers inside the claim at once.
 type claimProbe struct {
-	queuedInputStore
+	pending.Store
 	inflight, peak atomic.Int32
 }
 
@@ -1094,7 +1061,7 @@ func (p *claimProbe) ClaimBatch(ctx context.Context, key sessionruntime.Key, ori
 		}
 	}
 	time.Sleep(20 * time.Millisecond)
-	return p.queuedInputStore.ClaimBatch(ctx, key, origin)
+	return p.Store.ClaimBatch(ctx, key, origin)
 }
 
 // Whoever asks what waits on a session, the terminal observer, an enqueue, the
@@ -1103,9 +1070,8 @@ func (p *claimProbe) ClaimBatch(ctx context.Context, key sessionruntime.Key, ori
 func TestPendingAdmissionOfOneSessionTakesOneCallerAtATime(t *testing.T) {
 	env := newQueueEnv(t)
 	proc := newQueueProcess(t, env)
-	probe := &claimProbe{queuedInputStore: env.store}
-	proc.svc.queue = probe
-	rewireRun(proc.svc)
+	probe := &claimProbe{Store: env.store}
+	useQueue(proc.svc, probe)
 
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -1114,7 +1080,7 @@ func TestPendingAdmissionOfOneSessionTakesOneCallerAtATime(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			if _, err := proc.svc.admitPending(context.Background(), env.botID, env.sessionID); err != nil {
+			if _, err := proc.svc.pending.CheckAndAdmitDiscuss(context.Background(), env.botID, env.sessionID); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -1131,7 +1097,7 @@ func TestPendingAdmissionOfOneSessionTakesOneCallerAtATime(t *testing.T) {
 		both.Add(1)
 		go func() {
 			defer both.Done()
-			if _, err := proc.svc.admitPending(context.Background(), e.botID, e.sessionID); err != nil {
+			if _, err := proc.svc.pending.CheckAndAdmitDiscuss(context.Background(), e.botID, e.sessionID); err != nil {
 				t.Error(err)
 			}
 		}()
@@ -1240,8 +1206,8 @@ func (e queueEnv) webQueueTurn(text string) func(context.Context) (turn.StartTur
 	}
 }
 
-func (e queueEnv) webSend(invocation, text string) WebAdmitInput {
-	return WebAdmitInput{
+func (e queueEnv) webSend(invocation, text string) web.AdmitInput {
+	return web.AdmitInput{
 		BotID: e.botID, SessionID: e.sessionID, InvocationID: invocation,
 		Payload: []byte(`{"kind":"message","text":` + strconvQuote(text) + `}`),
 		Admission: func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
@@ -1337,4 +1303,30 @@ func TestWebSendOnAFullQueueIsRefusedWithTheQueueFullCode(t *testing.T) {
 
 	_, err := proc.svc.AdmitWebRun(context.Background(), env.webSend("web-4", "one too many"))
 	require.Equal(t, apperror.CodeSessionQueueFull, apperror.CodeOf(err))
+}
+
+// drainRun consumes a started run's channels, as the queue's own start does for
+// the runs it admits, so a run a test starts is not held up by its delivery.
+func drainRun(handle turn.RunHandle) {
+	events, errs := handle.Events(), handle.Errs()
+	for events != nil || errs != nil {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		}
+	}
+}
+
+// drainFollowUps asks what waits on the session, as the end of a run does, and
+// reports whether that started a queued batch: a started batch is a run that
+// holds the session, which admission reports as busy.
+func drainFollowUps(ctx context.Context, proc *discussProcess, key sessionruntime.Key) (bool, error) {
+	admission, err := proc.svc.pending.CheckAndAdmitDiscuss(ctx, key.BotID, key.SessionID)
+	return admission == pending.DiscussBusy, err
 }

@@ -10,12 +10,14 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/drivetest"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/errs"
@@ -78,7 +80,7 @@ func TestDriveDecisionContinuationSetupFailureLeavesAFailureRow(t *testing.T) {
 	messages := &agenttest.RecordingMessages{}
 	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})
 
-	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
+	err := service.answer.DriveUnrouted(context.Background(), answer.Continuation{
 		Req: continuationRequest(),
 		Setup: func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 			return drive.RunPlan{}, errors.New("SECRET tool result store unavailable")
@@ -102,7 +104,7 @@ func TestDriveDecisionContinuationTargetGoneWritesNothing(t *testing.T) {
 	messages := &agenttest.RecordingMessages{}
 	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler), messageService: messages})
 
-	err := service.driveUnroutedContinuation(context.Background(), decisionContinuation{
+	err := service.answer.DriveUnrouted(context.Background(), answer.Continuation{
 		Req: continuationRequest(),
 		Setup: func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 			return drive.RunPlan{}, sessionruntime.ErrCommandTargetNotActive
@@ -137,7 +139,7 @@ func TestDriveDecisionContinuationCallerLeavingIsAStop(t *testing.T) {
 	})
 	service := wireComponents(&Service{logger: slog.New(slog.DiscardHandler)})
 
-	err := service.driveUnroutedContinuation(ctx, decisionContinuation{
+	err := service.answer.DriveUnrouted(ctx, answer.Continuation{
 		Req: continuationRequest(),
 		Setup: func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
 			return drive.RunPlan{Exec: exec}, nil
@@ -173,16 +175,16 @@ var (
 // webEntrySpecs builds one spec per Web entry through the constructor the
 // entry itself uses, so the input ownership and the replacement under test are
 // the entry's own.
-func webEntrySpecs(svc *Service, admission *WebAdmission, delivery drive.RunDelivery) map[string]drive.RunSpec {
+func webEntrySpecs(svc *Service, admission *web.Admission, delivery drive.RunDelivery) map[string]drive.RunSpec {
 	return map[string]drive.RunSpec{
-		"send": svc.webRunSpec(admission, runreq.ChatRequest{
+		"send": web.RunSpec(admission, runreq.ChatRequest{
 			BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",
 			Query: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
 		}, delivery, outcome.InputHeld),
-		"retry": svc.retryRunSpec(admission, RetryLatestMessageInput{
+		"retry": svc.web.RetrySpec(admission, web.RetryLatestMessageInput{
 			BotID: "bot-1", SessionID: "session-1", TargetTurnID: "old-turn",
 		}, delivery),
-		"edit": svc.editRunSpec(admission, EditLatestMessageInput{
+		"edit": svc.web.EditSpec(admission, web.EditLatestMessageInput{
 			BotID: "bot-1", SessionID: "session-1", TargetTurnID: "old-turn", Text: "edited",
 		}, delivery),
 	}
@@ -219,7 +221,7 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 			svc := newDriveService(&agenttest.EventRecorder{}, &agenttest.ScriptedAdmitter{Started: true})
 			svc.messageService = messages
 			rewireComponents(svc)
-			admission, err := svc.AdmitWebRun(context.Background(), WebAdmitInput{
+			admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
 				BotID: "bot-1", SessionID: "session-1", InvocationID: name,
 				Payload: []byte(`{"kind":"` + tc.entry + `"}`),
 			})
@@ -245,9 +247,9 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 				return drive.RunPlan{Exec: exec, Req: req}, nil
 			}
 
-			result := svc.driver.Drive(admission.ctx, spec)
-			admission.stop(outcome.ErrRunStopped)
-			admission.endActive()
+			result := svc.driver.Drive(admission.Context(), spec)
+			admission.Stop(outcome.ErrRunStopped)
+			admission.Release()
 
 			if result.End != outcome.EndFailed || result.Failure == nil || result.Failure.Code != tc.code {
 				t.Fatalf("result = %#v, want failed %s", result, tc.code)

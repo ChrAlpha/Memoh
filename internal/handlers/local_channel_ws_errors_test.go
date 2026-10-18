@@ -17,6 +17,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/application"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/errs"
 	skillset "github.com/felinics/memoh/internal/skills"
@@ -212,6 +213,14 @@ func TestPermissionQuickActionFailureIsRecordedOnceByTheRequest(t *testing.T) {
 	assertWSCommandFailure(t, handler, &logs, err, string(apperror.CodeRuntimeControlFailed), "SECRET session store unreachable")
 }
 
+// unresolvableTurnMessages answers every message-to-turn lookup with a store
+// failure.
+type unresolvableTurnMessages struct{ stubAgentMessages }
+
+func (unresolvableTurnMessages) GetVisibleTurnByMessage(context.Context, string, string) (messagepkg.HistoryTurn, error) {
+	return messagepkg.HistoryTurn{}, errors.New("SECRET message lookup failed")
+}
+
 // A deprecated message_id that does not resolve is refused as not found. The
 // lookup error is the 404's internal error, so the request's one result record
 // carries it and the frame does not.
@@ -219,7 +228,8 @@ func TestResolveWSTargetTurnIDFailureReachesTheResultRecord(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	handler := &LocalChannelHandler{logger: logger, agentService: &application.Service{}}
+	agentService := newTestAgentService(t, application.Deps{Messages: unresolvableTurnMessages{}})
+	handler := &LocalChannelHandler{logger: logger, agentService: agentService}
 
 	_, err := handler.resolveWSTargetTurnID(context.Background(), "session-1", "", "message-1")
 	if err == nil {
@@ -231,7 +241,7 @@ func TestResolveWSTargetTurnIDFailureReachesTheResultRecord(t *testing.T) {
 	if frame["code"] != string(apperror.CodeSessionTurnNotFound) {
 		t.Fatalf("frame = %#v, want session_runtime.turn_not_found", frame)
 	}
-	if encoded, _ := json.Marshal(frame); strings.Contains(string(encoded), "message service") {
+	if encoded, _ := json.Marshal(frame); strings.Contains(string(encoded), "SECRET") {
 		t.Fatalf("frame carries the cause: %s", encoded)
 	}
 	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
@@ -245,7 +255,7 @@ func TestResolveWSTargetTurnIDFailureReachesTheResultRecord(t *testing.T) {
 	if record["msg"] != "ws request" || record["fault"] != "client" {
 		t.Fatalf("record = %v, want a client ws request record", record)
 	}
-	if got, _ := record["error"].(string); !strings.Contains(got, "message service not configured") {
+	if got, _ := record["error"].(string); !strings.Contains(got, "SECRET message lookup failed") {
 		t.Fatalf("record error = %#v, want the lookup cause", record["error"])
 	}
 }

@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
-	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
@@ -32,13 +30,13 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 		return nil, fmt.Errorf("%w: %s", turn.ErrTeamNotServed, cmd.TeamID)
 	}
 
-	if err := s.admitAfterQueue(ctx, cmd); err != nil {
+	if err := s.pending.GateTurn(ctx, cmd); err != nil {
 		return nil, err
 	}
 	// The earlier messages of a queued batch are rows of their own, written
 	// ahead of the run's turn. A failure here leaves no run behind, so the batch
 	// is started again as it was.
-	if err := s.persistPrecedingMessages(ctx, cmd); err != nil {
+	if err := s.pending.PersistPreceding(ctx, cmd); err != nil {
 		return nil, err
 	}
 
@@ -101,44 +99,22 @@ func (s *Service) StartTurn(ctx context.Context, cmd turn.StartTurnCommand) (tur
 	return handle, nil
 }
 
-// admitAfterQueue is the session queue's gate on a new turn. A turn whose
-// message the queue already holds or has taken was delivered before, and is
-// answered like any redelivery. A turn that would pass input queued ahead of
-// it is busy: the input waits its turn in the queue, in order. The queue's own
-// admission is the one command that neither waits nor is counted.
-func (s *Service) admitAfterQueue(ctx context.Context, cmd turn.StartTurnCommand) error {
-	if cmd.NoDefer || s.queue == nil || strings.TrimSpace(cmd.ThreadID) == "" {
-		return nil
-	}
-	gate, err := s.queue.Gate(ctx, sessionruntime.Key{BotID: cmd.BotID, SessionID: cmd.ThreadID}, cmd.IdempotencyKey)
-	if err != nil {
-		return fmt.Errorf("check session queue: %w", err)
-	}
-	switch {
-	case gate.Seen:
-		return fmt.Errorf("%w: %s", turn.ErrDuplicateTurn, cmd.IdempotencyKey)
-	case gate.Waiting:
-		return fmt.Errorf("%w: thread %s has queued input", turn.ErrSessionBusy, cmd.ThreadID)
-	}
-	return nil
-}
-
 // RespondToolApproval resumes a turn deferred on tool approval.
 func (s *Service) RespondToolApproval(ctx context.Context, input turn.ToolApprovalResponse, eventCh chan<- json.RawMessage) error {
 	converted := toolApprovalInputFromResponse(input)
-	if handled, err := s.routeToolApprovalResponse(ctx, converted, eventCh); handled || err != nil {
+	if handled, err := s.answer.RouteToolApproval(ctx, converted, eventCh); handled || err != nil {
 		return err
 	}
-	return s.respondToolApproval(ctx, converted, eventCh)
+	return s.answer.RespondToolApproval(ctx, converted, eventCh)
 }
 
 // RespondUserInput resumes a turn deferred on ask_user.
 func (s *Service) RespondUserInput(ctx context.Context, input turn.UserInputResponse, eventCh chan<- json.RawMessage) error {
 	converted := userInputInputFromResponse(input)
-	if handled, err := s.routeUserInputResponse(ctx, converted, eventCh); handled || err != nil {
+	if handled, err := s.answer.RouteUserInput(ctx, converted, eventCh); handled || err != nil {
 		return err
 	}
-	return s.respondUserInput(ctx, converted, eventCh)
+	return s.answer.RespondUserInput(ctx, converted, eventCh)
 }
 
 // StopTurn routes cancellation to the durable owner even after the channel

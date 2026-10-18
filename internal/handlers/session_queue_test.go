@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
@@ -158,7 +159,7 @@ func TestQueueAdmissionErrorKeepsPublishedCodes(t *testing.T) {
 		{sessionruntime.ErrQueueAdmissionOverloaded, apperror.CodeQueueAdmissionOverloaded},
 		{sessionruntime.ErrQueueCapacityExceeded, apperror.CodeQueueCapacityExceeded},
 		{sessionruntime.ErrQueueInvalidReference, apperror.CodeQueueRequestInvalid},
-		{application.ErrQueueInputIncomplete, apperror.CodeQueueAdmissionUnavailable},
+		{pending.ErrQueueInputIncomplete, apperror.CodeQueueAdmissionUnavailable},
 	}
 	for _, tc := range cases {
 		if got := apperror.CodeOf(queueAdmissionError(tc.err)); got != tc.want {

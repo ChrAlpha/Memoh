@@ -7,24 +7,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/team"
 )
 
 // newSweep is a sweep over the process's own service, with the singleton
 // scope the self-hosted deployment has.
-func newSweep(proc *discussProcess) *DiscussSweep {
+func newSweep(proc *discussProcess) *pending.DiscussSweep {
 	setAllowedTeam(proc.svc, team.DefaultTeamID)
-	return NewDiscussSweep(proc.svc)
+	return pending.NewDiscussSweep(proc.svc.pending)
 }
 
 // The sweep runs every minute and looks half an hour back.
 func TestDiscussSweepConstants(t *testing.T) {
-	if discussSweepInterval != time.Minute {
-		t.Fatalf("discussSweepInterval = %v, want 1m", discussSweepInterval)
+	if pending.DiscussSweepInterval != time.Minute {
+		t.Fatalf("pending.DiscussSweepInterval = %v, want 1m", pending.DiscussSweepInterval)
 	}
-	if discussSweepWindow <= discussSweepInterval {
-		t.Fatalf("discussSweepWindow = %v, want longer than the interval", discussSweepWindow)
+	if pending.DiscussSweepWindow <= pending.DiscussSweepInterval {
+		t.Fatalf("pending.DiscussSweepWindow = %v, want longer than the interval", pending.DiscussSweepWindow)
 	}
 }
 
@@ -40,13 +41,13 @@ func TestDiscussSweepAnswersInputWithinOneInterval(t *testing.T) {
 	sweep := newSweep(proc)
 	ctx := context.Background()
 
-	sweep.sweep(ctx, time.Now())
+	sweep.Sweep(ctx, time.Now())
 	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "nobody woke the server for this"})
 	if got := len(env.runs(t)); got != 0 {
 		t.Fatalf("runs before the sweep = %d, want 0", got)
 	}
 
-	sweep.sweep(ctx, time.Now())
+	sweep.Sweep(ctx, time.Now())
 	env.waitRunState(t, env.invocation(hw), "completed")
 	if got := env.cover(t); got != hw {
 		t.Fatalf("cover = %d, want %d", got, hw)
@@ -56,8 +57,8 @@ func TestDiscussSweepAnswersInputWithinOneInterval(t *testing.T) {
 	}
 
 	// Later sweeps find the input answered and leave the session alone.
-	sweep.sweep(ctx, time.Now())
-	sweep.sweep(ctx, time.Now())
+	sweep.Sweep(ctx, time.Now())
+	sweep.Sweep(ctx, time.Now())
 	if got := len(env.runs(t)); got != 1 {
 		t.Fatalf("runs after further sweeps = %d, want 1", got)
 	}
@@ -77,13 +78,13 @@ func TestDiscussSweepLeavesInputOlderThanTheWindow(t *testing.T) {
 
 	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "a while ago"})
 	written := time.Now()
-	sweep.sweep(ctx, written.Add(discussSweepWindow+time.Minute))
+	sweep.Sweep(ctx, written.Add(pending.DiscussSweepWindow+time.Minute))
 	if got := len(env.runs(t)); got != 0 {
 		t.Fatalf("runs for input older than the window = %d, want 0", got)
 	}
 
 	// Inside the window the same input is found.
-	sweep.sweep(ctx, written.Add(discussSweepWindow-time.Minute))
+	sweep.Sweep(ctx, written.Add(pending.DiscussSweepWindow-time.Minute))
 	env.waitRunState(t, env.invocation(hw), "completed")
 }
 
@@ -95,8 +96,8 @@ func TestDiscussSweepVisitsEveryScope(t *testing.T) {
 	env := newDiscussEnv(t, "group")
 	proc := newDiscussProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a", "scope-b", "scope-c"}}
-	proc.svc.teamScopes = scopes
-	NewDiscussSweep(proc.svc).sweep(context.Background(), time.Now())
+	useTeamScopes(proc.svc, scopes)
+	pending.NewDiscussSweep(proc.svc.pending).Sweep(context.Background(), time.Now())
 	if got := scopes.visited(); len(got) != 3 || got[0] != "scope-a" || got[2] != "scope-c" {
 		t.Fatalf("scopes visited = %v, want all three in order", got)
 	}
@@ -111,15 +112,15 @@ func TestDiscussSweepRunSweepsAtStartAndOnEveryTick(t *testing.T) {
 	env := newDiscussEnv(t, "group")
 	proc := newDiscussProcess(t, env)
 	scopes := &pagedScopes{scopes: []string{"scope-a"}}
-	proc.svc.teamScopes = scopes
-	sweep := NewDiscussSweep(proc.svc)
+	useTeamScopes(proc.svc, scopes)
+	sweep := pending.NewDiscussSweep(proc.svc.pending)
 
 	ticks := make(chan time.Time)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sweep.run(ctx, ticks, time.Now)
+		sweep.Run(ctx, ticks, time.Now)
 	}()
 	waitSweeps := func(want int) {
 		t.Helper()

@@ -88,7 +88,6 @@ func (p *Planner) resume(ctx context.Context, call decide.DecidedCall, req runre
 	cfg, err := p.assembleContinuation(
 		ctx,
 		resolved.RunConfig,
-		transcript.ScopeFallbackFromDecision(call.ConversationType, call.ReplyTarget),
 		transcript.SummaryScope(call.ScopeBotID, "", call.SessionID, call.ConversationType, "", call.ReplyTarget),
 	)
 	if err != nil {

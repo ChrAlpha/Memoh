@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -113,7 +114,7 @@ func TestDiscussCommandTurnAnswersItsMessageOnce(t *testing.T) {
 			if got := env.allRuns(t); got != 1 {
 				t.Fatalf("runs after the command turn = %d, want the turn alone", got)
 			}
-			if outcome, _ := proc.admit(t, env); outcome != DiscussNothingPending {
+			if outcome, _ := proc.admit(t, env); outcome != pending.DiscussNothingPending {
 				t.Fatalf("check after the turn = %v, want nothing pending", outcome)
 			}
 			if calls := len(proc.provider.recorded()); calls != 1 {
@@ -142,7 +143,7 @@ func TestDiscussCommandTurnLeavesEarlierInputPending(t *testing.T) {
 	drainDriveHandle(t, handle)
 	settle()
 
-	if outcome, _ := proc.admit(t, env); outcome != DiscussSkipped {
+	if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
 		t.Fatalf("check after the turn = %v, want skipped: the earlier input never addressed the bot", outcome)
 	}
 	if got := env.allRuns(t); got != 1 {
@@ -152,7 +153,7 @@ func TestDiscussCommandTurnLeavesEarlierInputPending(t *testing.T) {
 	// Addressing the bot answers everything before it, the earlier input too.
 	hw := env.write(t, passiveInput{from: alice, externalID: "m2", text: "@bot over to you", mentionsMe: true})
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome after an addressed input = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)
@@ -204,7 +205,7 @@ func TestDiscussCommandTurnRequestIsNeverPending(t *testing.T) {
 		if got := env.allRuns(t); got != 1 {
 			t.Fatalf("runs after a failed turn = %d, want the turn alone", got)
 		}
-		if outcome, _ := proc.admit(t, env); outcome != DiscussNothingPending {
+		if outcome, _ := proc.admit(t, env); outcome != pending.DiscussNothingPending {
 			t.Fatalf("check after a failed turn = %v, want nothing pending", outcome)
 		}
 	})
@@ -221,7 +222,7 @@ func TestDiscussFailedBatchStaysPendingAcrossCommandTurn(t *testing.T) {
 	alice := env.participant(t, false)
 	first := env.write(t, passiveInput{from: alice, externalID: "m1", text: "first batch"})
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)
@@ -233,12 +234,12 @@ func TestDiscussFailedBatchStaysPendingAcrossCommandTurn(t *testing.T) {
 
 	// The failed batch is still the pending head: nothing but a newer input
 	// admits it again, and the command's request row is not that input.
-	if outcome, _ := proc.admit(t, env); outcome != DiscussSkipped {
+	if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
 		t.Fatalf("check after the command turn = %v, want skipped for the unchanged batch", outcome)
 	}
 	second := env.write(t, passiveInput{from: alice, externalID: "m2", text: "second batch"})
 	outcome, done = proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome after a new input = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)

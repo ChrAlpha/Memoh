@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/decide"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -394,7 +395,7 @@ func (e discussEnv) runs(t *testing.T) map[string]discussRun {
 	return out
 }
 
-func (e discussEnv) invocation(hw int64) string { return discussInvocationID(e.sessionID, hw) }
+func (e discussEnv) invocation(hw int64) string { return pending.DiscussInvocationID(e.sessionID, hw) }
 
 // waitRunState polls until the run for invocation reaches state.
 func (e discussEnv) waitRunState(t *testing.T, invocation, state string) discussRun {
@@ -414,7 +415,7 @@ func (e discussEnv) waitRunState(t *testing.T, invocation, state string) discuss
 func (e discussEnv) cover(t *testing.T) int64 {
 	t.Helper()
 	cover, err := dbsqlc.New(e.pool).GetDiscussCoverPosition(context.Background(), dbsqlc.GetDiscussCoverPositionParams{
-		SessionID: db.ParseUUIDOrEmpty(e.sessionID), States: discussCoverStates,
+		SessionID: db.ParseUUIDOrEmpty(e.sessionID), States: pending.CoverStates,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -499,9 +500,9 @@ func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *dis
 	return &discussProcess{svc: svc, manager: manager, provider: provider, sender: sender}
 }
 
-func (p *discussProcess) admit(t *testing.T, env discussEnv) (DiscussAdmission, <-chan struct{}) {
+func (p *discussProcess) admit(t *testing.T, env discussEnv) (pending.DiscussAdmission, <-chan struct{}) {
 	t.Helper()
-	outcome, done, err := p.svc.admitDiscuss(context.Background(), env.botID, env.sessionID)
+	outcome, done, err := p.svc.pending.AdmitDiscussRun(context.Background(), env.botID, env.sessionID)
 	if err != nil {
 		t.Fatalf("admitDiscuss() error = %v", err)
 	}
@@ -543,7 +544,7 @@ func TestDiscussAnswersPendingInputThroughSend(t *testing.T) {
 	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "is the freeze on this week?"})
 
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)
@@ -591,7 +592,7 @@ func TestDiscussAnswersPendingInputThroughSend(t *testing.T) {
 		t.Fatalf("resume context = %+v", resume)
 	}
 
-	if outcome, _ := proc.admit(t, env); outcome != DiscussNothingPending {
+	if outcome, _ := proc.admit(t, env); outcome != pending.DiscussNothingPending {
 		t.Fatalf("check after completion = %v, want nothing pending", outcome)
 	}
 }
@@ -612,7 +613,7 @@ func TestDiscussAdmissionReadsTriggerScope(t *testing.T) {
 		}
 		proc := newDiscussProcess(t, env)
 		env.write(t, passiveInput{from: env.participant(t, false), externalID: "m1", text: "a message"})
-		if outcome, _ := proc.admit(t, env); outcome != DiscussSkipped {
+		if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
 			t.Fatalf("outcome = %v, want skipped", outcome)
 		}
 		if got := len(env.runs(t)); got != 0 {
@@ -629,7 +630,7 @@ func TestDiscussAdmissionReadsTriggerScope(t *testing.T) {
 		proc := newDiscussProcess(t, env)
 		hw := env.write(t, passiveInput{from: env.participant(t, false), externalID: "m1", text: "a message"})
 		outcome, done := proc.admit(t, env)
-		if outcome != DiscussAdmitted {
+		if outcome != pending.DiscussAdmitted {
 			t.Fatalf("outcome = %v, want admitted", outcome)
 		}
 		waitDiscussRun(t, done)
@@ -653,7 +654,7 @@ func TestDiscussAmbiguousParticipantNamesNoAccount(t *testing.T) {
 	proc := newDiscussProcess(t, env)
 	hw := env.write(t, passiveInput{from: bob, externalID: "m1", text: "who am I"})
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)
@@ -681,7 +682,7 @@ func TestDiscussUnchangedBatchIsNotAdmittedAgain(t *testing.T) {
 			proc := newDiscussProcess(t, env)
 			first := env.write(t, passiveInput{from: alice, externalID: "m1", text: "first batch"})
 			outcome, done := proc.admit(t, env)
-			if outcome != DiscussAdmitted {
+			if outcome != pending.DiscussAdmitted {
 				t.Fatalf("first outcome = %v, want admitted", outcome)
 			}
 			waitDiscussRun(t, done)
@@ -694,7 +695,7 @@ func TestDiscussUnchangedBatchIsNotAdmittedAgain(t *testing.T) {
 				t.Fatalf("cover after %s = %d, want 0", terminal, got)
 			}
 			for range 2 {
-				if outcome, _ := proc.admit(t, env); outcome != DiscussSkipped {
+				if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
 					t.Fatalf("unchanged batch after %s: outcome = %v, want skipped", terminal, outcome)
 				}
 			}
@@ -704,7 +705,7 @@ func TestDiscussUnchangedBatchIsNotAdmittedAgain(t *testing.T) {
 
 			second := env.write(t, passiveInput{from: alice, externalID: "m2", text: "second batch"})
 			outcome, done = proc.admit(t, env)
-			if outcome != DiscussAdmitted {
+			if outcome != pending.DiscussAdmitted {
 				t.Fatalf("after a new input: outcome = %v, want admitted", outcome)
 			}
 			waitDiscussRun(t, done)
@@ -733,7 +734,7 @@ func TestDiscussTwoManagersAdmitOneRound(t *testing.T) {
 
 	const perProcess = 3
 	type result struct {
-		outcome DiscussAdmission
+		outcome pending.DiscussAdmission
 		done    <-chan struct{}
 		err     error
 	}
@@ -747,7 +748,7 @@ func TestDiscussTwoManagersAdmitOneRound(t *testing.T) {
 			defer wg.Done()
 			<-start
 			r := &results[i]
-			r.outcome, r.done, r.err = proc.svc.admitDiscuss(context.Background(), env.botID, env.sessionID)
+			r.outcome, r.done, r.err = proc.svc.pending.AdmitDiscussRun(context.Background(), env.botID, env.sessionID)
 		}()
 	}
 	close(start)
@@ -758,7 +759,7 @@ func TestDiscussTwoManagersAdmitOneRound(t *testing.T) {
 		if r.err != nil {
 			t.Fatalf("caller %d: %v", i, r.err)
 		}
-		if r.outcome == DiscussAdmitted {
+		if r.outcome == pending.DiscussAdmitted {
 			admitted++
 			waitDiscussRun(t, r.done)
 		}
@@ -792,7 +793,7 @@ func TestDiscussExternalRuntimeRunsOnlyWhenAddressed(t *testing.T) {
 		}
 		proc := newDiscussProcess(t, env)
 		env.write(t, passiveInput{from: alice, externalID: "m1", text: "not for the bot"})
-		if outcome, _ := proc.admit(t, env); outcome != DiscussSkipped {
+		if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
 			t.Fatalf("unaddressed outcome = %v, want skipped", outcome)
 		}
 		if got := len(env.runs(t)); got != 0 {
@@ -800,7 +801,7 @@ func TestDiscussExternalRuntimeRunsOnlyWhenAddressed(t *testing.T) {
 		}
 		hw := env.write(t, passiveInput{from: alice, externalID: "m2", text: "@bot over to you", mentionsMe: true})
 		outcome, done := proc.admit(t, env)
-		if outcome != DiscussAdmitted {
+		if outcome != pending.DiscussAdmitted {
 			t.Fatalf("addressed outcome = %v, want admitted", outcome)
 		}
 		waitDiscussRun(t, done)
@@ -817,7 +818,7 @@ func TestDiscussExternalRuntimeRunsOnlyWhenAddressed(t *testing.T) {
 		proc := newDiscussProcess(t, env)
 		env.write(t, passiveInput{from: alice, externalID: "m1", text: "a direct message"})
 		outcome, done := proc.admit(t, env)
-		if outcome != DiscussAdmitted {
+		if outcome != pending.DiscussAdmitted {
 			t.Fatalf("private outcome = %v, want admitted", outcome)
 		}
 		waitDiscussRun(t, done)
@@ -836,14 +837,14 @@ func TestDiscussRefusedInputIsNotAnsweredOrShown(t *testing.T) {
 	proc := newDiscussProcess(t, env)
 
 	env.write(t, passiveInput{from: mallory, externalID: "r0", text: "refused before anything", refused: messagepkg.AdmissionRejectedACL})
-	if outcome, _ := proc.admit(t, env); outcome != DiscussNothingPending {
+	if outcome, _ := proc.admit(t, env); outcome != pending.DiscussNothingPending {
 		t.Fatalf("only refused input: outcome = %v, want nothing pending", outcome)
 	}
 
 	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "an admitted question"})
 	env.write(t, passiveInput{from: mallory, externalID: "r1", text: "refused after it", refused: messagepkg.AdmissionRejectedACL})
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)
@@ -873,7 +874,7 @@ func TestDiscussCommitsStepsAndRecordsFailure(t *testing.T) {
 		proc := newDiscussProcess(t, env, &discussStep{send: "on it"}, second)
 		hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "please check"})
 		outcome, done := proc.admit(t, env)
-		if outcome != DiscussAdmitted {
+		if outcome != pending.DiscussAdmitted {
 			t.Fatalf("outcome = %v, want admitted", outcome)
 		}
 		waitReached(t, second)
@@ -900,7 +901,7 @@ func TestDiscussCommitsStepsAndRecordsFailure(t *testing.T) {
 		proc := newDiscussProcess(t, env, &discussStep{fail: true})
 		hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "please check"})
 		outcome, done := proc.admit(t, env)
-		if outcome != DiscussAdmitted {
+		if outcome != pending.DiscussAdmitted {
 			t.Fatalf("outcome = %v, want admitted", outcome)
 		}
 		waitDiscussRun(t, done)
@@ -947,7 +948,7 @@ func TestDiscussRunHasOneTurnSpan(t *testing.T) {
 			hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "is the freeze on this week?"})
 
 			outcome, done := proc.admit(t, env)
-			if outcome != DiscussAdmitted {
+			if outcome != pending.DiscussAdmitted {
 				t.Fatalf("outcome = %v, want admitted", outcome)
 			}
 			waitDiscussRun(t, done)
@@ -986,7 +987,7 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 	proc := newDiscussProcess(t, env, &discussStep{send: "starting"})
 	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "long task"})
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want admitted", outcome)
 	}
 	waitDiscussRun(t, done)
@@ -1016,9 +1017,9 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 	}
 	setAllowedTeam(proc.svc, row.TeamID.String())
 	proc.svc.accountService = accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{ID: env.ownerID, IsActive: true}})
-	rewireComponents(proc.svc)
 	proc.svc.botPermissions = &agenttest.PermissionChecker{Values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
-	resumed, err := proc.svc.resumeInterruptedSession(ctx, row)
+	rewireComponents(proc.svc)
+	resumed, err := proc.svc.resume.Resume(ctx, row)
 	if err != nil {
 		t.Fatalf("resumeInterruptedSession() error = %v", err)
 	}
@@ -1042,7 +1043,7 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 	if got := env.cover(t); got != hw {
 		t.Fatalf("cover after the resume = %d, want %d", got, hw)
 	}
-	if outcome, _ := proc.admit(t, env); outcome != DiscussNothingPending {
+	if outcome, _ := proc.admit(t, env); outcome != pending.DiscussNothingPending {
 		t.Fatalf("check after the resume = %v, want nothing pending", outcome)
 	}
 }
@@ -1059,13 +1060,13 @@ func TestDiscussRunEndAnswersInputThatFoundItBusy(t *testing.T) {
 	proc := newDiscussProcess(t, env, held)
 	env.write(t, passiveInput{from: alice, externalID: "m1", text: "first"})
 	outcome, done := proc.admit(t, env)
-	if outcome != DiscussAdmitted {
+	if outcome != pending.DiscussAdmitted {
 		t.Fatalf("outcome = %v, want admitted", outcome)
 	}
 	waitReached(t, held)
 
 	second := env.write(t, passiveInput{from: alice, externalID: "m2", text: "arrived while busy"})
-	if outcome, _ := proc.admit(t, env); outcome != DiscussBusy {
+	if outcome, _ := proc.admit(t, env); outcome != pending.DiscussBusy {
 		t.Fatalf("check while held = %v, want busy", outcome)
 	}
 	close(held.gate)
@@ -1106,7 +1107,7 @@ func TestDiscussStaleBatchEndsWithoutAnswering(t *testing.T) {
 	slow.svc.sessionRuntime = &racingAdmitter{Manager: slow.manager, before: func() {
 		second = env.write(t, passiveInput{from: alice, externalID: "m2", text: "second"})
 		outcome, done := fast.admit(t, env)
-		if outcome != DiscussAdmitted {
+		if outcome != pending.DiscussAdmitted {
 			t.Errorf("newer batch outcome = %v, want admitted", outcome)
 			return
 		}
@@ -1115,7 +1116,7 @@ func TestDiscussStaleBatchEndsWithoutAnswering(t *testing.T) {
 	}}
 	rewireRun(slow.svc)
 
-	if outcome, done := slow.admit(t, env); outcome != DiscussNothingPending || done != nil {
+	if outcome, done := slow.admit(t, env); outcome != pending.DiscussNothingPending || done != nil {
 		t.Fatalf("stale batch outcome = %v, want nothing pending", outcome)
 	}
 	env.waitRunState(t, env.invocation(first), "completed")

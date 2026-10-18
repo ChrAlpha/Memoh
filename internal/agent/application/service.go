@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/activeprompt"
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/compact"
@@ -22,16 +23,20 @@ import (
 	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/plan"
+	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/schedule"
 	"github.com/felinics/memoh/internal/agent/subagent"
 	"github.com/felinics/memoh/internal/agent/title"
 	"github.com/felinics/memoh/internal/agent/transcript"
+	"github.com/felinics/memoh/internal/agent/web"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -58,9 +63,6 @@ type Service struct {
 	externalrun     *externalrun.Host
 	title           *title.Generator
 	teamScopes      runreq.TeamScopes
-	resumeReady     func(context.Context, string, string) error
-	resumeStop      context.CancelFunc
-	resumeDone      chan struct{}
 	agent           *native.Agent
 	modelsService   *models.Service
 	queries         dbstore.Queries
@@ -74,17 +76,16 @@ type Service struct {
 	memory          *memory.Keeper
 	compact         *compact.Compactor
 	plan            *plan.Planner
-	continuer       continuer
+	pending         *pending.Inputs
+	web             *web.Runner
+	schedule        *schedule.Runner
+	resume          *resume.Worker
+	answer          *answer.Responder
 	logger          *slog.Logger
 	allowedTeam     string
 	sessionRuntime  runreq.TurnAdmitter
 	decisionRuntime *sessionruntime.Manager
 	sessionManager  *sessionruntime.Manager
-	// queue is the durable queue of input that met a busy session. It is nil
-	// where the deployment has no database, and then nothing queues.
-	queue queuedInputStore
-	// pendingSessions serializes the admission of what waits on one session.
-	pendingSessions sessionLocks
 }
 
 // Deps is everything New wires into a Service. The required block is checked
@@ -230,7 +231,6 @@ func New(d Deps) (*Service, error) {
 		sessionService:  d.Sessions,
 		botPermissions:  d.BotPermissions,
 		eventPublisher:  d.Events,
-		resumeReady:     d.ResumeReadiness,
 		teamScopes:      teamScopes,
 		allowedTeam:     d.AllowedTeam,
 		logger:          d.Logger.With(slog.String("service", "agent/application")),
@@ -310,8 +310,12 @@ func New(d Deps) (*Service, error) {
 		Workdirs:           d.Workdirs,
 		Background:         d.Background,
 	})
+	// A typed nil stored in an interface would read as a queue.
+	var queue pending.Store
+	var promoted persist.PromotedInputs
 	if d.QueuedInputs != nil {
-		service.queue = d.QueuedInputs
+		queue = d.QueuedInputs
+		promoted = queue
 	}
 	service.persist = persist.New(persist.Deps{
 		Logger:   d.Logger.With(slog.String("service", "agent/persist")),
@@ -322,7 +326,7 @@ func New(d Deps) (*Service, error) {
 		Events:   d.Events,
 		Rounds:   service.memory,
 		Commits:  service.compact,
-		Promoted: service.queue,
+		Promoted: promoted,
 	})
 	service.signer = admit.NewSigner(d.RunCredentialSecret)
 	service.admit = admit.New(admit.Deps{Runtime: d.SessionRuntime, Queries: d.Queries, Signer: service.signer})
@@ -396,7 +400,65 @@ func New(d Deps) (*Service, error) {
 		External:   service.externalrun,
 		Title:      service.title,
 	})
-	service.continuer = service.plan
+	service.pending = pending.New(pending.Deps{
+		Logger:      d.Logger.With(slog.String("service", "agent/pending")),
+		Queries:     d.Queries,
+		Queue:       queue,
+		Runtime:     d.SessionRuntime,
+		Turns:       service,
+		Admit:       service.admit,
+		Signer:      service.signer,
+		ActiveTurns: &service.activeTurns,
+		Driver:      service.driver,
+		Plan:        service.plan,
+		Transcript:  service.transcript,
+		Bot:         service.botenv,
+		Persist:     service.persist,
+		Messages:    d.Messages,
+		TeamScopes:  teamScopes,
+	})
+	service.web = web.New(web.Deps{
+		Runtime:     d.SessionRuntime,
+		Admit:       service.admit,
+		ActiveTurns: &service.activeTurns,
+		Pending:     service.pending,
+		Compact:     service.compact,
+		Driver:      service.driver,
+		Plan:        service.plan,
+		Messages:    d.Messages,
+		Persist:     service.persist,
+		Runconfig:   service.runconfig,
+		Bot:         service.botenv,
+	})
+	service.schedule = schedule.New(schedule.Deps{
+		Admit:       service.admit,
+		ActiveTurns: &service.activeTurns,
+		ExternalRun: service.externalrun,
+		Driver:      service.driver,
+		Plan:        service.plan,
+	})
+	service.resume = resume.New(resume.Deps{
+		Logger:         d.Logger.With(slog.String("service", "agent/resume")),
+		Queries:        d.Queries,
+		Accounts:       d.Accounts,
+		BotPermissions: d.BotPermissions,
+		Signer:         service.signer,
+		Admit:          service.admit,
+		Decider:        service.decider,
+		Transcript:     service.transcript,
+		Driver:         service.driver,
+		Plan:           service.plan,
+		TeamScopes:     teamScopes,
+		Ready:          d.ResumeReadiness,
+	})
+	service.answer = answer.New(answer.Deps{
+		Logger:     d.Logger.With(slog.String("service", "agent/answer")),
+		Decider:    service.decider,
+		Runtime:    d.SessionRuntime,
+		Driver:     service.driver,
+		Transcript: service.transcript,
+		Continuer:  service.plan,
+	})
 	service.bindSessionRuntime(d.SessionRuntime)
 	return service, nil
 }

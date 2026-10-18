@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/pending"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/channel/inbound"
 )
@@ -20,7 +20,7 @@ func TestMapAdmissionErrorKeepsChannelCodes(t *testing.T) {
 		{sessionruntime.ErrQueueAdmissionOverloaded, inbound.QueueCommandCodeOverloaded},
 		{sessionruntime.ErrQueueCapacityExceeded, inbound.QueueCommandCodeCapacity},
 		{sessionruntime.ErrQueueInvalidReference, inbound.QueueCommandCodeInvalid},
-		{application.ErrQueueInputIncomplete, inbound.QueueCommandCodeUnavailable},
+		{pending.ErrQueueInputIncomplete, inbound.QueueCommandCodeUnavailable},
 	}
 	for _, tc := range cases {
 		if got := inbound.QueueCommandErrorCode(mapAdmissionError(tc.err)); got != tc.want {

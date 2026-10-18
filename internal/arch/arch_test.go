@@ -175,6 +175,11 @@ var applicationLayerDirs = []string{
 	"internal/agent/subagent",
 	"internal/agent/externalrun",
 	"internal/agent/plan",
+	"internal/agent/pending",
+	"internal/agent/answer",
+	"internal/agent/resume",
+	"internal/agent/schedule",
+	"internal/agent/web",
 	"internal/agent/title",
 	"internal/agent/agenttest",
 }

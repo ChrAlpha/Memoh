@@ -23,6 +23,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/application"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -955,7 +956,7 @@ func TestDiscussE2ESweepAnswersWhatNoWakeDid(t *testing.T) {
 		t.Fatalf("runs = %v, cover = %d without a wake, want none", got, e.cover())
 	}
 
-	sweep := application.NewDiscussSweep(e.service)
+	sweep := pending.NewDiscussSweep(e.service.Pending())
 	if err := sweep.Start(context.Background()); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}

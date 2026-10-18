@@ -4,7 +4,6 @@ import (
 	"context"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/transcript"
@@ -16,13 +15,11 @@ import (
 func (p *Planner) assembleContinuation(
 	ctx context.Context,
 	base native.RunConfig,
-	fallback historyfrag.ScopeFallback,
 	summaryScope contextfrag.Scope,
 ) (native.RunConfig, error) {
 	assembled, err := p.transcript.Assemble(ctx, transcript.Request{
-		Purpose:  transcript.PurposeContinuation,
-		Fallback: fallback,
-		Scope:    summaryScope,
+		Purpose: transcript.PurposeContinuation,
+		Scope:   summaryScope,
 	})
 	if err != nil {
 		return native.RunConfig{}, err

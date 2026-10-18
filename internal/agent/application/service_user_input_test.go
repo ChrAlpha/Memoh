@@ -152,7 +152,7 @@ func TestRespondUserInputContinuesChatSession(t *testing.T) {
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
 	answers := []userinput.QuestionAnswer{{QuestionID: "q1", OptionIDs: []string{"q1.o1"}}}
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:    "bot-1",
 		ThreadID: "session-1",
 		Answers:  answers,
@@ -275,7 +275,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encode response: %v", err)
 	}
-	err = resolver.handleRuntimeDecisionCommand(context.Background(), sessionruntime.Command{
+	err = resolver.answer.HandleCommand(context.Background(), sessionruntime.Command{
 		ID: "control-early-ack", Type: sessionruntime.CommandUserInputResponse,
 		BotID: botID, SessionID: sessionID, RunID: runID,
 		Generation: handle.Generation, TargetID: inputID, Payload: payload,
@@ -362,7 +362,7 @@ func TestRespondUserInputLimitsChatToolResult(t *testing.T) {
 		return completedContinuation(), nil
 	}))
 
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:    "bot-1",
 		ThreadID: "session-1",
 		Answers:  []userinput.QuestionAnswer{{QuestionID: "q1", Text: large}},
@@ -415,7 +415,7 @@ func TestRespondUserInputOnlyAcksACPRequests(t *testing.T) {
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
 		ActorUserID: testACPUserInputOwnerID,
@@ -453,7 +453,7 @@ func TestRespondUserInputAcksAlreadyDecidedACPRequest(t *testing.T) {
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
 		ActorUserID: testACPUserInputOwnerID,
@@ -492,7 +492,7 @@ func TestRespondUserInputACPRequestSubmitsWithLiveWaiter(t *testing.T) {
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
 		ActorUserID: testACPUserInputOwnerID,
@@ -545,7 +545,7 @@ func TestRespondUserInputACPRequestReattachesActivePrompt(t *testing.T) {
 	eventCh := make(chan runreq.WSStreamEvent, 8)
 	done := make(chan error, 1)
 	go func() {
-		done <- resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+		done <- resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 			BotID:       "bot-1",
 			ThreadID:    "session-1",
 			ActorUserID: testACPUserInputOwnerID,
@@ -626,7 +626,7 @@ func TestRespondUserInputACPRequestCanSuppressActivePromptReattach(t *testing.T)
 	defer resolver.activePrompts.Unregister("bot-1", "session-1", hub)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:                      "bot-1",
 		ThreadID:                   "session-1",
 		ActorUserID:                testACPUserInputOwnerID,
@@ -667,7 +667,7 @@ func TestRespondUserInputACPRequestWithoutWaiterCancelsInsteadOfSubmitting(t *te
 	attachACPUserInputAuth(resolver)
 
 	eventCh := make(chan runreq.WSStreamEvent, 4)
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:       "bot-1",
 		ThreadID:    "session-1",
 		ActorUserID: testACPUserInputOwnerID,
@@ -703,7 +703,7 @@ func TestRespondUserInputCancelRoutesToCancel(t *testing.T) {
 		return completedContinuation(), nil
 	}))
 
-	err := resolver.respondUserInput(context.Background(), decide.UserInputResponseInput{
+	err := resolver.answer.RespondUserInput(context.Background(), decide.UserInputResponseInput{
 		BotID:    "bot-1",
 		ThreadID: "session-1",
 		Canceled: true,

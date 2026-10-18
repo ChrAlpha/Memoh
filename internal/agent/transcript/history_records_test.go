@@ -228,18 +228,6 @@ func TestHistoryScopeFallbackFromChatRequestUsesRequestTopology(t *testing.T) {
 	}
 }
 
-func TestDecisionHistoryFallbackCarriesOnlyTheRecordedTopology(t *testing.T) {
-	t.Parallel()
-
-	got := ScopeFallbackFromDecision(" group ", " target-1 ")
-	if got.ChatID != "" {
-		t.Fatalf("decision fallback ChatID = %q, want empty", got.ChatID)
-	}
-	if got.ConversationType != "group" || got.ReplyTarget != "target-1" {
-		t.Fatalf("decision fallback lost topology: %#v", got)
-	}
-}
-
 func dbHistoryRow(t *testing.T, id string, role string, content json.RawMessage, mutate func(*messagepkg.Message)) messagepkg.Message {
 	t.Helper()
 	msg := messagepkg.Message{

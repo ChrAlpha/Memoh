@@ -28,6 +28,7 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -35,6 +36,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	chatview "github.com/felinics/memoh/internal/agent/view"
+	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	"github.com/felinics/memoh/internal/auth"
@@ -585,7 +587,7 @@ func (h *LocalChannelHandler) executeWSQueueCommand(ctx context.Context, writer 
 			err = apperror.New(apperror.CodeSessionNotFound, nil)
 			break
 		}
-		input := application.QueueInput{
+		input := pending.QueueInput{
 			TeamID:                  sess.TeamID,
 			BotID:                   botID,
 			SessionID:               msg.SessionID,
@@ -1481,11 +1483,11 @@ func (h *LocalChannelHandler) abortWSRun(ctx context.Context, writer *wsWriter, 
 // there is nothing to execute. release is called once whatever this call
 // reserved for the session is no longer needed: here when nothing runs, and
 // by the run's delivery end otherwise.
-func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID, initiatorID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), queueTurn func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error), release func()) (*application.WebAdmission, wsTurnRef) {
+func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID, initiatorID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), queueTurn func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error), release func()) (*web.Admission, wsTurnRef) {
 	if release == nil {
 		release = func() {}
 	}
-	admitted, err := h.agentService.AdmitWebRun(ctx, application.WebAdmitInput{
+	admitted, err := h.agentService.AdmitWebRun(ctx, web.AdmitInput{
 		BotID:        botID,
 		SessionID:    ref.SessionID,
 		InvocationID: ref.InvocationID,
@@ -2262,7 +2264,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				SessionID: sessionID,
 				TurnID:    targetTurnID,
 			}.encode()
-			retryInput := application.RetryLatestMessageInput{
+			retryInput := web.RetryLatestMessageInput{
 				BotID:                  botID,
 				SessionID:              sessionID,
 				TargetTurnID:           targetTurnID,
@@ -2337,7 +2339,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				TurnID:      targetTurnID,
 				Attachments: digestWSAttachments(msg.Attachments),
 			}.encode()
-			editInput := application.EditLatestMessageInput{
+			editInput := web.EditLatestMessageInput{
 				BotID:                  botID,
 				SessionID:              sessionID,
 				TargetTurnID:           targetTurnID,
