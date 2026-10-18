@@ -209,11 +209,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	entries, compactedMessageIDs := buildEntriesAndIDs(toCompact)
 	if (len(entries) == 0 || len(compactedMessageIDs) == 0) && !fusing {
-		// No complete group survived: every selected group had a row that rendered
-		// empty (a reasoning-only message, or a tool exchange whose result renders
-		// empty). buildEntriesAndIDs withholds such a group from both entries and
-		// ids, so summarizing here would either destroy rows for a junk summary or
-		// mark rows we cannot faithfully summarize. Leave them in raw history.
+		// Every selectable run renders nothing (reasoning-only messages, empty
+		// tool results), so there is nothing to summarize. Leave them in raw
+		// history.
 		return Result{Status: StatusNoop}, nil
 	}
 	// Cap the rendered entries and verify the final prompt cost before any
@@ -359,9 +357,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
-	replacementTokens := entriesPromptCost(entries)
+	replacementTokens := max(entriesPromptCost(entries), compactedReplayTokens(messages, compactedMessageIDs))
 	if fusing {
-		replacementTokens = summaryReplacementTokens(entries, frontier.Artifacts)
+		replacementTokens = summaryReplacementTokens(replacementTokens, frontier.Artifacts)
 	}
 	if summaryTokens := estimateSummaryReplayTokens(summary); summaryTokens >= replacementTokens {
 		err = fmt.Errorf("%w: summary_tokens=%d raw_tokens=%d", errIneffectiveSummary, summaryTokens, replacementTokens)

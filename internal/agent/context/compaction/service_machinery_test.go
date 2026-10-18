@@ -458,7 +458,7 @@ func TestDoCompactionAllEmptyWindowSkipsModelAndMarking(t *testing.T) {
 	}
 }
 
-func TestDoCompactionIncompleteToolExchangeSkipsModelAndMarking(t *testing.T) {
+func TestDoCompactionCoversToolExchangeWhoseResultRendersEmpty(t *testing.T) {
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		toolCallRow(t, 100),
 		mkRow(t, "tool", `[]`, 100),
@@ -471,23 +471,15 @@ func TestDoCompactionIncompleteToolExchangeSkipsModelAndMarking(t *testing.T) {
 	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 150)); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if stub.calls != 0 {
-		t.Fatalf("summarizer should not be called when no row can be marked (calls=%d)", stub.calls)
-	}
-	if q.created {
-		t.Fatal("a no-op compaction must not create a log row")
-	}
-	if len(q.markedIDs) != 0 {
-		t.Fatalf("nothing should be marked for an incomplete tool exchange (marked=%d)", len(q.markedIDs))
+	if stub.calls != 1 || len(q.markedIDs) != 2 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID {
+		t.Fatalf("calls=%d marked=%d, want the call and its empty result covered together", stub.calls, len(q.markedIDs))
 	}
 }
 
-func TestDoCompactionMarksOnlyContiguousRunAcrossEmptyMiddleRow(t *testing.T) {
+func TestDoCompactionCoversEmptyMiddleRowWithItsNeighbours(t *testing.T) {
 	// Window: an empty-rendering reasoning row sits between two rendered rows.
-	// Marking both rendered rows under one compact_id would leave the raw
-	// reasoning row between them and let the read path fold history out of
-	// order. doCompaction must mark only the first contiguous run (row 0) and
-	// leave row 2 for a later pass.
+	// All three are marked under one compact_id, so the range stays contiguous
+	// and the read path replaces it in place.
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		mkRow(t, "user", `[{"type":"text","text":"old question about a long-running project with plenty of detail to summarize"}]`, 100), // 0
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking"}]`, 100),                                                           // 1 renders empty
@@ -502,11 +494,11 @@ func TestDoCompactionMarksOnlyContiguousRunAcrossEmptyMiddleRow(t *testing.T) {
 	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 250)); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if len(q.markedIDs) != 1 || q.markedIDs[0] != rows[0].ID {
-		t.Fatalf("marked = %d ids, want only the contiguous leading run [row 0]", len(q.markedIDs))
+	if len(q.markedIDs) != 3 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID || q.markedIDs[2] != rows[2].ID {
+		t.Fatalf("marked = %d ids, want rows 0-2 as one contiguous run", len(q.markedIDs))
 	}
-	if q.completed.Status != "ok" || q.completed.MessageCount != 1 {
-		t.Fatalf("complete log = status=%q count=%d, want ok/1", q.completed.Status, q.completed.MessageCount)
+	if q.completed.Status != "ok" || q.completed.MessageCount != 3 {
+		t.Fatalf("complete log = status=%q count=%d, want ok/3", q.completed.Status, q.completed.MessageCount)
 	}
 }
 

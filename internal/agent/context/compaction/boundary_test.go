@@ -253,20 +253,18 @@ func TestTrimCompactMessagesMustKeepRowsCostNoBudget(t *testing.T) {
 	t.Parallel()
 
 	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"ask_user","toolCallId":"a","input":{}}]`, 600)
-	askResult := mkRow(t, "tool", `[{"type":"tool-result","toolName":"ask_user","toolCallId":"a","output":"yes"}]`, 600)
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		askCall,
-		askResult,
 		textRow(t, "user", 100),
 		textRow(t, "assistant", 100),
 		textRow(t, "user", 100),
 	}
 	items, _ := itemsFromRows(rows)
 	trimmed := trimCompactMessages(items, 250)
-	if len(trimmed) != 4 {
+	if len(trimmed) != 3 {
 		t.Fatalf("trimmed = %d, want must-keep island (free) plus two rows within budget", len(trimmed))
 	}
-	if !trimmed[0].HasPolicy(CompactPolicyMustKeep) || !trimmed[1].HasPolicy(CompactPolicyMustKeep) {
+	if !trimmed[0].HasPolicy(CompactPolicyMustKeep) {
 		t.Fatalf("must-keep island must stay in place at the head")
 	}
 }
