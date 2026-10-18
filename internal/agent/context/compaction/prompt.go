@@ -2,6 +2,7 @@ package compaction
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -66,17 +67,29 @@ func writeEntries(sb *strings.Builder, tag string, entries []messageEntry) {
 func entriesPromptCost(entries []messageEntry) int {
 	total := 0
 	for _, entry := range entries {
-		total += estimateBytesAsTokens(entry.Content) + estimateBytesAsTokens(entry.Role) + 1
+		total += entryPromptCost(entry)
 	}
 	return total
 }
 
+// entryPromptCost prices the line writeEntries emits for entry, plus a token
+// for the rounding a whole prompt does not share with its lines.
+func entryPromptCost(entry messageEntry) int {
+	return estimateBytesAsTokens(entry.Role+": "+entry.Content+"\n") + 1
+}
+
 // earlierSummariesCost is the estimated prompt cost of the summaries a pass
-// folds.
+// folds, each with the rounding token entryPromptCost adds.
 func earlierSummariesCost(earlier []string) int {
 	total := 0
 	for _, summary := range earlier {
-		total += estimateBytesAsTokens("<earlier_summary>\n" + strings.TrimSpace(summary) + "\n</earlier_summary>\n\n")
+		total += estimateBytesAsTokens("<earlier_summary>\n"+strings.TrimSpace(summary)+"\n</earlier_summary>\n\n") + 1
 	}
 	return total
 }
+
+// compactionPromptFramingTokens prices the user prompt text no entry owns —
+// block tags, the closing task and the room it states — with both blocks
+// present and the widest numbers, plus the rounding token every piece adds.
+var compactionPromptFramingTokens = estimateBytesAsTokens(buildUserPrompt(nil, []messageEntry{{}}, []messageEntry{{}},
+	summaryRoom{HistoryTokens: math.MaxInt, KeptTokens: math.MaxInt, SummaryTokens: math.MaxInt})) + 1
