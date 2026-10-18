@@ -1,0 +1,26 @@
+{
+  "source_tree": "0552487ffd7b5784e557dd2089d49bbcadb4f525",
+  "base": "ad8972d09cfca9f0a68cbe2ab1e43f19e493552c",
+  "provider": "scripted HTTP fixture",
+  "states": [
+    {
+      "name": "first",
+      "state": "completed",
+      "code": null
+    },
+    {
+      "name": "failure",
+      "state": "failed",
+      "code": "context.budget_unsatisfied"
+    },
+    {
+      "name": "recovered",
+      "state": "completed",
+      "code": null
+    }
+  ],
+  "page_errors": [],
+  "human_qa": false,
+  "build_note": "Compiled from the final merge tree before commit hook completion; tree equality verified against the resulting merge commit.",
+  "tested_commit": "347dd87096af07dc10c4cba61724b358e830dbc2"
+}
