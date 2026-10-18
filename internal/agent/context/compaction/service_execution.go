@@ -125,11 +125,13 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	earlierCost := earlierSummariesCost(earlier)
 	// The window holds what a pass reads and the summary written from it. A
 	// summary is shorter than what it replaces, so reading r tokens may need
-	// min(summaryLimit, r) beside it, and later groups are read only while that
-	// fits. No pass progresses without the earlier summaries and the first
+	// min(summaryLimit, r) beside it. A later group is read while at least
+	// half of that is left, r + min(summaryLimit, r)/2 <= readWindow: a pass
+	// gives up part of its summary room rather than leave a group to another
+	// pass. No pass progresses without the earlier summaries and the first
 	// group, so they need only some room left beside them.
 	required := earlierCost + leadingGroupCost(foldable)
-	inputTokens := readWindow - max(min(summaryLimit, readWindow/2, readWindow-required), 1)
+	inputTokens := readWindow - max(min(summaryLimit/2, readWindow/3, readWindow-required), 1)
 
 	toCompact := trimCompactMessages(foldable, inputTokens-earlierCost)
 	entries, compactedMessageIDs := buildEntriesAndIDs(toCompact)
