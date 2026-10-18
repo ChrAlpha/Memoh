@@ -3,12 +3,14 @@ package compaction
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -139,8 +141,8 @@ func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) 
 		if res.Status != StatusProgress {
 			t.Fatalf("status = %q, want %q: the rows past the summarizer input wait for the next pass", res.Status, StatusProgress)
 		}
-		if got := estimateBytesAsTokens(stub.prompt); got > 1000+320 {
-			t.Fatalf("summarizer prompt ~%d tokens, want within its input room plus fixed overhead", got)
+		if request := estimateBytesAsTokens(stub.prompt); request+stub.maxTokens > cfg.SummaryWindowTokens {
+			t.Fatalf("request %d + max_tokens %d exceeds the %d window", request, stub.maxTokens, cfg.SummaryWindowTokens)
 		}
 		return len(q.markedIDs)
 	}
@@ -152,21 +154,47 @@ func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) 
 	}
 }
 
-func TestDoCompactionNeverTruncatesAnEntryToFit(t *testing.T) {
+func TestDoCompactionReadsAWholeEntryOnlyWhenTheRequestFitsTheWindow(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
-		textRow(t, "user", 1202),
-		mkRow(t, "user", `"current"`, 40),
-	}
-	q := &fakeQueries{uncompacted: rows}
-	stub := &stubModel{summary: "condensed"}
-	cfg := machineryConfig(stub, 100000)
-	cfg.SummaryWindowTokens = summarizerWindowFor(1000)
-	cfg.ProtectedSources = historySources(rows[1])
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
-	if !errors.Is(err, errCompactionInputOverflow) || stub.calls != 0 || q.created || len(q.markedIDs) != 0 {
-		t.Fatalf("err=%v calls=%d created=%t marked=%v, want an overflow before any claim or call: a summary covers only what its model read", err, stub.calls, q.created, q.markedIDs)
+	for _, tc := range []struct {
+		name    string
+		tokens  int
+		earlier int
+		fits    bool
+	}{
+		{name: "over half the window", tokens: 4000, fits: true},
+		{name: "earlier summaries over half the window", tokens: 100, earlier: 4000, fits: true},
+		{name: "past the window", tokens: 6000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rows := []sqlc.ListUncompactedMessagesBySessionRow{textRow(t, "user", tc.tokens), mkRow(t, "user", `"current"`, 40)}
+			stub := &stubModel{summary: "condensed"}
+			cfg := machineryConfig(stub, 100000)
+			cfg.SummaryWindowTokens, cfg.MaxOutputTokens = 8000, 100000
+			cfg.ProtectedSources = historySources(rows[1])
+			q := &fakeQueries{uncompacted: rows}
+			if tc.earlier > 0 {
+				q.priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", tc.earlier*4))
+			}
+			_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+			if !tc.fits {
+				if !errors.Is(err, errCompactionInputOverflow) || stub.calls != 0 || q.created || len(q.markedIDs) != 0 {
+					t.Fatalf("err=%v calls=%d created=%t marked=%v, want an overflow before any claim or call: a summary covers only what its model read", err, stub.calls, q.created, q.markedIDs)
+				}
+				return
+			}
+			if err != nil || len(q.markedIDs) != 1 || !strings.Contains(stub.prompt, strings.Repeat("x", tc.tokens*4)) || !strings.Contains(stub.prompt, strings.Repeat("p", tc.earlier*4)) {
+				t.Fatalf("err=%v marked=%d, want the whole entry and earlier summaries read in one call", err, len(q.markedIDs))
+			}
+			if request := contextfrag.ProviderBudgetTokensFromBytes(len(stub.prompt)); request+stub.maxTokens > cfg.SummaryWindowTokens {
+				t.Fatalf("request %d + max_tokens %d exceeds the %d window", request, stub.maxTokens, cfg.SummaryWindowTokens)
+			}
+			if !strings.Contains(stub.prompt, fmt.Sprintf("must stay under %d tokens", stub.maxTokens)) {
+				t.Fatalf("stated limit is not the %d tokens the window leaves:\n%s", stub.maxTokens, stub.prompt[len(stub.prompt)-400:])
+			}
+		})
 	}
 }
 
