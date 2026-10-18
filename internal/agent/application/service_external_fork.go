@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/felinics/memoh/internal/agent/runtime/external"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
@@ -29,6 +30,19 @@ var ErrExternalForkAnchorMissing = errors.New("fork source turn has no runtime t
 // must carry. The anchor turn's recorded runtime turn id bounds the
 // runtime-side fork to the same cut as the visible history.
 func (s *Service) PrepareExternalFork(ctx context.Context, botID, sessionID, turnID string) (map[string]any, error) {
+	var result map[string]any
+	err := s.runSessionControl(ctx, RuntimeControlRequest{BotID: botID, ThreadID: sessionID}, true, func(ctx context.Context, _ string) error {
+		var err error
+		result, err = s.prepareExternalFork(ctx, botID, sessionID, turnID)
+		return err
+	})
+	if errors.Is(err, turn.ErrSessionBusy) {
+		return nil, RuntimeControlError(err)
+	}
+	return result, err
+}
+
+func (s *Service) prepareExternalFork(ctx context.Context, botID, sessionID, turnID string) (map[string]any, error) {
 	if s == nil || s.sessionService == nil {
 		return nil, errors.New("session service not configured")
 	}

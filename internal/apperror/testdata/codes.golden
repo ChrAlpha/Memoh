@@ -116,6 +116,7 @@ external_agent.account_unbound	403
 external_agent.container_workspace_required	409
 external_agent.turn_replacement_unsupported	400
 external_runtime.auth_required	409
+external_runtime.busy	409
 external_runtime.context_window_exceeded	422
 external_runtime.overloaded	503
 external_runtime.rate_limited	429
@@ -196,6 +197,7 @@ runtime_control.cancelled	409
 runtime_control.command_unavailable	409
 runtime_control.failed	500
 runtime_control.forbidden	403
+runtime_control.fork_latest_only	409
 runtime_control.goal_requires_default_mode	409
 runtime_control.mode_unavailable	400
 runtime_control.request_invalid	400

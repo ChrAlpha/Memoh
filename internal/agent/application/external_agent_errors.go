@@ -109,6 +109,10 @@ func runtimeFailureCode(failure *external.Failure) (apperror.Code, map[string]st
 		return apperror.CodeRuntimeControlGoalRequiresDefaultMode, nil
 	case external.FailureModeUnavailable:
 		return apperror.CodeRuntimeControlModeUnavailable, nil
+	case external.FailureRuntimeBusy:
+		return apperror.CodeExternalRuntimeBusy, nil
+	case external.FailureForkLatestOnly:
+		return apperror.CodeRuntimeControlForkLatestOnly, nil
 	case external.FailureControlFailed:
 		return apperror.CodeRuntimeControlFailed, nil
 	case external.FailureCredentialBusy:

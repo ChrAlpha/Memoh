@@ -7,7 +7,7 @@
 // Consumers share this table instead of copying the vocabulary and rules.
 //
 // The CHECK constraints on the runtime columns enumerate the same kinds, so
-// adding a kind here also takes a migration that admits it (0144).
+// adding a kind here also takes a migration that admits it (0144, 0167).
 //
 // This is deliberately a leaf package (stdlib-only) so that packages which
 // cannot import the session domain (chat/message, schedule) still share the
@@ -28,6 +28,8 @@ const (
 	Codex Kind = "codex"
 	// ClaudeCode is the direct Claude Code external agent runtime.
 	ClaudeCode Kind = "claude-code"
+	// GrokBuild is the direct Grok Build external agent runtime.
+	GrokBuild Kind = "grok-build"
 )
 
 // Session modes a runtime can host. The string values are the session_mode
@@ -68,6 +70,11 @@ type capabilities struct {
 	// carry the agent-side model id (acp_model_id) instead of a Memoh model
 	// row, and reasoning efforts use the agent's own vocabulary.
 	AgentModel bool
+	// ReadCommandsRequireIdle: reads may open or replace a native session.
+	ReadCommandsRequireIdle bool
+	// LatestForkAnchorKey: only the native anchor stored at this key can fork.
+	// Empty means historical anchors are supported.
+	LatestForkAnchorKey string
 	// SessionModes this runtime can host.
 	SessionModes []string
 }
@@ -101,6 +108,17 @@ var capabilityByKind = map[Kind]capabilities{
 		WorkspaceExec:  true,
 		AgentModel:     true,
 		SessionModes:   []string{ModeChat, ModeDiscuss, ModeSchedule},
+	},
+	GrokBuild: {
+		ReadCommandsRequireIdle: true,
+		LatestForkAnchorKey:     "grok_last_prompt_id",
+		External:                true,
+		Direct:                  true,
+		DisplayName:             "Grok Build",
+		DecisionWaiter:          true,
+		WorkspaceExec:           true,
+		AgentModel:              true,
+		SessionModes:            []string{ModeChat, ModeDiscuss, ModeSchedule},
 	},
 }
 
@@ -192,4 +210,16 @@ func SupportedSessionModes(raw string) []string {
 		return nil
 	}
 	return caps.SessionModes
+}
+
+// ReadCommandsRequireIdle reports whether even read commands need admission.
+func ReadCommandsRequireIdle(raw string) bool {
+	c, _ := capabilitiesFor(raw)
+	return c.ReadCommandsRequireIdle
+}
+
+// LatestForkAnchorKey names the native metadata anchor required by latest-only forks.
+func LatestForkAnchorKey(raw string) string {
+	c, _ := capabilitiesFor(raw)
+	return c.LatestForkAnchorKey
 }

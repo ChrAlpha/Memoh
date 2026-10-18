@@ -1587,9 +1587,16 @@ const canForkAssistant = computed(() =>
     || isDirectBotAgentRuntime(activeChatTarget.value.runtimeType)),
 )
 
+// A freshly committed turn can arrive before older history rows are refetched.
+// Keep the latest-only policy effective across that live transition as well.
+const latestRuntimeForkTurn = computed(() => messages.value.findLast(message =>
+  message.role === 'assistant' && message.runtimeForkable === true,
+))
 function isForkableTurn(message: ChatMessage): boolean {
   return canForkAssistant.value && message.role === 'assistant'
     && (activeChatTarget.value.runtimeType === 'model' || message.runtimeForkable === true)
+    && (!runtimeControls.controls.value?.capabilities?.fork_latest_only
+      || message === latestRuntimeForkTurn.value)
 }
 
 // Retry/edit rewrite persisted history and replay it, which only runtimes

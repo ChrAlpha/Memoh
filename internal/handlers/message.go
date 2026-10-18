@@ -245,7 +245,7 @@ func (h *MessageHandler) ListMessages(c echo.Context) error {
 	if len(messages) > 0 {
 		messages = h.extendToUITurnHead(c.Request().Context(), sessionID, messages, limit)
 	}
-	items := chatview.ConvertMessagesToUITurns(messages)
+	items := chatview.ConvertSessionMessagesToUITurns(messages, sess.RuntimeType, sess.RuntimeMetadata)
 	h.decorateUITurns(c.Request().Context(), botID, sessionID, sess, items)
 	return c.JSON(http.StatusOK, UIMessageListResponse{Items: items})
 }
@@ -340,7 +340,7 @@ func (h *MessageHandler) LocateMessage(c echo.Context) error {
 		return errs.Wrap(err, "get message")
 	}
 
-	items := chatview.ConvertMessagesToUITurns(located.Messages)
+	items := chatview.ConvertSessionMessagesToUITurns(located.Messages, sess.RuntimeType, sess.RuntimeMetadata)
 	h.decorateUITurns(c.Request().Context(), botID, sessionID, sess, items)
 	return c.JSON(http.StatusOK, UILocateMessageResponse{
 		Items:                   items,

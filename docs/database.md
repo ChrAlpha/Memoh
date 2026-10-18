@@ -30,6 +30,7 @@ PostgreSQL migrations live in `db/postgres/migrations/`:
   ```
 - **Idempotent DDL**: Use `IF NOT EXISTS` / `IF EXISTS` guards (e.g., `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `DROP TABLE IF EXISTS`) so migrations are safe to re-run.
 - **Down migration must fully reverse up**: The `.down.sql` must cleanly undo everything its `.up.sql` does, in reverse order.
+- **One file is one transaction**: golang-migrate sends a migration file as a single statement batch, which PostgreSQL runs as one implicit transaction, so every lock a file takes is held until the whole file commits. Adding a constraint `NOT VALID` and validating it in the same file therefore holds the `ADD`'s ACCESS EXCLUSIVE lock through the validation scan. To validate a large table without blocking reads and writes, put `ADD … NOT VALID` in one migration and `VALIDATE CONSTRAINT` in the next (0167/0168 do this).
 - **After creating or modifying migrations**, run `mise run sqlc-generate` to regenerate Go sqlc code, then validate the PostgreSQL migration path.
 - **0157 is reserved**: `0157_reserved_cloud_alignment` is intentionally empty. It realigns this stream with Memoh-Cloud's copy, which numbers every migration from 0141 onward one higher, so both use the same numbers from 0158 on. Never reuse a number or renumber a merged migration; Cloud-only schema changes belong in Cloud's own migration stream.
 

@@ -51,6 +51,7 @@ type RuntimeModeState struct {
 }
 
 type RuntimeControlCapabilities struct {
+	ForkLatestOnly  bool `json:"fork_latest_only"`
 	PermissionModes bool `json:"permission_modes"`
 	Compact         bool `json:"compact"`
 	PlanMode        bool `json:"plan_mode"`

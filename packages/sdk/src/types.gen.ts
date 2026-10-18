@@ -350,7 +350,7 @@ export type AgentcredentialAuthorization = {
 
 export type AgentcredentialAuthorizationRequest = {
     auth_kind: string;
-    runtime: 'codex' | 'claude-code';
+    runtime: 'codex' | 'claude-code' | 'grok-build';
     secret?: {
         [key: string]: string;
     };
@@ -4217,6 +4217,7 @@ export type TurnRuntimeCommandKind = 'turn' | 'read' | 'operation';
 
 export type TurnRuntimeControlCapabilities = {
     compact?: boolean;
+    fork_latest_only?: boolean;
     goal?: boolean;
     permission_modes?: boolean;
     plan_mode?: boolean;

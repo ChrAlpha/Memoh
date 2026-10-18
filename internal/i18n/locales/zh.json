@@ -653,6 +653,7 @@
     },
     "external_runtime": {
       "auth_required": "Codex 账号未连接或登录已失效。请前往 Agent 设置连接 ChatGPT，或配置 API Key。",
+      "busy": "此 Agent 仍在完成之前的操作，请等待操作结束后重试。",
       "context_window_exceeded": "这个会话已超出模型的上下文长度上限。请压缩上下文，或新开一个会话。",
       "overloaded": "外部 Agent 的模型服务暂时不可用或过载。请稍后重试，或换一个模型。",
       "rate_limited": "外部 Agent 已达到模型服务的速率上限，请稍后再发送。",
@@ -769,6 +770,7 @@
       "command_unavailable": "此命令已不可用，请刷新后重试。",
       "failed": "操作未能完成，请重试。",
       "forbidden": "你没有访问此会话的权限。",
+      "fork_latest_only": "只能从最新一条回复分叉，请选择最新回复后重试。",
       "goal_requires_default_mode": "请先退出计划模式，再创建或继续目标。",
       "mode_unavailable": "此权限模式已不可用，请刷新后重新选择。",
       "request_invalid": "请求无效，请刷新后重试。",

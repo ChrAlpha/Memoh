@@ -130,6 +130,8 @@ const (
 	CodeChatMessageEmpty                         Code = "chat.message_empty"
 	CodeRuntimeControlThreadUnavailable          Code = "runtime_control.thread_unavailable"
 	CodeRuntimeControlCancelled                  Code = "runtime_control.cancelled"
+	CodeRuntimeControlForkLatestOnly             Code = "runtime_control.fork_latest_only"
+	CodeExternalRuntimeBusy                      Code = "external_runtime.busy"
 	CodeRuntimeControlFailed                     Code = "runtime_control.failed"
 	CodeRuntimeControlSteerFailed                Code = "runtime_control.steer_failed"
 	CodeRuntimeControlForbidden                  Code = "runtime_control.forbidden"
@@ -880,6 +882,8 @@ var catalog = map[Code]Definition{
 	CodeRuntimeControlThreadUnavailable:       {HTTPStatus: http.StatusConflict, Detail: "Start a conversation before using this operation."},
 	CodeRuntimeControlCancelled:               {HTTPStatus: http.StatusConflict, Detail: "The runtime operation was cancelled."},
 	CodeRuntimeControlSteerFailed:             {HTTPStatus: http.StatusConflict, Detail: "The additional instruction could not be delivered. Send it again after this turn finishes."},
+	CodeRuntimeControlForkLatestOnly:          {HTTPStatus: http.StatusConflict, Detail: "Only the latest reply can be forked. Select the latest reply and try again."},
+	CodeExternalRuntimeBusy:                   {HTTPStatus: http.StatusConflict, Detail: "This Agent is finishing an earlier operation. Try again when it has finished."},
 	CodeRuntimeControlFailed:                  {HTTPStatus: http.StatusInternalServerError, Detail: "The runtime control could not be completed. Try again."},
 	CodeRuntimeControlForbidden:               {HTTPStatus: http.StatusForbidden, Detail: "You do not have access to this conversation."},
 	CodeRuntimeControlRequestInvalid:          {HTTPStatus: http.StatusBadRequest, Detail: "The runtime control request is invalid."},
