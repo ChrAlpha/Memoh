@@ -106,7 +106,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	earlierTokens := 0
 	for i, parent := range parents {
 		earlier[i] = parent.Summary
-		earlierTokens += estimateSummaryReplayTokens(parent.Summary)
+		earlierTokens += summaryProviderReplayTokens(parent.Summary)
 	}
 
 	// The summary replaces the earlier summaries and the rows it folds; what
@@ -137,9 +137,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		if _, pending := buildEntriesAndIDs(foldable); len(pending) > 0 {
 			return Result{}, fmt.Errorf("%w: earlier_summary_tokens=%d input_tokens=%d", errCompactionInputOverflow, earlierTokens, inputTokens)
 		}
-		// Nothing new to fold: the summaries are refolded only when they are
-		// themselves what no longer fits.
-		if len(parents) == 0 || earlierTokens <= summaryLimit {
+		// Nothing new to fold: the summaries are refolded only when their
+		// replay is itself what no longer fits the room the request leaves.
+		if len(parents) == 0 || earlierTokens <= room.HistoryTokens-room.KeptTokens {
 			return Result{Status: StatusNoop}, nil
 		}
 	}
@@ -268,12 +268,13 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
-	if summaryTokens := estimateSummaryReplayTokens(summary); summaryTokens >= replacedTokens {
-		err = fmt.Errorf("%w: summary_tokens=%d replaced_tokens=%d", errIneffectiveSummary, summaryTokens, replacedTokens)
+	replay := summaryProviderReplayTokens(summary)
+	if replay >= replacedTokens {
+		err = fmt.Errorf("%w: summary_tokens=%d replaced_tokens=%d", errIneffectiveSummary, replay, replacedTokens)
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
-	if replay := summaryProviderReplayTokens(summary); replay > room.HistoryTokens-room.KeptTokens {
+	if replay > room.HistoryTokens-room.KeptTokens {
 		err = fmt.Errorf("%w: replay=%d room=%d", errNoSummaryRoom, replay, room.HistoryTokens-room.KeptTokens)
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
@@ -451,11 +452,4 @@ func (s *Service) completeRollupLog(
 		return err
 	}
 	return nil
-}
-
-// estimateSummaryReplayTokens meters the summary with the same byte-based
-// estimator the selection path uses, so the ineffective-summary check
-// compares like units.
-func estimateSummaryReplayTokens(summary string) int {
-	return estimateBytesAsTokens("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")
 }
