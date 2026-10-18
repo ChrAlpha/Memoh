@@ -142,9 +142,12 @@
             </FieldStack>
           </FormField>
 
-          <Separator />
+          <!-- A managed OAuth provider lists no models until it signs in, so
+               it has nothing to import when it is created. -->
+          <Separator v-if="importsModelsOnCreate(form.values.client_type)" />
 
           <FormField
+            v-if="importsModelsOnCreate(form.values.client_type)"
             v-slot="{ value, handleChange }"
             name="auto_import"
           >
@@ -193,8 +196,9 @@ import { useDialogMutation } from '@/composables/useDialogMutation'
 import SearchableSelectPopover from '@/components/searchable-select-popover/index.vue'
 import {
   CLIENT_TYPE_META,
+  importsModelsOnCreate,
   isManagedOAuthClientType,
-  MANUAL_LLM_CLIENT_TYPE_LIST,
+  LLM_CLIENT_TYPE_LIST,
   suggestedModelCompatibilities,
 } from '@/constants/client-types'
 import { FieldStack, FormDialogShell, toast } from '@felinic/ui'
@@ -303,7 +307,7 @@ function shouldShowBaseUrlField() {
 }
 
 const clientTypeOptions = computed(() =>
-  MANUAL_LLM_CLIENT_TYPE_LIST.map((ct) => ({
+  LLM_CLIENT_TYPE_LIST.map((ct) => ({
     value: ct.value,
     label: ct.label,
     description: ct.hint,
@@ -352,7 +356,7 @@ const { mutateAsync: createProviderMutation, isLoading } = useMutation({
       const response = await postProviders({ body: payload, throwOnError: true })
       result = response.data
     }
-    if (data.auto_import && result?.id) {
+    if (data.auto_import && result?.id && importsModelsOnCreate(data.client_type)) {
       try {
         const defaultCompatibilities = preset
           ? undefined
