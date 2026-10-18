@@ -6,7 +6,7 @@ on first boot:
 - `AGENTS.md`, `MEMORY.md`, `PROFILES.md` — bot persona and memory scaffolding
   (not developer guides).
 - `.memoh/` — default hooks configuration and built-in skills
-  (`skill-creator`, `hooks-setup`).
+  (`skill-creator`, `hooks-setup`, `memoh-help`).
 
 The Server embeds `templates.WorkspaceFS()` and applies it through a
 provider-neutral filesystem after provisioning. Container workspaces currently
