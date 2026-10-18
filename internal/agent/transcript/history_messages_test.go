@@ -15,6 +15,7 @@ import (
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -79,6 +80,37 @@ func TestProjectInterruptedHistoryReasoning(t *testing.T) {
 	}
 	if len(runreq.ModelMessageToSDKMessage(records[0].ModelMessage).Content) != 2 {
 		t.Fatal("input records were mutated")
+	}
+}
+
+// A checkpoint that carries reasoning and the legacy ToolCalls field still
+// sends each tool call to the provider once.
+func TestProjectInterruptedHistoryReasoningKeepsLegacyToolCallOnce(t *testing.T) {
+	t.Parallel()
+
+	message := runreq.SDKMessagesToModelMessages([]sdk.Message{{
+		Role:    sdk.MessageRoleAssistant,
+		Content: []sdk.MessagePart{sdk.ReasoningPart{Text: "still thinking"}},
+	}})[0]
+	message.ToolCalls = []turnpkg.ToolCall{{
+		ID:       "call-legacy",
+		Type:     "function",
+		Function: turnpkg.ToolCallFunction{Name: "send", Arguments: `{"text":"hi"}`},
+	}}
+	records := []historyfrag.HistoryRecord{{
+		ModelMessage: message,
+		Metadata:     map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true},
+	}}
+
+	got := runreq.ModelMessageToSDKMessage(projectInterruptedHistoryReasoning(records)[0].ModelMessage)
+	calls := 0
+	for _, part := range got.Content {
+		if call, ok := part.(sdk.ToolCallPart); ok && call.ToolCallID == "call-legacy" {
+			calls++
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("legacy tool-call parts = %d, want 1: %#v", calls, got.Content)
 	}
 }
 

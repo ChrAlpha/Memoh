@@ -293,6 +293,39 @@ func TestAssembleContextKeepsToolExchangesAndReasoning(t *testing.T) {
 	}
 }
 
+// Provider metadata on a text or tool-call part (Gemini thoughtSignature)
+// reaches the request unchanged.
+func TestAssembleContextKeepsPartProviderMetadata(t *testing.T) {
+	t.Parallel()
+
+	toolMeta := partmeta.Fold(map[string]any{"google": map[string]any{"thoughtSignature": "sig-1"}})
+	textMeta := partmeta.Fold(map[string]any{"google": map[string]any{"thoughtSignature": "SIG_TEXT"}})
+	rows := []messagepkg.Message{
+		agenttest.AssembleRow(t, "a-tool", sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{
+			sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "read", Input: toolexec.ArgumentsFromValue(map[string]any{"path": "/tmp/a.txt"}), ProviderMetadata: toolMeta},
+		}}, agenttest.AssembleBase, nil),
+		agenttest.AssembleRow(t, "a-text", sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{
+			sdk.TextPart{Text: "the answer", ProviderMetadata: textMeta},
+		}}, agenttest.AssembleBase.Add(time.Minute), nil),
+	}
+
+	assembled, err := newAssembleService(&agenttest.AssembleMessages{After: rows}).Assemble(context.Background(), assembleRequest(PurposeRun, runreq.ChatRequest{}))
+	if err != nil {
+		t.Fatalf("assembleContext: %v", err)
+	}
+	if len(assembled.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(assembled.Messages))
+	}
+	call, ok := runreq.ModelMessageToSDKMessage(assembled.Messages[0]).Content[0].(sdk.ToolCallPart)
+	if !ok || call.ProviderMetadata["google"]["thoughtSignature"] != "sig-1" {
+		t.Fatalf("tool-call part = %#v, want thoughtSignature sig-1", call)
+	}
+	text, ok := runreq.ModelMessageToSDKMessage(assembled.Messages[1]).Content[0].(sdk.TextPart)
+	if !ok || text.ProviderMetadata["google"]["thoughtSignature"] != "SIG_TEXT" {
+		t.Fatalf("text part = %#v, want thoughtSignature SIG_TEXT", text)
+	}
+}
+
 // A load that reaches its byte budget may have stopped short of the oldest
 // row; the assembly says so, and a load that fits does not.
 func TestAssembleContextFlagsALoadThatReachedItsBudget(t *testing.T) {

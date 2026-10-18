@@ -9,11 +9,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	textprune "github.com/felinics/memoh/internal/prune"
+	"github.com/felinics/memoh/internal/settings"
 )
 
 func TestBuildInteractionMetadataIncludesForwardConversation(t *testing.T) {
@@ -486,5 +492,54 @@ func TestWorkspaceTargetMetadataNamesTheTarget(t *testing.T) {
 	location, _ := got["execution_location"].(map[string]any)
 	if location["target_id"] != "computer-b" || location["kind"] != "remote" || location["name"] != "B" {
 		t.Fatalf("metadata = %#v, want the trimmed target", got)
+	}
+}
+
+type fullToolResultsSettings struct {
+	dbstore.Queries
+	full bool
+}
+
+func (q fullToolResultsSettings) GetSettingsByBotID(_ context.Context, botID pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {
+	return sqlc.GetSettingsByBotIDRow{BotID: botID, ReasoningEffort: "medium", PersistFullToolResults: q.full}, nil
+}
+
+// A tool result past the payload limit is stored pruned unless the bot keeps
+// full tool results.
+func TestBuildPersistInputsPrunesToolResultsUnlessBotKeepsThemFull(t *testing.T) {
+	t.Parallel()
+
+	unit := "large tool result "
+	huge := strings.Repeat(unit, gatewayToolPayloadMaxBytes/len(unit)+2)
+	for _, tc := range []struct {
+		name       string
+		full       bool
+		wantPruned bool
+	}{
+		{"default prunes", false, true},
+		{"persist full tool results keeps the original", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			logger := slog.New(slog.DiscardHandler)
+			writer := newTestWriter(Deps{
+				Logger: logger,
+				Bot:    agenttest.BotEnvWithSettings(logger, settings.NewService(logger, fullToolResultsSettings{full: tc.full}, nil, nil)),
+			})
+			inputs, err := writer.buildPersistInputs(context.Background(), runreq.ChatRequest{
+				BotID: storeRoundBotID, ThreadID: "session-1",
+			}, []runreq.ModelMessage{{Role: "tool", Content: runreq.NewTextContent(huge)}}, "", RoundOptions{})
+			if err != nil {
+				t.Fatalf("buildPersistInputs() error = %v", err)
+			}
+			content := string(inputs[0].Content)
+			if pruned := strings.Contains(content, textprune.DefaultMarker); pruned != tc.wantPruned {
+				t.Fatalf("pruned = %t, want %t: %.120q", pruned, tc.wantPruned, content)
+			}
+			if kept := strings.Contains(content, huge); kept == tc.wantPruned {
+				t.Fatalf("original kept = %t with wantPruned %t", kept, tc.wantPruned)
+			}
+		})
 	}
 }
