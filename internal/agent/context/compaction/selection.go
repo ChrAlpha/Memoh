@@ -299,6 +299,17 @@ func trimCompactMessages(items []CompactionCandidate, maxTokens int) []Compactio
 	return items[:end]
 }
 
+// leadingGroupCost is what trimCompactMessages must admit before any entry
+// reaches the summarizer: the cost of the first group that renders one.
+func leadingGroupCost(items []CompactionCandidate) int {
+	for _, group := range toolExchangeGroups(items) {
+		if cost := markableGroupCost(items, group); cost > 0 {
+			return cost
+		}
+	}
+	return 0
+}
+
 // markableGroupCost is the summarizer-prompt cost of one tool-exchange group:
 // zero for a must-keep group, otherwise each rendered entry's text — what
 // buildUserPrompt actually emits, headers included — plus its role prefix,
