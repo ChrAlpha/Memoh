@@ -2013,6 +2013,43 @@ func buildChannelMessage(output turn.AssistantOutput, capabilities channel.Chann
 	return msg
 }
 
+// assistantReply builds the one message a turn's channel stream finalizes.
+// The stream delivers text before each tool call as its own segment, so the
+// final covers only the outputs after the last tool call. Those can still be
+// several (reasoning after text starts a new message), and adapters keep a
+// single final per stream: one push per output kept only the first or the
+// last. Outputs that must stay unseen (silent replies, text already sent
+// through a messaging tool) are left out, and the rest join like the parts of
+// one message.
+func assistantReply(messages []turn.ModelMessage, capabilities channel.ChannelCapabilities, sentTexts []string) (channel.Message, bool) {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && turn.HasToolCallContent(messages[i]) {
+			messages = messages[i+1:]
+			break
+		}
+	}
+	var reply turn.AssistantOutput
+	for _, output := range turn.ExtractAssistantOutputs(messages) {
+		msg := buildChannelMessage(output, capabilities)
+		if msg.IsEmpty() {
+			continue
+		}
+		plainText := strings.TrimSpace(msg.PlainText())
+		if isSilentReplyText(plainText) || isMessagingToolDuplicate(plainText, sentTexts) {
+			continue
+		}
+		parts := output.Parts
+		if len(parts) == 0 {
+			parts = []turn.ContentPart{{Type: "text", Text: output.Content}}
+		}
+		reply.Parts = append(reply.Parts, parts...)
+	}
+	if len(reply.Parts) == 0 {
+		return channel.Message{}, false
+	}
+	return buildChannelMessage(reply, capabilities), true
+}
+
 func hasNonTrivialContentPart(parts []turn.ContentPart) bool {
 	for _, part := range parts {
 		if !contentPartHasValue(part) {
@@ -3431,16 +3468,8 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 	}
 	sentTexts, suppressReplies := collectMessageToolContext(p.registry, finalMessages, msg.Channel, target)
 	if !suppressReplies {
-		outputs := turn.ExtractAssistantOutputs(finalMessages)
-		for _, output := range outputs {
-			outMessage := buildChannelMessage(output, channel.ChannelCapabilities{Text: true, Markdown: true, Reply: true})
-			if outMessage.IsEmpty() {
-				continue
-			}
-			plainText := strings.TrimSpace(outMessage.PlainText())
-			if isSilentReplyText(plainText) || isMessagingToolDuplicate(plainText, sentTexts) {
-				continue
-			}
+		capabilities := channel.ChannelCapabilities{Text: true, Markdown: true, Reply: true}
+		if outMessage, ok := assistantReply(finalMessages, capabilities, sentTexts); ok {
 			if outMessage.Reply == nil && sourceMessageID != "" {
 				outMessage.Reply = &channel.ReplyRef{Target: target, MessageID: sourceMessageID}
 			}
@@ -3976,17 +4005,9 @@ func newSessionHarnessName(spec NewSessionSpec, agentName string, profiles turn.
 		}
 		return "ACP"
 	case sessionpkg.IsDirectRuntimeType(spec.Runtime):
-		if name, ok := directRuntimeNames[spec.Runtime]; ok {
-			return name
-		}
-		return spec.Runtime
+		return runtimekind.DisplayName(spec.Runtime)
 	}
 	return ""
-}
-
-var directRuntimeNames = map[string]string{
-	string(runtimekind.Codex):      "Codex",
-	string(runtimekind.ClaudeCode): "Claude Code",
 }
 
 // newSessionAgentName is the Name of the Agent a /new session runs on. /new

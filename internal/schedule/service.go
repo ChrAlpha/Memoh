@@ -398,6 +398,7 @@ func (s *Service) runSchedule(ctx context.Context, sched Schedule) error {
 	if err != nil {
 		return fmt.Errorf("create schedule fire log: %w", err)
 	}
+	s.publishChanged(logRow.BotID.String(), logRow.ScheduleID.String())
 
 	if errors.Is(sessionErr, ErrTargetSessionGone) {
 		// The session this schedule was pinned to no longer exists. Every
@@ -551,6 +552,7 @@ func failureCode(err error) apperror.Code {
 
 // completeLog closes a run log. A failed fire passes the code of its cause;
 // a run whose budget expired is an execution timeout whatever else it reports.
+// A closed log announces a schedule change so run lists drop the running state.
 func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, resultText string, errorCode apperror.Code, usageBytes []byte, modelID pgtype.UUID) {
 	if errors.Is(context.Cause(ctx), ErrExecutionTimeout) {
 		status = "error"
@@ -561,7 +563,7 @@ func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, re
 	if !logID.Valid {
 		return
 	}
-	_, err := s.queries.CompleteScheduleLog(ctx, sqlc.CompleteScheduleLogParams{
+	row, err := s.queries.CompleteScheduleLog(ctx, sqlc.CompleteScheduleLogParams{
 		ID:         logID,
 		Status:     status,
 		ResultText: resultText,
@@ -571,7 +573,9 @@ func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, re
 	})
 	if err != nil {
 		s.logger.ErrorContext(ctx, "complete schedule log failed", slog.Any("error", err))
+		return
 	}
+	s.publishChanged(row.BotID.String(), row.ScheduleID.String())
 }
 
 func (s *Service) ListLogs(ctx context.Context, botID string, limit, offset int) ([]Log, int64, error) {

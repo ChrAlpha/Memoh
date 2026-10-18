@@ -99,6 +99,7 @@ func superviseXvnc(ctx context.Context, log *slog.Logger) {
 			"-geometry", geometry,
 			"-depth", "24",
 			"-SecurityTypes", "None",
+			"-SendPrimary=0",
 			"-localhost",
 			"-rfbport", displayRFBTCPPort(rfbTCPAddr),
 		)
@@ -816,9 +817,10 @@ func resolveDisplayCommand(candidates ...string) string {
 }
 
 func withDisplayEnv(env []string) []string {
-	out := make([]string, 0, len(env)+2)
+	out := make([]string, 0, len(env)+3)
 	hasDisplay := false
 	hasGtkA11y := false
+	hasLang := false
 	for _, item := range env {
 		switch {
 		case strings.HasPrefix(item, "DISPLAY="):
@@ -827,6 +829,12 @@ func withDisplayEnv(env []string) []string {
 		case strings.HasPrefix(item, "GTK_A11Y="):
 			out = append(out, item)
 			hasGtkA11y = true
+		case strings.HasPrefix(item, "LANG="):
+			if strings.TrimPrefix(item, "LANG=") == "" {
+				continue
+			}
+			out = append(out, item)
+			hasLang = true
 		default:
 			out = append(out, item)
 		}
@@ -836,6 +844,11 @@ func withDisplayEnv(env []string) []string {
 	}
 	if !hasGtkA11y {
 		out = append(out, "GTK_A11Y=1")
+	}
+	// X11 applications in the POSIX locale cannot turn Unicode keysyms into
+	// committed text. C.UTF-8 is available in the workspace image without an IME.
+	if !hasLang {
+		out = append(out, "LANG=C.UTF-8")
 	}
 	return out
 }

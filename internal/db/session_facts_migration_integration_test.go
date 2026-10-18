@@ -33,7 +33,7 @@ func presetRow(mode string, audience sessionfacts.Audience) sessionFactsRow {
 	}
 }
 
-// 0167 records the facts session_mode stood in for. The backfill must give
+// 0169 records the facts session_mode stood in for. The backfill must give
 // every existing session the facts its mode implied, under the FORCE RLS a
 // migration connection runs with, and the chain must step over it both ways.
 func TestSessionFactsMigrationBackfillsFromMode(t *testing.T) {
@@ -72,22 +72,22 @@ func TestSessionFactsMigrationBackfillsFromMode(t *testing.T) {
 	if _, err := conn.Exec(ctx, "SET ROLE "+quotedRole); err != nil {
 		t.Fatalf("set migration role: %v", err)
 	}
-	up, err := fs.ReadFile(postgresMigrationsFS(t), "0167_session_facts.up.sql")
+	up, err := fs.ReadFile(postgresMigrationsFS(t), "0169_session_facts.up.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	down, err := fs.ReadFile(postgresMigrationsFS(t), "0167_session_facts.down.sql")
+	down, err := fs.ReadFile(postgresMigrationsFS(t), "0169_session_facts.down.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := conn.Exec(ctx, string(down)); err != nil {
-		t.Fatalf("0167 down: %v", err)
+		t.Fatalf("0169 down: %v", err)
 	}
 	assertSessionFactColumns(t, ctx, pool, false)
 	for range 2 {
 		if _, err := conn.Exec(ctx, string(up)); err != nil {
-			t.Fatalf("0167 up: %v", err)
+			t.Fatalf("0169 up: %v", err)
 		}
 		assertSessionFactColumns(t, ctx, pool, true)
 		assertSessionTablesKeepRLS(t, ctx, pool)
@@ -103,9 +103,9 @@ func TestSessionFactsMigrationBackfillsFromMode(t *testing.T) {
 		}
 	}
 
-	// Later migrations sit above 0167, so stepping over it counts from head.
-	t.Run("chain steps over 0167 in both directions", func(t *testing.T) {
-		steps := countMigrationsFrom(t, "0167_session_facts.up.sql")
+	// Later migrations sit above 0169, so stepping over it counts from head.
+	t.Run("chain steps over 0169 in both directions", func(t *testing.T) {
+		steps := countMigrationsFrom(t, "0169_session_facts.up.sql")
 		stepDown(t, dsn, steps)
 		assertSessionFactColumns(t, ctx, pool, false)
 		stepUp(t, dsn, steps)
@@ -264,7 +264,7 @@ func assertSessionTablesKeepRLS(t *testing.T, ctx context.Context, pool *pgxpool
 		var enabled, forced bool
 		mustScan(t, pool.QueryRow(ctx, `SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE oid = $1::regclass`, table), &enabled, &forced)
 		if !enabled || !forced {
-			t.Fatalf("%s RLS enabled=%t forced=%t after 0167", table, enabled, forced)
+			t.Fatalf("%s RLS enabled=%t forced=%t after 0169", table, enabled, forced)
 		}
 	}
 }

@@ -186,9 +186,38 @@ display_ready() {
 }
 
 prepare_lock=/tmp/memoh-display-prepare.lock
+prepare_owner=0
+
+prepare_process_alive() {
+  prepare_pid="$1"
+  [ -n "$prepare_pid" ] || return 1
+  kill -0 "$prepare_pid" 2>/dev/null || return 1
+  [ -r "/proc/$prepare_pid/cmdline" ] || return 1
+  tr '\000' ' ' <"/proc/$prepare_pid/cmdline" 2>/dev/null | grep -Fq 'display-prepare.sh'
+}
+
+release_prepare_lock() {
+  rm -f "$prepare_lock/pid"
+  rmdir "$prepare_lock" 2>/dev/null || true
+}
+
+takeover_stale_prepare_lock() {
+  [ -f "$prepare_lock/pid" ] || return 1
+  prepare_pid="$(cat "$prepare_lock/pid" 2>/dev/null || true)"
+  [ -n "$prepare_pid" ] || return 1
+  prepare_process_alive "$prepare_pid" && return 1
+  rm -f "$prepare_lock/pid"
+  rmdir "$prepare_lock" 2>/dev/null || return 1
+  mkdir "$prepare_lock" 2>/dev/null
+}
+
 if mkdir "$prepare_lock" 2>/dev/null; then
-  trap 'rmdir "$prepare_lock" 2>/dev/null || true' EXIT INT TERM
-else
+  prepare_owner=1
+elif takeover_stale_prepare_lock; then
+  prepare_owner=1
+fi
+
+if [ "$prepare_owner" -ne 1 ]; then
   progress 12 checking "Waiting for another desktop preparation"
   wait_i=0
   while [ -d "$prepare_lock" ] && [ "$wait_i" -lt 180 ]; do
@@ -196,15 +225,28 @@ else
       emit_complete
       exit 0
     fi
+    if takeover_stale_prepare_lock; then
+      prepare_owner=1
+      break
+    fi
     sleep 1
     wait_i=$((wait_i + 1))
   done
-  if display_ready; then
+  if [ "$prepare_owner" -ne 1 ] && display_ready; then
     emit_complete
     exit 0
   fi
-  echo "Another desktop preparation is still running." >&2
-  exit 1
+  if [ "$prepare_owner" -ne 1 ]; then
+    echo "Another desktop preparation is still running." >&2
+    exit 1
+  fi
+fi
+
+if [ "$prepare_owner" -eq 1 ]; then
+  # A forced process-group kill cannot run the EXIT trap. Record the owner so
+  # a later preparation can distinguish that stale lock from an active one.
+  trap release_prepare_lock EXIT INT TERM
+  printf '%s\n' "$$" >"$prepare_lock/pid"
 fi
 
 progress 10 checking "Checking display runtime"
@@ -217,6 +259,9 @@ has_desktop || { echo "Workspace image contract violation: desktop session runti
 progress 18 checking "Display runtime is available"
 
 export DISPLAY=:99
+# Desktop processes inherit this locale. Default to UTF-8 so applications can
+# decode committed Unicode text; preserve a locale already set by the user.
+export LANG="${LANG:-C.UTF-8}"
 mkdir -p /run/memoh /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 
@@ -245,7 +290,7 @@ if ! display_socket_ready; then
   if ! display_socket_ready; then
     stop_xvnc
     cleanup_stale_display
-    nohup "$XVNC" :99 -geometry "$XVNC_GEOMETRY" -depth 24 -SecurityTypes None -localhost -rfbport "$RFB_PORT" >/tmp/memoh-xvnc.log 2>&1 &
+    nohup "$XVNC" :99 -geometry "$XVNC_GEOMETRY" -depth 24 -SecurityTypes None -SendPrimary=0 -localhost -rfbport "$RFB_PORT" >/tmp/memoh-xvnc.log 2>&1 &
     wait_i=0
     while [ "$wait_i" -lt 25 ]; do
       display_socket_ready && break
@@ -264,6 +309,11 @@ run_quick() {
     "$@" >/dev/null 2>&1 &
   fi
 }
+# Transfer explicit CLIPBOARD copies, not X11 PRIMARY changes from selecting
+# text. Apply to an existing display as well, without restarting applications.
+if has_cmd vncconfig; then
+  run_quick vncconfig -display "$DISPLAY" -set SendPrimary=0
+fi
 if command -v fc-cache >/dev/null 2>&1; then
   nohup fc-cache -f >/tmp/memoh-fc-cache.log 2>&1 &
 fi

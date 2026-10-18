@@ -373,6 +373,109 @@ func TestClientTunnelSurvivesDialContextCancellation(t *testing.T) {
 	}
 }
 
+// blockedTunnelStream models a peer that no longer drains its receive window.
+// Both I/O directions remain blocked until the stream context is canceled.
+type blockedTunnelStream struct {
+	grpc.ClientStream
+	ctx         context.Context
+	sendStarted chan struct{}
+	recvStarted chan struct{}
+	sendOnce    sync.Once
+}
+
+func (s *blockedTunnelStream) Context() context.Context { return s.ctx }
+func (*blockedTunnelStream) CloseSend() error           { return nil }
+
+func (s *blockedTunnelStream) Send(*pb.TunnelFrame) error {
+	s.sendOnce.Do(func() { close(s.sendStarted) })
+	<-s.ctx.Done()
+	return s.ctx.Err()
+}
+
+func (s *blockedTunnelStream) Recv() (*pb.TunnelFrame, error) {
+	close(s.recvStarted)
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func TestTunnelCloseUnblocksConcurrentReadAndWrite(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &blockedTunnelStream{ctx: ctx, sendStarted: make(chan struct{}), recvStarted: make(chan struct{})}
+	conn := &tunnelConn{stream: stream, cancel: cancel}
+	writeDone := make(chan error, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := conn.Write([]byte("blocked input"))
+		writeDone <- err
+	}()
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	<-stream.sendStarted
+	<-stream.recvStarted
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for blocked stream I/O instead of canceling it")
+	}
+	for name, done := range map[string]<-chan error{"read": readDone, "write": writeDone} {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatalf("%s succeeded after Close", name)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("Close left %s blocked", name)
+		}
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("repeated Close: %v", err)
+	}
+}
+
+type tunnelCancellationTestServer struct {
+	pb.UnimplementedContainerServiceServer
+	canceled chan struct{}
+}
+
+func (s *tunnelCancellationTestServer) Tunnel(stream pb.ContainerService_TunnelServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	if err := stream.Send(&pb.TunnelFrame{Frame: &pb.TunnelFrame_Data{Data: &pb.TunnelData{}}}); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	close(s.canceled)
+	return stream.Context().Err()
+}
+
+func TestClientTunnelCloseCancelsServerStream(t *testing.T) {
+	t.Parallel()
+	server := &tunnelCancellationTestServer{canceled: make(chan struct{})}
+	client := newTestClient(t, server)
+	conn, err := client.DialContext(context.Background(), "tcp", "127.0.0.1:9222")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-server.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Close left the server tunnel alive")
+	}
+}
+
 func TestServeReverseHTTPForwardsRequests(t *testing.T) {
 	broker := bridgesvc.NewReverseHTTPBroker()
 	client := newTestClient(t, bridgesvc.New(bridgesvc.Options{ReverseHTTP: broker}))
@@ -810,4 +913,65 @@ func TestExecStreamCloseWithoutCloseSendCancelsProcess(t *testing.T) {
 		}
 		return
 	}
+}
+
+func TestClientTunnelCloseUnblocksServerTargetWrite(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	handlerDone := make(chan struct{})
+	lis := bufconn.Listen(testBufSize)
+	srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		defer close(handlerDone)
+		return handler(srv, ss)
+	}))
+	pb.RegisterContainerServiceServer(srv, bridgesvc.New(bridgesvc.Options{}))
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+	rpc, err := grpc.NewClient("passthrough:///bufnet", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rpc.Close() }()
+	client := NewClientFromConn(rpc)
+	tunnel, err := client.DialContext(context.Background(), "tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := <-accepted
+	defer func() { _ = target.Close() }()
+	wrote := make(chan struct{})
+	go func() {
+		defer close(wrote)
+		for i := 0; i < 2000; i++ {
+			if _, err := tunnel.Write(make([]byte, 48*1024)); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-wrote:
+		t.Fatal("writes finished without target reading")
+	default:
+	}
+	if err := tunnel.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Error("canceled tunnel handler remains blocked writing the target socket")
+	}
+	_ = target.Close()
+	<-wrote
 }

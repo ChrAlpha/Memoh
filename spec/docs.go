@@ -34,7 +34,7 @@ const docTemplate = `{
         },
         "/agent-authorizations": {
             "post": {
-                "description": "Starts Codex device authorization or Claude browser authorization, or encrypts a supplied API key or Claude OAuth token. No Bot or workspace is created. Ready means the credential has been staged; API keys and manually supplied tokens are not probed against the provider.",
+                "description": "Starts Codex device authorization or Claude browser authorization, or encrypts a supplied API key or Claude OAuth token. A Grok account cannot be staged: it signs in on the Agent itself. No Bot or workspace is created. Ready means the credential has been staged; API keys and manually supplied tokens are not probed against the provider.",
                 "consumes": [
                     "application/json"
                 ],
@@ -44,7 +44,7 @@ const docTemplate = `{
                 "tags": [
                     "agent-authorizations"
                 ],
-                "summary": "Authorize an Agent account before creating a Bot",
+                "summary": "Authorize an Agent account independently of a Bot",
                 "parameters": [
                     {
                         "description": "Authorization request",
@@ -1820,159 +1820,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/bots/{bot_id}/agents/{id}/codex/login/device/authorize": {
-            "post": {
-                "tags": [
-                    "external-agents"
-                ],
-                "summary": "Start a ChatGPT device-code login for the direct codex runtime",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Bot Agent ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginAuthorizeResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/agents/{id}/codex/login/device/cancel": {
-            "post": {
-                "tags": [
-                    "external-agents"
-                ],
-                "summary": "Cancel a pending codex device-code login",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Login reference",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginPollRequest"
-                        }
-                    },
-                    {
-                        "type": "string",
-                        "description": "Bot Agent ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/agents/{id}/codex/login/device/poll": {
-            "post": {
-                "tags": [
-                    "external-agents"
-                ],
-                "summary": "Poll a pending codex device-code login",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Login reference",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginPollRequest"
-                        }
-                    },
-                    {
-                        "type": "string",
-                        "description": "Bot Agent ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginPollResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    }
-                }
-            }
-        },
         "/bots/{bot_id}/agents/{id}/codex/usage": {
             "get": {
                 "description": "Available to anyone who can chat with the Bot, so the composer",
@@ -2248,6 +2095,179 @@ const docTemplate = `{
                     },
                     "503": {
                         "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/login/device/authorize": {
+            "post": {
+                "description": "The Agent's own process obtains the device code; the user opens the URL and confirms the code there. Only runtimes that sign in this way (Codex, Grok Build) accept it.",
+                "tags": [
+                    "external-agents"
+                ],
+                "summary": "Start a device-code account sign-in on a direct runtime Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginAuthorizeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/login/device/cancel": {
+            "post": {
+                "tags": [
+                    "external-agents"
+                ],
+                "summary": "Cancel a pending device-code sign-in",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Sign-in reference",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginPollRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/login/device/poll": {
+            "post": {
+                "description": "A successful sign-in has already been stored as the Agent's credential when this answers success.",
+                "tags": [
+                    "external-agents"
+                ],
+                "summary": "Poll a pending device-code sign-in",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Sign-in reference",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginPollRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginPollResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/server.Problem"
                         }
@@ -8258,6 +8278,76 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/schedule/{id}/sessions": {
+            "get": {
+                "description": "List a schedule's runs newest first, each with the session it ran in. Runs whose session was deleted are omitted; a run that failed before it had a session is included with an empty session_id. status is running until the run completes.",
+                "tags": [
+                    "schedule"
+                ],
+                "summary": "List the sessions a schedule's runs created",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Schedule ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Page size (1..100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Opaque cursor returned as next_cursor on a previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/schedule.ListRunSessionsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/sessions": {
             "get": {
                 "tags": [
@@ -8288,6 +8378,12 @@ const docTemplate = `{
                         "type": "string",
                         "description": "Only include sessions bound to this workdir. The literal none selects sessions with no workdir.",
                         "name": "workdir_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule.",
+                        "name": "hide_schedule_runs",
                         "in": "query"
                     },
                     {
@@ -17979,7 +18075,8 @@ const docTemplate = `{
                     "type": "string",
                     "enum": [
                         "codex",
-                        "claude-code"
+                        "claude-code",
+                        "grok-build"
                     ]
                 },
                 "secret": {
@@ -19970,6 +20067,10 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                },
+                "tool_discovery_error": {
+                    "description": "ToolDiscoveryError is set when the last attempt to load this\nconnection's tools for the agent failed, even though the connection\nitself is authorized. Empty when the tools loaded or were never asked.",
+                    "type": "string"
                 }
             }
         },
@@ -19981,6 +20082,45 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/connectors.Connector"
                     }
+                },
+                "tool_discovery": {
+                    "description": "ToolDiscovery reports the last outcome of loading the bot's connector\ntools for the agent; absent until the agent has tried.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/connectors.ToolDiscoveryStatus"
+                        }
+                    ]
+                }
+            }
+        },
+        "connectors.ToolDiscoveryFailure": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "type": "string"
+                },
+                "connection_id": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "connectors.ToolDiscoveryStatus": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "failed_connections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/connectors.ToolDiscoveryFailure"
+                    }
+                },
+                "observed_at": {
+                    "type": "string"
                 }
             }
         },
@@ -21200,53 +21340,6 @@ const docTemplate = `{
                 }
             }
         },
-        "externalagent.CodexDeviceLoginAuthorizeResponse": {
-            "type": "object",
-            "required": [
-                "login_id",
-                "user_code",
-                "verification_url"
-            ],
-            "properties": {
-                "login_id": {
-                    "type": "string"
-                },
-                "user_code": {
-                    "type": "string"
-                },
-                "verification_url": {
-                    "type": "string"
-                }
-            }
-        },
-        "externalagent.CodexDeviceLoginPollRequest": {
-            "type": "object",
-            "required": [
-                "login_id"
-            ],
-            "properties": {
-                "login_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "externalagent.CodexDeviceLoginPollResponse": {
-            "type": "object",
-            "required": [
-                "status"
-            ],
-            "properties": {
-                "status": {
-                    "type": "string",
-                    "enum": [
-                        "pending",
-                        "success",
-                        "error",
-                        "unknown"
-                    ]
-                }
-            }
-        },
         "externalagent.CodexUsageResponse": {
             "type": "object",
             "required": [
@@ -21281,6 +21374,53 @@ const docTemplate = `{
                 "window_minutes": {
                     "description": "WindowMinutes is 0 when the backend does not report the window length.",
                     "type": "integer"
+                }
+            }
+        },
+        "externalagent.DeviceLoginAuthorizeResponse": {
+            "type": "object",
+            "required": [
+                "login_id",
+                "user_code",
+                "verification_url"
+            ],
+            "properties": {
+                "login_id": {
+                    "type": "string"
+                },
+                "user_code": {
+                    "type": "string"
+                },
+                "verification_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "externalagent.DeviceLoginPollRequest": {
+            "type": "object",
+            "required": [
+                "login_id"
+            ],
+            "properties": {
+                "login_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "externalagent.DeviceLoginPollResponse": {
+            "type": "object",
+            "required": [
+                "status"
+            ],
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "success",
+                        "error",
+                        "unknown"
+                    ]
                 }
             }
         },
@@ -26473,6 +26613,20 @@ const docTemplate = `{
                 }
             }
         },
+        "schedule.ListRunSessionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/schedule.RunSession"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
         "schedule.Log": {
             "type": "object",
             "properties": {
@@ -26518,6 +26672,43 @@ const docTemplate = `{
                 },
                 "value": {
                     "type": "integer"
+                }
+            }
+        },
+        "schedule.RunSession": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "description": "CompletedAt is null while the fire is still running.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "error_code": {
+                    "type": "string"
+                },
+                "log_id": {
+                    "description": "LogID identifies the fire (schedule_logs.id).",
+                    "type": "string"
+                },
+                "session_id": {
+                    "description": "SessionID is empty when the fire failed before any session existed.",
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is running while the fire has not completed, then ok or error.",
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "ok",
+                        "error"
+                    ]
+                },
+                "title": {
+                    "description": "Title is the session title, empty when there is no session.",
+                    "type": "string"
                 }
             }
         },
@@ -27276,6 +27467,9 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "compact": {
+                    "type": "boolean"
+                },
+                "fork_latest_only": {
                     "type": "boolean"
                 },
                 "goal": {

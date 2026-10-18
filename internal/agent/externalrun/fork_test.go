@@ -7,6 +7,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -47,7 +48,8 @@ func TestPrepareForkAnswersRuntimeFailures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := testHost(t, Deps{
-				Store: forkAnchorQueries{},
+				Store:    forkAnchorQueries{},
+				Admitter: agenttest.NewScriptedAdmitter(),
 				Sessions: &agenttest.Sessions{GetFn: func(context.Context, string) (session.Thread, error) {
 					return session.Thread{ID: forkTestSessionID, BotID: forkTestBotID, BotAgentID: "agent-1", RuntimeType: session.RuntimeCodex}, nil
 				}},
@@ -61,5 +63,16 @@ func TestPrepareForkAnswersRuntimeFailures(t *testing.T) {
 				t.Fatalf("error lost the runtime failure: %v", err)
 			}
 		})
+	}
+}
+
+func TestPrepareForkRejectsActiveTurnBeforeNativeFork(t *testing.T) {
+	admitter := agenttest.NewScriptedAdmitter()
+	admitter.AdmitErr = sessionruntime.ErrSessionBusy
+	// No session/driver is installed: a busy request must never reach either.
+	svc := testHost(t, Deps{Admitter: admitter})
+	_, err := svc.PrepareFork(t.Context(), forkTestBotID, forkTestSessionID, forkTestTurnID)
+	if apperror.CodeOf(err) != apperror.CodeSessionBusy || len(admitter.Finishes) != 0 {
+		t.Fatalf("busy fork: %v", err)
 	}
 }

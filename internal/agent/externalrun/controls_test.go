@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strconv"
 	"testing"
 	"time"
 
@@ -62,12 +63,20 @@ func (q *controlQueries) UpdateSessionRuntimeMetadata(_ context.Context, in sqlc
 }
 
 type controlDriver struct {
+	runtimeType  string
+	readCalls    int
 	commands     []external.Command
 	compactCalls int
 	mode         string
 }
 
-func (*controlDriver) RuntimeType() string { return "codex" }
+func (d *controlDriver) RuntimeType() string {
+	if d.runtimeType != "" {
+		return d.runtimeType
+	}
+	return "codex"
+}
+
 func (*controlDriver) Prompt(context.Context, external.PromptInput) (external.PromptResult, error) {
 	panic("control must not start chat")
 }
@@ -76,7 +85,8 @@ func (d *controlDriver) Commands(context.Context, external.PromptInput) ([]exter
 	return d.commands, nil
 }
 
-func (*controlDriver) ReadCommand(context.Context, external.PromptInput) (external.CommandResult, error) {
+func (d *controlDriver) ReadCommand(context.Context, external.PromptInput) (external.CommandResult, error) {
+	d.readCalls++
 	return external.CommandResult{Data: map[string]any{"native_field": "cached"}, Notice: "last_observed"}, nil
 }
 
@@ -132,6 +142,9 @@ func TestRuntimeControlUsesSlotWithoutChatAdmissionAndMergesMetadata(t *testing.
 	view, err := admitter.Inputs[0].Execution.Admission(t.Context(), admitter.Finishes[0].Handle)
 	if err != nil || view.RequestUserTurn != nil || view.Operation != nil {
 		t.Fatalf("control created chat admission: %+v, %v", view, err)
+	}
+	if admitter.Inputs[0].Execution.ConfigurationOnly {
+		t.Fatal("compaction changed its admission presentation")
 	}
 	var meta map[string]any
 	if err := json.Unmarshal(q.row.RuntimeMetadata, &meta); err != nil {
@@ -239,5 +252,43 @@ func TestRuntimeControlReportsBusySessionAsTurnBusy(t *testing.T) {
 				t.Fatal("busy session dispatched the command")
 			}
 		})
+	}
+}
+
+func TestReadCommandAdmissionMatchesRuntimePolicy(t *testing.T) {
+	for _, runtime := range []string{"codex", "grok-build"} {
+		for _, busy := range []bool{false, true} {
+			t.Run(runtime+"/"+strconv.FormatBool(busy), func(t *testing.T) {
+				svc, q, driver, admitter, req := runtimeControlFixture(t)
+				q.row.RuntimeType = runtime
+				driver.runtimeType = runtime
+				svc.drivers = map[string]external.Driver{runtime: driver}
+				req.Command = "inspect"
+				if busy {
+					admitter.AdmitErr = sessionruntime.ErrSessionBusy
+				}
+				result, err := svc.ExecuteRuntimeCommand(t.Context(), req)
+				if runtime == "grok-build" && busy {
+					if apperror.CodeOf(err) != apperror.CodeSessionBusy || driver.readCalls != 0 {
+						t.Fatalf("busy read dispatched: calls=%d err=%v", driver.readCalls, err)
+					}
+					return
+				}
+				if err != nil || driver.readCalls != 1 || !reflect.DeepEqual(result.Data, map[string]any{"native_field": "cached"}) {
+					t.Fatalf("read result=%+v calls=%d err=%v", result, driver.readCalls, err)
+				}
+				if runtime == "grok-build" && len(admitter.Finishes) != 1 {
+					t.Fatal("exclusive read did not finish admission")
+				}
+				// The slot keeps the read off a running turn; the read itself is
+				// no assistant turn, so clients must not render it as streaming.
+				if runtime == "grok-build" && !admitter.Inputs[0].Execution.ConfigurationOnly {
+					t.Fatal("exclusive read was admitted as an assistant turn")
+				}
+				if runtime == "codex" && len(admitter.Inputs) != 0 {
+					t.Fatal("cached read unnecessarily took a slot")
+				}
+			})
+		}
 	}
 }

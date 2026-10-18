@@ -29,10 +29,11 @@ func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *te
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 
 	items, _ := itemsFromRows(rows)
-	entries, _ := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
+	entries, ids := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
+	raw := max(entriesPromptCost(entries), compactedReplayTokens(items, ids))
 	artifacts := fusionArtifacts(t, parents)
-	partialReplacement := summaryReplacementTokens(entries, artifacts[:1])
-	wholeReplacement := summaryReplacementTokens(entries, artifacts)
+	partialReplacement := summaryReplacementTokens(raw, artifacts[:1])
+	wholeReplacement := summaryReplacementTokens(raw, artifacts)
 	stub.summary = strings.Repeat("s", partialReplacement*4)
 	summaryTokens := estimateSummaryReplayTokens(stub.summary)
 	if summaryTokens < partialReplacement || summaryTokens >= wholeReplacement {
@@ -193,8 +194,8 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 	parents := fusionParentLogs(t, cfg, strings.Repeat("a", 2400), strings.Repeat("b", 2400))
 
 	items, _ := itemsFromRows(rows)
-	entries, _ := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
-	replacementTokens := summaryReplacementTokens(entries, fusionArtifacts(t, parents))
+	entries, ids := buildEntriesAndIDs(splitByTarget(items, cfg.TargetTokens))
+	replacementTokens := summaryReplacementTokens(max(entriesPromptCost(entries), compactedReplayTokens(items, ids)), fusionArtifacts(t, parents))
 	stub.summary = strings.Repeat("s", replacementTokens*4)
 	if summaryTokens := estimateSummaryReplayTokens(stub.summary); summaryTokens < replacementTokens {
 		t.Fatalf("test setup invalid: summary=%d replacement=%d", summaryTokens, replacementTokens)

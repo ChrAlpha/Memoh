@@ -48,6 +48,7 @@ func itemsFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]Compactio
 		})
 	}
 	if len(items) > 0 {
+		protectPendingUserInput(items)
 		propagateMustKeepAcrossToolExchanges(items)
 		markSelectionPolicies(items)
 	}

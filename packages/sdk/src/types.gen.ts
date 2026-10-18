@@ -350,7 +350,7 @@ export type AgentcredentialAuthorization = {
 
 export type AgentcredentialAuthorizationRequest = {
     auth_kind: string;
-    runtime: 'codex' | 'claude-code';
+    runtime: 'codex' | 'claude-code' | 'grok-build';
     secret?: {
         [key: string]: string;
     };
@@ -1146,10 +1146,33 @@ export type ConnectorsConnector = {
     connector_type?: string;
     enabled?: boolean;
     status?: string;
+    /**
+     * ToolDiscoveryError is set when the last attempt to load this
+     * connection's tools for the agent failed, even though the connection
+     * itself is authorized. Empty when the tools loaded or were never asked.
+     */
+    tool_discovery_error?: string;
 };
 
 export type ConnectorsListResponse = {
     items?: Array<ConnectorsConnector>;
+    /**
+     * ToolDiscovery reports the last outcome of loading the bot's connector
+     * tools for the agent; absent until the agent has tried.
+     */
+    tool_discovery?: ConnectorsToolDiscoveryStatus;
+};
+
+export type ConnectorsToolDiscoveryFailure = {
+    alias?: string;
+    connection_id?: string;
+    error?: string;
+};
+
+export type ConnectorsToolDiscoveryStatus = {
+    error?: string;
+    failed_connections?: Array<ConnectorsToolDiscoveryFailure>;
+    observed_at?: string;
 };
 
 export type ContextfragCacheClass = 'stable' | 'dynamic' | 'never';
@@ -1592,20 +1615,6 @@ export type ExternalReasoningEffortOption = {
     name?: string;
 };
 
-export type ExternalagentCodexDeviceLoginAuthorizeResponse = {
-    login_id: string;
-    user_code: string;
-    verification_url: string;
-};
-
-export type ExternalagentCodexDeviceLoginPollRequest = {
-    login_id: string;
-};
-
-export type ExternalagentCodexDeviceLoginPollResponse = {
-    status: 'pending' | 'success' | 'error' | 'unknown';
-};
-
 export type ExternalagentCodexUsageResponse = {
     limit_reached: boolean;
     windows: Array<ExternalagentCodexUsageWindow>;
@@ -1618,6 +1627,20 @@ export type ExternalagentCodexUsageWindow = {
      * WindowMinutes is 0 when the backend does not report the window length.
      */
     window_minutes: number;
+};
+
+export type ExternalagentDeviceLoginAuthorizeResponse = {
+    login_id: string;
+    user_code: string;
+    verification_url: string;
+};
+
+export type ExternalagentDeviceLoginPollRequest = {
+    login_id: string;
+};
+
+export type ExternalagentDeviceLoginPollResponse = {
+    status: 'pending' | 'success' | 'error' | 'unknown';
 };
 
 export type FetchprovidersCreateRequest = {
@@ -3855,6 +3878,11 @@ export type ScheduleListResponse = {
     items?: Array<ScheduleSchedule>;
 };
 
+export type ScheduleListRunSessionsResponse = {
+    items?: Array<ScheduleRunSession>;
+    next_cursor?: string;
+};
+
 export type ScheduleLog = {
     bot_id?: string;
     completed_at?: string;
@@ -3876,6 +3904,31 @@ export type ScheduleLog = {
 export type ScheduleNullableInt = {
     set?: boolean;
     value?: number;
+};
+
+export type ScheduleRunSession = {
+    /**
+     * CompletedAt is null while the fire is still running.
+     */
+    completed_at?: string | null;
+    error_code?: string;
+    /**
+     * LogID identifies the fire (schedule_logs.id).
+     */
+    log_id?: string;
+    /**
+     * SessionID is empty when the fire failed before any session existed.
+     */
+    session_id?: string;
+    started_at?: string;
+    /**
+     * Status is running while the fire has not completed, then ok or error.
+     */
+    status?: 'running' | 'ok' | 'error';
+    /**
+     * Title is the session title, empty when there is no session.
+     */
+    title?: string;
 };
 
 export type ScheduleSchedule = {
@@ -4204,6 +4257,7 @@ export type TurnRuntimeCommandKind = 'turn' | 'read' | 'operation';
 
 export type TurnRuntimeControlCapabilities = {
     compact?: boolean;
+    fork_latest_only?: boolean;
     goal?: boolean;
     permission_modes?: boolean;
     plan_mode?: boolean;
@@ -5900,128 +5954,6 @@ export type PatchBotsByBotIdAgentsByIdResponses = {
 
 export type PatchBotsByBotIdAgentsByIdResponse = PatchBotsByBotIdAgentsByIdResponses[keyof PatchBotsByBotIdAgentsByIdResponses];
 
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Bot Agent ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/agents/{id}/codex/login/device/authorize';
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeErrors = {
-    /**
-     * Bad Request
-     */
-    400: ServerProblem;
-    /**
-     * Forbidden
-     */
-    403: ServerProblem;
-    /**
-     * Service Unavailable
-     */
-    503: ServerProblem;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeError = PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeErrors[keyof PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeErrors];
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponses = {
-    /**
-     * OK
-     */
-    200: ExternalagentCodexDeviceLoginAuthorizeResponse;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponse = PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponses[keyof PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponses];
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelData = {
-    /**
-     * Login reference
-     */
-    body: ExternalagentCodexDeviceLoginPollRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Bot Agent ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/agents/{id}/codex/login/device/cancel';
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelErrors = {
-    /**
-     * Bad Request
-     */
-    400: ServerProblem;
-    /**
-     * Forbidden
-     */
-    403: ServerProblem;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelError = PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelErrors[keyof PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelErrors];
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollData = {
-    /**
-     * Login reference
-     */
-    body: ExternalagentCodexDeviceLoginPollRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Bot Agent ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/agents/{id}/codex/login/device/poll';
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollErrors = {
-    /**
-     * Bad Request
-     */
-    400: ServerProblem;
-    /**
-     * Forbidden
-     */
-    403: ServerProblem;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollError = PostBotsByBotIdAgentsByIdCodexLoginDevicePollErrors[keyof PostBotsByBotIdAgentsByIdCodexLoginDevicePollErrors];
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponses = {
-    /**
-     * OK
-     */
-    200: ExternalagentCodexDeviceLoginPollResponse;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponse = PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponses[keyof PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponses];
-
 export type GetBotsByBotIdAgentsByIdCodexUsageData = {
     body?: never;
     path: {
@@ -6243,6 +6175,140 @@ export type PostBotsByBotIdAgentsByIdCredentialClaimResponses = {
 };
 
 export type PostBotsByBotIdAgentsByIdCredentialClaimResponse = PostBotsByBotIdAgentsByIdCredentialClaimResponses[keyof PostBotsByBotIdAgentsByIdCredentialClaimResponses];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/login/device/authorize';
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeError = PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeErrors[keyof PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeErrors];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponses = {
+    /**
+     * OK
+     */
+    200: ExternalagentDeviceLoginAuthorizeResponse;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponse = PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponses[keyof PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponses];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelData = {
+    /**
+     * Sign-in reference
+     */
+    body: ExternalagentDeviceLoginPollRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/login/device/cancel';
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelError = PostBotsByBotIdAgentsByIdLoginDeviceCancelErrors[keyof PostBotsByBotIdAgentsByIdLoginDeviceCancelErrors];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollData = {
+    /**
+     * Sign-in reference
+     */
+    body: ExternalagentDeviceLoginPollRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/login/device/poll';
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollError = PostBotsByBotIdAgentsByIdLoginDevicePollErrors[keyof PostBotsByBotIdAgentsByIdLoginDevicePollErrors];
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollResponses = {
+    /**
+     * OK
+     */
+    200: ExternalagentDeviceLoginPollResponse;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollResponse = PostBotsByBotIdAgentsByIdLoginDevicePollResponses[keyof PostBotsByBotIdAgentsByIdLoginDevicePollResponses];
 
 export type GetBotsByBotIdAgentsByIdModelsData = {
     body?: never;
@@ -10993,6 +11059,61 @@ export type GetBotsByBotIdScheduleByIdLogsResponses = {
 
 export type GetBotsByBotIdScheduleByIdLogsResponse = GetBotsByBotIdScheduleByIdLogsResponses[keyof GetBotsByBotIdScheduleByIdLogsResponses];
 
+export type GetBotsByBotIdScheduleByIdSessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Schedule ID
+         */
+        id: string;
+    };
+    query?: {
+        /**
+         * Page size (1..100)
+         */
+        limit?: number;
+        /**
+         * Opaque cursor returned as next_cursor on a previous page
+         */
+        cursor?: string;
+    };
+    url: '/bots/{bot_id}/schedule/{id}/sessions';
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsError = GetBotsByBotIdScheduleByIdSessionsErrors[keyof GetBotsByBotIdScheduleByIdSessionsErrors];
+
+export type GetBotsByBotIdScheduleByIdSessionsResponses = {
+    /**
+     * OK
+     */
+    200: ScheduleListRunSessionsResponse;
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsResponse = GetBotsByBotIdScheduleByIdSessionsResponses[keyof GetBotsByBotIdScheduleByIdSessionsResponses];
+
 export type GetBotsByBotIdSessionsData = {
     body?: never;
     path: {
@@ -11014,6 +11135,10 @@ export type GetBotsByBotIdSessionsData = {
          * Only include sessions bound to this workdir. The literal none selects sessions with no workdir.
          */
         workdir_id?: string;
+        /**
+         * Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule.
+         */
+        hide_schedule_runs?: boolean;
         /**
          * Page size (1..200). Defaults to 50.
          */

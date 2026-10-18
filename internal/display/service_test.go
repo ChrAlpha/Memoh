@@ -233,6 +233,45 @@ func TestSessionReplacingPeerKeepsNewPeer(t *testing.T) {
 	}
 }
 
+func TestSessionStopClosesPeersAndRejectsNewViewers(t *testing.T) {
+	sess := newSession(NewService(nil, nil), "bot-1", "gst-launch-1.0", CodecVP8)
+	closed := 0
+	peer := &peerSession{id: "viewer", trackID: "track"}
+	peer.close = func() {
+		closed++
+		sess.removeTrack(peer.trackID)
+		sess.removePeer(peer)
+	}
+	sess.addTrack(peer.trackID, nil)
+	sess.addPeer(peer)
+	sess.stop()
+	sess.stop()
+	if closed != 1 || len(sess.peerInfos()) != 0 || !sess.closed() {
+		t.Fatalf("stopped session retained a live viewer: closed=%d peers=%d", closed, len(sess.peerInfos()))
+	}
+	if sess.addTrack("late-track", nil) {
+		t.Fatal("stopped session accepted a new track")
+	}
+	late := &peerSession{id: "late", close: func() { closed++ }}
+	sess.addPeer(late)
+	if closed != 2 || len(sess.peerInfos()) != 0 {
+		t.Fatal("viewer arriving during shutdown was not closed")
+	}
+}
+
+func TestIdleStopAllowsPeerCleanupToRemoveTracks(t *testing.T) {
+	sess := newSession(NewService(nil, nil), "bot-1", "gst-launch-1.0", CodecVP8)
+	peer := &peerSession{id: "viewer", close: func() { sess.removeTrack("already-removed") }}
+	sess.addPeer(peer)
+	done := make(chan struct{})
+	go func() { sess.stopIfIdle(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("idle stop deadlocked while cleaning up a peer")
+	}
+}
+
 func TestSessionCloseStalePeers(t *testing.T) {
 	sess := newSession(NewService(nil, nil), "bot-1", "gst-launch-1.0", CodecVP8)
 	fresh := &peerSession{id: "fresh", createdAt: time.Now(), state: webrtc.PeerConnectionStateConnecting.String()}

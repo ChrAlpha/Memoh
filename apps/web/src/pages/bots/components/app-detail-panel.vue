@@ -379,6 +379,12 @@ function dependencyName(dep: AppDependencyItem): string {
                 · {{ t('apps.connector.optional') }}
               </template>
             </p>
+            <p
+              v-if="connector.connector?.tool_discovery_error"
+              class="mt-0.5 text-body text-destructive"
+            >
+              {{ t('connectors.toolDiscoveryFailed', { error: connector.connector.tool_discovery_error }) }}
+            </p>
           </template>
           <div
             v-if="!discovered"

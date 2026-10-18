@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
@@ -31,6 +32,19 @@ var ErrExternalForkAnchorMissing = errors.New("fork source turn has no runtime t
 // must carry. The anchor turn's recorded runtime turn id bounds the
 // runtime-side fork to the same cut as the visible history.
 func (h *Host) PrepareFork(ctx context.Context, botID, sessionID, turnID string) (map[string]any, error) {
+	var result map[string]any
+	err := h.runSessionControl(ctx, turn.RuntimeControlRequest{BotID: botID, ThreadID: sessionID}, true, func(ctx context.Context, _ string) error {
+		var err error
+		result, err = h.prepareFork(ctx, botID, sessionID, turnID)
+		return err
+	})
+	if errors.Is(err, turn.ErrSessionBusy) {
+		return nil, outcome.RuntimeControlError(err)
+	}
+	return result, err
+}
+
+func (h *Host) prepareFork(ctx context.Context, botID, sessionID, turnID string) (map[string]any, error) {
 	sess, err := h.sessions.Get(ctx, sessionID)
 	if err != nil {
 		return nil, err

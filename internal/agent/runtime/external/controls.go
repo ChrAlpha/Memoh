@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/runtimekind"
 )
 
 var (
@@ -80,6 +81,9 @@ type GoalProvider interface {
 
 func ReadControls(ctx context.Context, driver Driver, input PromptInput) (Controls, error) {
 	out := Controls{SessionID: input.ThreadID, Commands: []Command{}, Modes: ModeState{AvailableModes: []Mode{}}}
+	if driver != nil {
+		out.Capabilities.ForkLatestOnly = runtimekind.LatestForkAnchorKey(driver.RuntimeType()) != ""
+	}
 	if provider, ok := driver.(CommandProvider); ok {
 		commands, err := provider.Commands(ctx, input)
 		if err != nil {

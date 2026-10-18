@@ -687,17 +687,11 @@ func (c *tunnelConn) Write(p []byte) (int, error) {
 }
 
 func (c *tunnelConn) Close() error {
-	var err error
-	c.closeMu.Do(func() {
-		c.writeMu.Lock()
-		defer c.writeMu.Unlock()
-		err = c.stream.Send(&pb.TunnelFrame{Frame: &pb.TunnelFrame_Close{Close: &pb.TunnelClose{}}})
-		if closeErr := c.stream.CloseSend(); err == nil {
-			err = closeErr
-		}
-		c.cancel()
-	})
-	return err
+	// Cancel before waiting on any stream I/O: Send can hold writeMu while
+	// blocked on gRPC flow control. Cancellation releases both Send and Recv,
+	// and the server closes the target connection when its Recv ends.
+	c.closeMu.Do(c.cancel)
+	return nil
 }
 
 func (c *tunnelConn) LocalAddr() net.Addr  { return c.local }

@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/messageconv"
+	"github.com/felinics/memoh/internal/runtimekind"
 	"github.com/felinics/memoh/internal/textutil"
 )
 
@@ -1741,4 +1742,32 @@ func isBackgroundTerminalStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+// ConvertSessionMessagesToUITurns applies the session's native fork boundary.
+// The durable anchor, rather than the last row in this page, is authoritative
+// so an older history page never offers a fork from its own final reply.
+func ConvertSessionMessagesToUITurns(messages []messagepkg.Message, runtimeType string, metadata map[string]any) []UITurn {
+	turns := ConvertMessagesToUITurns(messages)
+	key := runtimekind.LatestForkAnchorKey(runtimeType)
+	if key == "" {
+		return turns
+	}
+	latest, _ := metadata[key].(string)
+	latest = strings.TrimSpace(latest)
+	allowed := map[string]bool{}
+	for _, raw := range messages {
+		if raw.Role != "assistant" {
+			continue
+		}
+		ensurePersistedMetadata(&raw)
+		anchor, _ := raw.Metadata["agent_turn_id"].(string)
+		if latest != "" && strings.TrimSpace(anchor) == latest {
+			allowed[strings.TrimSpace(raw.TurnID)] = true
+		}
+	}
+	for i := range turns {
+		turns[i].RuntimeForkable = turns[i].RuntimeForkable && allowed[turns[i].TurnID]
+	}
+	return turns
 }

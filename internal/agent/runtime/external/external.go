@@ -217,8 +217,8 @@ type PromptInput struct {
 	// persist their own keys through it (e.g. the codex thread id).
 	RuntimeMetadata map[string]any
 
-	// ContextURI names the Memoh-owned context document. The budget and tool
-	// exchange policy flow into runtime-hosted Memoh tools.
+	// ContextURI names the Memoh-owned context document. The budget flows into
+	// runtime-hosted Memoh tools.
 	ContextURI             string
 	ContextBudgetMaxTokens int
 

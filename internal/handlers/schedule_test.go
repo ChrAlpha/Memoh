@@ -85,6 +85,8 @@ func TestScheduleHandlerPathParamsAreRequiredFields(t *testing.T) {
 		{"get id", map[string]string{"bot_id": "b"}, (*ScheduleHandler).Get, "id"},
 		{"update id", map[string]string{"bot_id": "b"}, (*ScheduleHandler).Update, "id"},
 		{"delete id", map[string]string{"bot_id": "b"}, (*ScheduleHandler).Delete, "id"},
+		{"run sessions bot_id", nil, (*ScheduleHandler).ListRunSessions, "bot_id"},
+		{"run sessions id", map[string]string{"bot_id": "b"}, (*ScheduleHandler).ListRunSessions, "id"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

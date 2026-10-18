@@ -19,7 +19,7 @@ require (
 	github.com/docker/go-connections v0.6.0
 	github.com/exaring/otelpgx v0.12.0
 	github.com/felinics/acgo v0.0.0-20260829152557-fc78bf271ef8
-	github.com/felinics/connect-it/sdk/go v0.1.1-0.20260829153217-0dcd18de667d
+	github.com/felinics/connect-it/sdk/go v0.1.1-0.20261016070556-d8593c2a7ec7
 	github.com/felinics/dingtalk-stream-sdk-go v0.0.0-20260829152622-ce4b7ea674a5
 	github.com/felinics/twilight v0.7.2-0.20261002230120-f6d0ce1a0e8c
 	github.com/go-ego/gse v1.0.2
@@ -199,7 +199,7 @@ require (
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/mod v0.38.0 // indirect
+	golang.org/x/mod v0.38.0
 	golang.org/x/net v0.58.0
 	golang.org/x/sync v0.22.0
 	golang.org/x/text v0.41.0 // indirect

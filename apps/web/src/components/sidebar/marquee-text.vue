@@ -112,9 +112,10 @@ onBeforeUnmount(() => observer?.disconnect())
 }
 
 /* Match the actions' hover capability: a synthetic touch hover must not
-   reserve space for a button that remains hidden on a touch-only device. */
+   reserve space for a button that remains hidden on a touch-only device.
+   A selecting row hides the actions button, so hover reserves nothing. */
 @media (hover: hover) {
-  [data-slot='sidebar-session-row']:hover .marquee-viewport {
+  [data-slot='sidebar-session-row']:not([data-selecting]):hover .marquee-viewport {
     --marquee-end-inset: var(--marquee-overlay-width);
     --marquee-travel: var(--marquee-overlay-travel);
     --marquee-duration: var(--marquee-overlay-duration);
@@ -128,7 +129,8 @@ onBeforeUnmount(() => observer?.disconnect())
   }
 
   @media (hover: hover) {
-    [data-slot='sidebar-session-row']:hover .marquee-viewport.is-overlay-truncated {
+    [data-slot='sidebar-session-row']:not([data-selecting]):hover .marquee-viewport.is-overlay-truncated,
+    [data-slot='sidebar-session-row'][data-selecting]:hover .marquee-viewport:is(.is-truncated, .is-overlay-truncated) {
       animation: marquee-pingpong var(--marquee-duration) linear 0.2s infinite;
     }
   }

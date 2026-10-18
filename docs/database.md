@@ -12,6 +12,13 @@
 
 PostgreSQL migrations live in `db/postgres/migrations/`:
 
+- **Merged migrations are immutable — NEVER modify historical migrations unless strictly necessary.** Once an incremental migration (`0002_` onward) is merged into `main`, existing databases may already have applied it, so editing it creates schema drift between fresh installs and upgraded environments (including Memoh-Cloud's synced stream). Do not edit, rename, renumber, reorder, or delete it. To fix or change it, add a new migration with the next number. Allowed changes are limited to:
+  - migrations introduced by PRs that are not yet merged;
+  - new migrations;
+  - the `0001_init` snapshot, which must keep reflecting the final schema (see below).
+
+  "Strictly necessary" means a merged migration cannot run on a fresh install or a full up/down cycle and a new migration cannot fix it. Even then, explain the reason and the impact on already-migrated databases in the PR, and get explicit maintainer approval before making the change.
+
 - **PostgreSQL `0001_init.up.sql` is the canonical full PostgreSQL schema.** It always contains the complete, up-to-date PostgreSQL database definition (all tables, indexes, constraints, etc.). When adding PostgreSQL schema changes, you must **also update `db/postgres/migrations/0001_init.up.sql`** to reflect the final state.
 - **Incremental PostgreSQL migration files** (`0002_`, `0003_`, ...) contain only the diff needed to upgrade an existing PostgreSQL database. They exist for environments that already have the schema and need to apply only the delta.
 - **Naming**: `{NNNN}_{description}.up.sql` and `{NNNN}_{description}.down.sql`, where `{NNNN}` is a zero-padded sequential number (e.g., `0005`). Always use the next available number.
@@ -23,6 +30,7 @@ PostgreSQL migrations live in `db/postgres/migrations/`:
   ```
 - **Idempotent DDL**: Use `IF NOT EXISTS` / `IF EXISTS` guards (e.g., `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `DROP TABLE IF EXISTS`) so migrations are safe to re-run.
 - **Down migration must fully reverse up**: The `.down.sql` must cleanly undo everything its `.up.sql` does, in reverse order.
+- **One file is one transaction**: golang-migrate sends a migration file as a single statement batch, which PostgreSQL runs as one implicit transaction, so every lock a file takes is held until the whole file commits. Adding a constraint `NOT VALID` and validating it in the same file therefore holds the `ADD`'s ACCESS EXCLUSIVE lock through the validation scan. To validate a large table without blocking reads and writes, put `ADD … NOT VALID` in one migration and `VALIDATE CONSTRAINT` in the next (0167/0168 do this).
 - **After creating or modifying migrations**, run `mise run sqlc-generate` to regenerate Go sqlc code, then validate the PostgreSQL migration path.
 - **0157 is reserved**: `0157_reserved_cloud_alignment` is intentionally empty. It realigns this stream with Memoh-Cloud's copy, which numbers every migration from 0141 onward one higher, so both use the same numbers from 0158 on. Never reuse a number or renumber a merged migration; Cloud-only schema changes belong in Cloud's own migration stream.
 

@@ -28,6 +28,12 @@ export function isManagedOAuthClientType(clientType: unknown): boolean {
   return typeof clientType === 'string' && MANAGED_OAUTH_CLIENT_TYPES.has(clientType)
 }
 
+// A managed OAuth provider lists its models only after it signs in, so a new
+// one has nothing to import yet.
+export function importsModelsOnCreate(clientType: unknown): boolean {
+  return !isManagedOAuthClientType(clientType)
+}
+
 export function isManagedModelCatalogClientType(clientType: unknown): boolean {
   return isManagedOAuthClientType(clientType)
 }
@@ -165,7 +171,9 @@ export const CLIENT_TYPE_LIST: ClientTypeMeta[] = Object.values(CLIENT_TYPE_META
 export const LLM_CLIENT_TYPE_LIST: ClientTypeMeta[] = CLIENT_TYPE_LIST
   .filter(ct => !ct.value.endsWith('-speech') && !ct.value.endsWith('-transcription') && !ct.value.endsWith('-video'))
 
-// Managed OAuth providers are created from their dedicated presets. Keeping
-// them out of generic selectors prevents partially configured instances.
+// Managed OAuth providers sign in after they are created. The add-provider
+// dialog offers them, since a new provider goes on to its OAuth step; flows
+// with no such step (onboarding, switching an existing provider's type) keep
+// them out so they cannot leave an instance that never signs in.
 export const MANUAL_LLM_CLIENT_TYPE_LIST: ClientTypeMeta[] = LLM_CLIENT_TYPE_LIST
   .filter(ct => !isManagedOAuthClientType(ct.value))

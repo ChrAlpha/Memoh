@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -48,6 +49,23 @@ func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, ava
 		return p.missingMarker
 	}
 	return p.usage
+}
+
+// noticeTestProvider registers no tools but implements tools.ToolNotice, the
+// shape of a federated source whose upstream failed this turn.
+type noticeTestProvider struct {
+	label  string
+	notice string
+}
+
+func (p noticeTestProvider) ProviderLabel() string { return p.label }
+
+func (noticeTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]toolexec.Tool, error) {
+	return nil, nil
+}
+
+func (p noticeTestProvider) ToolNotice(_ context.Context, _ tools.SessionContext) string {
+	return p.notice
 }
 
 // plainTestProvider returns a tool but does NOT implement tools.ToolUsage.
@@ -518,5 +536,64 @@ func TestAssembleToolsPassesCompleteAvailableToolSetToUsage(t *testing.T) {
 	}
 	if strings.Contains(usage, markerMissing) {
 		t.Fatalf("expected complete available tool set, got missing marker in %q", usage)
+	}
+}
+
+func TestGenerateInjectsToolNoticeWithoutRegisteredTools(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	const notice = "Connector tools could not be loaded: Forbidden."
+	a := newTestAgent(
+		&usageTestProvider{emitTool: true, usage: usageMarker},
+		noticeTestProvider{label: "mcp", notice: "  " + notice + "  "},
+		noticeTestProvider{label: "quiet"},
+	)
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "usage-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "base system",
+		Messages:         []sdk.Message{sdk.UserMessage("hi")},
+		SupportsToolCall: true,
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	params := modelProvider.lastParams()
+	wantSystem := "base system\n\n## Tool usage\n\n" + usageMarker + "\n\n" + notice
+	if params.System != wantSystem {
+		t.Fatalf("expected model system %q, got %q", wantSystem, params.System)
+	}
+}
+
+func TestToolNoticeFragmentsSurviveCapabilityGate(t *testing.T) {
+	t.Parallel()
+	if got := toolNoticeSectionID(noticeTestProvider{label: " mcp "}, 3); got != "notice.mcp" {
+		t.Fatalf("got %q", got)
+	}
+	if got := toolNoticeSectionID(plainTestProvider{}, 3); got != "notice.3" {
+		t.Fatalf("got %q", got)
+	}
+	frags := structuredToolUsage([]toolUsageSection{
+		{capability: "fake_tool", text: "usage"},
+		{id: "notice.mcp", text: "notice"},
+	}, contextfrag.Scope{})
+	if len(frags) != 3 {
+		t.Fatalf("frags=%d", len(frags))
+	}
+	notice := frags[2]
+	if notice.ID != toolUsageGroupID+".notice.mcp" {
+		t.Fatalf("notice id = %q", notice.ID)
+	}
+	// A notice reports a missing tool, so it must not be gated on a tool
+	// being present: an empty required capability passes the capability gate.
+	if notice.RequiredCapability != "" {
+		t.Fatalf("notice must not require a capability, got %q", notice.RequiredCapability)
+	}
+	if frags[1].RequiredCapability != "fake_tool" {
+		t.Fatalf("usage guidance must keep its capability, got %q", frags[1].RequiredCapability)
 	}
 }

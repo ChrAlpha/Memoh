@@ -46,6 +46,10 @@ const (
 	// FailureRequestBlocked: the model service's policy refused the request;
 	// the same request will be refused again.
 	FailureRequestBlocked
+	// FailureRuntimeBusy: the previous native process must finish before restart.
+	FailureRuntimeBusy
+	// FailureForkLatestOnly: the requested fork anchor is no longer the latest.
+	FailureForkLatestOnly
 )
 
 var failureText = map[FailureKind]string{ //nolint:gosec // G101 matches the credential kinds; these are failure texts.
@@ -54,6 +58,8 @@ var failureText = map[FailureKind]string{ //nolint:gosec // G101 matches the cre
 	FailureSessionResumeFailed:     "runtime session could not be resumed",
 	FailureGoalRequiresDefaultMode: "runtime goal requires the default mode",
 	FailureModeUnavailable:         ErrModeUnavailable.Error(),
+	FailureRuntimeBusy:             "external agent runtime is still in use",
+	FailureForkLatestOnly:          "only the latest turn can be forked",
 	FailureControlFailed:           "runtime control failed",
 	FailureCredential:              "agent credential is unusable",
 	FailureCredentialBusy:          "agent credential is in use by a running turn",

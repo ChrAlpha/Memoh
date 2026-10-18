@@ -41,10 +41,17 @@ type Connector struct {
 	ConnectorType string `json:"connector_type"`
 	AuthMethod    string `json:"auth_method"`
 	Status        string `json:"status"`
+	// ToolDiscoveryError is set when the last attempt to load this
+	// connection's tools for the agent failed, even though the connection
+	// itself is authorized. Empty when the tools loaded or were never asked.
+	ToolDiscoveryError string `json:"tool_discovery_error,omitempty"`
 }
 
 type ListResponse struct {
 	Items []Connector `json:"items"`
+	// ToolDiscovery reports the last outcome of loading the bot's connector
+	// tools for the agent; absent until the agent has tried.
+	ToolDiscovery *ToolDiscoveryStatus `json:"tool_discovery,omitempty"`
 }
 
 // Service owns local connector bindings and the trusted Connect-It
@@ -53,6 +60,8 @@ type Service struct {
 	queries dbstore.Queries
 	client  *connectsdk.Client
 	logger  *slog.Logger
+
+	discovery toolDiscoveryStore
 }
 
 func NewService(log *slog.Logger, cfg config.Config, queries dbstore.Queries) (*Service, error) {
@@ -102,6 +111,7 @@ func (s *Service) List(ctx context.Context, botID string) ([]Connector, error) {
 		}
 		items = append(items, connector)
 	}
+	s.annotateToolDiscovery(botID, items)
 	return items, nil
 }
 
@@ -113,7 +123,13 @@ func (s *Service) Get(ctx context.Context, botID, connectionID string) (Connecto
 	if err != nil {
 		return Connector{}, err
 	}
-	return s.resolveBinding(ctx, item)
+	connector, err := s.resolveBinding(ctx, item)
+	if err != nil {
+		return Connector{}, err
+	}
+	items := []Connector{connector}
+	s.annotateToolDiscovery(botID, items)
+	return items[0], nil
 }
 
 func (s *Service) BeginOAuth(

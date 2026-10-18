@@ -205,11 +205,11 @@ INSERT INTO bot_history_messages (
 	// The migration names public.bot_history_message_compacts; this legacy copy
 	// lives in the test schema, so the statement is pointed there.
 	up0168 := strings.ReplaceAll(
-		readEmbeddedMigration(t, "postgres/migrations/0168_compact_invalidated_at.up.sql"),
+		readEmbeddedMigration(t, "postgres/migrations/0170_compact_invalidated_at.up.sql"),
 		"public.bot_history_message_compacts", quotedSchema+".bot_history_message_compacts",
 	)
 	if _, err := tx.Exec(ctx, up0168); err != nil {
-		t.Fatalf("apply 0168 up: %v", err)
+		t.Fatalf("apply 0170 up: %v", err)
 	}
 	parsedClearedSessionID, err := ParseUUID(clearedSessionID)
 	if err != nil {

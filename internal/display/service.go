@@ -560,8 +560,9 @@ type session struct {
 	tracks   map[string]*webrtc.TrackLocalStaticRTP
 	input    *rfbInputClient
 
-	peersMu sync.RWMutex
-	peers   map[string]*peerSession
+	peersMu           sync.RWMutex
+	peers             map[string]*peerSession
+	clipboardChannels map[*webrtc.DataChannel]struct{}
 
 	idleStopMu    sync.Mutex
 	idleStopTimer *time.Timer
@@ -585,15 +586,16 @@ type peerSession struct {
 func newSession(service *Service, botID, gstLaunch, codec string) *session {
 	ctx, cancel := context.WithCancel(context.Background()) //nolint:gosec // cancel is stored on the session and called when the display session stops.
 	return &session{
-		service:     service,
-		botID:       botID,
-		gstLaunch:   gstLaunch,
-		codec:       codec,
-		ctx:         ctx,
-		cancel:      cancel,
-		tracks:      make(map[string]*webrtc.TrackLocalStaticRTP),
-		peers:       make(map[string]*peerSession),
-		firstPacket: make(chan struct{}),
+		service:           service,
+		botID:             botID,
+		gstLaunch:         gstLaunch,
+		codec:             codec,
+		ctx:               ctx,
+		cancel:            cancel,
+		tracks:            make(map[string]*webrtc.TrackLocalStaticRTP),
+		peers:             make(map[string]*peerSession),
+		clipboardChannels: make(map[*webrtc.DataChannel]struct{}),
+		firstPacket:       make(chan struct{}),
 	}
 }
 
@@ -612,6 +614,7 @@ func (s *session) start(ctx context.Context) error {
 	}
 
 	runCtx, runCtxCancel := context.WithCancel(context.WithoutCancel(ctx))
+	s.runCtxCancel = runCtxCancel
 	cancelRunCtx := true
 	defer func() {
 		if cancelRunCtx {
@@ -659,11 +662,23 @@ func (s *session) start(ctx context.Context) error {
 			s.service.logger.WarnContext(ctx, "display input channel unavailable", slog.String("bot_id", s.botID), slog.Any("error", inputErr))
 		} else {
 			s.input = input
+			if err := input.startClipboard(s.publishClipboard, func(err error) {
+				if runCtx.Err() == nil {
+					s.service.logger.WarnContext(ctx, "display clipboard synchronization failed", slog.String("bot_id", s.botID), slog.Any("error", err))
+					s.broadcastClipboard(clipboardErrorMessage(ctx))
+				}
+			}, func(err error) {
+				if runCtx.Err() == nil {
+					s.service.logger.WarnContext(ctx, "display input connection lost", slog.String("bot_id", s.botID), slog.Any("error", err))
+					s.stop()
+				}
+			}); err != nil {
+				s.service.logger.WarnContext(ctx, "display clipboard unavailable", slog.String("bot_id", s.botID), slog.Any("error", err))
+			}
 		}
 	} else {
 		s.service.logger.WarnContext(ctx, "display input channel unavailable", slog.String("bot_id", s.botID), slog.Any("error", err))
 	}
-	s.runCtxCancel = runCtxCancel
 	cancelRunCtx = false
 
 	s.service.logger.InfoContext(ctx, "display encoder started",
@@ -757,15 +772,25 @@ func (s *session) answer(ctx context.Context, req OfferRequest) (OfferResponse, 
 		if dc.Label() != "display-input" {
 			return
 		}
+		s.attachClipboardChannel(dc)
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
 			if err := s.handleInput(msg.Data); err != nil {
+				var event struct {
+					Type string `json:"type"`
+				}
+				if json.Unmarshal(msg.Data, &event) == nil && (event.Type == "clipboard" || event.Type == "clipboard_sync") {
+					_ = dc.SendText(clipboardErrorMessage(ctx))
+				}
 				s.service.logger.DebugContext(ctx, "display input event dropped", slog.String("bot_id", s.botID), slog.Any("error", err))
 			}
 		})
 	})
 
 	trackID := uuid.NewString()
-	s.addTrack(trackID, track)
+	if !s.addTrack(trackID, track) {
+		_ = pc.Close()
+		return OfferResponse{}, fmt.Errorf("%w: display pipeline is not running", ErrEncoderUnavailable)
+	}
 	peer := &peerSession{
 		id:        sessionID,
 		codec:     s.codec,
@@ -855,9 +880,14 @@ type inputEvent struct {
 	ButtonMask uint8  `json:"button_mask,omitempty"`
 	Keysym     uint32 `json:"keysym,omitempty"`
 	Down       bool   `json:"down,omitempty"`
+	Text       string `json:"text,omitempty"`
+	Shift      bool   `json:"shift,omitempty"`
 }
 
 func (s *session) handleInput(data []byte) error {
+	if len(data) > maxClipboardMessageBytes {
+		return errors.New("display input message too large")
+	}
 	if s.input == nil {
 		return errors.New("display input is unavailable")
 	}
@@ -866,6 +896,10 @@ func (s *session) handleInput(data []byte) error {
 		return err
 	}
 	switch event.Type {
+	case "clipboard_sync":
+		return s.input.SetClipboardText(event.Text)
+	case "clipboard":
+		return s.input.Paste(event.Text, event.Shift)
 	case "pointer":
 		return s.input.Pointer(event.X, event.Y, event.ButtonMask)
 	case "key":
@@ -878,15 +912,19 @@ func (s *session) handleInput(data []byte) error {
 	}
 }
 
-func (s *session) addTrack(id string, track *webrtc.TrackLocalStaticRTP) {
+func (s *session) addTrack(id string, track *webrtc.TrackLocalStaticRTP) bool {
 	s.tracksMu.Lock()
+	defer s.tracksMu.Unlock()
+	if s.closed() {
+		return false
+	}
 	s.tracks[id] = track
 	// Cancel the idle-stop timer while still holding tracksMu so the timer
 	// callback cannot observe an empty track set and stop() the encoder in the
 	// gap between adding the track and cancelling the timer — which would bind
 	// a new viewer to a stopped pipeline (black video, no error).
 	s.cancelIdleStop()
-	s.tracksMu.Unlock()
+	return true
 }
 
 func (s *session) removeTrack(id string) {
@@ -894,7 +932,7 @@ func (s *session) removeTrack(id string) {
 	delete(s.tracks, id)
 	empty := len(s.tracks) == 0
 	s.tracksMu.Unlock()
-	if empty {
+	if empty && !s.closed() {
 		s.scheduleIdleStop()
 	}
 }
@@ -917,21 +955,27 @@ func (s *session) removeTrack(id string) {
 func (s *session) scheduleIdleStop() {
 	s.idleStopMu.Lock()
 	defer s.idleStopMu.Unlock()
+	if s.closed() {
+		return
+	}
 	if s.idleStopTimer != nil {
 		s.idleStopTimer.Stop()
 	}
-	s.idleStopTimer = time.AfterFunc(encoderIdleHold, func() {
-		// Hold tracksMu for the empty-check AND the stop() so a concurrent
-		// addTrack cannot insert a track between "still empty" and "stop the
-		// encoder" — that race bound a new viewer to a pipeline being torn
-		// down. stop() is idempotent (stopOnce) and lock-free w.r.t. tracksMu.
-		s.tracksMu.Lock()
-		empty := len(s.tracks) == 0
-		if empty && !s.closed() {
-			s.stop()
-		}
-		s.tracksMu.Unlock()
-	})
+	s.idleStopTimer = time.AfterFunc(encoderIdleHold, s.stopIfIdle)
+}
+
+func (s *session) stopIfIdle() {
+	// Mark closed under tracksMu so addTrack cannot attach a viewer after
+	// the idle check. Unlock before stop closes peers and removes tracks.
+	s.tracksMu.Lock()
+	stop := len(s.tracks) == 0 && !s.closed()
+	if stop {
+		s.cancel()
+	}
+	s.tracksMu.Unlock()
+	if stop {
+		s.stop()
+	}
 }
 
 func (s *session) cancelIdleStop() {
@@ -945,6 +989,11 @@ func (s *session) cancelIdleStop() {
 
 func (s *session) addPeer(peer *peerSession) {
 	s.peersMu.Lock()
+	if s.closed() {
+		s.peersMu.Unlock()
+		peer.closeNow()
+		return
+	}
 	s.peers[peer.id] = peer
 	s.peersMu.Unlock()
 }
@@ -1068,6 +1117,17 @@ func (s *session) stop() {
 			_ = s.input.Close()
 		}
 		s.service.removeSession(s.botID, s)
+		s.peersMu.Lock()
+		peers := make([]*peerSession, 0, len(s.peers))
+		for _, peer := range s.peers {
+			peers = append(peers, peer)
+		}
+		clear(s.peers)
+		clear(s.clipboardChannels)
+		s.peersMu.Unlock()
+		for _, peer := range peers {
+			peer.closeNow()
+		}
 		s.service.logger.Info("display encoder stopped", slog.String("bot_id", s.botID))
 	})
 }
@@ -1564,8 +1624,12 @@ func (w processLogWriter) Write(p []byte) (int, error) {
 }
 
 type rfbInputClient struct {
-	mu   sync.Mutex
-	conn net.Conn
+	mu        sync.Mutex
+	conn      net.Conn // Immutable after construction; Close must interrupt writes holding mu.
+	closeOnce sync.Once
+	closeErr  error
+	closed    bool // Guarded by mu.
+	clipboard *rfbClipboard
 }
 
 func newRFBInputClient(conn net.Conn) (*rfbInputClient, error) {
@@ -1578,20 +1642,23 @@ func newRFBInputClient(conn net.Conn) (*rfbInputClient, error) {
 }
 
 func (c *rfbInputClient) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
-		return nil
-	}
-	err := c.conn.Close()
-	c.conn = nil
-	return err
+	c.closeOnce.Do(func() {
+		// net.Conn permits concurrent Close and Write. Interrupt I/O before
+		// taking mu, which a blocked input write may still hold.
+		if c.conn != nil {
+			c.closeErr = c.conn.Close()
+		}
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+	})
+	return c.closeErr
 }
 
 func (c *rfbInputClient) Pointer(x, y int, buttonMask uint8) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn == nil {
+	if c.closed || c.conn == nil {
 		return net.ErrClosed
 	}
 	msg := []byte{5, buttonMask, 0, 0, 0, 0}
@@ -1604,7 +1671,11 @@ func (c *rfbInputClient) Pointer(x, y int, buttonMask uint8) error {
 func (c *rfbInputClient) Key(keysym uint32, down bool) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn == nil {
+	return c.keyLocked(keysym, down)
+}
+
+func (c *rfbInputClient) keyLocked(keysym uint32, down bool) error {
+	if c.closed || c.conn == nil {
 		return net.ErrClosed
 	}
 	msg := []byte{4, 0, 0, 0, 0, 0, 0, 0}

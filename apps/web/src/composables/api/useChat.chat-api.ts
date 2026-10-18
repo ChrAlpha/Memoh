@@ -189,6 +189,12 @@ export interface FetchSessionsResult {
 const DEFAULT_SESSION_TYPES = ['chat', 'discuss', 'acp_agent', 'schedule']
 const DEFAULT_SESSION_PAGE_SIZE = 50
 
+/**
+ * Pages the sidebar's session lists (Recents and workdir folders). Sessions
+ * that schedule runs created are left out: the Schedule panel lists them under
+ * their schedule. A schedule-created session that a schedule still runs in
+ * stays, since that schedule's card opens it as an ordinary conversation.
+ */
 export async function fetchSessions(botId: string, options?: FetchSessionsOptions): Promise<FetchSessionsResult> {
   const id = botId.trim()
   if (!id) return { items: [], nextCursor: null }
@@ -202,6 +208,7 @@ export async function fetchSessions(botId: string, options?: FetchSessionsOption
       types: types.join(','),
       ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
       ...(workdirId ? { workdir_id: workdirId } : {}),
+      hide_schedule_runs: true,
       limit: options?.limit ?? DEFAULT_SESSION_PAGE_SIZE,
       ...(cursor ? { cursor } : {}),
     },

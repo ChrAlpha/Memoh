@@ -45,6 +45,7 @@ const (
 	CodeContextProtectedOverflow                 Code = "context.protected_overflow"
 	CodeWorkspaceUnreachable                     Code = "workspace.unreachable"
 	CodeWorkspaceTemplateBootstrapFailed         Code = "workspace.template_bootstrap_failed"
+	CodeWorkspaceDisplayClipboardFailed          Code = "workspace.display_clipboard_failed"
 	CodeWorkspaceDisplayPrepareFailed            Code = "workspace.display_prepare_failed"
 	CodeWorkspaceImageNotFound                   Code = "workspace.image_not_found"
 	CodeWorkspaceImageRegistryUnavailable        Code = "workspace.image_registry_unavailable"
@@ -130,6 +131,8 @@ const (
 	CodeChatMessageEmpty                         Code = "chat.message_empty"
 	CodeRuntimeControlThreadUnavailable          Code = "runtime_control.thread_unavailable"
 	CodeRuntimeControlCancelled                  Code = "runtime_control.cancelled"
+	CodeRuntimeControlForkLatestOnly             Code = "runtime_control.fork_latest_only"
+	CodeExternalRuntimeBusy                      Code = "external_runtime.busy"
 	CodeRuntimeControlFailed                     Code = "runtime_control.failed"
 	CodeRuntimeControlSteerFailed                Code = "runtime_control.steer_failed"
 	CodeRuntimeControlForbidden                  Code = "runtime_control.forbidden"
@@ -529,7 +532,7 @@ var catalog = map[Code]Definition{
 	},
 	CodeBotAgentProviderDirectRuntime: {
 		HTTPStatus:  http.StatusBadRequest,
-		Detail:      "This provider runs as a direct runtime. Create the Agent with the codex or claude-code runtime instead.",
+		Detail:      "This provider runs as a direct runtime. Create the Agent with that runtime instead.",
 		AllowedArgs: []string{"runtime"},
 	},
 	CodeChannelRuntimeUnavailable: {
@@ -599,6 +602,10 @@ var catalog = map[Code]Definition{
 	CodeWorkspaceDisplayPrepareFailed: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "Display preparation failed.",
+	},
+	CodeWorkspaceDisplayClipboardFailed: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "Clipboard synchronization failed. Reconnect the desktop and try again.",
 	},
 	// The image name is a setting the user can change; the registry is the
 	// dependency whose outage the user can only wait out.
@@ -882,6 +889,8 @@ var catalog = map[Code]Definition{
 	CodeRuntimeControlThreadUnavailable:       {HTTPStatus: http.StatusConflict, Detail: "Start a conversation before using this operation."},
 	CodeRuntimeControlCancelled:               {HTTPStatus: http.StatusConflict, Detail: "The runtime operation was cancelled."},
 	CodeRuntimeControlSteerFailed:             {HTTPStatus: http.StatusConflict, Detail: "The additional instruction could not be delivered. Send it again after this turn finishes."},
+	CodeRuntimeControlForkLatestOnly:          {HTTPStatus: http.StatusConflict, Detail: "Only the latest reply can be forked. Select the latest reply and try again."},
+	CodeExternalRuntimeBusy:                   {HTTPStatus: http.StatusConflict, Detail: "This Agent is finishing an earlier operation. Try again when it has finished."},
 	CodeRuntimeControlFailed:                  {HTTPStatus: http.StatusInternalServerError, Detail: "The runtime control could not be completed. Try again."},
 	CodeRuntimeControlForbidden:               {HTTPStatus: http.StatusForbidden, Detail: "You do not have access to this conversation."},
 	CodeRuntimeControlRequestInvalid:          {HTTPStatus: http.StatusBadRequest, Detail: "The runtime control request is invalid."},

@@ -325,9 +325,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		_ = s.completeLog(persistCtx, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{}, nil)
 		return Result{}, err
 	}
-	replacementTokens := entriesPromptCost(entries)
+	replacementTokens := max(entriesPromptCost(entries), compactedReplayTokens(messages, compactedMessageIDs))
 	if fusing {
-		replacementTokens = summaryReplacementTokens(entries, frontier.Artifacts)
+		replacementTokens = summaryReplacementTokens(replacementTokens, frontier.Artifacts)
 	}
 	if summaryTokens := estimateSummaryReplayTokens(summary); summaryTokens >= replacementTokens {
 		err = fmt.Errorf("%w: summary_tokens=%d raw_tokens=%d", errIneffectiveSummary, summaryTokens, replacementTokens)

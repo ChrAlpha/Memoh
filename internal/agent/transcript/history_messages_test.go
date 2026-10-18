@@ -40,8 +40,13 @@ func TestDropPreflightFailureTurns(t *testing.T) {
 func TestDropEmptyHistoryFailures(t *testing.T) {
 	empty := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("")})[0]
 	kept := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("hello")})[0]
+	var stepFailure runreq.ModelMessage
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":[]}`), &stepFailure); err != nil {
+		t.Fatal(err)
+	}
 	records := []historyfrag.HistoryRecord{
 		{ModelMessage: empty, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout"}},
+		{ModelMessage: stepFailure, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.provider_request_rejected", messagepkg.AgentStepInterruptedMetadataKey: true}},
 		{ModelMessage: kept, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout"}},
 		{ModelMessage: empty},
 	}
@@ -111,7 +116,7 @@ func TestProjectInterruptedHistoryReasoningKeepsOpaqueBlock(t *testing.T) {
 	}
 }
 
-func TestProjectInterruptedHistoryReasoningSkipsSupersededCheckpoint(t *testing.T) {
+func TestProjectInterruptedHistoryReasoningProjectsSupersededCheckpoint(t *testing.T) {
 	checkpoint := historyfrag.HistoryRecord{
 		ModelMessage: runreq.SDKMessagesToModelMessages([]sdk.Message{{
 			Role:    sdk.MessageRoleAssistant,
@@ -128,10 +133,10 @@ func TestProjectInterruptedHistoryReasoningSkipsSupersededCheckpoint(t *testing.
 	projected := projectInterruptedHistoryReasoning([]historyfrag.HistoryRecord{checkpoint, answer})
 	got := runreq.ModelMessageToSDKMessage(projected[0].ModelMessage)
 	if len(got.Content) != 1 {
-		t.Fatalf("projected content = %#v, want the reasoning part untouched", got.Content)
+		t.Fatalf("projected content = %#v, want one text part", got.Content)
 	}
-	if _, ok := got.Content[0].(sdk.ReasoningPart); !ok {
-		t.Fatalf("superseded checkpoint was projected into prompt text: %#v", got.Content[0])
+	if text, ok := got.Content[0].(sdk.TextPart); !ok || !strings.Contains(text.Text, "partial reasoning") {
+		t.Fatalf("superseded checkpoint must keep the projection it had while live: %#v", got.Content[0])
 	}
 }
 

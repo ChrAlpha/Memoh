@@ -225,8 +225,8 @@ github.com/fatih/color v1.10.0/go.mod h1:ELkj/draVOlAH/xkhN6mQ50Qd0MPOk5AAr3maGE
 github.com/fatih/color v1.13.0/go.mod h1:kLAiJbzzSOZDVNGyDpeOxJ47H46qBXwg5ILebYFFOfk=
 github.com/felinics/acgo v0.0.0-20260829152557-fc78bf271ef8 h1:Dv0uAs9ZtHx2TttaF3fwVQdjsczma9rb4YGQ1b1MbkA=
 github.com/felinics/acgo v0.0.0-20260829152557-fc78bf271ef8/go.mod h1:0E+2+IsT1si/wEaUc4xupjq7tGaZxJYjlCMcce3ui+c=
-github.com/felinics/connect-it/sdk/go v0.1.1-0.20260829153217-0dcd18de667d h1:4xewhd8UyGc+n9SDMnzNo6HcbA1MjBT6YKWXQtlU0a0=
-github.com/felinics/connect-it/sdk/go v0.1.1-0.20260829153217-0dcd18de667d/go.mod h1:efQBEl/nBI7s7ptKhxpMIQWXMFwJA/mQlG8Y5Gx7y1k=
+github.com/felinics/connect-it/sdk/go v0.1.1-0.20261016070556-d8593c2a7ec7 h1:qvWU+fxFPiBALOWGnRYzlBV5WFrp0dEQKseffze/acY=
+github.com/felinics/connect-it/sdk/go v0.1.1-0.20261016070556-d8593c2a7ec7/go.mod h1:efQBEl/nBI7s7ptKhxpMIQWXMFwJA/mQlG8Y5Gx7y1k=
 github.com/felinics/dingtalk-stream-sdk-go v0.0.0-20260829152622-ce4b7ea674a5 h1:f70CJWZc4i4csjDQ50PpDVVqyc3wBFgRyGzKc/G101Q=
 github.com/felinics/dingtalk-stream-sdk-go v0.0.0-20260829152622-ce4b7ea674a5/go.mod h1:6lA5cvlc9Grmj5AgIMI0tCKB3o3M49qHzeA3rxmHZ1o=
 github.com/felinics/twilight v0.7.2-0.20261002230120-f6d0ce1a0e8c h1:KxleB2R+Bq5ZTcxAjXnYxWs7q0fDVKmVkpjx7kiQ2SY=

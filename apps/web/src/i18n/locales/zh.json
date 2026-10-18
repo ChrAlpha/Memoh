@@ -276,7 +276,8 @@
       "turn_replacement_unsupported": "外部 Agent 会话不支持重试或编辑，请改为发送一条新消息。"
     },
     "external_runtime": {
-      "auth_required": "Codex 账号未连接或登录已失效。请前往 Agent 设置连接 ChatGPT，或配置 API Key。",
+      "auth_required": "这个 Agent 尚未登录，或它的凭据被拒绝。请前往 Agent 设置重新登录，或更新 API Key。",
+      "busy": "此 Agent 仍在完成之前的操作，请等待操作结束后重试。",
       "context_window_exceeded": "这个会话已超出模型的上下文长度上限。请压缩上下文，或新开一个会话。",
       "overloaded": "外部 Agent 的模型服务暂时不可用或过载。请稍后重试，或换一个模型。",
       "rate_limited": "外部 Agent 已达到模型服务的速率上限，请稍后再发送。",
@@ -393,6 +394,7 @@
       "command_unavailable": "此命令已不可用，请刷新后重试。",
       "failed": "操作未能完成，请重试。",
       "forbidden": "你没有访问此会话的权限。",
+      "fork_latest_only": "只能从最新一条回复分叉，请选择最新回复后重试。",
       "goal_requires_default_mode": "请先退出计划模式，再创建或继续目标。",
       "mode_unavailable": "此模式已不可用，请刷新后重新选择。",
       "request_invalid": "请求无效，请刷新后重试。",
@@ -523,6 +525,7 @@
     },
     "workspace": {
       "archive_invalid": "无法解压该文件，请使用有效的 .zip、.tar.gz 或 .tgz 文件。",
+      "display_clipboard_failed": "剪贴板同步失败，请重新连接桌面后重试。",
       "display_prepare_failed": "显示环境准备失败，请稍后重试。",
       "image_not_found": "工作区镜像不存在、需要镜像仓库凭据，或名称无效，请检查镜像名称后重试。",
       "image_registry_unavailable": "暂时无法连接镜像仓库，请稍后重试。",
@@ -1505,6 +1508,11 @@
     "newSession": "新会话",
     "deleteSession": "删除会话",
     "deleteSessionConfirm": "确定要删除此会话吗？",
+    "selectSessions": "多选",
+    "selectedSessions": "已选择 {count} 个会话",
+    "deleteSessions": "删除会话",
+    "deleteSessionsConfirm": "确定要删除这 {count} 个会话吗？",
+    "deleteSessionsFailed": "{count} 个会话删除失败",
     "renameSession": "重命名会话",
     "renameSessionDescription": "为这段对话设置一个简短名称。",
     "renameSessionPlaceholder": "会话名称",
@@ -1737,6 +1745,13 @@
       }
     },
     "display": {
+      "keyboardInput": "远程桌面键盘输入",
+      "clipboard": {
+        "copyDenied": "浏览器阻止了写入剪贴板，请聚焦桌面后重新复制。",
+        "copyTimedOut": "未收到远程桌面的新复制结果，请选中文本后重新复制。",
+        "syncFailed": "剪贴板同步未完成，请重试或使用粘贴快捷键。",
+        "pasteFailed": "无法粘贴这段文本，请尝试缩小复制范围（最多 48 KB）。"
+      },
       "title": "桌面",
       "reconnect": "重新连接",
       "closeSession": "关闭桌面会话",
@@ -2339,7 +2354,7 @@
   "bots": {
     "toolApproval": {
       "title": "工具调用审核",
-      "intro": "分别设置这个 Bot 在工作区和每台已连接电脑上可以执行的操作。这些规则只约束 Memoh 提供的工具；Claude Code 与 Codex 的内置工具遵循各自的权限模式，它们发来的询问会以卡片展示，由持有对应工作区权限的用户决定。",
+      "intro": "分别设置这个 Bot 在工作区和每台已连接电脑上可以执行的操作。这些规则只约束 Memoh 提供的工具；Claude Code、Codex 与 Grok Build 的内置工具遵循各自的权限模式，它们发来的询问会以卡片展示，由持有对应工作区权限的用户决定。",
       "loading": "正在加载审核规则...",
       "loadFailed": "无法加载工具审核",
       "loadFailedDescription": "请检查服务器连接后重试。",
@@ -2450,6 +2465,7 @@
     "createBot": "新建 Bot",
     "createBotWaitHint": "首次创建可能需要拉取基础镜像，请耐心等待。",
     "createBotSuccess": "Bot 创建成功。",
+    "createBotSignInFirst": "Bot 已创建。先登录账号，Agent 才能开始回复。",
     "createBotSettingUp": "正在准备...",
     "createBotSetupTitle": "正在准备 Bot",
     "createBotSetupDesc": "正在创建 Bot 及其工作区。工作区准备完成后会自动打开这个 Bot。",
@@ -2731,7 +2747,7 @@
       "namePlaceholder": "输入 Agent 名称",
       "nameRequired": "请输入 Agent 名称。",
       "emptyTitle": "还没有 Agent",
-      "emptyDescription": "添加 Agent 后，这个 Bot 就可以使用 Codex、Claude Code 或自定义 ACP Agent。",
+      "emptyDescription": "添加 Agent 后，这个 Bot 就可以使用 Codex、Claude Code、Grok Build 或自定义 ACP Agent。",
       "statusNeedsConfig": "需要配置",
       "statusOff": "已停用",
       "deleteTitle": "删除 Agent？",
@@ -2756,13 +2772,20 @@
       "defaultModelDescription": "可选。留空时由外部 Agent 选择默认模型；对话中仍可临时切换。",
       "defaultModelPlaceholder": "使用运行时默认模型",
       "account": "账号",
-      "chatgptAccount": "ChatGPT 账号",
       "chatgptAccountDescription": "Memoh 会加密保存此 Agent 的 ChatGPT 凭据，并仅在运行时提供给 Codex。",
       "chatgptAccountConnectedDescription": "此 Agent 的 ChatGPT 凭据已加密保存。",
       "reconnect": "重新连接",
       "codexDeviceHint": "打开验证页面并输入这个一次性代码。只在页面显示的 OpenAI 验证地址输入此代码。Memoh 会自动完成授权。",
       "codexLoginSuccess": "Codex 已连接 ChatGPT 账号",
       "codexLoginFailed": "Codex 账号授权失败，请重试",
+      "authGrokAccountDescription": "使用 Grok 账号登录 Grok Build。",
+      "grokAccount": "Grok 账号",
+      "grokAccountDescription": "Memoh 会加密保存此 Agent 的 Grok 凭据，并仅在运行时提供给 Grok Build。",
+      "grokAccountConnectedDescription": "此 Agent 的 Grok 凭据已加密保存。",
+      "grokDeviceHint": "打开验证页面并确认这个一次性代码。只在页面显示的 accounts.x.ai 地址上确认。Memoh 会自动完成授权。",
+      "grokLoginSuccess": "Grok Build 已连接 Grok 账号",
+      "grokLoginFailed": "Grok 账号登录失败，请重试",
+      "signInAfterCreate": "Bot 创建完成后在 Agent 设置里登录：账号在 Agent 自己的工作区内完成登录。",
       "usage": {
         "window": {
           "weekly": "每周额度",
@@ -3773,6 +3796,7 @@
       "edit": "编辑任务",
       "delete": "删除",
       "deleteConfirm": "确定删除任务 \"{name}\"？此操作不可撤销。",
+      "deleteConfirmRunSessions": "确定删除任务 \"{name}\"？此操作不可撤销。删除后，这个任务每次运行创建的会话不会再出现在日程和最近中，只能通过搜索找到。",
       "deleteSuccess": "任务已删除",
       "deleteFailed": "删除失败",
       "saveSuccess": "任务已保存",
@@ -3870,6 +3894,13 @@
         "oct": "十月",
         "nov": "十一月",
         "dec": "十二月"
+      },
+      "sessions": {
+        "pinned": "在同一个对话中运行",
+        "openPinned": "打开这个定时任务所在的对话",
+        "failed": "这次运行失败了",
+        "notStarted": "这次运行没能开始，没有对应的对话",
+        "empty": "还没有运行过"
       }
     },
     "history": {
@@ -4024,6 +4055,7 @@
     "connectTitle": "连接 {name}",
     "awaitingAuthorization": "等待授权…",
     "unavailable": "暂不可用",
+    "toolDiscoveryFailed": "工具不可用：{error}",
     "unknown": "未知连接器",
     "emptyTitle": "还没有连接器",
     "emptyDescription": "连接服务，让这个 Bot 可以使用服务提供的工具。",
@@ -4379,6 +4411,32 @@
         "goal": {
           "description": "设置持续执行的目标",
           "input_hint": "描述你的目标"
+        }
+      }
+    },
+    "grokBuild": {
+      "modes": {
+        "ask": {
+          "name": "每次询问",
+          "description": "执行有副作用的操作前先由你确认。"
+        },
+        "auto": {
+          "name": "自动判断",
+          "description": "由 Grok 判断哪些操作可以安全执行，不再逐一询问。"
+        },
+        "alwaysApprove": {
+          "name": "全部批准",
+          "description": "所有操作直接批准，不再询问；Memoh 工具权限仍然生效。"
+        }
+      },
+      "commands": {
+        "status": {
+          "description": "查看会话的模型和上下文用量"
+        },
+        "compact": {
+          "description": "压缩 Grok 会话上下文",
+          "running_text": "压缩中",
+          "completed_text": "压缩已完成"
         }
       }
     },

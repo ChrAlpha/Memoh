@@ -276,7 +276,8 @@
       "turn_replacement_unsupported": "Retry and edit are unavailable for external agent sessions. Send a new message instead."
     },
     "external_runtime": {
-      "auth_required": "Codex is not connected, or its sign-in has expired. Open Agent settings to connect ChatGPT or configure an API key.",
+      "auth_required": "This Agent is not signed in, or its credential was rejected. Open Agent settings to sign in again or update the API key.",
+      "busy": "This Agent is finishing an earlier operation. Try again when it has finished.",
       "context_window_exceeded": "This conversation no longer fits in the model's context window. Compact the context or start a new conversation.",
       "overloaded": "The external Agent's model service is unavailable or overloaded right now. Try again in a moment, or switch to another model.",
       "rate_limited": "The external Agent was rate limited by its model service. Please wait a moment before sending again.",
@@ -393,6 +394,7 @@
       "command_unavailable": "This runtime command is no longer available. Refresh and try again.",
       "failed": "The runtime control could not be completed. Try again.",
       "forbidden": "You do not have access to this conversation.",
+      "fork_latest_only": "Only the latest reply can be forked. Select the latest reply and try again.",
       "goal_requires_default_mode": "Exit Plan mode before creating or resuming a goal.",
       "mode_unavailable": "This mode is unavailable. Refresh and choose a supported mode.",
       "request_invalid": "The runtime control request is invalid.",
@@ -523,6 +525,7 @@
     },
     "workspace": {
       "archive_invalid": "The archive cannot be extracted. Use a valid .zip, .tar.gz or .tgz file.",
+      "display_clipboard_failed": "Clipboard synchronization failed. Reconnect the desktop and try again.",
       "display_prepare_failed": "Display preparation failed.",
       "image_not_found": "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
       "image_registry_unavailable": "The image registry could not be reached. Please try again later.",
@@ -1493,6 +1496,11 @@
     "newSession": "New Session",
     "deleteSession": "Delete Session",
     "deleteSessionConfirm": "Are you sure you want to delete this session?",
+    "selectSessions": "Select",
+    "selectedSessions": "{count} selected",
+    "deleteSessions": "Delete Sessions",
+    "deleteSessionsConfirm": "Are you sure you want to delete {count} session? | Are you sure you want to delete {count} sessions?",
+    "deleteSessionsFailed": "{count} session couldn't be deleted | {count} sessions couldn't be deleted",
     "renameSession": "Rename Session",
     "renameSessionDescription": "Choose a short name for this conversation.",
     "renameSessionPlaceholder": "Session name",
@@ -1725,6 +1733,13 @@
       }
     },
     "display": {
+      "keyboardInput": "Remote desktop keyboard input",
+      "clipboard": {
+        "copyDenied": "The browser blocked copying to your clipboard. Focus the desktop and copy again.",
+        "copyTimedOut": "No new clipboard text arrived from the desktop. Select text and copy again.",
+        "syncFailed": "Could not sync the clipboard. Try again or use the paste shortcut.",
+        "pasteFailed": "Could not paste this text. Try a smaller selection (up to 48 KB)."
+      },
       "title": "Desktop",
       "reconnect": "Reconnect",
       "closeSession": "Close desktop session",
@@ -2339,7 +2354,7 @@
   "bots": {
     "toolApproval": {
       "title": "Tool Call Approval",
-      "intro": "Choose what this Bot may do in its Workspace and on each connected computer. These rules govern the tools Memoh provides. Claude Code and Codex apply their own permission mode to their built-in tools; when one of them asks, Memoh shows the request as a card for a user with the matching Workspace permission to decide.",
+      "intro": "Choose what this Bot may do in its Workspace and on each connected computer. These rules govern the tools Memoh provides. Claude Code, Codex and Grok Build apply their own permission mode to their built-in tools; when one of them asks, Memoh shows the request as a card for a user with the matching Workspace permission to decide.",
       "loading": "Loading approval rules...",
       "loadFailed": "Couldn’t load tool approval",
       "loadFailedDescription": "Check the server connection and try again.",
@@ -2450,6 +2465,7 @@
     "createBot": "New Bot",
     "createBotWaitHint": "First-time creation may pull base images and take a moment.",
     "createBotSuccess": "Bot created successfully.",
+    "createBotSignInFirst": "Bot created. Sign in to the account before the Agent can answer.",
     "createBotSettingUp": "Setting up...",
     "createBotSetupTitle": "Setting up bot",
     "createBotSetupDesc": "Creating the bot and its workspace. The page will open automatically when the workspace is ready.",
@@ -2731,7 +2747,7 @@
       "namePlaceholder": "Enter an Agent name",
       "nameRequired": "Enter an Agent name.",
       "emptyTitle": "No Agents yet",
-      "emptyDescription": "Add an Agent to let this Bot use Codex, Claude Code, or a custom ACP Agent.",
+      "emptyDescription": "Add an Agent to let this Bot use Codex, Claude Code, Grok Build, or a custom ACP Agent.",
       "statusNeedsConfig": "Needs setup",
       "statusOff": "Disabled",
       "deleteTitle": "Delete Agent?",
@@ -2756,13 +2772,20 @@
       "defaultModelDescription": "Optional. Leave blank to use the external Agent's default; conversations can still override it.",
       "defaultModelPlaceholder": "Use runtime default",
       "account": "Account",
-      "chatgptAccount": "ChatGPT account",
       "chatgptAccountDescription": "Memoh encrypts this Agent's ChatGPT credentials and provides them to Codex only at runtime.",
       "chatgptAccountConnectedDescription": "This Agent's ChatGPT credentials are encrypted at rest.",
       "reconnect": "Reconnect",
       "codexDeviceHint": "Open the verification page and enter this one-time code. Only enter it on the OpenAI verification address shown there. Memoh will finish authorization automatically.",
       "codexLoginSuccess": "Codex is connected to ChatGPT",
       "codexLoginFailed": "Codex account authorization failed. Try again.",
+      "authGrokAccountDescription": "Sign in to Grok Build with your Grok account.",
+      "grokAccount": "Grok account",
+      "grokAccountDescription": "Memoh encrypts this Agent's Grok credentials and provides them to Grok Build only at runtime.",
+      "grokAccountConnectedDescription": "This Agent's Grok credentials are encrypted at rest.",
+      "grokDeviceHint": "Open the verification page and confirm this one-time code. Only confirm it on the accounts.x.ai address shown there. Memoh will finish authorization automatically.",
+      "grokLoginSuccess": "Grok Build is connected to your Grok account",
+      "grokLoginFailed": "Grok account sign-in failed. Try again.",
+      "signInAfterCreate": "Sign in from the Agent's settings once the Bot is created: the account signs in inside the Agent's own workspace.",
       "usage": {
         "window": {
           "weekly": "Weekly limit",
@@ -3773,6 +3796,7 @@
       "edit": "Edit Task",
       "delete": "Delete",
       "deleteConfirm": "Delete task \"{name}\"? This cannot be undone.",
+      "deleteConfirmRunSessions": "Delete task \"{name}\"? This cannot be undone. The sessions its runs created will no longer show in Schedule or Recents; you can only find them with search.",
       "deleteSuccess": "Task deleted",
       "deleteFailed": "Delete failed",
       "saveSuccess": "Task saved",
@@ -3870,6 +3894,13 @@
         "oct": "October",
         "nov": "November",
         "dec": "December"
+      },
+      "sessions": {
+        "pinned": "Runs in one conversation",
+        "openPinned": "Open the conversation this schedule runs in",
+        "failed": "This run failed",
+        "notStarted": "This run did not start, so it has no conversation",
+        "empty": "No runs yet"
       }
     },
     "history": {
@@ -4024,6 +4055,7 @@
     "connectTitle": "Connect {name}",
     "awaitingAuthorization": "Waiting for authorization…",
     "unavailable": "Unavailable",
+    "toolDiscoveryFailed": "Tools unavailable: {error}",
     "unknown": "Unknown connector",
     "emptyTitle": "No connectors yet",
     "emptyDescription": "Connect a service to give this Bot access to its tools.",
@@ -4379,6 +4411,32 @@
         "goal": {
           "description": "Set a goal to keep pursuing",
           "input_hint": "Describe your goal"
+        }
+      }
+    },
+    "grokBuild": {
+      "modes": {
+        "ask": {
+          "name": "Ask",
+          "description": "Ask before each operation that has side effects."
+        },
+        "auto": {
+          "name": "Auto",
+          "description": "Let Grok decide which operations are safe to run without asking."
+        },
+        "alwaysApprove": {
+          "name": "Always approve",
+          "description": "Approve every operation without asking. Memoh tool permissions still apply."
+        }
+      },
+      "commands": {
+        "status": {
+          "description": "Show the session's model and context usage"
+        },
+        "compact": {
+          "description": "Compact Grok session context",
+          "running_text": "Compacting",
+          "completed_text": "Compaction completed"
         }
       }
     },

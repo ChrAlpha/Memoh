@@ -138,6 +138,8 @@ func TestExternalAgentErrorTranslatesRuntimeFailures(t *testing.T) {
 		{"session resume failed", external.Fail(external.FailureSessionResumeFailed, errors.New("SECRET rpc")), apperror.CodeExternalRuntimeSessionResumeFailed, nil, apperror.FaultDependency},
 		{"goal outside default mode", external.Fail(external.FailureGoalRequiresDefaultMode, nil), apperror.CodeRuntimeControlGoalRequiresDefaultMode, nil, apperror.FaultClient},
 		{"mode unavailable", external.Fail(external.FailureModeUnavailable, external.ErrModeUnavailable), apperror.CodeRuntimeControlModeUnavailable, nil, apperror.FaultClient},
+		{"runtime draining", external.Fail(external.FailureRuntimeBusy, errors.New("SECRET predecessor")), apperror.CodeExternalRuntimeBusy, nil, apperror.FaultClient},
+		{"fork latest only", external.Fail(external.FailureForkLatestOnly, errors.New("SECRET anchor")), apperror.CodeRuntimeControlForkLatestOnly, nil, apperror.FaultClient},
 		{"control failed", external.Fail(external.FailureControlFailed, errors.New("SECRET control")), apperror.CodeRuntimeControlFailed, nil, apperror.FaultServer},
 		{"credential busy", external.Fail(external.FailureCredentialBusy, nil), apperror.CodeAgentCredentialRuntimeBusy, nil, apperror.FaultClient},
 		{"usage limited", external.Fail(external.FailureUsageLimited, errs.NewDependency("SECRET resets at 5 PM")), apperror.CodeExternalRuntimeUsageLimited, nil, apperror.FaultDependency},

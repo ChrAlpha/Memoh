@@ -20,6 +20,7 @@ import (
 	"github.com/felinics/memoh/internal/bots"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/runtimefence"
+	"github.com/felinics/memoh/internal/runtimekind"
 )
 
 func (h *Host) runtimeControlSession(ctx context.Context, request turn.RuntimeControlRequest) (session.Thread, error) {
@@ -129,7 +130,7 @@ func (h *Host) SetRuntimeMode(ctx context.Context, request turn.RuntimeControlRe
 		return out, err
 	}
 
-	err = h.runRuntimeControl(ctx, request, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
+	err = h.runRuntimeControl(ctx, request, true, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
 		read, set, metadataKey, err := runtimeModeAccessors(driver, request.ModeKind)
 		if err != nil {
 			return err
@@ -201,17 +202,19 @@ func (h *Host) ExecuteRuntimeCommand(ctx context.Context, request turn.RuntimeCo
 	if !ok {
 		return turn.RuntimeCommandResult{}, external.ErrCommandUnavailable
 	}
-	if command.Kind == external.CommandRead {
+	if command.Kind == external.CommandRead && !runtimekind.ReadCommandsRequireIdle(driver.RuntimeType()) {
 		controlCtx, err := h.runtimeControlContext(ctx, request)
 		if err != nil {
 			return turn.RuntimeCommandResult{}, err
 		}
 		return provider.ReadCommand(controlCtx, input)
 	}
-	if command.Kind != external.CommandOperation {
+	if command.Kind != external.CommandOperation && command.Kind != external.CommandRead {
 		return turn.RuntimeCommandResult{}, external.ErrCommandUnavailable
 	}
-	err = h.runRuntimeControl(ctx, request, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
+	// A read only holds the slot so it cannot meet a turn on the native
+	// session; it is no assistant turn, and must not be shown as one.
+	err = h.runRuntimeControl(ctx, request, command.Kind == external.CommandRead, func(ctx context.Context, sess session.Thread, driver external.Driver, input external.PromptInput) error {
 		provider, ok := driver.(external.CommandProvider)
 		if !ok {
 			return external.ErrCommandUnavailable
@@ -221,8 +224,12 @@ func (h *Host) ExecuteRuntimeCommand(ctx context.Context, request turn.RuntimeCo
 			return err
 		}
 		current, ok := external.FindCommand(commands, request.Command)
-		if !ok || current.Kind != external.CommandOperation {
+		if !ok || (current.Kind != external.CommandOperation && current.Kind != external.CommandRead) {
 			return external.ErrCommandUnavailable
+		}
+		if current.Kind == external.CommandRead {
+			result, err = provider.ReadCommand(ctx, input)
+			return err
 		}
 		compactor, ok := driver.(external.Compactor)
 		if !ok {
@@ -235,10 +242,29 @@ func (h *Host) ExecuteRuntimeCommand(ctx context.Context, request turn.RuntimeCo
 		_, err = h.sessions.MergeRuntimeMetadata(ctx, sess.ID, sess.RuntimeType, result.RuntimeMetadata)
 		return err
 	})
-	return turn.RuntimeCommandResult{}, err
+	return result, err
 }
 
-func (h *Host) runRuntimeControl(ctx context.Context, request turn.RuntimeControlRequest, run func(context.Context, session.Thread, external.Driver, external.PromptInput) error) (resultErr error) {
+func (h *Host) runRuntimeControl(ctx context.Context, request turn.RuntimeControlRequest, configurationOnly bool, run func(context.Context, session.Thread, external.Driver, external.PromptInput) error) (resultErr error) {
+	return h.runSessionControl(ctx, request, configurationOnly, func(runCtx context.Context, runID string) error {
+		// Re-read after admission: a queued send or another mode change may have
+		// won while this request was validating its initial snapshot.
+		sess, driver, input, err := h.runtimeControlTarget(runCtx, request)
+		if err != nil {
+			return err
+		}
+		input.RunID = runID
+		controlCtx, err := h.runtimeControlContext(runCtx, request)
+		if err != nil {
+			return err
+		}
+		return run(controlCtx, sess, driver, input)
+	})
+}
+
+// runSessionControl shares the durable turn slot with non-chat operations.
+// Authorization is performed by the caller; state must be re-read in run.
+func (h *Host) runSessionControl(ctx context.Context, request turn.RuntimeControlRequest, configurationOnly bool, run func(context.Context, string) error) (resultErr error) {
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	payload, err := json.Marshal(request)
@@ -248,7 +274,7 @@ func (h *Host) runRuntimeControl(ctx context.Context, request turn.RuntimeContro
 	admission, err := h.admitter.Admit(runCtx, sessionruntime.AdmitInput{
 		BotID: request.BotID, SessionID: request.ThreadID, InvocationID: uuid.NewString(), InitiatorID: request.ActorID, Payload: payload,
 		Execution: sessionruntime.Execution{
-			ConfigurationOnly: request.ModeID != "",
+			ConfigurationOnly: configurationOnly,
 			Admission: func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
 				return sessionruntime.RunAdmissionView{}, nil
 			},
@@ -279,18 +305,7 @@ func (h *Host) runRuntimeControl(ctx context.Context, request turn.RuntimeContro
 		h.driver.Finish(runCtx, drive.AdmittedRun{Handle: handle},
 			drive.FromOutcome(outcome.RunOutcome{Status: status, Cause: publicRuntimeControlError(resultErr)}))
 	}()
-	// Re-read after admission: a queued send or another mode change may have
-	// won while this request was validating its initial snapshot.
-	sess, driver, input, err := h.runtimeControlTarget(runCtx, request)
-	if err != nil {
-		return err
-	}
-	input.RunID = handle.RunID
-	controlCtx, err := h.runtimeControlContext(runCtx, request)
-	if err != nil {
-		return err
-	}
-	return run(controlCtx, sess, driver, input)
+	return run(runCtx, handle.RunID)
 }
 
 // runtimeControlContext pins the session's workspace target for a runtime

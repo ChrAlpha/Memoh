@@ -9,7 +9,7 @@ const loading = ref(false)
 vi.mock('@/composables/useAgentAuthorization', () => ({ useAgentAuthorization: () => ({
   session, ready, pending, busy: loading, loading, error: ref(''), ...actions,
 }) }))
-vi.mock('./codex-account-panel.vue', () => ({ default: { template: '<div />' } }))
+vi.mock('./device-login-panel.vue', () => ({ default: { template: '<div data-device-login />' } }))
 vi.mock('./agent-credential-input.vue', () => ({ default: { template: '<input data-manual-token />' } }))
 vi.mock('@felinic/ui', () => {
   const slot = { template: '<div><slot /></div>' }
@@ -28,13 +28,16 @@ import AgentAuthorization from './agent-authorization.vue'
 let app: App
 let root: HTMLDivElement
 const status = vi.fn()
+function mount(runtime: string) {
+  app = createApp(AgentAuthorization, { runtime, storageKey: 'test', onStatus: status })
+  app.config.globalProperties.$t = (key: string) => key
+  app.mount(root)
+}
 beforeEach(() => {
   vi.resetAllMocks()
   session.value = null; ready.value = false; pending.value = false; loading.value = false
   root = document.createElement('div')
-  app = createApp(AgentAuthorization, { runtime: 'claude-code', storageKey: 'test', onStatus: status })
-  app.config.globalProperties.$t = (key: string) => key
-  app.mount(root)
+  mount('claude-code')
 })
 afterEach(() => { app.unmount(); vi.restoreAllMocks() })
 function button(label: string) {
@@ -69,4 +72,21 @@ it('keeps manual OAuth token entry as a separate choice', async () => {
   expect(actions.cancel).toHaveBeenCalled()
   expect(root.querySelector('[data-manual-token]')).not.toBeNull()
   expect(actions.start).not.toHaveBeenCalled()
+})
+
+it('offers Grok Build an account that signs in after creation by default and an API key as the other choice', async () => {
+  app.unmount()
+  mount('grok-build')
+  const select = root.querySelector('select')!
+  expect(Array.from(select.options).map(option => option.value)).toEqual(['grok_account', 'api_key'])
+  // Only Grok writes its login, on the Agent's own process: nothing to stage,
+  // nothing to wait for before the Bot can be created.
+  expect(root.querySelector('[data-device-login]')).toBeNull()
+  expect(actions.start).not.toHaveBeenCalled()
+  expect(status).toHaveBeenLastCalledWith({ ready: true, busy: false, id: '', auth: 'grok_account' })
+  select.value = 'api_key'; select.dispatchEvent(new Event('change'))
+  await nextTick()
+  root.querySelector('[data-manual-token]')!.dispatchEvent(new Event('save'))
+  expect(actions.start).toHaveBeenLastCalledWith('xai_api_key', '')
+  expect(status).toHaveBeenLastCalledWith({ ready: false, busy: false, id: '', auth: 'api_key' })
 })

@@ -4,16 +4,47 @@ This directory owns the boundary between durable ACP agent configuration and
 process-local agent state. ACP is the generic channel for custom,
 user-supplied agents speaking the Agent Client Protocol; the only registered
 profile is the generic `acp` profile (managed launch `command`/`arguments`,
-`api_key` setup mode). Built-in External Agents (Codex, Claude Code) are not
-ACP profiles — they run as direct external runtimes under
-`internal/agent/runtime/codex` and `internal/agent/runtime/claudecode`.
+`api_key` setup mode). Built-in External Agents (Codex, Claude Code, Grok
+Build) are not ACP profiles — they run as direct external runtimes under
+`internal/agent/runtime/codex`, `internal/agent/runtime/claudecode` and
+`internal/agent/runtime/grok`.
 
 Keep the boundary profile-driven. The launcher must not grow agent-name
 conditionals.
 
+## The ACP client is shared
+
+`client/` is the protocol client: the connection, sessions, event mapping and
+permission handling. It has two entry points.
+
+- `Runner.StartSession` is the pool's: it launches one process for one
+  session, advertises the client file and terminal capabilities, and looks the
+  agent up in the profile registry.
+- `Connect` returns a `Conn` over a process the caller started. A `Conn` hosts
+  any number of sessions, delivers each inbound call to the session it names,
+  and can resume a session the agent persisted. Updates are applied in the
+  connection's order, so a request returns once the updates sent before its
+  response have been applied. A prompt's sink is called on the loop every
+  session shares, so it must not wait on its consumer; the caller queues.
+  It advertises no client file
+  or terminal capability and looks nothing up: everything agent-specific
+  (`_meta`, MCP servers, how the agent names an MCP tool call) arrives in
+  `SessionConfig`, and the agent's own methods go through `Call`,
+  `Authenticate` and `Subscribe`, whose method names and shapes the caller
+  owns.
+
+A built-in agent whose own protocol is ACP (Grok Build) is a direct runtime
+that uses `Connect`. It must not import the pool or `profile/`
+(`internal/arch` enforces this), and the client must not learn its name: add
+a field to `SessionConfig` or expose a response value instead.
+
 ## Required invariants
 
-- Every ACP process receives a fresh runtime directory under
+These hold for the processes and sessions the pool starts. A direct runtime
+on `Connect` owns its own process environment and session continuity (Grok
+Build resumes its sessions; see `docs/agent-runtime.md`).
+
+- Every pool-started ACP process receives a fresh runtime directory under
   `/tmp/memoh-acp-runtime/<agent>/<uuid>` with mode `0700`. It holds only
   ephemeral state (`TMPDIR`) and is removed when the process exits.
 - The agent's durable state lives directly under `HOME=/data` (the workspace
@@ -27,7 +58,7 @@ conditionals.
   Never call recursive mkdir on an unvalidated runtime or cache parent.
   Pre-planted symlinks under `/tmp` (runtime and shared-cache tiers) must fail
   the lease with no side effects at the symlink target.
-- Conversation continuity is Memoh's context document. Every ACP session
+- Conversation continuity is Memoh's context document. Every pool session
   starts fresh; each completed turn publishes a publication head
   (`agent_session_publications`) in the same transaction as the round's
   messages. The durable head is the single authority: a warm process records

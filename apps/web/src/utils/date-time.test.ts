@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
-import { formatDateTime, formatDate, formatDateTimeSeconds, formatRelativeTime } from './date-time'
+import { formatCalendarTime, formatDateTime, formatDate, formatDateTimeSeconds, formatRelativeTime } from './date-time'
 
 // ─── formatDateTime ───────────────────────────────────────────────────────────
 
@@ -141,5 +141,27 @@ describe('formatRelativeTime', () => {
     // Should be a date string, not a relative string
     expect(typeof result).toBe('string')
     expect(result.length).toBeGreaterThan(0)
+  })
+})
+
+// ─── formatCalendarTime ───────────────────────────────────────────────────────
+
+describe('formatCalendarTime', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('keeps the 12-hour clock by default', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 9, 16, 15, 0))
+    expect(formatCalendarTime(new Date(2026, 9, 16, 14, 5).toISOString(), { locale: 'en' })).toBe('Today 2:05 PM')
+  })
+
+  it('renders a 24-hour clock when hour12 is false', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 9, 16, 15, 0))
+    expect(formatCalendarTime(new Date(2026, 9, 16, 14, 5).toISOString(), { locale: 'zh-CN', hour12: false })).toBe('今天 14:05')
+    expect(formatCalendarTime(new Date(2026, 9, 15, 8, 0).toISOString(), { locale: 'zh-CN', hour12: false })).toBe('昨天 08:00')
+    expect(formatCalendarTime(new Date(2026, 9, 9, 8, 0).toISOString(), { locale: 'zh-CN', hour12: false })).toBe('10月9日 08:00')
   })
 })

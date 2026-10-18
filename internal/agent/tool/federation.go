@@ -32,6 +32,23 @@ func NewFederationProvider(log *slog.Logger, source mcp.ToolSource) *FederationP
 
 func (*FederationProvider) ProviderLabel() string { return "mcp" }
 
+// ToolNotice relays the source's own explanation of missing tools, so a
+// failed listing reaches the model instead of looking like an empty source.
+func (f *FederationProvider) ToolNotice(ctx context.Context, session SessionContext) string {
+	diagnostics, ok := f.source.(mcp.ToolSourceDiagnostics)
+	if !ok {
+		return ""
+	}
+	lines := diagnostics.ToolDiagnostics(ctx, toMCPSession(session))
+	kept := lines[:0]
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n\n")
+}
+
 func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if f.source == nil {
 		return nil, nil
@@ -39,6 +56,8 @@ func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) 
 	mcpSession := toMCPSession(session)
 	descriptors, err := f.source.ListTools(ctx, mcpSession)
 	if err != nil {
+		// Not fatal for the turn: the agent keeps its other tools. The gap is
+		// reported to the model through ToolNotice instead of being hidden.
 		f.logger.WarnContext(ctx, "federation list tools failed", slog.Any("error", err))
 		return nil, nil
 	}

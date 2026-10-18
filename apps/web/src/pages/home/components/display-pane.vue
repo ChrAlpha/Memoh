@@ -17,6 +17,7 @@
       playsinline
       muted
       tabindex="0"
+      @focus="focusKeyboard"
       @playing="videoReady = true"
       @contextmenu.prevent="openStatsMenu"
       @mousedown.prevent="onPointerDown"
@@ -24,8 +25,29 @@
       @mouseup.prevent="onPointerUp"
       @mouseleave="onPointerLeave"
       @wheel.prevent="onWheel"
-      @keydown.prevent="onKeyDown"
+      @keydown="onKeyDown"
       @keyup.prevent="onKeyUp"
+      @paste.prevent="onPaste"
+      @blur="releaseKeyboard"
+    />
+    <!-- A real editable element is needed for the local IME and candidate UI;
+         the video cannot receive composed text. Only committed text is sent. -->
+    <textarea
+      ref="keyboardRef"
+      class="sr-only"
+      :style="keyboardPosition"
+      tabindex="-1"
+      :aria-label="t('chat.display.keyboardInput')"
+      autocomplete="off"
+      autocapitalize="off"
+      :spellcheck="false"
+      @keydown="onKeyDown"
+      @keyup.prevent="onKeyUp"
+      @compositionstart="textInput.start()"
+      @compositionend="onCompositionEnd"
+      @input="onTextInput"
+      @paste.prevent="onPaste"
+      @blur="releaseKeyboard"
     />
     <div
       v-if="prepareProgress"
@@ -213,11 +235,17 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Component, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Button, Spinner, SurfaceCard } from '@felinic/ui'
+import { Button, Spinner, SurfaceCard, toast } from '@felinic/ui'
 import { Activity, Globe, Maximize, Monitor, Package, Wrench, X } from 'lucide-vue-next'
-import { useMagicKeys, useMouseInElement, useToggle } from '@vueuse/core'
+import { useDocumentVisibility, useMagicKeys, useMouseInElement, useToggle } from '@vueuse/core'
 import { useBotDisplayConnection } from '@/composables/useBotDisplayConnection'
 import { captureDisplaySnapshot } from '@/utils/display-snapshot'
+import { createDisplayInput } from '@/composables/display-input'
+import { useDisplayClipboard } from '@/composables/useDisplayClipboard'
+import { createDisplayKeyboard } from '@/composables/display-keyboard'
+import { createDisplayTextInput } from '@/composables/display-text-input'
+import { resolveApiErrorMessage } from '@/utils/api-error'
+import { detectPlatform } from '@/lib/keyboard-bindings'
 
 const screenEl = useTemplateRef('rootRef')
 const fullScreenIcon = useTemplateRef('fullScreenIcon')
@@ -267,7 +295,80 @@ const emit = defineEmits<{
   snapshot: [payload: { tabId: string; sessionId?: string; dataUrl: string }]
 }>()
 
-const connection = useBotDisplayConnection(props.botId)
+const documentVisibility = useDocumentVisibility()
+const viewing = computed(() => !!props.active && documentVisibility.value === 'visible')
+const connection = useBotDisplayConnection(props.botId, viewing)
+const clipboard = useDisplayClipboard(connection, () => viewing.value)
+const orderedInput = createDisplayInput(payload => {
+  if (viewing.value) connection.sendInput(payload)
+})
+watch([viewing, connection.inputChannel], () => orderedInput.cancel(), { flush: 'sync' })
+const keyboardRef = useTemplateRef('keyboardRef')
+const keyboardPosition = ref({ left: '0px', top: '0px' })
+const macKeyboard = detectPlatform() === 'mac'
+let pasteWithShift = false
+const keyboard = createDisplayKeyboard({
+  mac: macKeyboard,
+  active: () => viewing.value && connection.inputReady(),
+  send: sendInput,
+  copy: clipboard.prepareRemoteCopy,
+  pasteShortcut: shift => { pasteWithShift = shift },
+})
+const textInput = createDisplayTextInput({
+  active: () => viewing.value && connection.inputReady() && document.hasFocus()
+    && document.activeElement === keyboardRef.value,
+  release: () => keyboard.release(),
+  text: value => keyboard.text(value),
+})
+watch(connection.inputChannel, () => {
+  // Do not carry unfinished local composition into a replacement connection.
+  cancelTextInput()
+  keyboard.reset()
+}, { flush: 'sync' })
+watch(viewing, (active) => {
+  if (!active) {
+    releaseKeyboard()
+    // Keep the video element bound while the shared connection is retained.
+    // Replaying the same stream on return would otherwise show a transient
+    // Connecting state even though no WebRTC reconnect is needed.
+    cleanupLocalUI({ preserveVideo: true })
+  }
+}, { flush: 'sync' })
+
+function cancelTextInput() {
+  textInput.cancel()
+  if (keyboardRef.value) keyboardRef.value.value = ''
+}
+
+function focusKeyboard() {
+  keyboardRef.value?.focus({ preventScroll: true })
+}
+
+function releaseKeyboard() {
+  cancelTextInput()
+  clipboard.cancelPointerCopy()
+  orderedInput.cancel()
+  keyboard.release()
+  pasteWithShift = false
+}
+
+watch(connection.clipboardError, (error) => {
+  if (error && viewing.value) toast.error(resolveApiErrorMessage(error, t('errors.workspace.display_clipboard_failed')))
+})
+
+// Send local content only from an explicit browser paste. Reading on focus or
+// pointer input could disclose clipboard content unrelated to this workspace.
+function onPaste(event: ClipboardEvent) {
+  if (!event.clipboardData?.types.includes('text/plain')) return
+  const text = event.clipboardData?.getData('text/plain')
+  const shift = pasteWithShift
+  pasteWithShift = false
+  if (text !== undefined) {
+    orderedInput.cancel()
+    clipboard.pasteText(text, shift)
+    keyboard.restoreModifiers()
+  }
+}
 
 interface PrepareStage {
   key: string
@@ -310,7 +411,6 @@ type VideoWithFrameCallback = HTMLVideoElement & {
 }
 
 const ACTIVE_SNAPSHOT_INTERVAL_MS = 10000
-const INACTIVE_SNAPSHOT_INTERVAL_MS = 5000
 const FIRST_SNAPSHOT_DELAY_MS = 350
 const BITRATE_SAMPLE_LIMIT = 60
 const BITRATE_AXIS_MIN_KBPS = 100
@@ -340,9 +440,9 @@ const statsMenu = reactive({
 })
 let pointerMask = 0
 let lastPointerPoint: { x: number; y: number } | null = null
-let snapshotTimer: ReturnType<typeof window.setTimeout> | null = null
+let snapshotTimer: number | null = null
 let snapshotFrameRequest: number | null = null
-let statsTimer: ReturnType<typeof window.setInterval> | null = null
+let statsTimer: number | null = null
 let lastStatsSample: StatsSample | null = null
 
 const statusLabel = computed(() => {
@@ -449,15 +549,19 @@ function emptyDisplayStats(): DisplayStats {
   }
 }
 
-function cleanupLocalUI() {
+function cleanupLocalUI(options: { preserveVideo?: boolean } = {}) {
+  const { preserveVideo = false } = options
+  orderedInput.cancel()
   stopSnapshotCapture()
   stopStatsPolling()
   closeStatsMenu()
-  videoReady.value = false
   pointerMask = 0
   lastPointerPoint = null
-  if (videoRef.value) {
-    videoRef.value.srcObject = null
+  if (!preserveVideo) {
+    videoReady.value = false
+    if (videoRef.value) {
+      videoRef.value.srcObject = null
+    }
   }
 }
 
@@ -467,7 +571,7 @@ function closeDisplayWindow() {
 }
 
 function startSnapshotCapture() {
-  if (snapshotTimer || snapshotFrameRequest !== null || document.visibilityState === 'hidden') return
+  if (snapshotTimer || snapshotFrameRequest !== null || !viewing.value) return
   scheduleSnapshotCapture(FIRST_SNAPSHOT_DELAY_MS)
 }
 
@@ -483,16 +587,11 @@ function stopSnapshotCapture() {
   snapshotFrameRequest = null
 }
 
-function restartSnapshotCapture() {
-  if (status.value !== 'connected') return
-  stopSnapshotCapture()
-  startSnapshotCapture()
-}
-
-function scheduleSnapshotCapture(delayMs = snapshotIntervalMs()) {
-  if (status.value !== 'connected' || document.visibilityState === 'hidden') return
+function scheduleSnapshotCapture(delayMs = ACTIVE_SNAPSHOT_INTERVAL_MS) {
+  if (status.value !== 'connected' || !viewing.value) return
   snapshotTimer = window.setTimeout(() => {
     snapshotTimer = null
+    if (!viewing.value) return
     const video = videoRef.value as VideoWithFrameCallback | null
     if (video?.requestVideoFrameCallback) {
       snapshotFrameRequest = video.requestVideoFrameCallback(() => {
@@ -507,11 +606,8 @@ function scheduleSnapshotCapture(delayMs = snapshotIntervalMs()) {
   }, delayMs)
 }
 
-function snapshotIntervalMs() {
-  return props.active ? ACTIVE_SNAPSHOT_INTERVAL_MS : INACTIVE_SNAPSHOT_INTERVAL_MS
-}
-
 function captureSnapshot() {
+  if (!viewing.value) return
   const video = videoRef.value
   if (!video) {
     return
@@ -530,6 +626,8 @@ function captureSnapshot() {
 }
 
 function openStatsMenu(event: MouseEvent) {
+  // Ordinary right clicks belong to the remote application's context menu.
+  if (!event.shiftKey) return
   const root = rootRef.value
   const rect = root?.getBoundingClientRect()
   const rawX = rect ? event.clientX - rect.left : event.clientX
@@ -556,7 +654,7 @@ function toggleStatsOverlay() {
 }
 
 function startStatsPolling() {
-  if (statsTimer || status.value !== 'connected' || document.visibilityState === 'hidden') return
+  if (statsTimer || status.value !== 'connected' || !viewing.value) return
   void updateDisplayStats()
   statsTimer = window.setInterval(() => {
     void updateDisplayStats()
@@ -585,6 +683,7 @@ async function updateDisplayStats() {
   }
   try {
     const report = await peer.getStats()
+    if (!viewing.value || connection.peer.value !== peer) return
     const now = Date.now()
     const inbound = findStats(report, item =>
       item.type === 'inbound-rtp'
@@ -640,8 +739,8 @@ function sendInput(payload: Record<string, unknown>) {
   // Only the active pane drives input. There is one shared input channel per
   // bot, so a background/inactive pane forwarding pointer + key events would
   // race the focused pane's input on the desktop.
-  if (!props.active) return
-  connection.sendInput(payload)
+  if (!viewing.value) return
+  orderedInput.input(payload)
 }
 
 function inputReady() {
@@ -693,7 +792,15 @@ function sendPointer(event: MouseEvent | WheelEvent, mask = pointerMask) {
 }
 
 function onPointerDown(event: MouseEvent) {
-  videoRef.value?.focus()
+  if (!inputReady() || !resolveVideoPoint(event)) return
+  // The browser cannot see the remote caret. Anchor its IME candidate popup
+  // near the last clicked position by moving the focused textarea there.
+  const bounds = rootRef.value?.getBoundingClientRect()
+  if (bounds) keyboardPosition.value = { left: `${event.clientX - bounds.left}px`, top: `${event.clientY - bounds.top}px` }
+  focusKeyboard()
+  // Start the promised clipboard write during the local click, before the
+  // remote menu can handle it and return its Copy/Cut result.
+  if (event.button === 0) clipboard.preparePointerCopy()
   pointerMask |= buttonBit(event.button)
   sendPointer(event)
 }
@@ -725,53 +832,30 @@ function onWheel(event: WheelEvent) {
   sendPointer(event, pointerMask)
 }
 
-function keysymForEvent(event: KeyboardEvent): number | null {
-  if (event.key.length === 1) {
-    return event.key.codePointAt(0) ?? null
-  }
-  const keysyms: Record<string, number> = {
-    Backspace: 0xff08,
-    Tab: 0xff09,
-    Enter: 0xff0d,
-    Escape: 0xff1b,
-    Delete: 0xffff,
-    Home: 0xff50,
-    ArrowLeft: 0xff51,
-    ArrowUp: 0xff52,
-    ArrowRight: 0xff53,
-    ArrowDown: 0xff54,
-    PageUp: 0xff55,
-    PageDown: 0xff56,
-    End: 0xff57,
-    Insert: 0xff63,
-    Shift: 0xffe1,
-    Control: 0xffe3,
-    Alt: 0xffe9,
-    Meta: 0xffeb,
-  }
-  if (/^F([1-9]|1[0-2])$/.test(event.key)) {
-    return 0xffbe + Number(event.key.slice(1)) - 1
-  }
-  return keysyms[event.key] ?? null
-}
-
-function sendKey(event: KeyboardEvent, down: boolean) {
-  const keysym = keysymForEvent(event)
-  if (!keysym) return
-  sendInput({
-    type: 'key',
-    keysym,
-    down,
-  })
-}
-
 function onKeyDown(event: KeyboardEvent) {
-  if (event.repeat) return
-  sendKey(event, true)
+  // Composition keys select local candidates; ordinary keys and shortcuts
+  // continue through the remote keyboard controller.
+  if (textInput.keydown(event)) return
+  keyboard.keydown(event)
 }
 
 function onKeyUp(event: KeyboardEvent) {
-  sendKey(event, false)
+  if (textInput.keyup(event)) return
+  if (event.key.toLowerCase() === 'v') pasteWithShift = false
+  keyboard.keyup(event)
+}
+
+function onCompositionEnd(event: CompositionEvent) {
+  textInput.end(event.data)
+  if (keyboardRef.value) keyboardRef.value.value = ''
+}
+
+function onTextInput(event: Event) {
+  const input = event as InputEvent
+  const target = event.target as HTMLTextAreaElement
+  // Keep the textarea value during preedit; clear it once consumed so the
+  // next composition starts empty. The helper deduplicates the final input.
+  if (textInput.input(input.data ?? target.value, input.isComposing)) target.value = ''
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -883,7 +967,7 @@ function shortID(value: string) {
 function bindStream() {
   const video = videoRef.value
   const stream = connection.stream.value
-  if (!video || !stream) return
+  if (!viewing.value || !video || !stream) return
   // Skip if already bound to this exact stream — multiple watchers (stream,
   // status, connect) can fire bindStream back-to-back and re-assigning
   // srcObject aborts the in-flight play() promise (AbortError).
@@ -896,17 +980,20 @@ function bindStream() {
   // play() resolves once playback begins; set videoReady here as the
   // authoritative signal instead of relying solely on the @playing event,
   // which can race or fail to fire when the panel visibility transitions.
-  video.play().then(() => { videoReady.value = true }).catch(() => {})
+  video.play().then(() => {
+    if (viewing.value && video.srcObject === stream) videoReady.value = true
+  }).catch(() => {})
 }
 
 async function connect() {
+  if (!viewing.value) return
   const ok = await connection.acquireConnection()
   if (ok) bindStream()
 }
 
 // Snapshot/stats follow the shared peer state + this pane's visibility, so a
 // background pane never captures and a connected pane resumes on focus.
-watch([() => status.value, () => props.active], ([st, active]) => {
+watch([() => status.value, viewing], ([st, active]) => {
   if (st === 'connected' && active) {
     bindStream()
     startSnapshotCapture()
@@ -915,59 +1002,23 @@ watch([() => status.value, () => props.active], ([st, active]) => {
     stopSnapshotCapture()
     stopStatsPolling()
   }
-})
+}, { immediate: true, flush: 'post' })
 
 // The track event can land before connectionstatechange flips to 'connected'
 // (track is negotiated at setRemoteDescription, ICE may still be gathering),
 // so bind as soon as the stream arrives rather than gating on status.
-watch(() => connection.stream.value, () => {
+// Also bind an existing shared stream when a new pane's video element mounts.
+watch([connection.stream, videoRef, viewing], () => {
   bindStream()
-})
-
-function handleVisibilityChange() {
-  if (document.visibilityState === 'hidden') {
-    stopSnapshotCapture()
-    stopStatsPolling()
-    return
-  }
-  if (status.value === 'connected' && props.active) {
-    startSnapshotCapture()
-    if (statsVisible.value) startStatsPolling()
-    return
-  }
-  // The peer can die while the tab is hidden (ICE timeout in a backgrounded
-  // browser tab). On return, auto-reconnect a dead peer instead of leaving a
-  // disconnected pane for a manual Reconnect click. acquireConnection is
-  // idempotent (concurrent callers share acquirePromise), so this is safe even
-  // if a reconnect is already in flight.
-  if (props.active && status.value !== 'connected') {
-    void connect()
-  }
-}
+}, { immediate: true, flush: 'post' })
 
 onMounted(() => {
-  document.addEventListener('visibilitychange', handleVisibilityChange)
-  if (props.active) {
-    void connect()
-  }
-})
-
-watch(() => props.active, (active) => {
-  if (!active) {
-    stopSnapshotCapture()
-    stopStatsPolling()
-    return
-  }
-  if (status.value === 'connected') {
-    bindStream()
-    restartSnapshotCapture()
-    return
-  }
-  void connect()
+  window.addEventListener('blur', releaseKeyboard)
 })
 
 onBeforeUnmount(() => {
-  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  window.removeEventListener('blur', releaseKeyboard)
+  releaseKeyboard()
   if (fullScreenIconTimer) {
     clearTimeout(fullScreenIconTimer)
     fullScreenIconTimer = null

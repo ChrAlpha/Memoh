@@ -132,10 +132,10 @@ func TestMergeCarriesContextBudget(t *testing.T) {
 		ContextBudgetMaxTokens: 128000,
 	})
 	if merged.ContextBudgetMaxTokens != 128000 {
-		t.Fatalf("merged = %#v, want context budget and policy carried", merged)
+		t.Fatalf("merged = %#v, want context budget carried", merged)
 	}
 	kept := Merge(merged, Session{SessionID: "session-1"})
 	if kept.ContextBudgetMaxTokens != 128000 {
-		t.Fatalf("kept = %#v, want context budget and policy preserved", kept)
+		t.Fatalf("kept = %#v, want context budget preserved", kept)
 	}
 }

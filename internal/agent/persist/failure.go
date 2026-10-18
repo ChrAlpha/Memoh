@@ -31,8 +31,10 @@ func FailureRowMetadata(f outcome.RunFailure, origin string, metadata map[string
 
 // FailureRow writes the user message and the empty assistant row that
 // record a run whose failure left no assistant output. It is the only writer
-// of a failure row: a run that had already committed steps keeps them and adds
-// nothing, which is what keeps a failure from appearing to be a second turn.
+// of a failure row for a turn without step commits: a run that had already
+// committed steps records its failure as an interrupted step instead
+// (StepCommitter.RecordFailure), which is what keeps a failure from appearing
+// to be a second turn.
 func (w *Writer) FailureRow(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, f outcome.RunFailure, origin string) ([]messagepkg.Message, error) {
 	if req.SkipHistoryTurn {
 		return nil, nil

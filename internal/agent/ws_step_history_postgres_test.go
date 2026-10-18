@@ -67,6 +67,10 @@ const (
 	// call, which commits a step, and breaks the second call's stream after
 	// some text.
 	wsStepHistoryToolThenBrokenStream wsStepHistoryModel = "tool_then_broken_stream"
+	// wsStepHistoryToolThenAuthFailure answers the first call with a tool
+	// call, which commits a step, and rejects the second call before any
+	// output.
+	wsStepHistoryToolThenAuthFailure wsStepHistoryModel = "tool_then_auth_failure"
 	// wsStepHistoryTextLoop repeats the same text until the runtime's loop
 	// detection aborts the run. The abort follows no error event, and its
 	// cause carries no catalogued code.
@@ -113,7 +117,7 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 		}
 	}
 	switch t.mode {
-	case wsStepHistoryToolThenBrokenStream:
+	case wsStepHistoryToolThenBrokenStream, wsStepHistoryToolThenAuthFailure:
 		if call == 1 {
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -125,7 +129,18 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 				Request: r,
 			}, nil
 		}
-		return stream(failingReader{err: errors.New("upstream stream broke")}), nil
+		if t.mode == wsStepHistoryToolThenBrokenStream {
+			return stream(failingReader{err: errors.New("upstream stream broke")}), nil
+		}
+		fallthrough
+	case wsStepHistoryAuthFailure:
+		return &http.Response{
+			StatusCode: http.StatusUnauthorized,
+			Status:     "401 Unauthorized",
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"invalid api key"}}`)),
+			Request:    r,
+		}, nil
 	case wsStepHistoryNumbered:
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -135,14 +150,6 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 				"data: {\"id\":\"chatcmpl-ws-step\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ANSWER-%d\"},\"finish_reason\":null}]}\n\n"+
 					"data: {\"id\":\"chatcmpl-ws-step\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", call))),
 			Request: r,
-		}, nil
-	case wsStepHistoryAuthFailure:
-		return &http.Response{
-			StatusCode: http.StatusUnauthorized,
-			Status:     "401 Unauthorized",
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"invalid api key"}}`)),
-			Request:    r,
 		}, nil
 	case wsStepHistoryBrokenStream:
 		return stream(failingReader{err: errors.New("upstream stream broke")}), nil
@@ -656,6 +663,27 @@ func TestPostgresWSStepHistoryFailureAfterCommittedStep(t *testing.T) {
 		[]string{
 			`user "` + directLifecyclePrompt + `"`,
 			`assistant [tool] [text "` + wsStepHistoryPartialText + `"] [error agent.response_interrupted]`,
+		},
+	)
+}
+
+// A failure after a committed step whose model call streamed nothing still
+// adds a row with the run's code, so the turn shows why it ended.
+func TestPostgresWSStepHistoryFailureAfterCommittedStepWithoutText(t *testing.T) {
+	h := newWSStepHistoryHarness(t, wsStepHistoryToolThenAuthFailure)
+	got := h.run(t, nil)
+	assertOrdered(t, got.events, "tool_call_start", "step_end", "error")
+	assertWSStepHistory(t, got,
+		[3]string{"failed", "agent.provider_auth_failed", ""},
+		[]string{
+			`user`,
+			`assistant ""`,
+			`tool ""`,
+			`assistant "" interrupted error_code=agent.provider_auth_failed`,
+		},
+		[]string{
+			`user "` + directLifecyclePrompt + `"`,
+			`assistant [tool] [error agent.provider_auth_failed]`,
 		},
 	)
 }

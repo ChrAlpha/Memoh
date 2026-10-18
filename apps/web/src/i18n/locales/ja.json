@@ -273,7 +273,8 @@
       "turn_replacement_unsupported": "外部 Agent のセッションでは再試行とメッセージの編集は利用できません。代わりに新しいメッセージを送信してください。"
     },
     "external_runtime": {
-      "auth_required": "Codex のアカウントが未接続か、ログインの有効期限が切れています。Agent の設定で ChatGPT に接続するか、API Key を設定してください。",
+      "auth_required": "この Agent はログインしていないか、認証情報が拒否されました。Agent の設定で再度ログインするか、API Key を更新してください。",
+      "busy": "この Agent は前の処理を実行中です。完了してから再試行してください。",
       "context_window_exceeded": "この会話はモデルのコンテキストウィンドウを超えました。コンテキストを圧縮するか、新しい会話を開始してください。",
       "overloaded": "外部 Agent のモデルサービスが一時的に利用できないか、過負荷になっています。しばらくしてからもう一度お試しいただくか、別のモデルに切り替えてください。",
       "rate_limited": "外部 Agent がモデルサービスのレート制限に達しました。しばらく待ってからもう一度送信してください。",
@@ -390,6 +391,7 @@
       "command_unavailable": "このコマンドは利用できません。更新して再試行してください。",
       "failed": "操作を完了できませんでした。再試行してください。",
       "forbidden": "この会話へのアクセス権がありません。",
+      "fork_latest_only": "分岐できるのは最新の返信のみです。最新の返信を選択して再試行してください。",
       "goal_requires_default_mode": "目標を作成・再開するには、先にプランモードを終了してください。",
       "mode_unavailable": "このモードは利用できません。更新して選び直してください。",
       "request_invalid": "リクエストが無効です。更新して再試行してください。",
@@ -520,6 +522,7 @@
     },
     "workspace": {
       "archive_invalid": "アーカイブを展開できません。有効な .zip、.tar.gz、.tgz ファイルを使用してください。",
+      "display_clipboard_failed": "クリップボードの同期に失敗しました。デスクトップに再接続して、もう一度お試しください。",
       "display_prepare_failed": "ディスプレイの準備に失敗しました。しばらくしてからもう一度お試しください。",
       "image_not_found": "ワークスペースのイメージが存在しないか、レジストリの認証が必要か、名前が正しくありません。イメージ名を確認してからもう一度お試しください。",
       "image_registry_unavailable": "イメージレジストリに接続できません。しばらくしてからもう一度お試しください。",
@@ -1474,6 +1477,11 @@
     "newSession": "新しいセッション",
     "deleteSession": "セッションを削除",
     "deleteSessionConfirm": "このセッションを削除してもよろしいですか？",
+    "selectSessions": "選択",
+    "selectedSessions": "{count} 件選択中",
+    "deleteSessions": "セッションを削除",
+    "deleteSessionsConfirm": "{count} 件のセッションを削除してもよろしいですか？",
+    "deleteSessionsFailed": "{count} 件のセッションを削除できませんでした",
     "renameSession": "セッション名を変更",
     "renameSessionDescription": "この会話の短い名前を選択してください。",
     "renameSessionPlaceholder": "セッション名",
@@ -1694,6 +1702,13 @@
       }
     },
     "display": {
+      "keyboardInput": "リモートデスクトップのキーボード入力",
+      "clipboard": {
+        "copyDenied": "ブラウザーによりクリップボードへの書き込みが拒否されました。デスクトップにフォーカスして、もう一度コピーしてください。",
+        "copyTimedOut": "デスクトップから新しいコピー内容を受信できませんでした。テキストを選択して、もう一度コピーしてください。",
+        "syncFailed": "クリップボードを同期できませんでした。再試行するか、貼り付けのショートカットを使ってください。",
+        "pasteFailed": "このテキストを貼り付けられません。コピーする範囲を小さくしてください（最大 48 KB）。"
+      },
       "title": "デスクトップ",
       "reconnect": "再接続",
       "closeSession": "デスクトップセッションを閉じる",
@@ -2341,7 +2356,7 @@
       "confirmReset": "すべてのツール承認ルールをデフォルト状態に戻しますか?",
       "resetWarningExtra": "カスタムのバイパスルールとレビュー必須ルールは失われます。",
       "title": "ツール呼び出しの承認",
-      "intro": "この Bot が Workspace と各接続済みコンピューターで実行できる操作を設定します。これらのルールは Memoh が提供するツールにのみ適用されます。Claude Code と Codex の組み込みツールはそれぞれの権限モードに従い、確認の要求はカードとして表示され、該当する Workspace 権限を持つユーザーが判断します。",
+      "intro": "この Bot が Workspace と各接続済みコンピューターで実行できる操作を設定します。これらのルールは Memoh が提供するツールにのみ適用されます。Claude Code、Codex、Grok Build の組み込みツールはそれぞれの権限モードに従い、確認の要求はカードとして表示され、該当する Workspace 権限を持つユーザーが判断します。",
       "loading": "承認ルールを読み込んでいます...",
       "loadFailed": "Tool の承認設定を読み込めませんでした",
       "loadFailedDescription": "Server への接続を確認して、もう一度お試しください。",
@@ -2449,6 +2464,7 @@
     "createBot": "新しいBot",
     "createBotWaitHint": "初めて作成する場合は、基本イメージを取得するため、少し時間がかかる場合があります。",
     "createBotSuccess": "Botが正常に作成されました。",
+    "createBotSignInFirst": "Bot を作成しました。Agent が応答できるようにするには、先にアカウントにサインインしてください。",
     "createBotSettingUp": "セットアップ中...",
     "createBotSetupTitle": "Botのセットアップ",
     "createBotSetupDesc": "Bot と Workspace を作成しています。準備が完了すると、自動的にページが開きます。",
@@ -2729,7 +2745,7 @@
       "namePlaceholder": "Agent 名を入力",
       "nameRequired": "Agent 名を入力してください。",
       "emptyTitle": "Agent はまだありません",
-      "emptyDescription": "Agent を追加すると、この Bot で Codex、Claude Code、またはカスタム ACP Agent を利用できます。",
+      "emptyDescription": "Agent を追加すると、この Bot で Codex、Claude Code、Grok Build、またはカスタム ACP Agent を利用できます。",
       "statusNeedsConfig": "設定が必要",
       "statusOff": "無効",
       "deleteTitle": "Agent を削除しますか？",
@@ -2754,13 +2770,20 @@
       "defaultModelDescription": "任意項目です。空欄の場合は External Agent のデフォルトを使用し、会話中に一時的に変更できます。",
       "defaultModelPlaceholder": "Runtime のデフォルトを使用",
       "account": "アカウント",
-      "chatgptAccount": "ChatGPT アカウント",
       "chatgptAccountDescription": "Memoh はこの Agent の ChatGPT 認証情報を暗号化して保存し、Runtime でのみ Codex に渡します。",
       "chatgptAccountConnectedDescription": "この Agent の ChatGPT 認証情報は暗号化して保存されています。",
       "reconnect": "再接続",
       "codexDeviceHint": "認証ページを開き、このワンタイムコードを入力してください。表示された OpenAI の認証ページ以外には入力しないでください。Memoh が認証を自動で完了します。",
       "codexLoginSuccess": "Codex を ChatGPT アカウントに接続しました",
       "codexLoginFailed": "Codex アカウントを認証できませんでした。もう一度お試しください。",
+      "authGrokAccountDescription": "Grok アカウントで Grok Build にサインインします。",
+      "grokAccount": "Grok アカウント",
+      "grokAccountDescription": "Memoh はこの Agent の Grok 認証情報を暗号化して保存し、Runtime でのみ Grok Build に渡します。",
+      "grokAccountConnectedDescription": "この Agent の Grok 認証情報は暗号化して保存されています。",
+      "grokDeviceHint": "認証ページを開き、このワンタイムコードを確認してください。表示された accounts.x.ai のページ以外では確認しないでください。Memoh が認証を自動で完了します。",
+      "grokLoginSuccess": "Grok Build を Grok アカウントに接続しました",
+      "grokLoginFailed": "Grok アカウントにサインインできませんでした。もう一度お試しください。",
+      "signInAfterCreate": "Bot の作成後に Agent の設定からサインインしてください。アカウントは Agent 自身の Workspace 内でサインインします。",
       "usage": {
         "window": {
           "weekly": "週間上限",
@@ -3769,6 +3792,7 @@
       "edit": "タスクの編集",
       "delete": "削除",
       "deleteConfirm": "タスク「{name}」を削除しますか?これを元に戻すことはできません。",
+      "deleteConfirmRunSessions": "タスク「{name}」を削除しますか?これを元に戻すことはできません。削除後、このタスクの実行で作成された会話はスケジュールと最近に表示されなくなり、検索でのみ見つけられます。",
       "deleteSuccess": "タスクが削除されました",
       "deleteFailed": "削除に失敗しました",
       "saveSuccess": "タスクが保存されました",
@@ -3866,6 +3890,13 @@
         "oct": "10月",
         "nov": "11月",
         "dec": "12月"
+      },
+      "sessions": {
+        "pinned": "同じ会話で実行",
+        "openPinned": "このスケジュールが実行される会話を開く",
+        "failed": "この実行は失敗しました",
+        "notStarted": "この実行は開始できなかったため、会話がありません",
+        "empty": "まだ実行されていません"
       }
     },
     "history": {
@@ -4020,6 +4051,7 @@
     "connectTitle": "{name} に接続",
     "awaitingAuthorization": "認証を待っています…",
     "unavailable": "利用不可",
+    "toolDiscoveryFailed": "ツールを利用できません：{error}",
     "unknown": "不明なコネクター",
     "emptyTitle": "コネクターはまだありません",
     "emptyDescription": "サービスを接続して、この Bot からツールを利用できるようにします。",
@@ -4375,6 +4407,32 @@
         "goal": {
           "description": "継続して取り組む目標を設定",
           "input_hint": "目標を入力"
+        }
+      }
+    },
+    "grokBuild": {
+      "modes": {
+        "ask": {
+          "name": "毎回確認",
+          "description": "副作用のある操作を実行する前に確認します。"
+        },
+        "auto": {
+          "name": "自動判断",
+          "description": "安全に実行できる操作を Grok が判断し、確認を省きます。"
+        },
+        "alwaysApprove": {
+          "name": "すべて承認",
+          "description": "すべての操作を確認なしで承認します。Memoh ツールの権限は引き続き適用されます。"
+        }
+      },
+      "commands": {
+        "status": {
+          "description": "セッションのモデルとコンテキスト使用量を表示"
+        },
+        "compact": {
+          "description": "Grok セッションのコンテキストを圧縮",
+          "running_text": "圧縮中",
+          "completed_text": "圧縮が完了しました"
         }
       }
     },

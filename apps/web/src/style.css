@@ -587,7 +587,8 @@
   }
 
   @media (hover: hover) {
-    [data-slot="sidebar-session-row"]:hover [data-slot="sidebar-session-spinner"] {
+    /* A selecting row has no actions button for hover to reveal. */
+    [data-slot="sidebar-session-row"]:not([data-selecting]):hover [data-slot="sidebar-session-spinner"] {
       opacity: 0;
     }
   }

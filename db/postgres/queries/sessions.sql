@@ -365,7 +365,10 @@ ORDER BY s.updated_at DESC;
 -- updated_at. Callers always pass an explicit types filter; to opt out of
 -- filtering, pass every known type. The workdir filter is three-state:
 -- disabled, "sessions of this workdir", or "sessions with no workdir"
--- (workdir_unassigned) for the sidebar's ungrouped bucket.
+-- (workdir_unassigned) for the sidebar's ungrouped bucket. hide_schedule_runs
+-- drops the sessions schedule fires created (type 'schedule'), which the
+-- sidebar lists under their schedule instead, except one a schedule still
+-- runs in (existing_session target): that conversation stays a normal row.
 SELECT
   s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility,
   s.reply_delivery, s.trigger_scope, s.decision_mode, s.audience, s.external_runtime_driver, s.runtime_metadata, s.title, s.metadata,
@@ -389,6 +392,14 @@ WHERE s.team_id = public.memoh_current_team_id()
   AND (
     NOT sqlc.arg(use_visibility)::bool
     OR s.visibility = sqlc.arg(visibility)::text
+  )
+  AND (
+    NOT sqlc.arg(hide_schedule_runs)::bool
+    OR s.type <> 'schedule'
+    OR EXISTS (
+      SELECT 1 FROM schedule sc
+      WHERE sc.team_id = s.team_id AND sc.target_session_id = s.id
+    )
   )
   AND (
     NOT sqlc.arg(use_cursor)::bool
@@ -422,6 +433,14 @@ WHERE s.team_id = public.memoh_current_team_id()
   AND (
     NOT sqlc.arg(use_visibility)::bool
     OR s.visibility = sqlc.arg(visibility)::text
+  )
+  AND (
+    NOT sqlc.arg(hide_schedule_runs)::bool
+    OR s.type <> 'schedule'
+    OR EXISTS (
+      SELECT 1 FROM schedule sc
+      WHERE sc.team_id = s.team_id AND sc.target_session_id = s.id
+    )
   )
   AND (
     NOT sqlc.arg(use_cursor)::bool

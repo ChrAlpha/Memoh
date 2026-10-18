@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 
@@ -41,6 +43,7 @@ func (h *ScheduleHandler) Register(e *echo.Echo) {
 	group.DELETE("/logs", h.DeleteLogs)
 	group.GET("/:id", h.Get)
 	group.GET("/:id/logs", h.ListLogsBySchedule)
+	group.GET("/:id/sessions", h.ListRunSessions)
 	group.PUT("/:id", h.Update)
 	group.DELETE("/:id", h.Delete)
 }
@@ -294,6 +297,44 @@ func (h *ScheduleHandler) ListLogsBySchedule(c echo.Context) error {
 		return errs.Wrap(err, "schedule request")
 	}
 	return c.JSON(http.StatusOK, schedule.ListLogsResponse{Items: items, TotalCount: total})
+}
+
+// ListRunSessions godoc
+// @Summary List the sessions a schedule's runs created
+// @Description List a schedule's runs newest first, each with the session it ran in. Runs whose session was deleted are omitted; a run that failed before it had a session is included with an empty session_id. status is running until the run completes.
+// @Tags schedule
+// @Param bot_id path string true "Bot ID"
+// @Param id path string true "Schedule ID"
+// @Param limit query int false "Page size (1..100)" default(20)
+// @Param cursor query string false "Opaque cursor returned as next_cursor on a previous page"
+// @Success 200 {object} schedule.ListRunSessionsResponse
+// @Failure 400 {object} server.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 404 {object} server.Problem
+// @Failure 500 {object} server.Problem
+// @Router /bots/{bot_id}/schedule/{id}/sessions [get].
+func (h *ScheduleHandler) ListRunSessions(c echo.Context) error {
+	userID, err := h.requireUserID(c)
+	if err != nil {
+		return err
+	}
+	botID, err := httpx.RequiredParam(c, "bot_id")
+	if err != nil {
+		return err
+	}
+	scheduleID, err := httpx.RequiredParam(c, "id")
+	if err != nil {
+		return err
+	}
+	if _, err := h.authorizeBotAccess(c.Request().Context(), userID, botID); err != nil {
+		return err
+	}
+	limit, _ := strconv.Atoi(strings.TrimSpace(c.QueryParam("limit")))
+	resp, err := h.service.ListRunSessions(c.Request().Context(), botID, scheduleID, limit, c.QueryParam("cursor"))
+	if err != nil {
+		return scheduleLookupError(err)
+	}
+	return c.JSON(http.StatusOK, resp)
 }
 
 // DeleteLogs godoc

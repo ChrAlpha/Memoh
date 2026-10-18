@@ -9,15 +9,13 @@ import (
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
-func TestBuildEntriesAndIDsBreaksSpanAtSkippedMiddleGroup(t *testing.T) {
+func TestBuildEntriesAndIDsCoversMiddleRowThatRendersNothing(t *testing.T) {
 	t.Parallel()
 
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		mkRow(t, "user", `"first question"`, 0),
-		// reasoning-only: renders empty. It must NOT be marked, and because it
-		// sits between two rendered rows, it breaks the contiguous compact span:
-		// marking row 0 and row 2 under one compact_id would leave this raw row
-		// between them, and the read path would fold row 2's summary before it.
+		// reasoning-only: renders empty. It is covered with its neighbours so
+		// the span stays one contiguous range instead of two short fragments.
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking"}]`, 0),
 		mkRow(t, "assistant", `"the answer"`, 0),
 	}
@@ -25,13 +23,11 @@ func TestBuildEntriesAndIDsBreaksSpanAtSkippedMiddleGroup(t *testing.T) {
 
 	entries, ids := buildEntriesAndIDs(items)
 
-	// Only the first contiguous run (row 0) is marked; "the answer" is deferred
-	// to a later pass so the marked ids stay contiguous in history.
-	if len(ids) != 1 || ids[0] != rows[0].ID {
-		t.Fatalf("ids = %#v, want only the leading contiguous row 0 marked", ids)
+	if len(ids) != 3 || ids[0] != rows[0].ID || ids[1] != rows[1].ID || ids[2] != rows[2].ID {
+		t.Fatalf("ids = %#v, want the whole contiguous span marked", ids)
 	}
-	if len(entries) != 1 || entries[0].Content != "first question" {
-		t.Fatalf("entries = %#v, want only 'first question'", entries)
+	if len(entries) != 2 || entries[0].Content != "first question" || entries[1].Content != "the answer" {
+		t.Fatalf("entries = %#v, want the two rendered rows", entries)
 	}
 	for _, e := range entries {
 		if strings.TrimSpace(e.Content) == "" {
@@ -40,7 +36,7 @@ func TestBuildEntriesAndIDsBreaksSpanAtSkippedMiddleGroup(t *testing.T) {
 	}
 }
 
-func TestBuildEntriesAndIDsWithholdsWholeExchangeWhenResultRendersEmpty(t *testing.T) {
+func TestBuildEntriesAndIDsCoversWholeExchangeWhenResultRendersEmpty(t *testing.T) {
 	t.Parallel()
 
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
@@ -54,14 +50,13 @@ func TestBuildEntriesAndIDsWithholdsWholeExchangeWhenResultRendersEmpty(t *testi
 
 	entries, ids := buildEntriesAndIDs(items)
 
-	// The incomplete exchange (renderable call, empty-rendering result) is
-	// withheld from BOTH the summarizer prompt and the marked ids: summarizing
-	// the call while it stays in raw history would duplicate its content.
-	if len(entries) != 1 || entries[0].Content != "question" {
-		t.Fatalf("entries = %#v, want only the unrelated question", entries)
+	// The exchange is covered whole: the call is summarized and its empty
+	// result goes with it, so neither stays behind as an orphan in raw history.
+	if len(entries) != 2 || entries[0].Content != "question" {
+		t.Fatalf("entries = %#v, want the question and the tool call", entries)
 	}
-	if len(ids) != 1 || ids[0] != rows[0].ID {
-		t.Fatalf("ids = %#v, want only the unrelated question row marked", ids)
+	if len(ids) != 3 {
+		t.Fatalf("ids = %#v, want the question and both exchange rows marked", ids)
 	}
 }
 
