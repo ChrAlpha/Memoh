@@ -80,6 +80,8 @@ type backlogFixture struct {
 	lastRequest atomic.Value
 	agent       *native.Agent
 	stream      func(http.ResponseWriter, []byte)
+	manager     *sessionruntime.Manager
+	ownerUserID string
 }
 
 func newBacklogFixture(t *testing.T) *backlogFixture {
@@ -91,7 +93,7 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	f.botID, f.sessionID = createDiscussRecoveryFixture(t, ctx, f.pool)
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
 	var teamID string
-	if err := f.pool.QueryRow(ctx, `SELECT team_id FROM bots WHERE id=$1`, f.botID).Scan(&teamID); err != nil {
+	if err := f.pool.QueryRow(ctx, `SELECT team_id, owner_user_id FROM bots WHERE id=$1`, f.botID).Scan(&teamID, &f.ownerUserID); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +155,7 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	f.base = time.Now().Add(time.Minute).Truncate(time.Millisecond)
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{OwnerID: uuid.NewString(), Ledger: ledger.NewPostgres(sqlc.New(f.pool), f.pool), Fence: runtimefence.NewActivator(queries)})
 	t.Cleanup(func() { _ = manager.Close() })
+	f.manager = manager
 	f.agent = native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)})
 	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, f.agent, time.UTC, time.Minute)
 	service.SetSessionRuntime(manager)
