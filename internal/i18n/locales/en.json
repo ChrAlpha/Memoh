@@ -901,6 +901,7 @@
     "workspace": {
       "archive_invalid": "The archive cannot be extracted. Use a valid .zip, .tar.gz or .tgz file.",
       "display_clipboard_failed": "Clipboard synchronization failed. Reconnect the desktop and try again.",
+      "display_clipboard_too_large": "Clipboard text exceeds 48 KiB. Copy a smaller selection.",
       "display_prepare_failed": "Display preparation failed.",
       "image_not_found": "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
       "image_registry_unavailable": "The image registry could not be reached. Please try again later.",

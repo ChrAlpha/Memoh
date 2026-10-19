@@ -273,7 +273,7 @@ func TestLegacyClipboardAndPublicError(t *testing.T) {
 		t.Fatal("legacy encoding silently corrupted Unicode")
 	}
 	var event map[string]any
-	if err := json.Unmarshal([]byte(clipboardErrorMessage(t.Context())), &event); err != nil {
+	if err := json.Unmarshal([]byte(clipboardErrorMessage(t.Context(), nil)), &event); err != nil {
 		t.Fatal(err)
 	}
 	if event["type"] != "clipboard_error" || event["code"] != "workspace.display_clipboard_failed" {
@@ -322,5 +322,51 @@ func TestSessionStopUnblocksInputWrite(t *testing.T) {
 	}
 	if err := sess.input.Close(); err != nil {
 		t.Fatalf("repeated input close: %v", err)
+	}
+}
+
+func TestClipboardTooLargePublicErrorAndRecovery(t *testing.T) {
+	c := &rfbInputClient{conn: &clipboardTestConn{}, clipboard: &rfbClipboard{extended: true}}
+	_, _, cause := c.handleExtendedClipboard(providedClipboard(t, strings.Repeat("x", maxClipboardBytes+1)))
+	if !errors.Is(cause, errClipboardTooLarge) {
+		t.Fatalf("size rejection: %v", cause)
+	}
+	var frame struct {
+		Code string `json:"code"`
+		Type string `json:"type"`
+	}
+	wire := clipboardErrorMessage(t.Context(), cause)
+	if err := json.Unmarshal([]byte(wire), &frame); err != nil {
+		t.Fatal(err)
+	}
+	if frame.Code != "workspace.display_clipboard_too_large" || frame.Type != "clipboard_error" {
+		t.Fatalf("wrong public error: %s", wire)
+	}
+	text, present, err := c.handleExtendedClipboard(providedClipboard(t, "small copy"))
+	if err != nil || !present || text != "small copy" {
+		t.Fatalf("copy did not recover: %q %v %v", text, present, err)
+	}
+	wire = clipboardErrorMessage(t.Context(), errors.New("PRIVATE diagnostic"))
+	if strings.Contains(wire, "PRIVATE") || strings.Contains(wire, "too_large") {
+		t.Fatalf("invalid error classification: %s", wire)
+	}
+}
+
+func TestLegacyClipboardUTF8SizeRejectionKeepsFollowingCopy(t *testing.T) {
+	c := &rfbInputClient{conn: &clipboardTestConn{}, clipboard: &rfbClipboard{}}
+	var wire bytes.Buffer
+	// Latin-1 bytes expand to two bytes each when represented as UTF-8.
+	for _, text := range [][]byte{bytes.Repeat([]byte{0xe9}, maxClipboardBytes/2+1), []byte("next copy")} {
+		wire.Write([]byte{3, 0, 0, 0})
+		if err := binary.Write(&wire, binary.BigEndian, uint32(len(text))); err != nil { //nolint:gosec // Bounded test frames.
+			t.Fatal(err)
+		}
+		wire.Write(text)
+	}
+	var copied []string
+	var rejected []error
+	err := c.readClipboard(&wire, func(text string) { copied = append(copied, text) }, func(err error) { rejected = append(rejected, err) })
+	if !errors.Is(err, io.EOF) || len(rejected) != 1 || !errors.Is(rejected[0], errClipboardTooLarge) || len(copied) != 1 || copied[0] != "next copy" {
+		t.Fatalf("legacy reader: %v, rejected=%v, copied=%q", err, rejected, copied)
 	}
 }

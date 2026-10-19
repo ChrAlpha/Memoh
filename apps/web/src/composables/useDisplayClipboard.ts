@@ -11,17 +11,24 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
   let pending: { pointer: boolean; received: boolean; resolve: (text: Blob) => void; cancel: () => void } | null = null
   let contextRevision = 0
   let clipboardRevision = 0
-  let pointerCopyEnabled = !navigator.permissions?.query
+  let pointerCopyEnabled = true
+  let permissionCleanup: (() => void) | undefined
+  let disposed = false
 
-  // Detect Safari's unsupported clipboard permission before a later click.
-  // Querying inside the click would lose the activation before write().
+  // Only a granted background write can replace the gesture path. Chrome's
+  // prompt state needs the same gesture as browsers without permission queries.
   async function detectGestureWrite() {
     if (!navigator.permissions?.query) return
     try {
       const descriptor = { name: 'clipboard-write' as PermissionName, allowWithoutGesture: true }
-      await navigator.permissions.query(descriptor)
+      const permission = await navigator.permissions.query(descriptor)
+      if (disposed) return
+      const update = () => { pointerCopyEnabled = permission.state !== 'granted' }
+      update()
+      permission.addEventListener('change', update)
+      permissionCleanup = () => permission.removeEventListener('change', update)
     } catch {
-      pointerCopyEnabled = true
+      // Safari and Firefox reject this descriptor; keep the gesture path.
     }
   }
   void detectGestureWrite()
@@ -39,8 +46,10 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     if (pointer && pending && (!pending.pointer || pending.received)) return
     clipboardRevision++
     cancelCopy()
-    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-      if (!pointer) toast.error(t('chat.display.clipboard.copyDenied'))
+    const unavailable = !window.isSecureContext ? 'copyRequiresSecureContext'
+      : !navigator.clipboard?.write || typeof ClipboardItem === 'undefined' ? 'copyUnsupported' : null
+    if (unavailable) {
+      if (!pointer) toast.error(t(`chat.display.clipboard.${unavailable}`))
       return
     }
     let resolve!: (text: Blob) => void
@@ -80,7 +89,10 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     }
   }
 
-  function preparePointerCopy() {
+  function preparePointerCopy(continuing = false) {
+    // mousedown and mouseup share one request. The latter can be the first
+    // focused gesture when Safari returns from its browser toolbar.
+    if (continuing && pending) return
     if (pointerCopyEnabled && navigator.userActivation?.isActive !== false) prepareRemoteCopy(true)
   }
 
@@ -135,6 +147,8 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     cancelCopy()
   }, { flush: 'sync' })
   onScopeDispose(() => {
+    disposed = true
+    permissionCleanup?.()
     contextRevision++
     cancelCopy()
   })
