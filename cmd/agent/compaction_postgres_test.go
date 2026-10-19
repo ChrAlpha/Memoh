@@ -64,9 +64,9 @@ func TestPostgresCompactionFoldsALegacySummaryIntoOne(t *testing.T) {
 	}
 }
 
-// Budget recovery only summarizes rows the request actually loaded: an older
-// backlog outside the loaded view, and rows after an edit or retry cutoff,
-// stay raw instead of being folded into a summary the request then carries.
+// Compaction only summarizes rows inside the caller's history range: an older
+// backlog, and rows after an edit or retry cutoff, stay raw instead of being
+// folded into a summary the request then carries.
 func TestPostgresCompactionLeavesRowsOutsideTheViewRaw(t *testing.T) {
 	f := newBacklogFixture(t)
 	f.appendBacklog(3, 400)

@@ -35,7 +35,12 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
-	cfg.CandidatesFrom = req.historyViewFrom
+	// The byte budget bounds what a request loads, not what its history is:
+	// rows inside the time window stay candidates after the view slides past.
+	cfg.CandidatesFrom = time.Now().UTC().Add(-time.Duration(defaultMaxContextMinutes) * time.Minute)
+	if !req.historyViewFrom.IsZero() && req.historyViewFrom.Before(cfg.CandidatesFrom) {
+		cfg.CandidatesFrom = req.historyViewFrom
+	}
 	if cutoff := strings.TrimSpace(req.HistoryCutoffBeforeMessageID); cutoff != "" {
 		message, err := s.messageService.GetByIDBySession(ctx, req.ThreadID, cutoff)
 		if err != nil {

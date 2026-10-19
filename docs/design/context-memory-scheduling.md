@@ -205,8 +205,11 @@ drop history, current input, or summaries to make it fit. It compacts once
 Both failures are bounded: no provider call, no partial send, and the triggering
 input stays unconsumed. Input that composition cannot carry (Channel admission
 records it as omitted) MUST be compacted by that request, or the run fails; it is
-never silently skipped. Bounded reads (CM-ADM-001) still limit what a request loads;
-history older than its loaded view is outside that request.
+never silently skipped. Bounded reads (CM-ADM-001) still limit what a request loads,
+but a compaction reads every uncompacted row inside the request's time window, loaded
+or not: rows that slid out of a byte-bounded view while turns failed are folded,
+never skipped. Only history older than both the loaded view and the time window is
+outside that request.
 
 ### CM-ADM-003: A missing source fails the request
 
@@ -505,6 +508,8 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       active modes, the compaction barrier, `/compact`, the HTTP endpoint, and the
       four per-bot compaction settings — CM-CMP-002/003
 - [x] Compaction logs outcome, passes, and duration — CM-CMP-003, CM-OBS-001
+- [x] Rows inside the time window stay candidates when a byte-bounded view
+      slides past them — CM-ADM-002
 - [ ] In-run compaction for long tool loops under the same rule — CM-CMP-001
 - [ ] Candidate view beyond the 24-hour pipeline window — CM-ADM-002
 

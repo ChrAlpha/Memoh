@@ -13,11 +13,12 @@ import (
 )
 
 // History that does not fit the model window is summarized before the turn,
-// only from what the turn loaded, into one active summary that the next
-// compaction folds again. A summary as long as the prompt allows is answered
-// without another compaction. When the summarizer fails, the turn fails
-// before any provider call and leaves history whole; once the summarizer is
-// back, the next turn runs on a summary.
+// from the history inside its time window, into one active summary that the
+// next compaction folds again. A summary as long as the prompt allows is
+// answered without another compaction. When the summarizer fails, the turn
+// fails before any provider call and leaves history whole; once the
+// summarizer is back, the next turn runs on a summary that also covers the
+// failed input a bounded chat view no longer loads.
 func TestPostgresPreTurnCompaction(t *testing.T) {
 	for _, entry := range []string{"chat", "discuss"} {
 		t.Run(entry, func(t *testing.T) {
@@ -51,7 +52,7 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 			}
 			f.longSummary.Store(false)
 			if raw, compacted := f.backlogRowsPrefixed("hidden-"); raw != 4 || compacted != 0 {
-				t.Fatalf("history the turn never loaded: raw=%d compacted=%d, want it left raw", raw, compacted)
+				t.Fatalf("history older than the time window: raw=%d compacted=%d, want it left raw", raw, compacted)
 			}
 			f.failSummary.Store(true)
 			f.appendRound(entry, "failed-")
@@ -62,14 +63,18 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 			if raw, compacted := f.backlogRowsPrefixed("failed-"); raw < 11 || compacted != 0 || f.activeSummaries() != 1 {
 				t.Fatalf("a failed summary changed history: raw=%d compacted=%d active=%d", raw, compacted, f.activeSummaries())
 			}
+			f.appendRound(entry, "failedb-")
+			if code := send("failedb-current", "failedb-current message"); code != "context.budget_unsatisfied" {
+				t.Fatalf("summarizer still down: code=%q", code)
+			}
 			f.failSummary.Store(false)
 			calls = f.modelCalls.Load()
 			if code := send("next-current", "next-current message"); code != "" || f.modelCalls.Load() != calls+1 {
 				t.Fatalf("summarizer back: code=%q provider_calls=%d", code, f.modelCalls.Load()-calls)
 			}
 			request, _ := f.lastRequest.Load().(string)
-			if _, compacted := f.backlogRowsPrefixed("failed-"); compacted == 0 || strings.Count(request, "next-current message") != 1 || f.activeSummaries() != 1 {
-				t.Fatalf("summarizer back: compacted=%d current=%d active=%d", compacted, strings.Count(request, "next-current message"), f.activeSummaries())
+			if raw, compacted := f.backlogRowsPrefixed("failed-"); compacted == 0 || entry == "chat" && raw != 0 || strings.Count(request, "next-current message") != 1 || f.activeSummaries() != 1 {
+				t.Fatalf("summarizer back: raw=%d compacted=%d current=%d active=%d", raw, compacted, strings.Count(request, "next-current message"), f.activeSummaries())
 			}
 		})
 	}
