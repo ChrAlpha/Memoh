@@ -1,0 +1,341 @@
+{
+ "tested_head": "1588981f5c45763dc34cd0e7906cd41a252d8e2c",
+ "server_sha256": "aa08f95737e90b3927c702880da62834ed48960d933280194c1727fcb2653fac",
+ "counterfactual_server_sha256_prefix": "d90407f220712a80",
+ "date": "2026-10-19",
+ "provider": "scripted HTTP fixture",
+ "cases": {
+  "fault48-empty": {
+   "completed_turns": 3,
+   "attempted_turns": 4,
+   "correct_facts": 2,
+   "required_facts": 2,
+   "summary_calls": 2,
+   "provider_calls": 5,
+   "request_bytes": 506306
+  },
+  "fault48-length": {
+   "completed_turns": 3,
+   "attempted_turns": 4,
+   "correct_facts": 2,
+   "required_facts": 2,
+   "summary_calls": 2,
+   "provider_calls": 5,
+   "request_bytes": 506317
+  },
+  "fault48-no_reduce": {
+   "completed_turns": 3,
+   "attempted_turns": 4,
+   "correct_facts": 2,
+   "required_facts": 2,
+   "summary_calls": 2,
+   "provider_calls": 5,
+   "request_bytes": 506350
+  },
+  "fault48-reject": {
+   "completed_turns": 3,
+   "attempted_turns": 4,
+   "correct_facts": 2,
+   "required_facts": 2,
+   "summary_calls": 2,
+   "provider_calls": 5,
+   "request_bytes": 506317
+  },
+  "final-boundary16": {
+   "completed_turns": 0,
+   "attempted_turns": 5,
+   "correct_facts": 0,
+   "required_facts": 4,
+   "summary_calls": 0,
+   "provider_calls": 0,
+   "request_bytes": 0
+  },
+  "final-control": {
+   "completed_turns": 6,
+   "attempted_turns": 6,
+   "correct_facts": 5,
+   "required_facts": 5,
+   "summary_calls": 0,
+   "provider_calls": 6,
+   "request_bytes": 435516
+  },
+  "final-failure-empty": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192473
+  },
+  "final-failure-length": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192478
+  },
+  "final-failure-no_reduce": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192493
+  },
+  "final-failure-reject": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192478
+  },
+  "final-pressure32": {
+   "completed_turns": 1,
+   "attempted_turns": 13,
+   "correct_facts": 12,
+   "required_facts": 12,
+   "summary_calls": 6,
+   "provider_calls": 7,
+   "request_bytes": 560024
+  },
+  "final-pressure48": {
+   "completed_turns": 13,
+   "attempted_turns": 13,
+   "correct_facts": 12,
+   "required_facts": 12,
+   "summary_calls": 11,
+   "provider_calls": 24,
+   "request_bytes": 2988277
+  },
+  "inbound-chat": {
+   "completed_turns": 5,
+   "attempted_turns": 5,
+   "correct_facts": 4,
+   "required_facts": 4,
+   "summary_calls": 3,
+   "provider_calls": 8,
+   "request_bytes": 1000923
+  },
+  "inbound-discuss": {
+   "completed_turns": 1,
+   "attempted_turns": 2,
+   "correct_facts": 1,
+   "required_facts": 2,
+   "summary_calls": 1,
+   "provider_calls": 2,
+   "request_bytes": 186087
+  },
+  "matrix-boundary16": {
+   "completed_turns": 0,
+   "attempted_turns": 5,
+   "correct_facts": 0,
+   "required_facts": 4,
+   "summary_calls": 0,
+   "provider_calls": 0,
+   "request_bytes": 0
+  },
+  "matrix-control": {
+   "completed_turns": 6,
+   "attempted_turns": 6,
+   "correct_facts": 5,
+   "required_facts": 5,
+   "summary_calls": 0,
+   "provider_calls": 6,
+   "request_bytes": 435534
+  },
+  "matrix-failure-empty": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192478
+  },
+  "matrix-failure-length": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192483
+  },
+  "matrix-failure-no_reduce": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192498
+  },
+  "matrix-failure-reject": {
+   "completed_turns": 1,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 192483
+  },
+  "matrix-pressure32": {
+   "completed_turns": 1,
+   "attempted_turns": 13,
+   "correct_facts": 4,
+   "required_facts": 12,
+   "summary_calls": 2,
+   "provider_calls": 3,
+   "request_bytes": 232057
+  },
+  "matrix-pressure48": {
+   "completed_turns": 13,
+   "attempted_turns": 13,
+   "correct_facts": 12,
+   "required_facts": 12,
+   "summary_calls": 11,
+   "provider_calls": 24,
+   "request_bytes": 2988327
+  },
+  "r2-inbound-discuss": {
+   "completed_turns": 5,
+   "attempted_turns": 5,
+   "correct_facts": 4,
+   "required_facts": 4,
+   "summary_calls": 3,
+   "provider_calls": 8,
+   "request_bytes": 984120
+  },
+  "r3-inbound-discuss": {
+   "completed_turns": 5,
+   "attempted_turns": 5,
+   "correct_facts": 4,
+   "required_facts": 4,
+   "summary_calls": 3,
+   "provider_calls": 8,
+   "request_bytes": 984120
+  },
+  "r4-inbound-discuss": {
+   "completed_turns": 5,
+   "attempted_turns": 5,
+   "correct_facts": 4,
+   "required_facts": 4,
+   "summary_calls": 3,
+   "provider_calls": 8,
+   "request_bytes": 984120
+  },
+  "slide-pressure32": {
+   "completed_turns": 1,
+   "attempted_turns": 13,
+   "correct_facts": 12,
+   "required_facts": 12,
+   "summary_calls": 6,
+   "provider_calls": 7,
+   "request_bytes": 560024
+  },
+  "slide-pressure32slide": {
+   "completed_turns": 13,
+   "attempted_turns": 13,
+   "correct_facts": 12,
+   "required_facts": 12,
+   "summary_calls": 12,
+   "provider_calls": 25,
+   "request_bytes": 2166975
+  },
+  "slide-pressure32slide39800": {
+   "completed_turns": 9,
+   "attempted_turns": 13,
+   "correct_facts": 12,
+   "required_facts": 12,
+   "summary_calls": 14,
+   "provider_calls": 23,
+   "request_bytes": 1950471
+  },
+  "small-inbound-discuss": {
+   "completed_turns": 5,
+   "attempted_turns": 5,
+   "correct_facts": 4,
+   "required_facts": 4,
+   "summary_calls": 0,
+   "provider_calls": 5,
+   "request_bytes": 356354
+  },
+  "smoke-control": {
+   "completed_turns": 4,
+   "attempted_turns": 4,
+   "correct_facts": 3,
+   "required_facts": 3,
+   "summary_calls": 0,
+   "provider_calls": 4,
+   "request_bytes": 284596
+  },
+  "stress32": {
+   "completed_turns": 33,
+   "attempted_turns": 33,
+   "correct_facts": 32,
+   "required_facts": 32,
+   "summary_calls": 31,
+   "provider_calls": 64,
+   "request_bytes": 7973526
+  },
+  "ui-slide-after": {
+   "states": [
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "completed"
+   ],
+   "page_errors": []
+  },
+  "ui-slide-cf": {
+   "states": [
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "failed:context.protected_overflow",
+    "completed"
+   ],
+   "page_errors": []
+  },
+  "ui-e2e": {
+   "states": [
+    "completed",
+    "failed:context.budget_unsatisfied",
+    "completed"
+   ],
+   "page_errors": []
+  }
+ },
+ "followup_lifecycle": {
+  "cancel": {
+   "state": "completed",
+   "effect": "1\n"
+  },
+  "retry_state": "completed",
+  "edit": {
+   "state": "completed",
+   "effect": "1\n"
+  }
+ },
+ "case_versions": {
+  "smoke-*, matrix-*": "84b01a32b (first fix + main merge; no time-window bound) \u2014 matrix-pressure32 4/12 is the evidence for the no-summary gap",
+  "final-*, slide-*, stress32, inbound-*, r*-inbound-discuss, small-*, fault48-*, cancel/edit/followup, ui-e2e, ui-slide-after, crash": "1588981f5 (final)",
+  "ui-slide-cf": "counterfactual: 1588981f5 with 12ade3bdc and 1588981f5 reverted (/tmp/pr1620c-before)"
+ },
+ "deadlocks": {
+  "count": 2,
+  "run": "inbound-discuss (first large Discuss run)",
+  "other_large_discuss_runs": "r2/r3/r4: 0 deadlocks, 5/5, facts 4/4"
+ }
+}

@@ -1,0 +1,163 @@
+{
+ "v3-boundary16": {
+  "completed_turns": 0,
+  "attempted_turns": 5,
+  "correct_facts": 0,
+  "required_facts": 4,
+  "summary_calls": 0,
+  "request_bytes": 0
+ },
+ "v3-control": {
+  "completed_turns": 6,
+  "attempted_turns": 6,
+  "correct_facts": 5,
+  "required_facts": 5,
+  "summary_calls": 0,
+  "request_bytes": 435462
+ },
+ "v3-failure-empty": {
+  "completed_turns": 1,
+  "attempted_turns": 4,
+  "correct_facts": 3,
+  "required_facts": 3,
+  "summary_calls": 2,
+  "request_bytes": 192458
+ },
+ "v3-failure-length": {
+  "completed_turns": 1,
+  "attempted_turns": 4,
+  "correct_facts": 3,
+  "required_facts": 3,
+  "summary_calls": 2,
+  "request_bytes": 192463
+ },
+ "v3-failure-no_reduce": {
+  "completed_turns": 1,
+  "attempted_turns": 4,
+  "correct_facts": 3,
+  "required_facts": 3,
+  "summary_calls": 2,
+  "request_bytes": 192478
+ },
+ "v3-failure-reject": {
+  "completed_turns": 1,
+  "attempted_turns": 4,
+  "correct_facts": 3,
+  "required_facts": 3,
+  "summary_calls": 2,
+  "request_bytes": 192463
+ },
+ "v3-fault48-empty": {
+  "completed_turns": 3,
+  "attempted_turns": 4,
+  "correct_facts": 2,
+  "required_facts": 2,
+  "summary_calls": 2,
+  "request_bytes": 506345
+ },
+ "v3-fault48-length": {
+  "completed_turns": 3,
+  "attempted_turns": 4,
+  "correct_facts": 2,
+  "required_facts": 2,
+  "summary_calls": 2,
+  "request_bytes": 506356
+ },
+ "v3-fault48-no_reduce": {
+  "completed_turns": 3,
+  "attempted_turns": 4,
+  "correct_facts": 2,
+  "required_facts": 2,
+  "summary_calls": 2,
+  "request_bytes": 506389
+ },
+ "v3-fault48-reject": {
+  "completed_turns": 3,
+  "attempted_turns": 4,
+  "correct_facts": 2,
+  "required_facts": 2,
+  "summary_calls": 2,
+  "request_bytes": 506356
+ },
+ "v3-inbound-chat": {
+  "completed_turns": 5,
+  "attempted_turns": 5,
+  "correct_facts": 4,
+  "required_facts": 4,
+  "summary_calls": 3,
+  "request_bytes": 1000987
+ },
+ "v3-inbound-discuss": {
+  "completed_turns": 5,
+  "attempted_turns": 5,
+  "correct_facts": 4,
+  "required_facts": 4,
+  "summary_calls": 3,
+  "request_bytes": 984130
+ },
+ "v3-pressure32": {
+  "completed_turns": 1,
+  "attempted_turns": 13,
+  "correct_facts": 12,
+  "required_facts": 12,
+  "summary_calls": 6,
+  "request_bytes": 559997
+ },
+ "v3-pressure32slide39800": {
+  "completed_turns": 9,
+  "attempted_turns": 13,
+  "correct_facts": 12,
+  "required_facts": 12,
+  "summary_calls": 14,
+  "request_bytes": 1950348
+ },
+ "v3-pressure48": {
+  "completed_turns": 13,
+  "attempted_turns": 13,
+  "correct_facts": 12,
+  "required_facts": 12,
+  "summary_calls": 11,
+  "request_bytes": 2988127
+ },
+ "v3-stress32": {
+  "completed_turns": 33,
+  "attempted_turns": 33,
+  "correct_facts": 32,
+  "required_facts": 32,
+  "summary_calls": 31,
+  "request_bytes": 7973982
+ },
+ "v3-crash": {
+  "elapsed_since_kill_ms": 960159,
+  "recovery_state": "completed",
+  "readback_state": "completed"
+ },
+ "v3-followup": {
+  "retry_state": "completed",
+  "cancel": {
+   "state": "completed",
+   "effect": "1\n"
+  },
+  "edit": {
+   "state": "completed",
+   "effect": "1\n"
+  }
+ },
+ "v3b-inbound-discuss": {
+  "completed_turns": 5,
+  "attempted_turns": 5,
+  "correct_facts": 4,
+  "required_facts": 4,
+  "summary_calls": 3,
+  "request_bytes": 984148
+ },
+ "v3small-inbound-discuss": {
+  "completed_turns": 5,
+  "attempted_turns": 5,
+  "correct_facts": 4,
+  "required_facts": 4,
+  "summary_calls": 0,
+  "request_bytes": 356394
+ },
+ "deadlocks_during_final_runs": 0
+}

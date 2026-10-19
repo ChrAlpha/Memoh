@@ -1,0 +1,18 @@
+{
+ "pr_head": "b9bbb5cce",
+ "e2e_tree": "461e5fee1bfb148d2a76218d6122ee8977c81d43",
+ "production_identical_to_pr_head": true,
+ "server_sha256": "6558a95ea2860c35d68966f09726f15f4a1bb2025a4da85fdafcad26f2471264",
+ "counterfactual": "1588981f5 with both candidate-bound fixes reverted (production = PR head before this fix + main merge); server sha256 prefix d90407f220712a80",
+ "provider": "scripted OpenAI-compatible HTTP fixture",
+ "human_qa": false,
+ "screenshots": {
+  "before-slide-recall.png": "counterfactual: 6 inputs failed with protected_overflow, recall sees K02-K05 only (4/6)",
+  "after-slide-failures.png": "fixed: same 6 failed inputs, visible errors",
+  "after-slide-recall.png": "fixed: recall sees K00-K05 (6/6)",
+  "ui-failure.png": "summarizer rejected: visible budget_unsatisfied error",
+  "ui-reload.png": "error kept after reload",
+  "ui-recovered.png": "summarizer back: answer returns K00/K01",
+  "ui-settings.png": "settings keep only the compaction log entry"
+ }
+}
