@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -20,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -185,6 +187,23 @@ func (s discussStore) GetDiscussCoverPosition(ctx context.Context, p dbsqlc.GetD
 
 func (s discussStore) ListDiscussPendingInputs(ctx context.Context, p dbsqlc.ListDiscussPendingInputsParams) ([]dbsqlc.ListDiscussPendingInputsRow, error) {
 	return s.pg.ListDiscussPendingInputs(ctx, p)
+}
+
+// The compaction reads of a run whose history is summarized as it goes.
+func (s discussStore) ListCompactionArtifactLineageBySession(ctx context.Context, id pgtype.UUID) ([]dbsqlc.BotHistoryMessageCompact, error) {
+	return s.pg.ListCompactionArtifactLineageBySession(ctx, id)
+}
+
+func (s discussStore) GetCompactionLogByID(ctx context.Context, id pgtype.UUID) (dbsqlc.BotHistoryMessageCompact, error) {
+	return s.pg.GetCompactionLogByID(ctx, id)
+}
+
+func (s discussStore) ListCompactionArtifactParentIDsBySuccessor(ctx context.Context, p dbsqlc.ListCompactionArtifactParentIDsBySuccessorParams) ([]pgtype.UUID, error) {
+	return s.pg.ListCompactionArtifactParentIDsBySuccessor(ctx, p)
+}
+
+func (s discussStore) ListMessageRefsByCompactID(ctx context.Context, id pgtype.UUID) ([]dbsqlc.ListMessageRefsByCompactIDRow, error) {
+	return s.pg.ListMessageRefsByCompactID(ctx, id)
 }
 
 func (s discussStore) ListDiscussSweepCandidates(ctx context.Context, p dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error) {
@@ -478,6 +497,7 @@ type discussSetup struct {
 	fixture []directLifecycleOption
 	// compatibilities are what the run's model declares it can do.
 	compatibilities []string
+	contextWindow   int
 	// observe sees the run configuration as the agent receives it, before the
 	// provider context is built from it.
 	observe func(native.RunConfig)
@@ -513,6 +533,20 @@ func discussAdmitter(wrap func(*sessionruntime.Manager) runreq.TurnAdmitter) dis
 	}
 }
 
+// discussContextWindow sets the context window of the run's model.
+func discussContextWindow(tokens int) discussOption {
+	return func(s *discussSetup) { s.contextWindow = tokens }
+}
+
+// discussCompaction summarizes the session's history with the real compaction
+// service, the summarizer being the session's stand-in.
+func discussCompaction(session *agenttest.CompactionSession) discussOption {
+	return discussService(withCompact(func(d *compact.Deps) {
+		d.Runner = withoutModelRecord{session.Compaction}
+		d.HTTPClient = &http.Client{Transport: session.Summarizer}
+	}))
+}
+
 // discussVision makes the run's model accept image input.
 func discussVision() discussOption {
 	return func(s *discussSetup) { s.compatibilities = append(s.compatibilities, "vision") }
@@ -539,7 +573,7 @@ func newDiscussProcessWith(t *testing.T, env discussEnv, options []discussOption
 		Fence:         runtimefence.NewActivator(pg),
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	setup := discussSetup{manager: manager, compatibilities: []string{"tool-call"}}
+	setup := discussSetup{manager: manager, compatibilities: []string{"tool-call"}, contextWindow: 128000}
 	for _, option := range options {
 		option(&setup)
 	}
@@ -590,7 +624,7 @@ func newDiscussProcessWith(t *testing.T, env discussEnv, options []discussOption
 	chat := newChatTurnFixture(t, directLifecycleModelSuccess, append(base, setup.fixture...)...)
 	// The run offers tools only to a model that can call them.
 	for key, model := range chat.fixture.queries.Models {
-		config, err := json.Marshal(map[string]any{"context_window": 128000, "compatibilities": setup.compatibilities})
+		config, err := json.Marshal(map[string]any{"context_window": setup.contextWindow, "compatibilities": setup.compatibilities})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1289,4 +1323,41 @@ type titleModelAccountStore struct {
 
 func (s titleModelAccountStore) GetByUserID(context.Context, string) (dbstore.AccountRecord, error) {
 	return s.account, nil
+}
+
+// A new discuss run is configured with the context budget of its model and
+// with the id of the run admitted for it, which compaction and the tools read
+// from the configuration.
+func TestDiscussRunConfigCarriesBudgetAndRunID(t *testing.T) {
+	if testing.Short() {
+		t.Skip("PostgreSQL integration")
+	}
+	env := newDiscussEnv(t, "group")
+	var (
+		mu  sync.Mutex
+		cfg native.RunConfig
+	)
+	proc := newDiscussProcessWith(t, env, []discussOption{discussObserveConfig(func(c native.RunConfig) {
+		mu.Lock()
+		defer mu.Unlock()
+		cfg = c
+	})}, &discussStep{})
+	alice := env.participant(t, false)
+	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "hello"})
+
+	outcome, done := proc.admit(t, env)
+	if outcome != pending.DiscussAdmitted {
+		t.Fatalf("outcome = %v, want admitted", outcome)
+	}
+	waitDiscussRun(t, done)
+	run := env.waitRunState(t, env.invocation(hw), "completed")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if cfg.ContextBudgetMaxTokens != 128000 {
+		t.Fatalf("ContextBudgetMaxTokens = %d, want the model's window of 128000", cfg.ContextBudgetMaxTokens)
+	}
+	if cfg.RunID != run.runID {
+		t.Fatalf("RunID = %q, want the admitted run %q", cfg.RunID, run.runID)
+	}
 }

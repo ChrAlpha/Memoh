@@ -7,6 +7,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
@@ -249,5 +250,42 @@ func assertPersistenceJSON(t *testing.T, got, want any) {
 	wantRaw := mustPersistenceJSON(t, want)
 	if string(gotRaw) != string(wantRaw) {
 		t.Fatalf("JSON mismatch:\ngot  %s\nwant %s", gotRaw, wantRaw)
+	}
+}
+
+// A stored row carries the content shape the codec writes (argument objects,
+// output values, nested annotations). It is typed through the codec into SDK
+// parts, never decoded as SDK JSON, whether the row is a tool call, a tool
+// result or plain text.
+func TestStoredRowsTypeTheStoredContentShape(t *testing.T) {
+	t.Parallel()
+
+	decode := func(role, content string) sdk.Message {
+		raw := `{"role":"` + role + `","content":` + content + `}`
+		return StoredModelMessageToSDKMessage(DecodeStoredModelMessage(nil, "row", role, json.RawMessage(raw)))
+	}
+	call := decode("assistant", `[{"type":"tool-call","toolCallId":"call-1","toolName":"exec","input":{"command":"ls && pwd"},"providerMetadata":{"approval":{"approval_id":"a1","status":"approved"}}}]`)
+	result := decode("tool", `[{"type":"tool-result","toolCallId":"call-1","toolName":"exec","result":{"stdout":"ok"}}]`)
+	plain := decode("user", `[{"type":"text","text":"plain"}]`)
+
+	callPart, ok := call.Content[0].(sdk.ToolCallPart)
+	if !ok {
+		t.Fatalf("first part = %#v, want a tool call", call.Content[0])
+	}
+	if args, _ := toolexec.ArgumentsValue(callPart.Input).(map[string]any); args["command"] != "ls && pwd" {
+		t.Fatalf("tool call input = %#v", toolexec.ArgumentsValue(callPart.Input))
+	}
+	if approval, ok := partmeta.Object(callPart.ProviderMetadata, partmeta.KeyApproval); !ok || approval["status"] != "approved" {
+		t.Fatalf("approval annotation = %#v, want the stored annotation typed", callPart.ProviderMetadata)
+	}
+	resultPart, ok := result.Content[0].(sdk.ToolResultPart)
+	if !ok {
+		t.Fatalf("second part = %#v, want a tool result", result.Content[0])
+	}
+	if out, _ := toolexec.OutputValue(resultPart.Result).(map[string]any); out["stdout"] != "ok" {
+		t.Fatalf("tool result output = %#v", toolexec.OutputValue(resultPart.Result))
+	}
+	if text, ok := plain.Content[0].(sdk.TextPart); plain.Role != sdk.MessageRoleUser || !ok || text.Text != "plain" {
+		t.Fatalf("plain message = %#v", plain)
 	}
 }

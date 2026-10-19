@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -219,5 +220,48 @@ func TestR4bExternalDiscussRunActsForTheParticipantOnTheRoute(t *testing.T) {
 	}
 	if want := "http://tools.test/bots/" + env.botID; got.ToolHTTPURL != want {
 		t.Fatalf("prompt ToolHTTPURL = %q, want %q", got.ToolHTTPURL, want)
+	}
+}
+
+// An External Agent run that ends cleanly covers its batch, so the batch is not
+// answered again; one that ends in an error leaves it pending to be answered
+// with the next input.
+func TestR4bExternalDiscussCoversItsBatchOnlyWhenTheRuntimeEndsCleanly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("PostgreSQL integration")
+	}
+	cases := []struct {
+		name      string
+		err       error
+		wantState string
+		wantCover bool
+	}{
+		{name: "clean end", wantState: "completed", wantCover: true},
+		{name: "runtime error", err: errors.New("runtime failed"), wantState: "failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			env := newDiscussEnv(t, "group")
+			proc, pool := r4bExternalDiscuss(t, env)
+			pool.err = tc.err
+
+			alice := env.participant(t, false)
+			env.write(t, passiveInput{from: alice, externalID: "m1", text: "did anyone check the deploy?"})
+			hw := env.write(t, passiveInput{from: alice, externalID: "m2", mentionsMe: true, text: "@memoh when is the freeze?"})
+			if outcome, done := proc.admit(t, env); outcome != pending.DiscussAdmitted {
+				t.Fatalf("outcome = %v, want the batch admitted", outcome)
+			} else if done != nil {
+				waitDiscussRun(t, done)
+			}
+			env.waitRunState(t, env.invocation(hw), tc.wantState)
+
+			want := int64(0)
+			if tc.wantCover {
+				want = hw
+			}
+			if got := env.cover(t); got != want {
+				t.Fatalf("cover position = %d, want %d", got, want)
+			}
+		})
 	}
 }
