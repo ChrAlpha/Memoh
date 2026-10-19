@@ -1,8 +1,11 @@
 import type { Component } from 'vue'
 import {
+  BookOpen,
   Brain,
   CalendarDays,
   ChartPie,
+  Cpu,
+  Globe,
   Lightbulb,
   Link2Off,
   Mail,
@@ -13,7 +16,9 @@ import {
   PenLine,
   Search,
   SquareTerminal,
+  Target,
   TrendingDown,
+  TrendingUp,
   Users,
 } from 'lucide-vue-next'
 
@@ -22,9 +27,12 @@ import {
  * a component so the catalog stays serializable for a future backend payload.
  */
 export const CHAT_EXAMPLE_ICONS: Record<string, Component> = {
+  'book-open': BookOpen,
   'brain': Brain,
   'calendar-days': CalendarDays,
   'chart-pie': ChartPie,
+  'cpu': Cpu,
+  'globe': Globe,
   'lightbulb': Lightbulb,
   'link-2-off': Link2Off,
   'mail': Mail,
@@ -35,7 +43,9 @@ export const CHAT_EXAMPLE_ICONS: Record<string, Component> = {
   'pen-line': PenLine,
   'search': Search,
   'square-terminal': SquareTerminal,
+  'target': Target,
   'trending-down': TrendingDown,
+  'trending-up': TrendingUp,
   'users': Users,
 }
 
