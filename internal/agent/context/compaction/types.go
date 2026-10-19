@@ -63,10 +63,9 @@ type TriggerConfig struct {
 	// declared window and output cap; they size the summarizer call.
 	SummaryWindowTokens int
 	MaxOutputTokens     int
-	// CandidatesFrom is the creation time of the oldest row the caller's
-	// request loaded and CandidatesBefore the cutoff an edit or retry
-	// replays history before. Rows outside are invisible to that request,
-	// so summarizing them cannot shrink it. Zero leaves that side open.
+	// CandidatesFrom is where the caller's history begins and
+	// CandidatesBefore the cutoff an edit or retry replays history before.
+	// Rows outside are not part of that request. Zero leaves that side open.
 	CandidatesFrom   time.Time
 	CandidatesBefore time.Time
 	// ProtectedSources stay raw. Current ones are the caller's current input,
