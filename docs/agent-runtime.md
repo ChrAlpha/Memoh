@@ -154,6 +154,12 @@ continuations use the same phase-aware application watchdog:
   their synchronous compaction runs; the model window restarts when they
   return. Cancellation and execution budgets still apply.
 
+Every native run is armed through `bindNativeRun` in `internal/agent/application`:
+step persistence, provider timing, and the continuation hooks — steer for
+queue-enabled turns, the in-run fold for every turn whose rows are visible as
+they commit — are declared there rather than per driver, so which entries fold
+is one declaration.
+
 Schedules expose `max_run_seconds` (default 3600, range 300–86400), independently
 of the selected runtime. Every fire uses its existing log UUID for turn admission,
 so repeated fires targeting the same session remain distinct. The execution
