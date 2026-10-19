@@ -10,6 +10,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/compact"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -256,7 +257,15 @@ func (b *Builder) Resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	} else {
 		runCfg.Query = headerifiedModelQuery
 	}
-	runCfg.InlineImages = extractNativeImageParts(mergedAttachments)
+	batchImages := b.discussBatchImages(ctx, chatModel, req, historyRecords)
+	batchImages.attach(runCfg.Messages, runCfg.ForkContextSourceMessageIDs)
+	if len(batchImages.omitted) > 0 {
+		if runCfg.ContextMutations == nil {
+			runCfg.ContextMutations = contextfrag.NewMutationLedger()
+		}
+		batchImages.record(runCfg.ContextMutations)
+	}
+	runCfg.InlineImages = append(extractNativeImageParts(mergedAttachments), batchImages.current...)
 	runCfg.InlineAttachments = extractNativeAttachmentParts(mergedAttachments)
 	runCfg.ContextScope = buildContextFragScope(req, displayName, runCfg.Identity)
 	runCfg = runCfg.RefreshContextFrag()

@@ -39,6 +39,9 @@ const (
 // ErrNotAnimation reports input that is not a gzip-compressed animation.
 var ErrNotAnimation = errors.New("not a gzip-compressed animation")
 
+// MimeTGS is the label Telegram animated stickers are stored under.
+const MimeTGS = "application/x-tgsticker"
+
 // IsTGS reports whether data carries the gzip magic that starts a Telegram
 // animated sticker. The bytes decide: attachments routinely arrive labelled as
 // images regardless of what they contain.

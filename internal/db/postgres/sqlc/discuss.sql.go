@@ -34,87 +34,6 @@ func (q *Queries) GetDiscussCoverPosition(ctx context.Context, arg GetDiscussCov
 	return cover_position, err
 }
 
-const getDiscussPendingAddressed = `-- name: GetDiscussPendingAddressed :one
-SELECT EXISTS (
-  SELECT 1
-  FROM bot_history_messages m
-  JOIN bot_session_events e ON e.id = m.event_id
-  WHERE m.team_id = public.memoh_current_team_id()
-    AND m.session_id = $1
-    AND m.role = 'user'
-    AND m.turn_position > $2
-    AND (
-      COALESCE((e.event_data->>'mentions_me')::boolean, false)
-      OR COALESCE((e.event_data->>'replies_to_me')::boolean, false)
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM session_runs r
-      WHERE r.team_id = m.team_id
-        AND r.run_id = m.run_id
-        AND NOT (r.input_json ? 'cover_position')
-    )
-)::boolean AS addressed
-`
-
-type GetDiscussPendingAddressedParams struct {
-	SessionID     pgtype.UUID `json:"session_id"`
-	CoverPosition pgtype.Int8 `json:"cover_position"`
-}
-
-// Whether any external input past the cover position mentions the bot or
-// replies to it. The flags live on the input's session event. Input a non-discuss
-// run already answered is not pending, as in GetDiscussPendingHead.
-func (q *Queries) GetDiscussPendingAddressed(ctx context.Context, arg GetDiscussPendingAddressedParams) (bool, error) {
-	row := q.db.QueryRow(ctx, getDiscussPendingAddressed, arg.SessionID, arg.CoverPosition)
-	var addressed bool
-	err := row.Scan(&addressed)
-	return addressed, err
-}
-
-const getDiscussPendingHead = `-- name: GetDiscussPendingHead :one
-SELECT m.id, m.turn_position, m.sender_channel_identity_id
-FROM bot_history_messages m
-WHERE m.team_id = public.memoh_current_team_id()
-  AND m.session_id = $1
-  AND m.event_id IS NOT NULL
-  AND m.role = 'user'
-  AND m.turn_position > $2
-  AND NOT EXISTS (
-    SELECT 1
-    FROM session_runs r
-    WHERE r.team_id = m.team_id
-      AND r.run_id = m.run_id
-      AND NOT (r.input_json ? 'cover_position')
-  )
-ORDER BY m.turn_position DESC
-LIMIT 1
-`
-
-type GetDiscussPendingHeadParams struct {
-	SessionID     pgtype.UUID `json:"session_id"`
-	CoverPosition pgtype.Int8 `json:"cover_position"`
-}
-
-type GetDiscussPendingHeadRow struct {
-	ID                      pgtype.UUID `json:"id"`
-	TurnPosition            pgtype.Int8 `json:"turn_position"`
-	SenderChannelIdentityID pgtype.UUID `json:"sender_channel_identity_id"`
-}
-
-// The newest external input past the cover position. Only rows written with
-// their session event are external input; rows refused at admission have none,
-// and the bot's own output is stored as assistant rows. A row that a run other
-// than a discuss run took as its request message was answered by that run,
-// whatever state the run is in, so it is not pending. A run is a discuss run
-// when it carries a cover position, the same marker the cover query reads.
-func (q *Queries) GetDiscussPendingHead(ctx context.Context, arg GetDiscussPendingHeadParams) (GetDiscussPendingHeadRow, error) {
-	row := q.db.QueryRow(ctx, getDiscussPendingHead, arg.SessionID, arg.CoverPosition)
-	var i GetDiscussPendingHeadRow
-	err := row.Scan(&i.ID, &i.TurnPosition, &i.SenderChannelIdentityID)
-	return i, err
-}
-
 const getDiscussSession = `-- name: GetDiscussSession :one
 SELECT
   s.runtime_type,
@@ -162,6 +81,77 @@ func (q *Queries) GetDiscussSession(ctx context.Context, arg GetDiscussSessionPa
 		&i.ReplyTarget,
 	)
 	return i, err
+}
+
+const listDiscussPendingInputs = `-- name: ListDiscussPendingInputs :many
+SELECT
+  m.id,
+  m.turn_position,
+  m.sender_channel_identity_id,
+  COALESCE((e.event_data->>'mentions_me')::boolean, false)::boolean AS mentions_me,
+  COALESCE((e.event_data->>'replies_to_me')::boolean, false)::boolean AS replies_to_me
+FROM bot_history_messages m
+LEFT JOIN bot_session_events e ON e.id = m.event_id
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND m.event_id IS NOT NULL
+  AND m.role = 'user'
+  AND m.turn_position > $2
+  AND NOT EXISTS (
+    SELECT 1
+    FROM session_runs r
+    WHERE r.team_id = m.team_id
+      AND r.run_id = m.run_id
+      AND NOT (r.input_json ? 'cover_position')
+  )
+ORDER BY m.turn_position
+`
+
+type ListDiscussPendingInputsParams struct {
+	SessionID     pgtype.UUID `json:"session_id"`
+	CoverPosition pgtype.Int8 `json:"cover_position"`
+}
+
+type ListDiscussPendingInputsRow struct {
+	ID                      pgtype.UUID `json:"id"`
+	TurnPosition            pgtype.Int8 `json:"turn_position"`
+	SenderChannelIdentityID pgtype.UUID `json:"sender_channel_identity_id"`
+	MentionsMe              bool        `json:"mentions_me"`
+	RepliesToMe             bool        `json:"replies_to_me"`
+}
+
+// The external input past the cover position, oldest first: the one definition
+// of what a discuss session still owes an answer. Only rows written with their
+// session event are external input; rows refused at admission have none, and
+// the bot's own output is stored as assistant rows. A row that a run other
+// than a discuss run took as its request message was answered by that run,
+// whatever state the run is in, so it is not pending. A run is a discuss run
+// when it carries a cover position, the same marker the cover query reads.
+// The attention flags live on the input's session event.
+func (q *Queries) ListDiscussPendingInputs(ctx context.Context, arg ListDiscussPendingInputsParams) ([]ListDiscussPendingInputsRow, error) {
+	rows, err := q.db.Query(ctx, listDiscussPendingInputs, arg.SessionID, arg.CoverPosition)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDiscussPendingInputsRow
+	for rows.Next() {
+		var i ListDiscussPendingInputsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TurnPosition,
+			&i.SenderChannelIdentityID,
+			&i.MentionsMe,
+			&i.RepliesToMe,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listDiscussSweepCandidates = `-- name: ListDiscussSweepCandidates :many

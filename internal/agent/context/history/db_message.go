@@ -198,6 +198,7 @@ func mediaRefsFromDBMessage(msg messagepkg.Message) []MediaRef {
 		}
 		out = append(out, MediaRef{
 			ContentHash: contentHash,
+			Mime:        strings.TrimSpace(asset.Mime),
 			Role:        strings.TrimSpace(asset.Role),
 			Ordinal:     asset.Ordinal,
 			Name:        strings.TrimSpace(asset.Name),

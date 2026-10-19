@@ -8,15 +8,23 @@ WHERE team_id = public.memoh_current_team_id()
   AND state = ANY(sqlc.arg(states)::text[])
   AND input_json ? 'cover_position';
 
--- name: GetDiscussPendingHead :one
--- The newest external input past the cover position. Only rows written with
--- their session event are external input; rows refused at admission have none,
--- and the bot's own output is stored as assistant rows. A row that a run other
+-- name: ListDiscussPendingInputs :many
+-- The external input past the cover position, oldest first: the one definition
+-- of what a discuss session still owes an answer. Only rows written with their
+-- session event are external input; rows refused at admission have none, and
+-- the bot's own output is stored as assistant rows. A row that a run other
 -- than a discuss run took as its request message was answered by that run,
 -- whatever state the run is in, so it is not pending. A run is a discuss run
 -- when it carries a cover position, the same marker the cover query reads.
-SELECT m.id, m.turn_position, m.sender_channel_identity_id
+-- The attention flags live on the input's session event.
+SELECT
+  m.id,
+  m.turn_position,
+  m.sender_channel_identity_id,
+  COALESCE((e.event_data->>'mentions_me')::boolean, false)::boolean AS mentions_me,
+  COALESCE((e.event_data->>'replies_to_me')::boolean, false)::boolean AS replies_to_me
 FROM bot_history_messages m
+LEFT JOIN bot_session_events e ON e.id = m.event_id
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
   AND m.event_id IS NOT NULL
@@ -29,33 +37,7 @@ WHERE m.team_id = public.memoh_current_team_id()
       AND r.run_id = m.run_id
       AND NOT (r.input_json ? 'cover_position')
   )
-ORDER BY m.turn_position DESC
-LIMIT 1;
-
--- name: GetDiscussPendingAddressed :one
--- Whether any external input past the cover position mentions the bot or
--- replies to it. The flags live on the input's session event. Input a non-discuss
--- run already answered is not pending, as in GetDiscussPendingHead.
-SELECT EXISTS (
-  SELECT 1
-  FROM bot_history_messages m
-  JOIN bot_session_events e ON e.id = m.event_id
-  WHERE m.team_id = public.memoh_current_team_id()
-    AND m.session_id = sqlc.arg(session_id)
-    AND m.role = 'user'
-    AND m.turn_position > sqlc.arg(cover_position)
-    AND (
-      COALESCE((e.event_data->>'mentions_me')::boolean, false)
-      OR COALESCE((e.event_data->>'replies_to_me')::boolean, false)
-    )
-    AND NOT EXISTS (
-      SELECT 1
-      FROM session_runs r
-      WHERE r.team_id = m.team_id
-        AND r.run_id = m.run_id
-        AND NOT (r.input_json ? 'cover_position')
-    )
-)::boolean AS addressed;
+ORDER BY m.turn_position;
 
 -- name: GetDiscussSession :one
 -- What a discuss admission needs about the session: its runtime, the runtime

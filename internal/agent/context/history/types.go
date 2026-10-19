@@ -76,8 +76,11 @@ type HistoryRecord struct {
 
 type MediaRef struct {
 	ContentHash string
-	Role        string
-	Ordinal     int
-	Name        string
-	Metadata    map[string]any
+	// Mime is the type the channel reported, excluded from the source hash
+	// like the rest of what only readers of the asset need.
+	Mime     string `json:"-"`
+	Role     string
+	Ordinal  int
+	Name     string
+	Metadata map[string]any
 }

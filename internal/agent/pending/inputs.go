@@ -28,8 +28,7 @@ import (
 type Queries interface {
 	GetDiscussSession(context.Context, dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error)
 	GetDiscussCoverPosition(context.Context, dbsqlc.GetDiscussCoverPositionParams) (int64, error)
-	GetDiscussPendingHead(context.Context, dbsqlc.GetDiscussPendingHeadParams) (dbsqlc.GetDiscussPendingHeadRow, error)
-	GetDiscussPendingAddressed(context.Context, dbsqlc.GetDiscussPendingAddressedParams) (bool, error)
+	ListDiscussPendingInputs(context.Context, dbsqlc.ListDiscussPendingInputsParams) ([]dbsqlc.ListDiscussPendingInputsRow, error)
 	ListDiscussSweepCandidates(context.Context, dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error)
 	GetBotByID(ctx context.Context, id pgtype.UUID) (dbsqlc.GetBotByIDRow, error)
 	ListUserIDsByChannelIdentity(ctx context.Context, channelIdentityID pgtype.UUID) ([]pgtype.UUID, error)

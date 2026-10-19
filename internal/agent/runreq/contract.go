@@ -80,10 +80,15 @@ type ChatRequest struct {
 	// matched against a live ACP runtime. The session pool re-validates it
 	// against the final session at prompt time; it never crosses the turn
 	// transport (Web admission runs in-process).
-	AgentCommand                 string           `json:"-"`
-	HistoryCutoffBeforeMessageID string           `json:"-"`
-	RequiredHistoryMessageID     string           `json:"-"`
-	WorkspaceTarget              *WorkspaceTarget `json:"-"`
+	AgentCommand                 string `json:"-"`
+	HistoryCutoffBeforeMessageID string `json:"-"`
+	RequiredHistoryMessageID     string `json:"-"`
+	// DiscussBatchMessageIDs are the history rows a discuss run answers: the
+	// external input past the session's cover position. Only the admission
+	// knows where that position was when the run took the session, and the
+	// images those rows carry go to the model with them.
+	DiscussBatchMessageIDs []string         `json:"-"`
+	WorkspaceTarget        *WorkspaceTarget `json:"-"`
 
 	// OutboundAssetCollector returns asset refs accumulated during outbound
 	// streaming. It is never serialized across the turn transport.

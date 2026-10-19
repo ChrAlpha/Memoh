@@ -185,3 +185,39 @@ func TestR4bExternalDiscussAsksForAFreshRuntime(t *testing.T) {
 		t.Fatal("the runtime was resumed; the batch would be shown to it twice")
 	}
 }
+
+// The runtime is prompted as the run's own: the run it belongs to, the route
+// the conversation arrives on, the participant who wrote the newest input, and
+// the credentials and tool endpoint issued for them.
+func TestR4bExternalDiscussRunActsForTheParticipantOnTheRoute(t *testing.T) {
+	if testing.Short() {
+		t.Skip("PostgreSQL integration")
+	}
+	t.Setenv("MEMOH_ACP_MCP_HTTP_URL", "http://tools.test/bots/{bot_id}")
+	env := newDiscussEnv(t, "group")
+	proc, pool := r4bExternalDiscuss(t, env)
+
+	alice := env.participant(t, false)
+	hw := env.write(t, passiveInput{from: alice, externalID: "m1", mentionsMe: true, text: "@memoh hello"})
+	if outcome, done := proc.admit(t, env); outcome != pending.DiscussAdmitted {
+		t.Fatalf("outcome = %v, want the batch admitted", outcome)
+	} else if done != nil {
+		waitDiscussRun(t, done)
+	}
+	run := env.waitRunState(t, env.invocation(hw), "completed")
+
+	got := pool.input
+	if got.RunID != run.runID {
+		t.Fatalf("prompt RunID = %q, want the admitted run %q", got.RunID, run.runID)
+	}
+	if got.RouteID != env.routeID || got.SessionID != env.sessionID || got.ChannelIdentityID != alice.identityID {
+		t.Fatalf("prompt names route %q session %q sender %q, want %q %q %q",
+			got.RouteID, got.SessionID, got.ChannelIdentityID, env.routeID, env.sessionID, alice.identityID)
+	}
+	if got.SessionToken == "" {
+		t.Fatal("the runtime was prompted without the credentials issued for the run")
+	}
+	if want := "http://tools.test/bots/" + env.botID; got.ToolHTTPURL != want {
+		t.Fatalf("prompt ToolHTTPURL = %q, want %q", got.ToolHTTPURL, want)
+	}
+}

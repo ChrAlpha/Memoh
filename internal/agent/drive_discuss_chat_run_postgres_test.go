@@ -3,12 +3,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/pending"
@@ -181,11 +179,11 @@ func TestDiscussCommandTurnRequestIsNeverPending(t *testing.T) {
 		eventID, handle := proc.chatTurn(t, env, alice, "cmd-1", "@bot /status")
 		waitReached(t, held)
 		env.requestRow(t, eventID)
-		_, err := dbsqlc.New(env.pool).GetDiscussPendingHead(context.Background(), dbsqlc.GetDiscussPendingHeadParams{
+		pendingInputs, err := dbsqlc.New(env.pool).ListDiscussPendingInputs(context.Background(), dbsqlc.ListDiscussPendingInputsParams{
 			SessionID: db.ParseUUIDOrEmpty(env.sessionID), CoverPosition: pgtype.Int8{Valid: true},
 		})
-		if !errors.Is(err, pgx.ErrNoRows) {
-			t.Fatalf("pending head while the turn runs: error = %v, want none", err)
+		if err != nil || len(pendingInputs) != 0 {
+			t.Fatalf("pending input while the turn runs: %d rows, error = %v, want none", len(pendingInputs), err)
 		}
 		close(held.gate)
 		drainDriveHandle(t, handle)

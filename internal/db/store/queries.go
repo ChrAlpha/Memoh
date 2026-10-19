@@ -27,8 +27,7 @@ type HistoryTurn struct {
 // Domain-specific stores should replace this broad interface module by module.
 type Queries interface {
 	GetDiscussCoverPosition(context.Context, dbsqlc.GetDiscussCoverPositionParams) (int64, error)
-	GetDiscussPendingHead(context.Context, dbsqlc.GetDiscussPendingHeadParams) (dbsqlc.GetDiscussPendingHeadRow, error)
-	GetDiscussPendingAddressed(context.Context, dbsqlc.GetDiscussPendingAddressedParams) (bool, error)
+	ListDiscussPendingInputs(context.Context, dbsqlc.ListDiscussPendingInputsParams) ([]dbsqlc.ListDiscussPendingInputsRow, error)
 	GetDiscussSession(context.Context, dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error)
 	ListDiscussSweepCandidates(context.Context, dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error)
 	SaveSessionRunResumeContext(context.Context, dbsqlc.SaveSessionRunResumeContextParams) (int64, error)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -24,6 +25,8 @@ import (
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/httpx"
+	"github.com/felinics/memoh/internal/logger"
 )
 
 // CoverStates are the run states that cover a discuss batch. A completed
@@ -114,28 +117,22 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	if err != nil {
 		return 0, nil, err
 	}
-	head, err := in.queries.GetDiscussPendingHead(ctx, dbsqlc.GetDiscussPendingHeadParams{
-		SessionID:     pgSessionID,
-		CoverPosition: pgtype.Int8{Int64: cover, Valid: true},
-	})
-	if errors.Is(err, pgx.ErrNoRows) {
+	inputs, err := in.pendingInputs(ctx, pgSessionID, cover)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(inputs) == 0 {
 		return DiscussNothingPending, nil, nil
 	}
-	if err != nil {
-		return 0, nil, fmt.Errorf("read discuss pending input: %w", err)
-	}
+	head := inputs[len(inputs)-1]
 	externalRuntime := sess.RuntimeType == sessionpkg.RuntimeACPAgent || sessionpkg.IsDirectRuntimeType(sess.RuntimeType)
 	if externalRuntime && !turn.IsPrivateConversationType(sess.ConversationType.String) {
 		// An External Agent runtime replays the whole context on every run, so
 		// it runs only when someone asked it to. The first addressed input
 		// answers everything pending before it.
-		addressed, err := in.queries.GetDiscussPendingAddressed(ctx, dbsqlc.GetDiscussPendingAddressedParams{
-			SessionID:     pgSessionID,
-			CoverPosition: pgtype.Int8{Int64: cover, Valid: true},
+		addressed := slices.ContainsFunc(inputs, func(input dbsqlc.ListDiscussPendingInputsRow) bool {
+			return input.MentionsMe || input.RepliesToMe
 		})
-		if err != nil {
-			return 0, nil, fmt.Errorf("read discuss addressed input: %w", err)
-		}
 		if !addressed {
 			return DiscussSkipped, nil, nil
 		}
@@ -181,6 +178,10 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 			return 0, nil, err
 		}
 	}
+	// The run answers a batch, not the request of whichever input, run end or
+	// sweep tick led to this admission, so it and its result record carry a
+	// request id of their own.
+	runCtx = logger.ContextWithRequestID(runCtx, httpx.NewRequestID())
 	// The cover position read above may be stale: a run for a newer batch can
 	// have completed between that read and this admission. Holding the
 	// session's slot, this read is current, and a batch it already covers ends
@@ -227,6 +228,13 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	// that answers nothing pays for nothing, and the rendered text is what the
 	// run stores for a crash resume.
 	spec.Setup = func(setupCtx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
+		if !externalRuntime {
+			batch, err := in.discussBatch(setupCtx, pgSessionID, current)
+			if err != nil {
+				return drive.RunPlan{}, err
+			}
+			req.DiscussBatchMessageIDs = batch
+		}
 		if externalRuntime {
 			prompt, err := in.discussExternalPrompt(setupCtx, req)
 			if err != nil {
@@ -253,7 +261,7 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 // discussRequest is the request a discuss run executes: the session's route,
 // the participant who wrote the hw row, and credentials issued for them. The
 // input is the hw row itself, already in history.
-func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, pgBotID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow, head dbsqlc.GetDiscussPendingHeadRow, externalRuntime bool) (runreq.ChatRequest, error) {
+func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, pgBotID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow, head dbsqlc.ListDiscussPendingInputsRow, externalRuntime bool) (runreq.ChatRequest, error) {
 	bot, err := in.queries.GetBotByID(ctx, pgBotID)
 	if err != nil {
 		return runreq.ChatRequest{}, fmt.Errorf("read discuss bot: %w", err)
@@ -294,6 +302,7 @@ func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, p
 		BotID:                     botID,
 		ThreadID:                  sessionID,
 		ChatID:                    botID,
+		RouteID:                   routeID,
 		RequiredHistoryMessageID:  head.ID.String(),
 		PersistedUserMessageID:    head.ID.String(),
 		ReusePersistedUserMessage: true,
@@ -310,6 +319,31 @@ func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, p
 		req.ToolHTTPURL = external.ToolGatewayURLFromEnv(botID)
 	}
 	return req, nil
+}
+
+// pendingInputs reads the external input past cover, oldest first.
+func (in *Inputs) pendingInputs(ctx context.Context, sessionID pgtype.UUID, cover int64) ([]dbsqlc.ListDiscussPendingInputsRow, error) {
+	inputs, err := in.queries.ListDiscussPendingInputs(ctx, dbsqlc.ListDiscussPendingInputsParams{
+		SessionID:     sessionID,
+		CoverPosition: pgtype.Int8{Int64: cover, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read discuss pending input: %w", err)
+	}
+	return inputs, nil
+}
+
+// discussBatch lists the history rows past cover that a discuss run answers.
+func (in *Inputs) discussBatch(ctx context.Context, sessionID pgtype.UUID, cover int64) ([]string, error) {
+	inputs, err := in.pendingInputs(ctx, sessionID, cover)
+	if err != nil {
+		return nil, err
+	}
+	batch := make([]string, len(inputs))
+	for i, input := range inputs {
+		batch[i] = input.ID.String()
+	}
+	return batch, nil
 }
 
 func (in *Inputs) discussCover(ctx context.Context, sessionID pgtype.UUID) (int64, error) {

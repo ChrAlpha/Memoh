@@ -35,6 +35,7 @@ import (
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/logger"
 	"github.com/felinics/memoh/internal/messaging"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/sessionfacts"
@@ -182,12 +183,8 @@ func (s discussStore) GetDiscussCoverPosition(ctx context.Context, p dbsqlc.GetD
 	return s.pg.GetDiscussCoverPosition(ctx, p)
 }
 
-func (s discussStore) GetDiscussPendingHead(ctx context.Context, p dbsqlc.GetDiscussPendingHeadParams) (dbsqlc.GetDiscussPendingHeadRow, error) {
-	return s.pg.GetDiscussPendingHead(ctx, p)
-}
-
-func (s discussStore) GetDiscussPendingAddressed(ctx context.Context, p dbsqlc.GetDiscussPendingAddressedParams) (bool, error) {
-	return s.pg.GetDiscussPendingAddressed(ctx, p)
+func (s discussStore) ListDiscussPendingInputs(ctx context.Context, p dbsqlc.ListDiscussPendingInputsParams) ([]dbsqlc.ListDiscussPendingInputsRow, error) {
+	return s.pg.ListDiscussPendingInputs(ctx, p)
 }
 
 func (s discussStore) ListDiscussSweepCandidates(ctx context.Context, p dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error) {
@@ -324,52 +321,79 @@ type passiveInput struct {
 	// refused writes the row the way a refused sender's message is written:
 	// without an event, marked with the admission that refused it.
 	refused messagepkg.Admission
+	// assets are the images and files linked to the row, as the inbound path
+	// links what the message carried.
+	assets []messagepkg.AssetRef
 }
 
 // write stores the input and returns its history position. An admitted input
 // is a session event and the history row that carries its id.
 func (e discussEnv) write(t *testing.T, in passiveInput) int64 {
 	t.Helper()
+	return e.writeAll(t, in)[0]
+}
+
+// writeAll stores the inputs and returns their history positions. The inputs
+// become external input together: a check that runs meanwhile, such as the
+// one a run's end makes, sees all of them or none.
+func (e discussEnv) writeAll(t *testing.T, inputs ...passiveInput) []int64 {
+	t.Helper()
 	ctx := context.Background()
-	modelMessage := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.UserMessage(in.text)})[0]
-	raw, err := json.Marshal(modelMessage)
+	svc := messagepkg.NewService(slog.New(slog.DiscardHandler), postgresstore.NewQueriesWithPool(e.pool, dbsqlc.New(e.pool)))
+	rowIDs := make([]string, len(inputs))
+	for i, in := range inputs {
+		modelMessage := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.UserMessage(in.text)})[0]
+		raw, err := json.Marshal(modelMessage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		meta := map[string]any{"route_id": e.routeID, "platform": discussTestPlatform}
+		if in.refused != "" {
+			messagepkg.SetAdmission(meta, in.refused)
+		}
+		row, err := svc.Persist(ctx, messagepkg.PersistInput{
+			BotID: e.botID, SessionID: e.sessionID, Role: "user", Content: raw,
+			SenderChannelIdentityID: in.from.identityID, ExternalMessageID: in.externalID,
+			DisplayText: in.text, Metadata: meta, Assets: in.assets,
+		})
+		if err != nil {
+			t.Fatalf("persist %s: %v", in.externalID, err)
+		}
+		rowIDs[i] = row.ID
+	}
+	tx, err := e.pool.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	meta := map[string]any{"route_id": e.routeID, "platform": discussTestPlatform}
-	if in.refused != "" {
-		messagepkg.SetAdmission(meta, in.refused)
-	}
-	svc := messagepkg.NewService(slog.New(slog.DiscardHandler), postgresstore.NewQueriesWithPool(e.pool, dbsqlc.New(e.pool)))
-	row, err := svc.Persist(ctx, messagepkg.PersistInput{
-		BotID: e.botID, SessionID: e.sessionID, Role: "user", Content: raw,
-		SenderChannelIdentityID: in.from.identityID, ExternalMessageID: in.externalID,
-		DisplayText: in.text, Metadata: meta,
-	})
-	if err != nil {
-		t.Fatalf("persist %s: %v", in.externalID, err)
-	}
-	if in.refused == "" {
+	for i, in := range inputs {
+		if in.refused != "" {
+			continue
+		}
 		eventData, err := json.Marshal(map[string]any{"message_id": in.externalID, "mentions_me": in.mentionsMe})
 		if err != nil {
 			t.Fatal(err)
 		}
 		eventID := uuid.New()
-		if _, err := e.pool.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
 			INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms)
 			VALUES ($1, $2, $3, 'message', $4, $5, $6)
 		`, eventID, e.botID, e.sessionID, eventData, in.externalID, time.Now().UnixMilli()); err != nil {
 			t.Fatalf("insert event %s: %v", in.externalID, err)
 		}
-		if _, err := e.pool.Exec(ctx, `UPDATE bot_history_messages SET event_id = $2 WHERE id = $1`, row.ID, eventID); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE bot_history_messages SET event_id = $2 WHERE id = $1`, rowIDs[i], eventID); err != nil {
 			t.Fatal(err)
 		}
 	}
-	var position int64
-	if err := e.pool.QueryRow(ctx, `SELECT turn_position FROM bot_history_messages WHERE id = $1`, row.ID).Scan(&position); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return position
+	positions := make([]int64, len(inputs))
+	for i := range inputs {
+		if err := e.pool.QueryRow(ctx, `SELECT turn_position FROM bot_history_messages WHERE id = $1`, rowIDs[i]).Scan(&positions[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return positions
 }
 
 // discussRun is one discuss run as the ledger holds it.
@@ -452,6 +476,11 @@ type discussProcess struct {
 type discussSetup struct {
 	manager *sessionruntime.Manager
 	fixture []directLifecycleOption
+	// compatibilities are what the run's model declares it can do.
+	compatibilities []string
+	// observe sees the run configuration as the agent receives it, before the
+	// provider context is built from it.
+	observe func(native.RunConfig)
 }
 
 type discussOption func(*discussSetup)
@@ -484,6 +513,16 @@ func discussAdmitter(wrap func(*sessionruntime.Manager) runreq.TurnAdmitter) dis
 	}
 }
 
+// discussVision makes the run's model accept image input.
+func discussVision() discussOption {
+	return func(s *discussSetup) { s.compatibilities = append(s.compatibilities, "vision") }
+}
+
+// discussObserveConfig reports the configuration of each run to observe.
+func discussObserveConfig(observe func(native.RunConfig)) discussOption {
+	return func(s *discussSetup) { s.observe = observe }
+}
+
 func newDiscussProcess(t *testing.T, env discussEnv, steps ...*discussStep) *discussProcess {
 	t.Helper()
 	return newDiscussProcessWith(t, env, nil, steps...)
@@ -500,7 +539,7 @@ func newDiscussProcessWith(t *testing.T, env discussEnv, options []discussOption
 		Fence:         runtimefence.NewActivator(pg),
 	})
 	t.Cleanup(func() { _ = manager.Close() })
-	setup := discussSetup{manager: manager}
+	setup := discussSetup{manager: manager, compatibilities: []string{"tool-call"}}
 	for _, option := range options {
 		option(&setup)
 	}
@@ -512,6 +551,9 @@ func newDiscussProcessWith(t *testing.T, env discussEnv, options []discussOption
 	agent := native.New(native.Deps{
 		Logger: logger,
 		ContextViewApplier: func(ctx context.Context, cfg native.RunConfig) native.RunConfig {
+			if setup.observe != nil {
+				setup.observe(cfg)
+			}
 			out := applier(ctx, cfg)
 			if out.Model != nil {
 				model := *out.Model
@@ -548,7 +590,11 @@ func newDiscussProcessWith(t *testing.T, env discussEnv, options []discussOption
 	chat := newChatTurnFixture(t, directLifecycleModelSuccess, append(base, setup.fixture...)...)
 	// The run offers tools only to a model that can call them.
 	for key, model := range chat.fixture.queries.Models {
-		model.Config = []byte(`{"context_window":128000,"compatibilities":["tool-call"]}`)
+		config, err := json.Marshal(map[string]any{"context_window": 128000, "compatibilities": setup.compatibilities})
+		if err != nil {
+			t.Fatal(err)
+		}
+		model.Config = config
 		chat.fixture.queries.Models[key] = model
 	}
 	return &discussProcess{svc: chat.fixture.service, manager: manager, provider: provider, sender: sender}
@@ -561,6 +607,53 @@ func (p *discussProcess) admit(t *testing.T, env discussEnv) (pending.DiscussAdm
 		t.Fatalf("admitDiscuss() error = %v", err)
 	}
 	return outcome, done
+}
+
+// answer makes sure the batch ending at hw is answered and waits for its run
+// to complete. A run's end checks the session again by itself, so input
+// written after a run may already have been admitted by then; the batch is
+// answered either way, by that admission or by this one.
+func (p *discussProcess) answer(t *testing.T, env discussEnv, hw int64) {
+	t.Helper()
+	p.answerFrom(t, "", env, hw)
+}
+
+// answerFrom is answer with the admissions made on behalf of the request with
+// the given id.
+func (p *discussProcess) answerFrom(t *testing.T, requestID string, env discussEnv, hw int64) {
+	t.Helper()
+	admit := func() (<-chan struct{}, error) {
+		ctx := logger.ContextWithRequestID(context.Background(), requestID)
+		_, done, err := p.svc.pending.AdmitDiscussRun(ctx, env.botID, env.sessionID)
+		return done, err
+	}
+	env.awaitAnswered(t, hw, admit)
+}
+
+// awaitAnswered admits until the batch ending at hw has been answered.
+func (e discussEnv) awaitAnswered(t *testing.T, hw int64, admit func() (<-chan struct{}, error)) {
+	t.Helper()
+	for attempt := 0; attempt < 1500; attempt++ {
+		done, err := admit()
+		if err != nil {
+			t.Fatalf("admitDiscuss() error = %v", err)
+		}
+		if done != nil {
+			waitDiscussRun(t, done)
+		}
+		if e.answered(t, hw) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("the batch ending at %d was not answered", hw)
+}
+
+// answered reports whether the run for the batch ending at hw has completed.
+func (e discussEnv) answered(t *testing.T, hw int64) bool {
+	t.Helper()
+	run, ok := e.runs(t)[e.invocation(hw)]
+	return ok && run.state == "completed"
 }
 
 func waitDiscussRun(t *testing.T, done <-chan struct{}) {
