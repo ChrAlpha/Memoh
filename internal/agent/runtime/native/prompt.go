@@ -181,6 +181,7 @@ func buildSkillsHeader(count int) string {
 	var sb strings.Builder
 	sb.WriteString("## Skills\n\n")
 	sb.WriteString("Memoh-managed skills are stored in `" + skillset.ManagedDir() + "/`. ")
+	sb.WriteString("**Create user skills directly as `" + skillset.ManagedDir() + "/<skill-name>/SKILL.md`.** ")
 	sb.WriteString("Compatible external skill directories inside the bot workspace may also be discovered automatically. ")
 	sb.WriteString("Each skill is represented by a `SKILL.md` file in one of the discovered source directories. ")
 	sb.WriteString("Only activate a skill when it is relevant to the current task and a skill-loading capability is available.\n\n")

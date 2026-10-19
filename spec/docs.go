@@ -23337,7 +23337,7 @@ const docTemplate = `{
                     }
                 },
                 "source_path": {
-                    "description": "SourcePath is the existing SKILL.md being edited when saving a single skill.\nEmpty means create (or overwrite by frontmatter name under\n/data/skills/user/personal/\u003cname\u003e/).",
+                    "description": "SourcePath is the existing SKILL.md being edited when saving a single skill.\nEmpty means create (or overwrite by frontmatter name under\n/data/skills/\u003cname\u003e/).",
                     "type": "string"
                 }
             }

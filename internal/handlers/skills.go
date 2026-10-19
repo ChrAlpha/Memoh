@@ -49,7 +49,7 @@ type SkillsUpsertRequest struct {
 	Skills []string `json:"skills"`
 	// SourcePath is the existing SKILL.md being edited when saving a single skill.
 	// Empty means create (or overwrite by frontmatter name under
-	// /data/skills/user/personal/<name>/).
+	// /data/skills/<name>/).
 	SourcePath string `json:"source_path,omitempty"`
 }
 

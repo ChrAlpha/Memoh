@@ -16,23 +16,11 @@ import (
 )
 
 // The built-in skill-creator ships its own path guidance and Python
-// scaffolder. They must target the user Skill app, otherwise the Skills they
-// create are never discovered.
+// scaffolder. They must create user Skills directly below ManagedDirPath,
+// otherwise the Skills they create are never discovered.
 const skillCreatorTemplateDir = ".memoh/skills/skill-creator"
 
-var (
-	managedSkillPathPattern  = regexp.MustCompile(regexp.QuoteMeta(ManagedDirPath) + "[^\\s`'\",)]*")
-	initSkillDefaultPathExpr = regexp.MustCompile(`"--path",\s*default="([^"]+)"`)
-)
-
-func userSkillAppDir(t *testing.T) string {
-	t.Helper()
-	dir, err := AppDirForIDs(UserSkillNamespace, UserApp)
-	if err != nil {
-		t.Fatalf("AppDirForIDs() error = %v", err)
-	}
-	return dir
-}
+var initSkillDefaultPathExpr = regexp.MustCompile(`"--path",\s*default="([^"]+)"`)
 
 func readSkillCreatorTemplate(t *testing.T, name string) string {
 	t.Helper()
@@ -43,25 +31,20 @@ func readSkillCreatorTemplate(t *testing.T, name string) string {
 	return string(data)
 }
 
-func TestSkillCreatorTemplatePathsTargetUserSkillApp(t *testing.T) {
-	userApp := userSkillAppDir(t)
-	found := 0
+func TestSkillCreatorTemplateDoesNotMentionCompatUserSkillDir(t *testing.T) {
+	compatDir, err := AppDirForIDs(UserSkillNamespace, UserApp)
+	if err != nil {
+		t.Fatalf("AppDirForIDs() error = %v", err)
+	}
 	for _, name := range []string{
 		"SKILL.md",
 		"references/skill-files.md",
 		"scripts/init_skill.py",
 		"scripts/quick_validate.py",
 	} {
-		for _, match := range managedSkillPathPattern.FindAllString(readSkillCreatorTemplate(t, name), -1) {
-			found++
-			p := strings.TrimRight(match, ".")
-			if p != userApp && !strings.HasPrefix(p, userApp+"/") {
-				t.Errorf("%s references %q, want a path under %s", name, p, userApp)
-			}
+		if content := readSkillCreatorTemplate(t, name); strings.Contains(content, compatDir) {
+			t.Errorf("%s references the compatibility directory %s", name, compatDir)
 		}
-	}
-	if found == 0 {
-		t.Fatalf("skill-creator templates no longer reference %s", ManagedDirPath)
 	}
 }
 
@@ -76,7 +59,7 @@ func TestSkillCreatorInitScriptCreatesDiscoverableUserSkill(t *testing.T) {
 		t.Fatal("init_skill.py --path default not found")
 	}
 	defaultRoot := match[1]
-	if want := userSkillAppDir(t); defaultRoot != want {
+	if want := ManagedDirPath; defaultRoot != want {
 		t.Fatalf("init_skill.py --path default = %q, want %q", defaultRoot, want)
 	}
 
