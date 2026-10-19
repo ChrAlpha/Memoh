@@ -25,6 +25,9 @@ func bindSessionRuntime(manager *sessionruntime.Manager, logger *slog.Logger, s 
 		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 			s.lifecycle.ReconcileTerminal(ctx, terminal)
 		},
+		func(_ context.Context, terminal sessionruntime.TerminalRun) {
+			s.overview.RunEnded(terminal.BotID, terminal.SessionID)
+		},
 		func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 			s.pending.AfterSessionTerminal(ctx, terminal)
 		},
@@ -36,7 +39,9 @@ func bindSessionRuntime(manager *sessionruntime.Manager, logger *slog.Logger, s 
 
 // terminalFanout runs the terminal observers in the order given. The order is
 // the contract: the outcome record comes first, the lifecycle reconciliation
-// next, and whatever the run's end releases (queued input) last.
+// next, the memory overview's note that the session's prompt cache was just
+// refreshed after that, and whatever the run's end releases (queued input)
+// last.
 func terminalFanout(steps ...func(context.Context, sessionruntime.TerminalRun)) func(context.Context, sessionruntime.TerminalRun) {
 	return func(ctx context.Context, terminal sessionruntime.TerminalRun) {
 		for _, step := range steps {

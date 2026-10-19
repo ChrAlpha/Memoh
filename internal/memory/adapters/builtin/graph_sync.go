@@ -86,13 +86,45 @@ func (s *graphSync) syncMarkdownFromNodes(ctx context.Context, botID string, nod
 		"scopeId":   botID,
 		"bot_id":    botID,
 	}
+	// RebuildFiles also syncs (or defers) the overview; see memoryStore.
 	if err := s.fs.RebuildFiles(ctx, botID, items, filters); err != nil {
 		return fmt.Errorf("graph sync: rebuild files: %w", err)
 	}
-	if err := s.fs.SyncOverview(ctx, botID); err != nil {
-		return fmt.Errorf("graph sync: sync overview: %w", err)
-	}
 	return nil
+}
+
+// overviewRefresher is the part of a memory store that can defer MEMORY.md
+// rewrites made during a conversation (storefs.Service).
+type overviewRefresher interface {
+	OverviewStaleSince(botID string) (time.Time, bool)
+	RefreshOverview(ctx context.Context, botID string) error
+}
+
+// overviewStaleSince reports whether the store left MEMORY.md behind its
+// memory files for botID and, if so, since when.
+func (s *graphSync) overviewStaleSince(botID string) (time.Time, bool) {
+	refresher, ok := s.fs.(overviewRefresher)
+	if !ok {
+		return time.Time{}, false
+	}
+	return refresher.OverviewStaleSince(strings.TrimSpace(botID))
+}
+
+// refreshOverview rewrites a stale MEMORY.md under the same per-bot lock the
+// write path holds, so it never interleaves with a projection rebuild.
+func (s *graphSync) refreshOverview(ctx context.Context, botID string) error {
+	refresher, ok := s.fs.(overviewRefresher)
+	if !ok {
+		return nil
+	}
+	botID = strings.TrimSpace(botID)
+	if botID == "" {
+		return errors.New("graph sync: bot_id is required")
+	}
+	mu := s.botLock(botID)
+	mu.Lock()
+	defer mu.Unlock()
+	return refresher.RefreshOverview(ctx, botID)
 }
 
 // nodeSpecToStoreItem converts a wiki node into the storefs item shape so the

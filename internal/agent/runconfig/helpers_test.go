@@ -36,6 +36,9 @@ func newBuilder(adjust ...func(*Deps)) *Builder {
 	if d.Memory == nil {
 		d.Memory = memory.New(memory.Deps{Logger: logger, Bot: d.Bot, Transcript: d.Transcript})
 	}
+	if d.MemoryOverview == nil {
+		d.MemoryOverview = memory.NewOverview(memory.OverviewDeps{Logger: logger, Keeper: d.Memory})
+	}
 	if d.Compact == nil {
 		d.Compact = compact.New(compact.Deps{Logger: logger, Transcript: d.Transcript})
 	}

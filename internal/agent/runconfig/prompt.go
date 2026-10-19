@@ -31,6 +31,7 @@ func (b *Builder) Prepare(ctx context.Context, cfg native.RunConfig) native.RunC
 		nowFn = func() time.Time { return time.Now().In(cfg.Identity.TimezoneLocation) }
 	}
 	fs := native.NewFSClient(b.agent.BridgeProvider(), cfg.Identity.BotID, nowFn)
+	b.overview.Refresh(ctx, cfg.Identity.BotID, cfg.Identity.SessionID, cfg.SessionType, cfg.PromptCacheTTL)
 	files := fs.LoadSystemFiles(ctx)
 
 	platformIdentitiesSection := ""

@@ -69,7 +69,7 @@ func testHost(t *testing.T, d Deps) *Host {
 	if d.Runconfig == nil {
 		d.Runconfig = runconfig.New(runconfig.Deps{
 			Logger: d.Logger, Credentials: providers.NewService(nil, nil, ""), Sessions: d.Sessions, Bot: bot,
-			Memory: d.Memory, Decider: d.Decider, BotPermissions: d.BotPermissions,
+			Memory: d.Memory, MemoryOverview: memory.NewOverview(memory.OverviewDeps{Logger: d.Logger, Keeper: d.Memory}), Decider: d.Decider, BotPermissions: d.BotPermissions,
 			WorkspaceTargets: agenttest.KindedTargetResolver{},
 		})
 	}
@@ -103,6 +103,9 @@ func withRunconfig(t *testing.T, adjust func(*runconfig.Deps)) *Host {
 	bot := agenttest.BotEnv(logger)
 	d := runconfig.Deps{Logger: logger, Credentials: providers.NewService(nil, nil, ""), Bot: bot, WorkspaceTargets: agenttest.KindedTargetResolver{}}
 	adjust(&d)
+	if d.MemoryOverview == nil {
+		d.MemoryOverview = memory.NewOverview(memory.OverviewDeps{Logger: logger, Keeper: d.Memory})
+	}
 	return testHost(t, Deps{Logger: logger, Runconfig: runconfig.New(d)})
 }
 

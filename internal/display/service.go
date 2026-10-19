@@ -665,7 +665,7 @@ func (s *session) start(ctx context.Context) error {
 			if err := input.startClipboard(s.publishClipboard, func(err error) {
 				if runCtx.Err() == nil {
 					s.service.logger.WarnContext(ctx, "display clipboard synchronization failed", slog.String("bot_id", s.botID), slog.Any("error", err))
-					s.broadcastClipboard(clipboardErrorMessage(ctx))
+					s.broadcastClipboard(clipboardErrorMessage(ctx, err))
 				}
 			}, func(err error) {
 				if runCtx.Err() == nil {
@@ -779,7 +779,7 @@ func (s *session) answer(ctx context.Context, req OfferRequest) (OfferResponse, 
 					Type string `json:"type"`
 				}
 				if json.Unmarshal(msg.Data, &event) == nil && (event.Type == "clipboard" || event.Type == "clipboard_sync") {
-					_ = dc.SendText(clipboardErrorMessage(ctx))
+					_ = dc.SendText(clipboardErrorMessage(ctx, nil))
 				}
 				s.service.logger.DebugContext(ctx, "display input event dropped", slog.String("bot_id", s.botID), slog.Any("error", err))
 			}

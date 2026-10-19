@@ -18,13 +18,15 @@ func newTestBuilder() *runconfig.Builder {
 	logger := slog.New(slog.DiscardHandler)
 	bot := agenttest.BotEnv(logger)
 	reader := transcript.New(transcript.Deps{Logger: logger})
+	keeper := memory.New(memory.Deps{Logger: logger, Bot: bot, Transcript: reader})
 	return runconfig.New(runconfig.Deps{
-		Logger:     logger,
-		Agent:      &native.Agent{},
-		Bot:        bot,
-		Transcript: reader,
-		Memory:     memory.New(memory.Deps{Logger: logger, Bot: bot, Transcript: reader}),
-		Compact:    compact.New(compact.Deps{Logger: logger, Transcript: reader}),
-		Decider:    decide.New(decide.Deps{Logger: logger}),
+		Logger:         logger,
+		Agent:          &native.Agent{},
+		Bot:            bot,
+		Transcript:     reader,
+		Memory:         keeper,
+		MemoryOverview: memory.NewOverview(memory.OverviewDeps{Logger: logger, Keeper: keeper}),
+		Compact:        compact.New(compact.Deps{Logger: logger, Transcript: reader}),
+		Decider:        decide.New(decide.Deps{Logger: logger}),
 	})
 }

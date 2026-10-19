@@ -9,6 +9,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
+	"github.com/felinics/memoh/internal/memory/storefs"
 )
 
 func TestToProviderMessagesKeepsPersistedContentAndSourceAligned(t *testing.T) {
@@ -65,5 +66,36 @@ func TestRoundPersistedUsesPersistedUserContent(t *testing.T) {
 	}
 	if got.Messages[1].Content != "stored answer" || got.Messages[1].SourceMessageID != "session-1/msg-assistant" {
 		t.Fatalf("persisted assistant message = %#v", got.Messages[1])
+	}
+}
+
+type conversationWriteProvider struct {
+	memprovider.Provider
+	afterChat chan context.Context
+}
+
+func (*conversationWriteProvider) Type() string { return "test" }
+
+func (p *conversationWriteProvider) OnAfterChat(ctx context.Context, _ memprovider.AfterChatRequest) error {
+	p.afterChat <- ctx
+	return nil
+}
+
+func TestWriteMarksPostTurnWritesAsConversationWrites(t *testing.T) {
+	t.Parallel()
+
+	provider := &conversationWriteProvider{afterChat: make(chan context.Context, 1)}
+	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
+	registry.Register(agenttest.MemoryProviderID, provider)
+	keeper := newTestKeeper(t, func(d *Deps) { d.Registry = registry })
+
+	err := keeper.write(context.Background(), runreq.ChatRequest{BotID: agenttest.MemoryBotID, ThreadID: "session-1"}, agenttest.MemoryBotID, []messagepkg.Message{
+		agenttest.StoredMessage(t, "msg-assistant", "session-1", "assistant", "stored answer"),
+	})
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if ctx := <-provider.afterChat; !storefs.IsConversationWrite(ctx) {
+		t.Fatal("post-turn memory write is not marked as a conversation write")
 	}
 }

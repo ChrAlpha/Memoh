@@ -70,6 +70,7 @@ type Service struct {
 	title         *title.Generator
 	decider       *decide.Decider
 	memory        *memory.Keeper
+	overview      *memory.Overview
 	compact       *compact.Compactor
 	plan          *plan.Planner
 	pending       *pending.Inputs
@@ -295,6 +296,11 @@ func assemble(d Deps, w wiring) *Service {
 		Transcript: service.transcript,
 		Registry:   d.Memory,
 	})
+	service.overview = memory.NewOverview(memory.OverviewDeps{
+		Logger: log("memory"),
+		Store:  d.Queries,
+		Keeper: service.memory,
+	})
 	// A typed nil stored in an interface would read as configured.
 	var runner compact.Runner
 	if d.Compaction != nil {
@@ -318,6 +324,7 @@ func assemble(d Deps, w wiring) *Service {
 		Bot:                service.botenv,
 		Transcript:         service.transcript,
 		Memory:             service.memory,
+		MemoryOverview:     service.overview,
 		Compact:            service.compact,
 		Decider:            service.decider,
 		BotPermissions:     d.BotPermissions,

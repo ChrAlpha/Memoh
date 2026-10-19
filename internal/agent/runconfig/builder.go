@@ -68,6 +68,9 @@ type Deps struct {
 	Transcript *transcript.Reader
 	// Memory recalls what the bot remembers about the request.
 	Memory *memory.Keeper
+	// MemoryOverview rewrites a stale MEMORY.md before the system files are
+	// read.
+	MemoryOverview *memory.Overview
 	// Compact judges and compacts the context before the first call.
 	Compact *compact.Compactor
 	// Decider builds the handler a tool approval is decided through.
@@ -109,6 +112,7 @@ type Builder struct {
 	bot         *botenv.Env
 	transcript  *transcript.Reader
 	memory      *memory.Keeper
+	overview    *memory.Overview
 	compact     *compact.Compactor
 	decider     *decide.Decider
 	permissions runreq.BotPermissionChecker
@@ -139,6 +143,7 @@ func New(d Deps) *Builder {
 		bot:         d.Bot,
 		transcript:  d.Transcript,
 		memory:      d.Memory,
+		overview:    d.MemoryOverview,
 		compact:     d.Compact,
 		decider:     d.Decider,
 		permissions: d.BotPermissions,

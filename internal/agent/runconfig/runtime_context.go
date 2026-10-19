@@ -52,6 +52,9 @@ func (b *Builder) BuildRuntimeContextSections(ctx context.Context, req runreq.Ch
 		nowFn = func() time.Time { return time.Now().In(timezoneLocation) }
 	}
 	fs := native.NewFSClient(b.agent.BridgeProvider(), req.BotID, nowFn)
+	// External runtimes keep their own prompt cache; the default TTL is the
+	// conservative estimate of when it has expired.
+	b.overview.Refresh(ctx, req.BotID, req.ThreadID, req.SessionType, "")
 	files := fs.LoadSystemFiles(ctx)
 
 	platformIdentitiesSection := ""

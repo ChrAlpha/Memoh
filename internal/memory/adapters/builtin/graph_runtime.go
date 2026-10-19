@@ -84,6 +84,24 @@ func (r *graphRuntime) MemoryVersion(_ context.Context, botID string) string {
 
 // ---- helpers ----
 
+// OverviewStaleSince reports whether MEMORY.md lags behind memory written
+// during a conversation and, if so, since when.
+func (r *graphRuntime) OverviewStaleSince(botID string) (time.Time, bool) {
+	if r == nil || r.syncer == nil {
+		return time.Time{}, false
+	}
+	return r.syncer.overviewStaleSince(botID)
+}
+
+// RefreshOverview rewrites a MEMORY.md that lags behind memory written during
+// a conversation.
+func (r *graphRuntime) RefreshOverview(ctx context.Context, botID string) error {
+	if r == nil || r.syncer == nil {
+		return nil
+	}
+	return r.syncer.refreshOverview(ctx, botID)
+}
+
 func (r *graphRuntime) syncAndInvalidate(ctx context.Context, botID string) {
 	// Regenerate the derived Markdown view from the authoritative PG nodes.
 	// Best-effort: PG is the source of truth, so a sync failure is logged, not

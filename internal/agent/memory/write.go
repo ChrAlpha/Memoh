@@ -13,6 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/job"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
+	"github.com/felinics/memoh/internal/memory/storefs"
 	"github.com/felinics/memoh/internal/runtimekind"
 )
 
@@ -68,7 +69,9 @@ func (k *Keeper) write(ctx context.Context, req runreq.ChatRequest, botID string
 		}
 	}
 	_, tzLoc := k.bot.ResolveTimezone(ctx, req.BotID, req.UserID)
-	if err := p.OnAfterChat(ctx, memprovider.AfterChatRequest{
+	// A post-turn write belongs to a conversation that is still warm: it may
+	// leave MEMORY.md for Overview.Refresh to rewrite.
+	if err := p.OnAfterChat(storefs.WithConversationWrite(ctx), memprovider.AfterChatRequest{
 		BotID:             botID,
 		Messages:          memMsgs,
 		UserID:            strings.TrimSpace(req.UserID),
