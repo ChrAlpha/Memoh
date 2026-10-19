@@ -733,11 +733,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
 	cfg := rc.runConfig
-	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
-	if stepCommitter != nil {
-		cfg.OnStepCommitted = stepCommitter.commit
-		stepCommitter.bindContinuation(&cfg)
-	}
+	stepCommitter := s.bindNativeRun(ctx, req, rc, &cfg, nil)
 	cfg = s.prepareRunConfig(ctx, cfg)
 	terminal := s.contextLifecycleTerminal(ctx, cfg)
 	var lifecycleCause error
