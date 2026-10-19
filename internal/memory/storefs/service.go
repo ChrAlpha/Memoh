@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -43,6 +44,11 @@ type scanEntry struct {
 type Service struct {
 	provider bridge.Provider
 	logger   *slog.Logger
+
+	// overview tracks, per bot, whether MEMORY.md has caught up with the
+	// conversation writes it deferred (see RefreshOverview).
+	overviewMu sync.Mutex
+	overview   map[string]overviewState
 }
 
 type MemoryItem struct {
@@ -234,9 +240,20 @@ func (s *Service) PersistMemories(ctx context.Context, botID string, items []Mem
 			return err
 		}
 	}
-	return s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMDWithPaths(overviewItems, overviewPaths))
+	if s.deferOverview(ctx, botID) {
+		return nil
+	}
+	generation := s.overviewGeneration(botID)
+	if err := s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMDWithPaths(overviewItems, overviewPaths)); err != nil {
+		return err
+	}
+	s.markOverviewClean(botID, generation)
+	return nil
 }
 
+// RebuildFiles rewrites the memory projection from items and finishes with
+// SyncOverview, so callers need not sync the overview again. A conversation
+// write defers the MEMORY.md rewrite as SyncOverview does.
 func (s *Service) RebuildFiles(ctx context.Context, botID string, items []MemoryItem, _ map[string]any) error {
 	if s.provider == nil {
 		return ErrNotConfigured
@@ -512,15 +529,16 @@ func (s *Service) CountMemoryFiles(ctx context.Context, botID string) (int, erro
 	return count, nil
 }
 
+// SyncOverview rewrites MEMORY.md from the memory files, unless ctx carries a
+// conversation write, whose rewrite waits for RefreshOverview.
 func (s *Service) SyncOverview(ctx context.Context, botID string) error {
 	if s.provider == nil {
 		return ErrNotConfigured
 	}
-	items, err := s.ReadAllMemoryFiles(ctx, botID)
-	if err != nil {
-		return err
+	if s.deferOverview(ctx, botID) {
+		return nil
 	}
-	return s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMD(items))
+	return s.writeOverview(ctx, botID)
 }
 
 func (s *Service) readMemoryDay(ctx context.Context, botID, filePath string) ([]MemoryItem, error) {

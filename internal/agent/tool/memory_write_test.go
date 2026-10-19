@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/mcp"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
+	"github.com/felinics/memoh/internal/memory/storefs"
 	"github.com/felinics/memoh/internal/settings"
 )
 
@@ -26,6 +27,9 @@ type recordingMemoryProvider struct {
 	deleted    []string
 	deleteBots []string
 	addErr     error
+	// conversation records, per write, whether the context was marked as a
+	// conversation write (storefs.WithConversationWrite).
+	conversation []bool
 }
 
 func (*recordingMemoryProvider) Type() string { return "recording" }
@@ -34,21 +38,24 @@ func (*recordingMemoryProvider) ListTools(context.Context, mcp.ToolSessionContex
 	return nil, nil
 }
 
-func (p *recordingMemoryProvider) Add(_ context.Context, req memprovider.AddRequest) (memprovider.SearchResponse, error) {
+func (p *recordingMemoryProvider) Add(ctx context.Context, req memprovider.AddRequest) (memprovider.SearchResponse, error) {
 	p.added = append(p.added, req)
+	p.conversation = append(p.conversation, storefs.IsConversationWrite(ctx))
 	if p.addErr != nil {
 		return memprovider.SearchResponse{}, p.addErr
 	}
 	return memprovider.SearchResponse{Results: []memprovider.MemoryItem{{ID: "mem-1", Memory: req.Message}}}, nil
 }
 
-func (p *recordingMemoryProvider) Update(_ context.Context, req memprovider.UpdateRequest) (memprovider.MemoryItem, error) {
+func (p *recordingMemoryProvider) Update(ctx context.Context, req memprovider.UpdateRequest) (memprovider.MemoryItem, error) {
 	p.updated = append(p.updated, req)
+	p.conversation = append(p.conversation, storefs.IsConversationWrite(ctx))
 	return memprovider.MemoryItem{ID: req.MemoryID, Memory: req.Memory}, nil
 }
 
-func (p *recordingMemoryProvider) Delete(_ context.Context, botID string, memoryID string) (memprovider.DeleteResponse, error) {
+func (p *recordingMemoryProvider) Delete(ctx context.Context, botID string, memoryID string) (memprovider.DeleteResponse, error) {
 	p.deleted = append(p.deleted, memoryID)
+	p.conversation = append(p.conversation, storefs.IsConversationWrite(ctx))
 	p.deleteBots = append(p.deleteBots, botID)
 	return memprovider.DeleteResponse{}, nil
 }
@@ -301,5 +308,30 @@ func TestPublicMCPHeadersCannotAdoptPrivateMemoryIdentity(t *testing.T) {
 	trusted := sessionFromMCP(mcp.ToolSessionContext{BotID: "bot-1", SessionID: "victim-thread"})
 	if got := p.resolveActorUserID(context.Background(), trusted); got != "victim" {
 		t.Fatalf("trusted runtime lost author: %s", got)
+	}
+}
+
+func TestMemoryWriteToolsMarkConversationWrites(t *testing.T) {
+	t.Parallel()
+	p, backing := newMemoryWriteProvider(t, nil)
+	sess := SessionContext{BotID: "bot-1", SessionID: "session-1"}
+	exec := &toolexec.ToolExecContext{Context: context.Background()}
+
+	if _, err := memoryTool(t, p, sess, ToolCreateMemory().String()).Execute(exec, toolexec.ArgumentsFromValue(map[string]any{"memory": "Prefers tea."})); err != nil {
+		t.Fatalf("create_memory error: %v", err)
+	}
+	if _, err := memoryTool(t, p, sess, ToolUpdateMemory().String()).Execute(exec, toolexec.ArgumentsFromValue(map[string]any{"id": "mem-1", "memory": "Prefers oolong tea."})); err != nil {
+		t.Fatalf("update_memory error: %v", err)
+	}
+	if _, err := memoryTool(t, p, sess, ToolDeleteMemory().String()).Execute(exec, toolexec.ArgumentsFromValue(map[string]any{"id": "mem-1"})); err != nil {
+		t.Fatalf("delete_memory error: %v", err)
+	}
+	if len(backing.conversation) != 3 {
+		t.Fatalf("writes = %d, want create, update and delete", len(backing.conversation))
+	}
+	for i, marked := range backing.conversation {
+		if !marked {
+			t.Fatalf("write %d is not marked as a conversation write", i)
+		}
 	}
 }

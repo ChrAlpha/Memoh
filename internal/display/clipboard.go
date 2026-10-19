@@ -29,6 +29,8 @@ const (
 	clipboardProvide         = uint32(1 << 28)
 )
 
+var errClipboardTooLarge = errors.New("display clipboard text too large")
+
 // State is guarded by rfbInputClient.mu, along with writes to the RFB stream.
 type rfbClipboard struct {
 	extended bool
@@ -87,7 +89,7 @@ func (c *rfbInputClient) readClipboard(reader io.Reader, onText func(string), on
 				if _, err := io.CopyN(io.Discard, reader, size); err != nil {
 					return err
 				}
-				onRejected(errors.New("RFB clipboard message too large"))
+				onRejected(errClipboardTooLarge)
 				continue
 			}
 			data := make([]byte, int(size))
@@ -101,6 +103,7 @@ func (c *rfbInputClient) readClipboard(reader io.Reader, onText func(string), on
 				}
 				text := string(runes)
 				if len(text) > maxClipboardBytes {
+					onRejected(errClipboardTooLarge)
 					continue
 				}
 				c.mu.Lock()
@@ -178,7 +181,10 @@ func (c *rfbInputClient) handleExtendedClipboard(data []byte) (string, bool, err
 		size := binary.BigEndian.Uint32(header[:])
 		// CRLF can use twice as many bytes as the normalized text. Bound the
 		// allocation before decompressing to also reject compression bombs.
-		if size < 1 || size > 2*maxClipboardBytes+1 {
+		if size > 2*maxClipboardBytes+1 {
+			return "", false, errClipboardTooLarge
+		}
+		if size < 1 {
 			return "", false, errors.New("invalid clipboard text size")
 		}
 		plain := make([]byte, int(size))
@@ -189,7 +195,10 @@ func (c *rfbInputClient) handleExtendedClipboard(data []byte) (string, bool, err
 			return "", false, errors.New("invalid UTF-8 clipboard text")
 		}
 		text := strings.ReplaceAll(string(plain[:len(plain)-1]), "\r\n", "\n")
-		if len(text) > maxClipboardBytes || strings.ContainsRune(text, 0) {
+		if len(text) > maxClipboardBytes {
+			return "", false, errClipboardTooLarge
+		}
+		if strings.ContainsRune(text, 0) {
 			return "", false, errors.New("invalid clipboard text")
 		}
 		c.clipboard.hasText = false
@@ -320,7 +329,7 @@ func (s *session) publishClipboard(text string) {
 	}
 	data := buffer.String()
 	if len(data) > maxClipboardMessageBytes {
-		data = clipboardErrorMessage(s.ctx)
+		data = clipboardErrorMessage(s.ctx, errClipboardTooLarge)
 	}
 	s.broadcastClipboard(data)
 }
@@ -350,8 +359,12 @@ func (s *session) attachClipboardChannel(dc *webrtc.DataChannel) {
 	})
 }
 
-func clipboardErrorMessage(ctx context.Context) string {
-	frame, _ := server.NewStreamError(ctx, apperror.New(apperror.CodeWorkspaceDisplayClipboardFailed, nil), "")
+func clipboardErrorMessage(ctx context.Context, cause error) string {
+	code := apperror.CodeWorkspaceDisplayClipboardFailed
+	if errors.Is(cause, errClipboardTooLarge) {
+		code = apperror.CodeWorkspaceDisplayClipboardTooLarge
+	}
+	frame, _ := server.NewStreamError(ctx, apperror.New(code, nil), "")
 	frame.Type = "clipboard_error"
 	data, _ := json.Marshal(frame)
 	return string(data)

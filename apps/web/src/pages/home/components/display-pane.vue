@@ -810,6 +810,7 @@ function onPointerMove(event: MouseEvent) {
 }
 
 function onPointerUp(event: MouseEvent) {
+  if (event.button === 0) clipboard.preparePointerCopy(true)
   pointerMask &= ~buttonBit(event.button)
   sendPointer(event)
 }
@@ -1013,10 +1014,14 @@ watch([connection.stream, videoRef, viewing], () => {
 }, { immediate: true, flush: 'post' })
 
 onMounted(() => {
+  // A pointer press abandons pending native composition text. Choosing in the
+  // IME candidate window has no DOM pointer event and still commits.
+  window.addEventListener('pointerdown', cancelTextInput, true)
   window.addEventListener('blur', releaseKeyboard)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', cancelTextInput, true)
   window.removeEventListener('blur', releaseKeyboard)
   releaseKeyboard()
   if (fullScreenIconTimer) {

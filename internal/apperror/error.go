@@ -45,6 +45,7 @@ const (
 	CodeWorkspaceUnreachable                     Code = "workspace.unreachable"
 	CodeWorkspaceTemplateBootstrapFailed         Code = "workspace.template_bootstrap_failed"
 	CodeWorkspaceDisplayClipboardFailed          Code = "workspace.display_clipboard_failed"
+	CodeWorkspaceDisplayClipboardTooLarge        Code = "workspace.display_clipboard_too_large"
 	CodeWorkspaceDisplayPrepareFailed            Code = "workspace.display_prepare_failed"
 	CodeWorkspaceImageNotFound                   Code = "workspace.image_not_found"
 	CodeWorkspaceImageRegistryUnavailable        Code = "workspace.image_registry_unavailable"
@@ -595,6 +596,10 @@ var catalog = map[Code]Definition{
 	CodeWorkspaceDisplayPrepareFailed: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "Display preparation failed.",
+	},
+	CodeWorkspaceDisplayClipboardTooLarge: {
+		HTTPStatus: http.StatusRequestEntityTooLarge,
+		Detail:     "Clipboard text exceeds 48 KiB. Copy a smaller selection.",
 	},
 	CodeWorkspaceDisplayClipboardFailed: {
 		HTTPStatus: http.StatusInternalServerError,

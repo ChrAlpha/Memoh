@@ -207,6 +207,11 @@ func (s *Service) EnsureTerminalContextLifecycle(
 }
 
 func (s *Service) persistRunContextLifecycle(ctx context.Context, cfg native.RunConfig, cause error) {
+	if s != nil {
+		// The run's last provider request has just finished, which is what
+		// keeps its session's prompt cache warm.
+		s.memoryOverviewActivity.noteRunEnd(cfg.Identity.BotID, cfg.Identity.SessionID, memoryOverviewNow())
+	}
 	if cfg.ContextLifecycle == nil {
 		return
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/mcp"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
+	"github.com/felinics/memoh/internal/memory/storefs"
 	"github.com/felinics/memoh/internal/settings"
 )
 
@@ -140,14 +141,16 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]t
 			},
 		})
 	}
-	return append(tools, p.writeTools(session, provider)...), nil
+	return append(tools, p.writeTools(session, provider)...), nil //nolint:contextcheck // each write tool derives its context from the tool call's own context
 }
 
-// writeTools are the agent-authored memory writes. They live here rather than
-// behind the provider's own MCP descriptors because this is the layer that
-// holds the session identity and the hook gate; a write issued from inside the
-// memory adapter can reach neither. Both the native loop and the external
-// runtimes reach these through this provider, so one definition covers both.
+// writeTools are the agent-authored memory writes. Their context is marked as
+// a conversation write, so MEMORY.md may lag behind them until the session's
+// prompt cache expires. They live here rather than behind the provider's own
+// MCP descriptors because this is the layer that holds the session identity
+// and the hook gate; a write issued from inside the memory adapter can reach
+// neither. Both the native loop and the external runtimes reach these through
+// this provider, so one definition covers both.
 func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider.Provider) []toolexec.Tool {
 	return []toolexec.Tool{
 		{
@@ -166,7 +169,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				if err := p.gateMemoryWrite(ctx.Context, session, ToolCreateMemory().String(), memory, ""); err != nil {
 					return sdk.ToolOutput{}, err
 				}
-				resp, err := provider.Add(ctx.Context, memprovider.AddRequest{
+				resp, err := provider.Add(storefs.WithConversationWrite(ctx.Context), memprovider.AddRequest{
 					Message:  memory,
 					BotID:    strings.TrimSpace(session.BotID),
 					Metadata: p.memoryWriteMetadata(ctx.Context, session, args.Layer, args.Subject, args.Topic),
@@ -205,7 +208,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				if err := p.gateMemoryWrite(ctx.Context, session, ToolUpdateMemory().String(), memory, memoryID); err != nil {
 					return sdk.ToolOutput{}, err
 				}
-				item, err := provider.Update(ctx.Context, memprovider.UpdateRequest{
+				item, err := provider.Update(storefs.WithConversationWrite(ctx.Context), memprovider.UpdateRequest{
 					BotID:    strings.TrimSpace(session.BotID),
 					MemoryID: memoryID,
 					Memory:   memory,
@@ -231,7 +234,7 @@ func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider
 				if err := p.gateMemoryWrite(ctx.Context, session, ToolDeleteMemory().String(), "", memoryID); err != nil {
 					return sdk.ToolOutput{}, err
 				}
-				if _, err := provider.Delete(ctx.Context, strings.TrimSpace(session.BotID), memoryID); err != nil {
+				if _, err := provider.Delete(storefs.WithConversationWrite(ctx.Context), strings.TrimSpace(session.BotID), memoryID); err != nil {
 					p.logger.WarnContext(ctx.Context, "delete memory failed", slog.String("bot_id", session.BotID), slog.String("memory_id", memoryID), slog.Any("error", err))
 					return sdk.ToolOutput{}, errors.New("deleting the memory failed")
 				}
