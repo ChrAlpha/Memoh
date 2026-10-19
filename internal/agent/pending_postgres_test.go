@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/plan"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -1348,4 +1349,44 @@ func drainRun(handle turn.RunHandle) {
 func drainFollowUps(ctx context.Context, proc *discussProcess, key sessionruntime.Key) (bool, error) {
 	admission, err := proc.svc.pending.CheckAndAdmitDiscuss(ctx, key.BotID, key.SessionID)
 	return admission == pending.DiscussBusy, err
+}
+
+// A queued command runs as the sender it recorded, so another user with access
+// to the queue cannot rewrite it: the edit is refused and the stored item keeps
+// its text and sender. Cancelling and reordering stay open to them.
+func TestUpdateFollowUpOnlyBySender(t *testing.T) {
+	env := newQueueEnv(t)
+	held := heldStep("first answer")
+	proc := newQueueProcess(t, env, held, &discussStep{text: "answered"})
+	release := startHeldRun(t, proc, env, held)
+	defer release()
+	ctx := context.Background()
+
+	input := env.input("q1", "original")
+	input.UserID, input.SourceChannelIdentityID = "user-1", "identity-1"
+	item, err := proc.svc.EnqueueFollowUp(ctx, input)
+	require.NoError(t, err)
+
+	for _, editor := range []string{"user-2", ""} {
+		_, err := proc.svc.UpdateFollowUp(ctx, env.botID, env.sessionID, string(item.ID), editor, "forged")
+		require.ErrorIs(t, err, runreq.ErrQueueItemNotEditable, "edit by %q", editor)
+	}
+	queues, err := proc.svc.ListSessionQueues(ctx, env.botID, env.sessionID)
+	require.NoError(t, err)
+	require.Len(t, queues.FollowUp, 1)
+	cmd, err := turnwire.ParseQueuedInput(queues.FollowUp[0].Payload).StartCommand()
+	require.NoError(t, err)
+	require.Equal(t, "original", cmd.Query)
+	require.Equal(t, "user-1", cmd.UserID)
+
+	edited, err := proc.svc.UpdateFollowUp(ctx, env.botID, env.sessionID, string(item.ID), "user-1", "revised")
+	require.NoError(t, err)
+	cmd, err = turnwire.ParseQueuedInput(edited.Payload).StartCommand()
+	require.NoError(t, err)
+	require.Equal(t, "revised", cmd.Query)
+	require.Equal(t, "revised", cmd.UserVisibleText)
+	require.Equal(t, "user-1", cmd.UserID)
+	require.Equal(t, "identity-1", cmd.SourceChannelIdentityID)
+
+	require.NoError(t, proc.svc.CancelFollowUp(ctx, env.botID, env.sessionID, string(item.ID)))
 }
