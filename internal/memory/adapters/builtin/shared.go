@@ -29,6 +29,9 @@ type memoryStore interface {
 	ReadAllMemoryFilesForIngest(ctx context.Context, botID string) ([]storefs.MemoryItem, error)
 	RemoveMemories(ctx context.Context, botID string, ids []string) error
 	RemoveAllMemories(ctx context.Context, botID string) error
+	// RebuildFiles must finish by syncing the overview exactly as
+	// SyncOverview does (rewriting MEMORY.md, or deferring it for a
+	// conversation write): graphSync does not sync it again afterwards.
 	RebuildFiles(ctx context.Context, botID string, items []storefs.MemoryItem, filters map[string]any) error
 	SyncOverview(ctx context.Context, botID string) error
 	CountMemoryFiles(ctx context.Context, botID string) (int, error)
