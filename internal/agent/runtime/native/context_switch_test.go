@@ -32,6 +32,10 @@ type contextSwitchRun struct {
 	committed []int
 	carried   map[int]string
 	ledger    *contextfrag.MutationLedger
+	// window widens the model window; reselector stands in for the step
+	// selector when set.
+	window     int
+	reselector func(ContextStepSelectionInput) ContextStepSelectionResult
 }
 
 func (r *contextSwitchRun) run(t *testing.T, streaming bool, calls int, switchFn func(int, ContextSwitchInput) (sdk.Message, error)) error {
@@ -59,7 +63,7 @@ func (r *contextSwitchRun) run(t *testing.T, streaming bool, calls int, switchFn
 	}}
 	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) { return cfg, nil }})
 	a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{lookup}}})
-	plan := contextfrag.ContextBudgetPlan{Window: 4000, OutputReserve: 100}
+	plan := contextfrag.ContextBudgetPlan{Window: max(r.window, 4000), OutputReserve: 100}
 	r.ledger = contextfrag.NewMutationLedger()
 	cfg := RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
@@ -83,6 +87,11 @@ func (r *contextSwitchRun) run(t *testing.T, streaming bool, calls int, switchFn
 			r.switches = append(r.switches, input)
 			return switchFn(len(r.switches), input)
 		},
+	}
+	if r.reselector != nil {
+		cfg.ContextStepReselector = func(_ context.Context, input ContextStepSelectionInput) ContextStepSelectionResult {
+			return r.reselector(input)
+		}
 	}
 	if !streaming {
 		_, err := a.Generate(t.Context(), cfg)
@@ -202,6 +211,46 @@ func TestContextSwitchFailsTheRunWhenItCannotHelp(t *testing.T) {
 			}
 			if fmt.Sprint(r.committed) != want || len(r.requests) != len(r.committed) {
 				t.Fatalf("requests=%d committed=%v, want no call after the failure and the committed steps kept", len(r.requests), r.committed)
+			}
+		})
+	}
+}
+
+// The step selector measures the loop its own way. A request it cannot fit
+// is switched instead of failed as long as two steps are committed; before
+// that, its failure ends the run as it always did.
+func TestContextSwitchFoldsWhenTheStepSelectorCannotFit(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		fromSteps int
+		fails     bool
+	}{
+		{name: "after two committed steps", fromSteps: 2},
+		{name: "before a fold is possible", fromSteps: 1, fails: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := contextSwitchRun{window: 400000}
+			r.reselector = func(input ContextStepSelectionInput) ContextStepSelectionResult {
+				if (len(input.Messages)-input.InitialMessageCount)/2 >= tc.fromSteps {
+					return ContextStepSelectionResult{FatalError: fmt.Errorf("%w: step selector", contextfrag.ErrBudgetUnsatisfied)}
+				}
+				return ContextStepSelectionResult{}
+			}
+			err := r.run(t, false, 6, func(int, ContextSwitchInput) (sdk.Message, error) {
+				return sdk.UserMessage("summary of the earlier steps"), nil
+			})
+			if tc.fails {
+				if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || len(r.switches) != 0 || fmt.Sprint(r.committed) != "[0]" {
+					t.Fatalf("err=%v switches=%d committed=%v, want the selector's failure with one committed step and no switch", err, len(r.switches), r.committed)
+				}
+				return
+			}
+			if err != nil || len(r.switches) == 0 || fmt.Sprint(r.committed) != "[0 1 2 3 4 5]" || len(r.requests) != 6 {
+				t.Fatalf("err=%v switches=%d committed=%v requests=%d, want the loop to finish on switches", err, len(r.switches), r.committed, len(r.requests))
+			}
+			last := requestText(r.requests[5])
+			if !strings.Contains(last, "summary of the earlier steps") || !strings.Contains(last, "call-5") || strings.Contains(last, "call-1\n") {
+				t.Fatalf("last request: %q, want the summary, the latest exchange and no folded exchange", last)
 			}
 		})
 	}

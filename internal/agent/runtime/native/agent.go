@@ -325,17 +325,12 @@ func prepareProviderAttempt(
 	reselectionDetail := ""
 	protectedPruned := 0
 	before := len(params.Messages)
-	dropped, err := cfg.contextSwitch.fold(ctx, cfg, params, prefixCount, inputAllowance)
+	dropped, err := cfg.contextSwitch.fold(ctx, cfg, params, prefixCount, inputAllowance, false)
 	if err != nil {
 		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, err)
 	}
-	if dropped > 0 {
-		// The summary is the whole recovery: nothing trims the request after it.
-		reselector = nil
-		dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, shiftDynamicSourceRefs(dynamicRefs, -dropped), params.Messages)
-		cfg.ContextMutations.Record(contextfrag.MutationContextSwitch, fmt.Sprintf("step=%d messages=%d->%d input_tokens=%d", stepIndex, before, len(params.Messages), contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)))
-	}
-	if reselector != nil && prefixCount < len(params.Messages) {
+	// The summary is the whole recovery: nothing trims the request after it.
+	if dropped == 0 && reselector != nil && prefixCount < len(params.Messages) {
 		beforeMessages := append([]sdk.Message(nil), params.Messages...)
 		selection := reselector(ctx, ContextStepSelectionInput{
 			Scope: cfg.ContextScope, InitialMessageCount: prefixCount, Messages: params.Messages,
@@ -360,7 +355,14 @@ func prepareProviderAttempt(
 				snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
 			}
 		case selection.FatalError != nil:
-			return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, selection.FatalError)
+			// The selector measures the loop its own way; a request it cannot
+			// fit is still switched before the attempt fails.
+			if dropped, err = cfg.contextSwitch.fold(ctx, cfg, params, prefixCount, inputAllowance, true); err != nil {
+				return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, err)
+			}
+			if dropped == 0 {
+				return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, selection.FatalError)
+			}
 		case selection.Messages != nil && stepSelectionPreservesPrefix(beforeMessages, selection.Messages, prefixCount):
 			if len(selection.Messages) != len(beforeMessages) {
 				cfg.contextSwitch.invalidate()
@@ -379,6 +381,10 @@ func prepareProviderAttempt(
 		default:
 			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
 		}
+	}
+	if dropped > 0 {
+		dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, shiftDynamicSourceRefs(dynamicRefs, -dropped), params.Messages)
+		cfg.ContextMutations.Record(contextfrag.MutationContextSwitch, fmt.Sprintf("step=%d messages=%d->%d input_tokens=%d", stepIndex, before, len(params.Messages), contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)))
 	}
 	if overflow := providerAttemptEnvelopeOverflow(params, inputAllowance); overflow > 0 {
 		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, fmt.Errorf(

@@ -67,15 +67,15 @@ func (s *contextSwitchState) invalidate() {
 }
 
 // fold replaces the earlier committed steps with the summary SwitchContext
-// writes for them when the request does not fit. It reports how many
-// messages the request lost; a summary that leaves the request too large
-// fails the attempt.
-func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, prefix, allowance int) (int, error) {
+// writes for them when the request does not fit, or when the caller found it
+// does not fit by another measure. It reports how many messages the request
+// lost; a summary that leaves the request too large fails the attempt.
+func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, prefix, allowance int, force bool) (int, error) {
 	if s == nil || cfg.SwitchContext == nil || allowance <= 0 || s.steps < 2 || s.latest <= prefix || s.latest > len(params.Messages) {
 		return 0, nil
 	}
 	before := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
-	if before <= allowance {
+	if before <= allowance && !force {
 		return 0, nil
 	}
 	kept := slices.Concat(params.Messages[:prefix], params.Messages[s.latest:])
