@@ -368,11 +368,7 @@ func (s *Service) StreamChat(ctx context.Context, req ChatRequest) (<-chan Strea
 		cfg.LiveToolStream = true
 		cfg.CanRequestUserInput = s.canDeliverUserInputStream()
 		reasoningTiming := newReasoningTimingTracker(nil)
-		stepCommitter := s.newAgentStepCommitter(streamCtx, streamReq, rc)
-		configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
-		if stepCommitter != nil {
-			stepCommitter.bindContinuation(&cfg)
-		}
+		stepCommitter := s.bindNativeRun(streamCtx, streamReq, rc, &cfg, reasoningTiming)
 		cfg = s.prepareRunConfig(streamCtx, cfg)
 		terminal := s.contextLifecycleTerminal(streamCtx, cfg)
 		outcome := newOutcomeRecorder(streamCtx)
@@ -710,11 +706,7 @@ func (s *Service) streamChatWSResultWithHooks(
 	cfg.LiveToolStream = true
 	cfg.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)
 	reasoningTiming := newReasoningTimingTracker(nil)
-	stepCommitter := s.newAgentStepCommitter(streamCtx, req, rc)
-	configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
-	if stepCommitter != nil {
-		stepCommitter.bindContinuation(&cfg)
-	}
+	stepCommitter := s.bindNativeRun(streamCtx, req, rc, &cfg, reasoningTiming)
 	cfg = s.prepareRunConfig(streamCtx, cfg)
 	terminal := s.contextLifecycleTerminal(streamCtx, cfg)
 	outcome := newOutcomeRecorder(streamCtx)

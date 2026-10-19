@@ -91,6 +91,22 @@ func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc
 	}
 }
 
+// bindNativeRun arms one native run: step persistence when the turn is
+// admitted and fenced, provider part timing for the drivers that sample it,
+// and the continuation hooks bindContinuation decides from the request. Every
+// native driver goes through it, so which hooks a run gets is declared in one
+// place instead of per driver.
+func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolvedContext, cfg *native.RunConfig, timing *reasoningTimingTracker) *agentStepCommitter {
+	committer := s.newAgentStepCommitter(ctx, req, rc)
+	if timing != nil {
+		configureNativeReasoningTiming(cfg, timing, committer)
+	} else if committer != nil {
+		cfg.OnStepCommitted = committer.commit
+	}
+	committer.bindContinuation(cfg)
+	return committer
+}
+
 func (c *agentStepCommitter) bindContinuation(cfg *native.RunConfig) {
 	if c == nil || cfg == nil {
 		return
