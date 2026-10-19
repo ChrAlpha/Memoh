@@ -1,0 +1,2 @@
+{"at":"2026-10-19T10:48:25.701Z","model":"f-loop","stream":true,"cap":0,"bytes":74348,"messages":3,"turn":10,"tag":"line","kind":"chat","finish":"stop"}
+{"at":"2026-10-19T10:48:42.865Z","model":"f-loop","stream":true,"cap":0,"bytes":76372,"messages":5,"turn":11,"tag":"ws","kind":"chat","finish":"stop"}

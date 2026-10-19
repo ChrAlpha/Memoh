@@ -1,0 +1,16 @@
+{
+  "captured_at": "2026-10-19",
+  "stacks": {
+    "pr5": {"worktree": "memoh-restack", "branch": "feat/memoh-131-in-run-context-switch", "rev": "3eb0c2737af0574c6a807e931117689b63edfb55", "mode": "split (dev default)", "web": "http://localhost:41982", "provider": "provider.mjs (scripted openai-completions, exec tool loop, summaries; f-badcompact rejects summaries)", "model_window": 38000},
+    "fix": {"worktree": "pipeline-input-fallback", "branch": "fix/pipeline-input-fallback", "rev": "b11810600abf6bd36505628c2573074302c9212f", "mode": "all-in-one (internal_rpc.shared_secret blanked locally, channel container replaced by a placeholder)", "line_channel": "config row inserted directly; webhook signed with channel_secret"}
+  },
+  "screenshots": {
+    "web-loop-done.png": "PR5 stack: web chat F_TURN_2 steps=70 completed (Ran 70 commands, context 49%) after 11 in-run folds",
+    "web-session-info.png": "PR5 stack: session info popover for that session (18.4K / 38K)",
+    "web-context-inspector.png": "PR5 stack: Context Inspector for that turn",
+    "trigger-loop-done.png": "PR5 stack: schedule fire session F_TURN_3 steps=70 completed (Ran 70 commands) after 8 in-run folds",
+    "web-summarizer-down.png": "PR5 stack: model switched to f-badcompact, F_TURN_4 ends after 2 commands with context.budget_unsatisfied",
+    "web-summarizer-back.png": "PR5 stack: model back to f-loop, F_TURN_5 answered",
+    "fix-line-session-ws-reply.png": "fix stack: LINE-warmed session; WS message F_TURN_11 answered F_TURN_11_DONE"
+  }
+}
