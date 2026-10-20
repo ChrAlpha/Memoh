@@ -63,6 +63,25 @@ func TestMemoryQueryBuilderCombinesRecentUserMessages(t *testing.T) {
 	}
 }
 
+// A read carrier is input the model produced for itself; it must not take a
+// recent-user slot from something the user said.
+func TestMemoryQueryBuilderSkipsInternalFeedback(t *testing.T) {
+	t.Parallel()
+
+	builder := memoryQueryBuilder{MaxRecentMessages: 1, MaxBytes: 2000, MaxLines: 20, MaxMessageRunes: 200}
+	query := builder.Build(ChatRequest{Query: "What is my cat called?"}, []historyfrag.HistoryRecord{
+		{ModelMessage: ModelMessage{Role: "user", Content: newTextContent("My cat is called Mochi")}},
+		{
+			ModelMessage: ModelMessage{Role: "user", Content: newTextContent("[image (image/png) was shown to the model this turn]")},
+			Metadata:     map[string]any{messagepkg.MessageSourceMetadataKey: messagepkg.MessageSourceInternalFeedback},
+		},
+	})
+
+	if !strings.Contains(query.Query, "Mochi") || strings.Contains(query.Query, "[image") {
+		t.Fatalf("query = %s, want the user's own message and no read carrier", query.Query)
+	}
+}
+
 func TestMemoryQueryBuilderTruncates(t *testing.T) {
 	t.Parallel()
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/prune"
 	"github.com/felinics/memoh/internal/textutil"
 )
@@ -113,7 +114,7 @@ func (b memoryQueryBuilder) recentUserMessages(current string, history []history
 	reversed := make([]string, 0, b.MaxRecentMessages)
 	for i := len(history) - 1; i >= 0 && len(reversed) < b.MaxRecentMessages; i-- {
 		msg := history[i].ModelMessage
-		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
+		if !strings.EqualFold(strings.TrimSpace(msg.Role), "user") || messagepkg.IsInternalFeedback(history[i].Metadata) {
 			continue
 		}
 		text := strings.TrimSpace(msg.TextContent())
