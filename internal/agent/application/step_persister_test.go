@@ -17,8 +17,9 @@ import (
 // subagent step tests, with an optional persistence failure.
 type recordingStepPersister struct {
 	*recordingMessageService
-	steps   []messagepkg.AgentStep
-	stepErr error
+	steps              []messagepkg.AgentStep
+	stepErr            error
+	replacementRequest *messagepkg.Message
 }
 
 func TestAgentStepCommitterBindsContinuationToRequestMessage(t *testing.T) {
@@ -59,47 +60,16 @@ func (s *recordingStepPersister) PersistAgentStep(_ context.Context, step messag
 		return nil, s.stepErr
 	}
 	s.steps = append(s.steps, step)
-	result := make([]messagepkg.Message, len(step.Messages))
-	for i, input := range step.Messages {
-		result[i] = messagepkg.Message{ID: "committed", Role: input.Role, BotID: input.BotID, SessionID: input.SessionID, Metadata: input.Metadata, Content: input.Content}
+	result := make([]messagepkg.Message, 0, len(step.Messages)+1)
+	if step.Replacement != nil && step.Replacement.RequestMessageID != "" {
+		request := messagepkg.Message{ID: "replacement-request", Role: "user", TurnID: step.Replacement.ReplacementTurnID}
+		if s.replacementRequest != nil {
+			request = *s.replacementRequest
+		}
+		result = append(result, request)
+	}
+	for _, input := range step.Messages {
+		result = append(result, messagepkg.Message{ID: "committed", Role: input.Role, BotID: input.BotID, SessionID: input.SessionID, Metadata: input.Metadata, Content: input.Content})
 	}
 	return result, nil
-}
-
-func (s *recordingStepPersister) PersistAgentReplacementStep(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
-	return s.PersistAgentStep(ctx, step)
-}
-
-func (*recordingStepPersister) FinalizeAgentReplacement(context.Context, string, messagepkg.TurnReplacement, string, string) error {
-	return nil
-}
-
-func TestAgentStepCommitterLeavesAFailedReplacementToItsCoordinator(t *testing.T) {
-	service, handle := newDeferredSteerTestService(t)
-	ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{
-		BotID:     handle.BotID,
-		SessionID: handle.SessionID,
-		Token:     handle.FencingToken,
-	})
-	committer := service.newAgentStepCommitter(ctx, ChatRequest{
-		BotID:                  handle.BotID,
-		ThreadID:               handle.SessionID,
-		RunID:                  handle.RunID,
-		RunHandle:              handle,
-		UserMessagePersisted:   true,
-		PersistedUserMessageID: "request-message-id",
-		SkipHistoryTurn:        true,
-		TurnReplacement:        &messagepkg.TurnReplacement{},
-	}, resolvedContext{runConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}})
-	if _, err := committer.commit(ctx, 0, &step.Record{
-		Messages: []sdk.Message{sdk.AssistantMessage("replacement step")},
-	}); err != nil {
-		t.Fatalf("commit replacement step: %v", err)
-	}
-	if _, err := committer.recordFailure(ctx, "", "agent.provider_auth_failed"); err != nil {
-		t.Fatalf("recordFailure() error = %v", err)
-	}
-	if store := service.messageService.(*recordingStepPersister); len(store.steps) != 1 {
-		t.Fatalf("persisted steps = %d, want only the committed replacement step", len(store.steps))
-	}
 }
