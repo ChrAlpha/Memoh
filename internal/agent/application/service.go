@@ -1469,6 +1469,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	}
 	systemParams := native.SystemPromptParams{
 		SessionType:               cfg.SessionType,
+		Platform:                  cfg.Identity.CurrentPlatform,
 		Bot:                       cfg.Bot,
 		Skills:                    cfg.Skills,
 		Files:                     files,
