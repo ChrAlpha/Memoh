@@ -352,6 +352,9 @@ func (s *Service) writeMemory(ctx context.Context, req ChatRequest, botID string
 func toProviderMessages(persisted []messagepkg.Message) []memprovider.Message {
 	out := make([]memprovider.Message, 0, len(persisted))
 	for _, stored := range persisted {
+		if messagepkg.IsInternalFeedback(stored.Metadata) {
+			continue
+		}
 		var msg ModelMessage
 		if err := json.Unmarshal(stored.Content, &msg); err != nil {
 			continue

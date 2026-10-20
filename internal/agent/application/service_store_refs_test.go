@@ -42,6 +42,19 @@ func TestToProviderMessagesKeepsPersistedContentAndSourceAligned(t *testing.T) {
 	}
 }
 
+// A read carrier is input the model produced for itself, not something the
+// user said, so memory extraction leaves it out.
+func TestToProviderMessagesSkipsInternalFeedback(t *testing.T) {
+	t.Parallel()
+
+	carrier := storedMemoryTestMessage(t, "msg-carrier", "sess-1", "user", "[image (image/png) was shown to the model this turn]")
+	carrier.Metadata = map[string]any{messagepkg.MessageSourceMetadataKey: messagepkg.MessageSourceInternalFeedback}
+	got := toProviderMessages([]messagepkg.Message{carrier, storedMemoryTestMessage(t, "msg-a", "sess-1", "assistant", "answer")})
+	if len(got) != 1 || got[0].Content != "answer" {
+		t.Fatalf("provider messages = %v, want only the assistant answer", got)
+	}
+}
+
 func TestToProviderMessagesUsesPrunedPersistedContent(t *testing.T) {
 	t.Parallel()
 

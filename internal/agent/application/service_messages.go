@@ -12,20 +12,9 @@ import (
 // sdkMessagesToModelMessages converts SDK messages to the persistence/API format
 // for resolver call sites using the shared conversion helper. File and image
 // parts are redacted to text placeholders first — media bytes never enter
-// bot_history_messages (see redactMediaPartsForStorage).
+// bot_history_messages, and follow-up turns re-read the media via the read tool.
 func sdkMessagesToModelMessages(msgs []sdk.Message) []ModelMessage {
 	return historyfrag.ToStoredModelMessages(msgs)
-}
-
-// redactMediaPartsForStorage replaces FileParts and ImageParts with text
-// placeholders before persistence. Storing media base64 in message history
-// would bloat rows, blow up the length-based token estimator (triggering
-// history trimming), and break replay after switching to a model without the
-// matching native input. The media itself stays in the workspace or media
-// store: follow-up turns re-read it via the read tool, which re-injects it for
-// whatever model is current.
-func redactMediaPartsForStorage(msgs []sdk.Message) []sdk.Message {
-	return historyfrag.RedactMediaParts(msgs)
 }
 
 // modelMessageToSDKMessage converts a persistence format message to SDK message

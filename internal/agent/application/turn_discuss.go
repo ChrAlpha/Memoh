@@ -281,6 +281,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	eventCh := s.streamDiscussAgent(idleCtx, runConfig)
 
 	var finalMessages json.RawMessage
+	var finalFeedbackIndexes []int
 	var finalReasoningTiming []messagepkg.ReasoningTimingSegment
 	var terminalEvent native.StreamEvent
 	var terminalPayload []byte
@@ -298,6 +299,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		_ = outcome.observe(event)
 		if event.IsTerminal() {
 			finalMessages = event.Messages
+			finalFeedbackIndexes = event.InternalFeedbackIndexes
 			finalReasoningTiming = takeTerminalReasoningTiming(reasoningTiming, event.Type)
 			terminalEvent = outcome.stampTerminal(event)
 			terminalPayload, _ = json.Marshal(terminalEvent)
@@ -346,7 +348,7 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 		if timedOut {
 			failureCode = snapshotFailureCode(true, outcome.cause)
 		}
-		if storeErr := s.persistDiscussTerminalSnapshot(terminalCtx, runConfig, cmd, resolved.ModelID, finalMessages, finalReasoningTiming, failureCode); storeErr != nil {
+		if storeErr := s.persistDiscussTerminalSnapshot(terminalCtx, runConfig, cmd, resolved.ModelID, finalMessages, finalFeedbackIndexes, finalReasoningTiming, failureCode); storeErr != nil {
 			historyErr := runtimeHistoryError(storeErr)
 			outcome.setCause(historyErr)
 			h.emitErr(historyErr)
@@ -389,11 +391,22 @@ func (s *Service) persistDiscussTerminalSnapshot(
 	cmd turn.StartTurnCommand,
 	modelID string,
 	finalMessages json.RawMessage,
+	feedbackIndexes []int,
 	reasoningTiming []messagepkg.ReasoningTimingSegment,
 	failureCode apperror.Code,
 ) error {
 	var sdkMsgs []sdk.Message
 	if len(finalMessages) > 0 && json.Unmarshal(finalMessages, &sdkMsgs) == nil && len(sdkMsgs) > 0 {
+		// Discuss replays only the bot's own rows and has no user turn to file
+		// internal feedback under, so read carriers are not stored; the read
+		// call and its result keep the path to view the media again.
+		stored := make([]sdk.Message, 0, len(sdkMsgs))
+		for index, msg := range sdkMsgs {
+			if !slices.Contains(feedbackIndexes, index) {
+				stored = append(stored, msg)
+			}
+		}
+		sdkMsgs = stored
 		return s.storeDiscussRound(
 			ctx,
 			runConfig.RunID,

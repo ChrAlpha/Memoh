@@ -486,6 +486,39 @@ func TestStoreDiscussRoundPersistsAdmittedRunIDAndLifecycleAssociation(t *testin
 	}
 }
 
+// Discuss replays only the bot's own rows and has no user turn to file a read
+// carrier under, so persistence drops the carrier. The read call and result
+// keep the path the model uses to view the image again.
+func TestPersistDiscussTerminalSnapshotDropsReadMediaCarriers(t *testing.T) {
+	messages := &recordingMessageService{}
+	service := &Service{messageService: messages, logger: slog.New(slog.DiscardHandler)}
+	holder := contextfrag.NewLifecycleHolder()
+	holder.SetManifest(contextfrag.BuildManifest(nil))
+	final, err := json.Marshal([]sdk.Message{
+		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+			ToolCallID: "read-1", ToolName: "read", Input: toolexec.ArgumentsFromValue(map[string]any{"path": "/data/shot.png"}),
+		}}},
+		sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "read-1", ToolName: "read", Result: toolexec.OutputFromValue(map[string]any{"ok": true, "path": "shot.png"})}),
+		{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{sdk.ImagePart{Image: "data:image/png;base64,iVBORw0KGgo=", MediaType: "image/png"}}},
+		sdk.AssistantMessage("done"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = service.persistDiscussTerminalSnapshot(context.Background(), native.RunConfig{RunID: "77777777-7777-4777-8777-777777777777", ContextLifecycle: holder}, lifecycleDiscussCommand(), "model-id", final, []int{2}, nil, "")
+	if err != nil {
+		t.Fatalf("persistDiscussTerminalSnapshot() error = %v", err)
+	}
+	var roles []string
+	for _, input := range messages.persisted {
+		roles = append(roles, input.Role)
+	}
+	if strings.Join(roles, ",") != "assistant,tool,assistant" {
+		t.Fatalf("persisted roles = %v, want the read call, its result and the answer without the carrier", roles)
+	}
+}
+
 func TestAdmittedDiscussCancellationPersistsAbortedLifecycle(t *testing.T) {
 	agent := &canceledDiscussTerminalReporter{started: make(chan struct{})}
 	resolver := &fakeDiscussService{resolveResult: ResolveRunConfigResult{ModelID: "model-1"}}
