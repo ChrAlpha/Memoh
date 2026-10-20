@@ -1146,14 +1146,16 @@ func TestForkedSubagentToleratesEmptyParentMessage(t *testing.T) {
 	}
 }
 
-// Fork rows follow the history-row rule: a document's bytes are never stored.
-// The forked agent inherits the file's name and type as text and reads the
-// content from the workspace itself; images are inherited as they are.
-func TestForkedSubagentInheritsFileNameNotFileBytes(t *testing.T) {
+// Fork rows follow the history-row rule: media bytes are never stored. The
+// forked agent inherits a placeholder naming each file or image and reads the
+// content from the workspace itself.
+func TestForkedSubagentInheritsMediaPlaceholdersNotBytes(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, _, _ := newAgentControlProvider(t, agent)
 	parentMessages := []sdk.Message{
-		sdk.UserMessage("read this", sdk.FilePart{Data: "JVBERi0xLjQ=", MediaType: "application/pdf", Filename: "brief.pdf"}),
+		sdk.UserMessage("read this",
+			sdk.FilePart{Data: "JVBERi0xLjQ=", MediaType: "application/pdf", Filename: "brief.pdf"},
+			sdk.ImagePart{Image: "data:image/png;base64,iVBORw0KGgo=", MediaType: "image/png"}),
 	}
 	session := SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: NewMessageSnapshot(parentMessages)}
 	mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true})
@@ -1163,12 +1165,15 @@ func TestForkedSubagentInheritsFileNameNotFileBytes(t *testing.T) {
 		t.Fatal("follow-up call missing")
 	}
 	text := messageContentTextForTest(second.Messages[0])
-	if !strings.Contains(text, "brief.pdf") || !strings.Contains(text, "application/pdf") {
-		t.Fatalf("forked prefix = %q, want the attachment name and type", text)
+	for _, want := range []string{"brief.pdf", "application/pdf", "image/png"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("forked prefix = %q, want it to name %q", text, want)
+		}
 	}
 	for _, part := range second.Messages[0].Content {
-		if _, isFile := part.(sdk.FilePart); isFile {
-			t.Fatalf("forked prefix carries document bytes: %#v", part)
+		switch part.(type) {
+		case sdk.FilePart, sdk.ImagePart:
+			t.Fatalf("forked prefix carries media bytes: %#v", part)
 		}
 	}
 }

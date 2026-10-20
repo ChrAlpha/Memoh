@@ -210,27 +210,27 @@ func cloneRawMessage(raw json.RawMessage) json.RawMessage {
 }
 
 // ToStoredModelMessages converts Agent messages into the existing history
-// message shape. File bytes are replaced with a readable placeholder before
-// conversion; the media store remains the source of the attachment itself.
+// message shape. Media bytes are replaced with a readable placeholder before
+// conversion; the workspace and media store remain the source of the media.
 func ToStoredModelMessages(messages []sdk.Message) []turn.ModelMessage {
-	return messageconv.SDKMessagesToModelMessages(RedactFileParts(messages))
+	return messageconv.SDKMessagesToModelMessages(RedactMediaParts(messages))
 }
 
-// RedactFileParts returns a copy only when a message contains a FilePart.
-// History rows must never contain document bytes, while unrelated message
+// RedactMediaParts returns a copy only when a message contains a file or an
+// image. History rows must never contain media bytes, while unrelated message
 // parts keep their original order and values.
-func RedactFileParts(messages []sdk.Message) []sdk.Message {
+func RedactMediaParts(messages []sdk.Message) []sdk.Message {
 	out := messages
 	copied := false
 	for i, message := range messages {
-		hasFile := false
+		hasMedia := false
 		for _, part := range message.Content {
-			if _, ok := filePartValue(part); ok {
-				hasFile = true
+			if _, ok := mediaPlaceholder(part); ok {
+				hasMedia = true
 				break
 			}
 		}
-		if !hasFile {
+		if !hasMedia {
 			continue
 		}
 		if !copied {
@@ -239,36 +239,53 @@ func RedactFileParts(messages []sdk.Message) []sdk.Message {
 		}
 		kept := make([]sdk.MessagePart, 0, len(message.Content))
 		for _, part := range message.Content {
-			file, ok := filePartValue(part)
-			if !ok {
-				kept = append(kept, part)
+			if placeholder, ok := mediaPlaceholder(part); ok {
+				kept = append(kept, sdk.TextPart{Text: placeholder})
 				continue
 			}
-			name := strings.TrimSpace(file.Filename)
-			if name == "" {
-				name = "attachment"
-			}
-			mime := strings.TrimSpace(file.MediaType)
-			if mime == "" {
-				mime = "application/pdf"
-			}
-			kept = append(kept, sdk.TextPart{
-				Text: "[attachment " + name + " (" + mime + ") was shown to the model this turn; its bytes are not persisted — use the read tool to view it again]",
-			})
+			kept = append(kept, part)
 		}
 		out[i].Content = kept
 	}
 	return out
 }
 
-func filePartValue(part sdk.MessagePart) (sdk.FilePart, bool) {
-	switch file := part.(type) {
+const mediaNotPersistedNotice = " was shown to the model this turn; its bytes are not persisted — use the read tool to view it again]"
+
+func mediaPlaceholder(part sdk.MessagePart) (string, bool) {
+	switch media := part.(type) {
 	case sdk.FilePart:
-		return file, true
+		return filePlaceholder(media), true
 	case *sdk.FilePart:
-		if file != nil {
-			return *file, true
+		if media != nil {
+			return filePlaceholder(*media), true
+		}
+	case sdk.ImagePart:
+		return imagePlaceholder(media), true
+	case *sdk.ImagePart:
+		if media != nil {
+			return imagePlaceholder(*media), true
 		}
 	}
-	return sdk.FilePart{}, false
+	return "", false
+}
+
+func filePlaceholder(file sdk.FilePart) string {
+	name := strings.TrimSpace(file.Filename)
+	if name == "" {
+		name = "attachment"
+	}
+	mime := strings.TrimSpace(file.MediaType)
+	if mime == "" {
+		mime = "application/pdf"
+	}
+	return "[attachment " + name + " (" + mime + ")" + mediaNotPersistedNotice
+}
+
+func imagePlaceholder(image sdk.ImagePart) string {
+	label := "[image"
+	if mime := strings.TrimSpace(image.MediaType); mime != "" {
+		label += " (" + mime + ")"
+	}
+	return label + mediaNotPersistedNotice
 }

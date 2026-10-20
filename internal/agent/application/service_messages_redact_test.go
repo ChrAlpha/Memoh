@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRedactFilePartsForStorage_ReplacesFilePartWithPlaceholder(t *testing.T) {
+func TestRedactMediaPartsForStorage_ReplacesFilePartWithPlaceholder(t *testing.T) {
 	msgs := []sdk.Message{{
 		Role: sdk.MessageRoleUser,
 		Content: []sdk.MessagePart{
@@ -17,7 +17,7 @@ func TestRedactFilePartsForStorage_ReplacesFilePartWithPlaceholder(t *testing.T)
 		},
 	}}
 
-	out := redactFilePartsForStorage(msgs)
+	out := redactMediaPartsForStorage(msgs)
 	require.Len(t, out, 1)
 	require.Len(t, out[0].Content, 1)
 	tp, ok := out[0].Content[0].(sdk.TextPart)
@@ -31,7 +31,7 @@ func TestRedactFilePartsForStorage_ReplacesFilePartWithPlaceholder(t *testing.T)
 	assert.True(t, stillFile)
 }
 
-func TestRedactFilePartsForStorage_KeepsSiblingParts(t *testing.T) {
+func TestRedactMediaPartsForStorage_KeepsSiblingParts(t *testing.T) {
 	msgs := []sdk.Message{{
 		Role: sdk.MessageRoleUser,
 		Content: []sdk.MessagePart{
@@ -41,19 +41,22 @@ func TestRedactFilePartsForStorage_KeepsSiblingParts(t *testing.T) {
 		},
 	}}
 
-	out := redactFilePartsForStorage(msgs)
+	out := redactMediaPartsForStorage(msgs)
 	require.Len(t, out[0].Content, 3)
-	assert.IsType(t, sdk.TextPart{}, out[0].Content[0])
+	assert.Equal(t, sdk.TextPart{Text: "please read"}, out[0].Content[0])
 	assert.IsType(t, sdk.TextPart{}, out[0].Content[1])
-	assert.IsType(t, sdk.ImagePart{}, out[0].Content[2])
+	image, ok := out[0].Content[2].(sdk.TextPart)
+	require.True(t, ok, "expected TextPart, got %T", out[0].Content[2])
+	assert.Contains(t, image.Text, "image/png")
+	assert.NotContains(t, image.Text, "abc")
 }
 
-func TestRedactFilePartsForStorage_NoFilePartsPassthrough(t *testing.T) {
+func TestRedactMediaPartsForStorage_NoMediaPartsPassthrough(t *testing.T) {
 	msgs := []sdk.Message{{
 		Role:    sdk.MessageRoleAssistant,
 		Content: []sdk.MessagePart{sdk.TextPart{Text: "hello"}},
 	}}
-	out := redactFilePartsForStorage(msgs)
+	out := redactMediaPartsForStorage(msgs)
 	assert.Equal(t, msgs, out)
 }
 

@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -476,71 +477,94 @@ func TestAgentGenerateReadMediaInjectsAnthropicSafeImageIntoNextStep(t *testing.
 	}
 }
 
-func TestAgentStreamReadMediaPersistsInjectedImageInTerminalMessages(t *testing.T) {
+// A read image reaches the model natively within its run. Stored history keeps
+// only a placeholder, so the next turn replays text instead of the bytes.
+func TestAgentStreamReadMediaImageReachesItsRunAndReplaysAsPlaceholder(t *testing.T) {
 	t.Parallel()
 
 	pngBytes := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00payload")
-	expectedDataURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString(pngBytes)
+	encoded := base64.StdEncoding.EncodeToString(pngBytes)
+	for client, injected := range map[models.ClientType]string{
+		models.ClientTypeOpenAICompletions: "data:image/png;base64," + encoded,
+		models.ClientTypeAnthropicMessages: encoded,
+	} {
+		t.Run(string(client), func(t *testing.T) {
+			t.Parallel()
 
-	modelProvider := &agentReadMediaMockProvider{
-		handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
-			if call == 1 {
-				return sdk.ModelResult{
-					FinishReason: sdk.FinishReasonToolCalls,
-					ToolCalls: []sdk.ToolCall{{
-						ToolCallID: "call-1",
-						ToolName:   "read",
-						Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/images/demo.png"}),
-					}},
-				}, nil
+			var requests []sdk.Request
+			modelProvider := &agentReadMediaMockProvider{
+				name: string(client),
+				handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
+					requests = append(requests, params)
+					if call == 1 {
+						return sdk.ModelResult{
+							FinishReason: sdk.FinishReasonToolCalls,
+							ToolCalls: []sdk.ToolCall{{
+								ToolCallID: "call-1",
+								ToolName:   "read",
+								Input:      toolexec.ArgumentsFromValue(map[string]any{"path": "/data/images/demo.png"}),
+							}},
+						}, nil
+					}
+					return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+				},
 			}
-			return sdk.ModelResult{
-				Text:         "done",
-				FinishReason: sdk.FinishReasonStop,
-			}, nil
-		},
-	}
+			// ContainerProvider normalizes paths by stripping the workdir prefix,
+			// so the mock files map must use the normalized (relative) path.
+			a := New(Deps{})
+			a.SetToolProviders([]agenttools.ToolProvider{
+				agenttools.NewContainerProvider(nil, newAgentReadMediaBridgeProvider(t, map[string][]byte{"images/demo.png": pngBytes}), nil, "/data"),
+			})
+			run := func(messages []sdk.Message) []sdk.Message {
+				var terminal StreamEvent
+				for event := range a.Stream(context.Background(), RunConfig{
+					Model:              &sdk.Model{ID: "mock-model", Provider: modelProvider},
+					Messages:           messages,
+					SupportsImageInput: true,
+					SupportsToolCall:   true,
+					Identity:           SessionContext{BotID: "bot-1"},
+				}) {
+					if event.IsTerminal() {
+						terminal = event
+					}
+				}
+				if terminal.Type != EventAgentEnd {
+					t.Fatalf("expected terminal event %q, got %q", EventAgentEnd, terminal.Type)
+				}
+				var output []sdk.Message
+				if err := json.Unmarshal(terminal.Messages, &output); err != nil {
+					t.Fatalf("unmarshal terminal messages: %v", err)
+				}
+				return output
+			}
 
-	// ContainerProvider normalizes paths by stripping the workdir prefix,
-	// so the mock files map must use the normalized (relative) path.
-	bp := newAgentReadMediaBridgeProvider(t, map[string][]byte{
-		"images/demo.png": pngBytes,
-	})
+			history := []sdk.Message{sdk.UserMessage("look at the image")}
+			output := run(history)
+			if len(output) != 4 {
+				t.Fatalf("expected persisted step + injected history, got %d messages", len(output))
+			}
+			assertInjectedReadMediaMessage(t, output[2], injected, "image/png")
+			assertInjectedReadMediaMessage(t, requests[1].Messages[len(requests[1].Messages)-1], injected, "image/png")
 
-	a := New(Deps{})
-	a.SetToolProviders([]agenttools.ToolProvider{
-		agenttools.NewContainerProvider(nil, bp, nil, "/data"),
-	})
-
-	var terminal StreamEvent
-	for event := range a.Stream(context.Background(), RunConfig{
-		Model:              &sdk.Model{ID: "mock-model", Provider: modelProvider},
-		Messages:           []sdk.Message{sdk.UserMessage("look at the image")},
-		SupportsImageInput: true,
-		SupportsToolCall:   true,
-		Identity: SessionContext{
-			BotID: "bot-1",
-		},
-	}) {
-		if event.IsTerminal() {
-			terminal = event
-		}
-	}
-
-	if terminal.Type != EventAgentEnd {
-		t.Fatalf("expected terminal event %q, got %q", EventAgentEnd, terminal.Type)
-	}
-
-	var messages []sdk.Message
-	if err := json.Unmarshal(terminal.Messages, &messages); err != nil {
-		t.Fatalf("unmarshal terminal messages: %v", err)
-	}
-	if len(messages) != 4 {
-		t.Fatalf("expected persisted step + injected history, got %d messages", len(messages))
-	}
-	assertInjectedReadMediaMessage(t, messages[2], expectedDataURL, "image/png")
-	if messages[3].Role != sdk.MessageRoleAssistant {
-		t.Fatalf("expected final persisted message to be assistant, got %s", messages[3].Role)
+			for _, message := range output {
+				raw, err := historyfrag.MarshalStoredSDKMessage(message)
+				if err != nil {
+					t.Fatalf("MarshalStoredSDKMessage: %v", err)
+				}
+				history = append(history, historyfrag.StoredModelMessageToSDKMessage(historyfrag.DecodeStoredModelMessage(nil, "row", string(message.Role), raw)))
+			}
+			run(append(history, sdk.UserMessage("what was in it?")))
+			replay, err := json.Marshal(requests[2].Messages)
+			if err != nil {
+				t.Fatalf("marshal replay: %v", err)
+			}
+			if strings.Contains(string(replay), encoded) || strings.Contains(string(replay), `"type":"image"`) {
+				t.Fatalf("next turn replayed the image bytes: %s", replay)
+			}
+			if !strings.Contains(string(replay), "image/png") || !strings.Contains(string(replay), "read tool") {
+				t.Fatalf("next turn lost the image placeholder: %s", replay)
+			}
+		})
 	}
 }
 

@@ -568,9 +568,9 @@ func (p *SpawnProvider) execSpawnAgent(ctx context.Context, session SessionConte
 		for i, entry := range entries {
 			// Fork rows share bot_history_messages' stored shape so every
 			// reader types them the same way as ordinary history. That
-			// includes the row rule that document bytes are never stored: a
-			// forked agent inherits images and file names, and reads a
-			// document's content from the workspace itself.
+			// includes the row rule that media bytes are never stored: a
+			// forked agent inherits placeholders naming each file or image,
+			// and reads the content from the workspace itself.
 			content, marshalErr := historyfrag.MarshalStoredSDKMessage(entry.Message)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("marshal fork context message %d: %w", i, marshalErr)

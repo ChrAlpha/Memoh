@@ -195,42 +195,57 @@ func TestDecodeStoredModelMessageSupportsPreviousSDKEnvelope(t *testing.T) {
 	})
 }
 
-func TestMarshalStoredSDKMessageRedactsPointerFilePartWithoutMutatingInput(t *testing.T) {
+// History rows keep only a placeholder for media the model was shown. The
+// bytes stay in the workspace or media store and the read tool re-injects them.
+func TestMarshalStoredSDKMessageStoresMediaPlaceholdersWithoutMutatingInput(t *testing.T) {
 	t.Parallel()
 
-	file := &sdk.FilePart{
-		Data:      "secret-file-bytes",
-		Filename:  "report.pdf",
-		MediaType: "application/pdf",
+	tests := []struct {
+		name  string
+		part  sdk.MessagePart
+		bytes string
+		names []string
+	}{
+		{name: "file", part: sdk.FilePart{Data: "secret-file-bytes", MediaType: "application/pdf", Filename: "report.pdf"}, bytes: "secret-file-bytes", names: []string{"report.pdf", "application/pdf"}},
+		{name: "file pointer", part: &sdk.FilePart{Data: "secret-file-bytes", MediaType: "application/pdf", Filename: "report.pdf"}, bytes: "secret-file-bytes", names: []string{"report.pdf", "application/pdf"}},
+		{name: "image data URL", part: sdk.ImagePart{Image: "data:image/png;base64,c2VjcmV0LWltYWdl", MediaType: "image/png"}, bytes: "c2VjcmV0LWltYWdl", names: []string{"image/png"}},
+		{name: "image bare base64", part: sdk.ImagePart{Image: "c2VjcmV0LWltYWdl", MediaType: "image/webp"}, bytes: "c2VjcmV0LWltYWdl", names: []string{"image/webp"}},
+		{name: "image pointer", part: &sdk.ImagePart{Image: "data:image/jpeg;base64,c2VjcmV0LWltYWdl", MediaType: "image/jpeg"}, bytes: "c2VjcmV0LWltYWdl", names: []string{"image/jpeg"}},
 	}
-	message := sdk.UserMessage("inspect", file, sdk.ImagePart{
-		Image:     "data:image/png;base64,abc",
-		MediaType: "image/png",
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			message := sdk.UserMessage("inspect", tt.part)
+			before := string(mustPersistenceJSON(t, message))
 
-	raw, err := MarshalStoredSDKMessage(message)
-	if err != nil {
-		t.Fatalf("MarshalStoredSDKMessage: %v", err)
-	}
-	if strings.Contains(string(raw), file.Data) {
-		t.Fatalf("stored payload contains file bytes: %s", raw)
-	}
-	if !strings.Contains(string(raw), file.Filename) {
-		t.Fatalf("stored payload lost the attachment placeholder: %s", raw)
-	}
-	if file.Data != "secret-file-bytes" {
-		t.Fatalf("input file part was mutated: %#v", file)
-	}
+			raw, err := MarshalStoredSDKMessage(message)
+			if err != nil {
+				t.Fatalf("MarshalStoredSDKMessage: %v", err)
+			}
+			if strings.Contains(string(raw), tt.bytes) {
+				t.Fatalf("stored payload contains media bytes: %s", raw)
+			}
+			if after := string(mustPersistenceJSON(t, message)); after != before {
+				t.Fatalf("input message was mutated:\nbefore %s\nafter  %s", before, after)
+			}
 
-	replayed := StoredModelMessageToSDKMessage(DecodeStoredModelMessage(nil, "row-file", "user", raw))
-	if len(replayed.Content) != 3 {
-		t.Fatalf("replayed content parts = %d, want text, placeholder, and image: %#v", len(replayed.Content), replayed.Content)
-	}
-	if _, ok := replayed.Content[1].(sdk.TextPart); !ok {
-		t.Fatalf("replayed file part = %T, want redacted TextPart", replayed.Content[1])
-	}
-	if _, ok := replayed.Content[2].(sdk.ImagePart); !ok {
-		t.Fatalf("replayed sibling part = %T, want ImagePart", replayed.Content[2])
+			replayed := StoredModelMessageToSDKMessage(DecodeStoredModelMessage(nil, "row-media", "user", raw))
+			if len(replayed.Content) != 2 {
+				t.Fatalf("replayed content = %#v, want the text and one placeholder", replayed.Content)
+			}
+			if text, ok := replayed.Content[0].(sdk.TextPart); !ok || text.Text != "inspect" {
+				t.Fatalf("replayed sibling = %#v, want the original text first", replayed.Content[0])
+			}
+			placeholder, ok := replayed.Content[1].(sdk.TextPart)
+			if !ok {
+				t.Fatalf("replayed media part = %T, want a TextPart placeholder", replayed.Content[1])
+			}
+			for _, name := range append(tt.names, "read tool") {
+				if !strings.Contains(placeholder.Text, name) {
+					t.Fatalf("placeholder %q does not mention %q", placeholder.Text, name)
+				}
+			}
+		})
 	}
 }
 
