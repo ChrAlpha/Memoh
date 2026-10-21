@@ -62,20 +62,24 @@ func TestMapSearchProviderWriteError(t *testing.T) {
 	}
 }
 
-func TestDefaultProvidersAreValidAndDescribed(t *testing.T) {
+func TestDefaultProvidersMatchMeta(t *testing.T) {
 	t.Parallel()
 
-	metas := map[string]bool{}
-	for _, meta := range (&Service{}).ListMeta(t.Context()) {
-		metas[meta.Provider] = true
-	}
+	defaults := map[string]bool{}
 	for _, dp := range defaultProviders {
-		if !isValidProviderName(dp.Name) || !metas[string(dp.Name)] {
-			t.Errorf("default provider %q: valid=%t, meta=%t", dp.Name, isValidProviderName(dp.Name), metas[string(dp.Name)])
+		defaults[string(dp.Name)] = true
+	}
+	metas := (&Service{}).ListMeta(t.Context())
+	if len(metas) != len(defaults) {
+		t.Fatalf("%d metas, %d default providers", len(metas), len(defaults))
+	}
+	for _, meta := range metas {
+		if !defaults[meta.Provider] || !isValidProviderName(ProviderName(meta.Provider)) {
+			t.Errorf("meta %q: default=%t, valid=%t", meta.Provider, defaults[meta.Provider], isValidProviderName(ProviderName(meta.Provider)))
 		}
 	}
-	if !metas[string(ProviderDeepSeek)] {
-		t.Fatal("DeepSeek meta not found")
+	if !defaults[string(ProviderDeepSeek)] {
+		t.Fatal("DeepSeek is not a default provider")
 	}
 }
 

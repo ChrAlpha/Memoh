@@ -53,13 +53,15 @@ func TestCallSearXNGSearchUsesCustomBearerHeader(t *testing.T) {
 func TestCallSearchDeepSeek(t *testing.T) {
 	const apiKey = "sk-deepseek-test-key" //nolint:gosec // G101: test-only fixed credential.
 	var (
-		gotMethod string
-		gotAuth   string
-		gotBody   map[string]any
+		gotMethod      string
+		gotAuth        string
+		gotContentType string
+		gotBody        map[string]any
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotMethod = r.Method
 		gotAuth = r.Header.Get("Authorization")
+		gotContentType = r.Header.Get("Content-Type")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Errorf("decode request body: %v", err)
 		}
@@ -74,8 +76,8 @@ func TestCallSearchDeepSeek(t *testing.T) {
 	if err != nil {
 		t.Fatalf("callSearch: %v", err)
 	}
-	if gotMethod != http.MethodPost || gotAuth != "Bearer "+apiKey {
-		t.Fatalf("request = %s with Authorization %q", gotMethod, gotAuth)
+	if gotMethod != http.MethodPost || gotAuth != "Bearer "+apiKey || gotContentType != "application/json" {
+		t.Fatalf("request = %s with Authorization %q, Content-Type %q", gotMethod, gotAuth, gotContentType)
 	}
 	if gotBody["query"] != "deepseek search" || gotBody["count"] != float64(3) {
 		t.Fatalf("request body = %v", gotBody)
