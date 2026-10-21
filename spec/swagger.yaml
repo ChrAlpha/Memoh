@@ -6776,6 +6776,7 @@ definitions:
     - bocha
     - duckduckgo
     - yandex
+    - deepseek
     type: string
     x-enum-varnames:
     - ProviderBrave
@@ -6790,6 +6791,7 @@ definitions:
     - ProviderBocha
     - ProviderDuckDuckGo
     - ProviderYandex
+    - ProviderDeepSeek
   searchproviders.UpdateRequest:
     properties:
       config:
