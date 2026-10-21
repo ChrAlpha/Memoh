@@ -1,0 +1,14 @@
+DeepSeek search provider verification, 2026-10-21 (UTC)
+
+code:      feat/deepseek-search-provider @ 1333bbd0323d3dbf009e18e19359e5c050b099e7 (base 3ee18d1ca)
+stack:     devenv/docker-compose.yml, isolated project memoh-ds, web http://localhost:43082
+chat:      DeepSeek provider template, model deepseek-flash (real API)
+search:    DeepSeek search provider, default base_url https://api.deepseek.com/v1/tools/search, timeout 15s (real API)
+
+01-web-search-list.png           Settings > Providers > Web Search lists DeepSeek with its logo
+02-deepseek-settings-enabled.png  API key saved (masked), default base URL/timeout, provider enabled
+03-bot-web-search-deepseek.png    Bot "Miao" General tab: Web Search = DeepSeek
+04-chat-web-search.png            Chat turn calls web_search "DeepSeek Search API 价格" and answers with cited links
+
+persisted tool result (bot_history_messages, role=tool): query "DeepSeek Search API 价格", 5 results,
+description lengths 210/458/673/469/474 chars, API key not present in history.
