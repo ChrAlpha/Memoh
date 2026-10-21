@@ -206,7 +206,7 @@ func SummaryScope(botID, chatID, sessionID, conversationType, conversationName, 
 // when the request already persisted it. The row id is authoritative; the
 // external message id only identifies rows of requests that carry no id.
 func dedupePersistedCurrentUserMessage(messages []historyfrag.HistoryRecord, req runreq.ChatRequest) []historyfrag.HistoryRecord {
-	if !req.UserMessagePersisted || len(messages) == 0 {
+	if !req.UserMessagePersisted || req.RequestStaysInContext || len(messages) == 0 {
 		return messages
 	}
 	if persistedID := strings.TrimSpace(req.PersistedUserMessageID); persistedID != "" {

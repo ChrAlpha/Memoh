@@ -161,19 +161,31 @@ type Run struct {
 	InitiatorID string
 }
 
+// Turn is an existing turn a run joins.
+type Turn struct {
+	ID       string
+	Position int64
+}
+
 // AdmitParams is one durable admission. RunID and TurnID are minted by the
 // caller so the identity it hands back to a client is the identity that was
 // committed.
 type AdmitParams struct {
 	// ResumeRunID is checked inside the admission transaction, under the parent lock.
-	ResumeRunID      string
-	RunID            string
-	BotID            string
-	SessionID        string
-	InvocationID     string
+	ResumeRunID  string
+	RunID        string
+	BotID        string
+	SessionID    string
+	InvocationID string
+	// TurnID names the turn the run belongs to. Without JoinTurn it is a new
+	// turn minted by the caller.
 	TurnID           string
 	Input            []byte
 	InputFingerprint string
+	// JoinTurn is set when the run answers a request row that already has a
+	// turn: the run takes that turn (TurnID must equal JoinTurn.ID) and draws
+	// no position from the session counter.
+	JoinTurn *Turn
 	// InitiatorID is the principal the submission was made under. A resume
 	// that names none inherits the interrupted run's initiator.
 	InitiatorID string

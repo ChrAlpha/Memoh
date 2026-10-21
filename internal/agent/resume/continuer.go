@@ -265,6 +265,7 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 	runCtx, admission, _, err := c.admit.Triggered(runBase, admit.Trigger{
 		BotID: row.BotID.String(), ThreadID: row.SessionID.String(), InvocationID: "resume:" + row.RunID.String(),
 		Submission: payload, StopCause: outcome.ErrRunStopped, ResumeRunID: row.RunID.String(),
+		JoinTurn: &ledger.Turn{ID: runreq.PGUUIDString(row.TurnID), Position: row.TurnPosition},
 	})
 	if err != nil {
 		cancel()
@@ -276,9 +277,11 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 		return nil, err
 	}
 	// The interrupted turn's request row is already in history, and the
-	// instruction below carries the original task again. Naming the row lets
-	// context assembly drop the history copy so the model sees the task once.
-	// Without a resolvable row (older records, lookup failure) both stay.
+	// continuation's steps are filed under it. When the saved query restates
+	// the task in the instruction below, context assembly drops the history copy
+	// so the model sees the task once; a run whose task is only that row (a
+	// discuss batch) keeps it. Without a resolvable row (older records, lookup
+	// failure) the steps cannot be filed under it and both copies stay.
 	requestMessageID, lookupErr := c.transcript.ContinuationRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{TurnID: runreq.PGUUIDString(row.TurnID)})
 	if lookupErr != nil {
 		c.logger.WarnContext(runCtx, "resume request message lookup failed", slog.String("run_id", admission.RunID), slog.Any("error", lookupErr))
@@ -286,8 +289,8 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 	}
 	req := runreq.ChatRequest{
 		BotID: row.BotID.String(), ThreadID: row.SessionID.String(), ChatID: data.ChatID,
-		PersistedUserMessageID: requestMessageID,
-		RunID:                  admission.RunID, RunHandle: admission.Handle, TurnID: admission.TurnID, TurnPosition: &admission.TurnPosition,
+		PersistedUserMessageID: requestMessageID, RequestStaysInContext: data.Query == "",
+		RunID: admission.RunID, RunHandle: admission.Handle, TurnID: admission.TurnID, TurnPosition: &admission.TurnPosition,
 		Query: Instruction + data.Query, UserID: data.UserID, SourceChannelIdentityID: data.ChannelIdentityID,
 		Token: token, ChatToken: chatToken, CurrentChannel: data.CurrentChannel, ReplyTarget: data.ReplyTarget,
 		ConversationType: data.ConversationType, Model: data.Model, ReasoningEffort: data.ReasoningEffort,

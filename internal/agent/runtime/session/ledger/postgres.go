@@ -113,11 +113,21 @@ func (s *PostgresStore) Admit(ctx context.Context, params AdmitParams) (Run, boo
 		SessionID:        sessionID,
 		InvocationID:     params.InvocationID,
 		TurnID:           turnID,
+		TurnPosition:     joinPosition(params.JoinTurn),
 		InputJson:        params.Input,
 		InputFingerprint: params.InputFingerprint,
 		InitiatorID:      params.InitiatorID,
 	})
 	if err == nil {
+		if params.ResumeRunID != "" {
+			// The continuation shares the interrupted run's turn, so "a later
+			// turn supersedes it" no longer retires the source. Its intent ends
+			// with the admission that consumes it.
+			sourceID, _ := dbpkg.ParseUUID(params.ResumeRunID)
+			if _, err := txq.RetireInterruptedSessionRun(ctx, sourceID); err != nil {
+				return Run{}, false, fmt.Errorf("ledger(postgres): retire resumed run: %w", err)
+			}
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return Run{}, false, fmt.Errorf("ledger(postgres): commit admission: %w", err)
 		}
@@ -988,4 +998,13 @@ func textOrNull(value string) pgtype.Text {
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: value, Valid: true}
+}
+
+// joinPosition is the position of the turn a run joins, null for a run that
+// opens a new turn.
+func joinPosition(turn *Turn) pgtype.Int8 {
+	if turn == nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: turn.Position, Valid: true}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 )
 
 // TriggeredView lets a triggered caller inject the subscriber-facing
@@ -35,6 +36,8 @@ type Trigger struct {
 	StopCause error
 	// ResumeRunID names the interrupted run a resumed run continues.
 	ResumeRunID string
+	// JoinTurn is the existing turn the run answers; nil opens a new one.
+	JoinTurn *ledger.Turn
 }
 
 // Triggered admits a run the server starts itself and returns the context to
@@ -57,6 +60,7 @@ func (a *Admitter) Triggered(ctx context.Context, t Trigger) (context.Context, s
 		InvocationID: t.InvocationID,
 		Payload:      t.Submission,
 		ResumeRunID:  t.ResumeRunID,
+		JoinTurn:     t.JoinTurn,
 		Execution: sessionruntime.Execution{
 			Admission: func(_ context.Context, handle sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
 				if t.View == nil {

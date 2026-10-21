@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
 	"github.com/felinics/memoh/internal/accounts"
@@ -83,7 +84,7 @@ func (g *workspaceGate) untilChecks(t *testing.T, n int) {
 
 // interruptedRun admits a run of the session on proc, saves its resume intent
 // as a streaming turn does, and stops it with the process's graceful shutdown.
-func interruptedRun(t *testing.T, proc *discussProcess, botID, sessionID, userID, task, targetID string) string {
+func interruptedRun(t *testing.T, proc *discussProcess, pool *pgxpool.Pool, botID, sessionID, userID, task, targetID string) string {
 	t.Helper()
 	ctx := context.Background()
 	admission, err := proc.manager.Admit(ctx, sessionruntime.AdmitInput{
@@ -95,6 +96,10 @@ func interruptedRun(t *testing.T, proc *discussProcess, botID, sessionID, userID
 	})
 	require.NoError(t, err)
 	require.True(t, admission.Started)
+	// The request row a chat turn writes with its admission, in the run's turn.
+	_, err = pool.Exec(ctx, `INSERT INTO bot_history_messages (id, bot_id, session_id, role, content, run_id, turn_id, turn_position, turn_message_seq, turn_visible)
+		VALUES ($1, $2, $3, 'user', '{}', $4, $5, $6, 1, true)`, uuid.NewString(), botID, sessionID, admission.RunID, admission.TurnID, admission.TurnPosition)
+	require.NoError(t, err)
 	fenced := runtimefence.WithContext(ctx, runtimefence.Fence{BotID: botID, SessionID: sessionID, Token: admission.Handle.FencingToken})
 	require.NoError(t, proc.svc.admit.RecordResume(fenced, runreq.ChatRequest{RunID: admission.RunID, ChatID: botID, UserID: userID, Query: task, WorkspaceTargetID: targetID}))
 	require.NoError(t, proc.manager.InterruptForShutdown(ctx))
@@ -200,7 +205,7 @@ func triggerRestartAdmission(t *testing.T, proc *discussProcess, env queueEnv) {
 // up the continuation starts first, and the follow-up when it has ended.
 func TestColdStartHoldsTheQueueBehindTheContinuationUntilTheWorkspaceIsReady(t *testing.T) {
 	env := newQueueEnv(t)
-	interrupted := interruptedRun(t, newQueueProcess(t, env), env.botID, env.sessionID, env.ownerID, "the long task", "ws-1")
+	interrupted := interruptedRun(t, newQueueProcess(t, env), env.pool, env.botID, env.sessionID, env.ownerID, "the long task", "ws-1")
 	env.park(t, "f1", "", "a follow-up typed before the restart")
 
 	gate := &workspaceGate{}
@@ -228,7 +233,7 @@ func TestColdStartHoldsTheQueueBehindTheContinuationUntilTheWorkspaceIsReady(t *
 
 	runs = untilRuns(t, env.discussEnv, allCompleted(3))
 	require.Equal(t, "resume:"+interrupted, runs[1].invocation, "the continuation is the first run after the interrupted one")
-	require.Equal(t, runs[0].position+1, runs[1].position)
+	require.Equal(t, runs[0].position, runs[1].position, "the continuation joins the interrupted run's turn")
 	require.Contains(t, runs[2].invocation, "queued:", "the follow-up starts after it")
 	require.True(t, runs[2].created.After(runs[1].created))
 	require.Greater(t, runs[2].position, runs[1].position)
@@ -312,7 +317,7 @@ func TestColdStartHoldsDiscussInputBehindTheContinuationUntilTheWorkspaceIsReady
 // user's turn starts when that turn ends.
 func TestUserMessageOnASessionOwedAContinuationTakesTheSessionOver(t *testing.T) {
 	env := newQueueEnv(t)
-	interrupted := interruptedRun(t, newQueueProcess(t, env), env.botID, env.sessionID, env.ownerID, "the long task", "")
+	interrupted := interruptedRun(t, newQueueProcess(t, env), env.pool, env.botID, env.sessionID, env.ownerID, "the long task", "")
 
 	gate := &workspaceGate{}
 	held := heldStep("the user's answer")
@@ -346,7 +351,7 @@ func TestUnrecoverableContinuationIsRetiredAndTheFollowUpStartsInTheSameAdmissio
 	} {
 		t.Run(name, func(t *testing.T) {
 			env := newQueueEnv(t)
-			interrupted := interruptedRun(t, newQueueProcess(t, env), env.botID, env.sessionID, env.ownerID, "the long task", "")
+			interrupted := interruptedRun(t, newQueueProcess(t, env), env.pool, env.botID, env.sessionID, env.ownerID, "the long task", "")
 			_, err := env.pool.Exec(context.Background(), `UPDATE session_runs SET input_json = `+damage+` WHERE run_id = $1`, interrupted)
 			require.NoError(t, err)
 			env.park(t, "f1", "", "a follow-up typed before the restart")
@@ -371,7 +376,7 @@ func TestUnrecoverableContinuationIsRetiredAndTheFollowUpStartsInTheSameAdmissio
 // continuation: the follow-up does not start until the continuation ends.
 func TestConcurrentTriggersAdmitOnlyTheContinuation(t *testing.T) {
 	env := newQueueEnv(t)
-	interrupted := interruptedRun(t, newQueueProcess(t, env), env.botID, env.sessionID, env.ownerID, "the long task", "")
+	interrupted := interruptedRun(t, newQueueProcess(t, env), env.pool, env.botID, env.sessionID, env.ownerID, "the long task", "")
 	env.park(t, "f1", "", "a follow-up typed before the restart")
 
 	gate := &workspaceGate{}
@@ -437,7 +442,7 @@ func TestQueuedFollowUpWaitsForTheWorkspaceWithoutFailing(t *testing.T) {
 // starts all return at once.
 func TestBlockedWorkspaceCheckDoesNotBlockQueueingOrTerminalCallbacks(t *testing.T) {
 	env := newQueueEnv(t)
-	interruptedRun(t, newQueueProcess(t, env), env.botID, env.sessionID, env.ownerID, "the long task", "")
+	interruptedRun(t, newQueueProcess(t, env), env.pool, env.botID, env.sessionID, env.ownerID, "the long task", "")
 	env.park(t, "f1", "", "typed before the restart")
 
 	gate := &workspaceGate{block: make(chan struct{})}
@@ -490,7 +495,7 @@ func TestContinuationsRunFourAtATimeAndTheFifthSessionWaitsForASlot(t *testing.T
 		envs[i] = newQueueEnv(t)
 		botOf[envs[i].sessionID] = envs[i].botID
 		owners[envs[i].botID+":"+envs[i].ownerID+":"+bots.PermissionChat] = true
-		interruptedRun(t, newQueueProcess(t, envs[i]), envs[i].botID, envs[i].sessionID, envs[i].ownerID, "the long task", "")
+		interruptedRun(t, newQueueProcess(t, envs[i]), envs[i].pool, envs[i].botID, envs[i].sessionID, envs[i].ownerID, "the long task", "")
 		envs[i].park(t, "f1", "", "a follow-up typed before the restart")
 	}
 	steps := make([]*discussStep, 0, sessions+2)

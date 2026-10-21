@@ -166,6 +166,7 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	runCtx, admission, release, err := in.admit.Triggered(ctx, admit.Trigger{
 		BotID: botID, ThreadID: sessionID, InvocationID: DiscussInvocationID(sessionID, hw),
 		Submission: payload, StopCause: outcome.ErrRunStopped,
+		JoinTurn: &ledger.Turn{ID: head.TurnID.String(), Position: hw},
 	})
 	if err != nil {
 		endActiveTurn()

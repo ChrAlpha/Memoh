@@ -156,6 +156,7 @@ func TestDriveHistoryResumeWritesNoConversationRows(t *testing.T) {
 	// The interrupted run the resume continues: it is what the ledger checks
 	// the continuation against, and what the intent was saved on.
 	interruptedID := uuid.NewString()
+	interruptedTurnID := uuid.NewString()
 	deadline := time.Now().Add(time.Minute)
 	intent, err := json.Marshal(map[string]any{"resume": admit.ResumeContext{
 		Version: 1, ChatID: botID, UserID: "im-user-1", Query: "finish the task", DeadlineAt: &deadline,
@@ -168,17 +169,19 @@ func TestDriveHistoryResumeWritesNoConversationRows(t *testing.T) {
 			run_id, bot_id, session_id, invocation_id, turn_id,
 			turn_position, state, error_code, input_json, input_fingerprint
 		) VALUES ($1, $2, $3, $4, $5, 1, 'lost', $6, $7, 'interrupted')
-	`, interruptedID, botID, sessionID, "interrupted-"+interruptedID, uuid.NewString(),
+	`, interruptedID, botID, sessionID, "interrupted-"+interruptedID, interruptedTurnID,
 		sessionruntime.RunErrorInterrupted, intent); err != nil {
 		t.Fatalf("seed interrupted run: %v", err)
 	}
 
 	done, err := startContinuation(ctx, service, dbsqlc.SessionRun{
-		TeamID:    db.ParseUUIDOrEmpty(runreq.SingleTeam("").CurrentScope(ctx)),
-		RunID:     db.ParseUUIDOrEmpty(interruptedID),
-		BotID:     db.ParseUUIDOrEmpty(botID),
-		SessionID: db.ParseUUIDOrEmpty(sessionID),
-		InputJson: intent,
+		TeamID:       db.ParseUUIDOrEmpty(runreq.SingleTeam("").CurrentScope(ctx)),
+		RunID:        db.ParseUUIDOrEmpty(interruptedID),
+		BotID:        db.ParseUUIDOrEmpty(botID),
+		SessionID:    db.ParseUUIDOrEmpty(sessionID),
+		TurnID:       db.ParseUUIDOrEmpty(interruptedTurnID),
+		TurnPosition: 1,
+		InputJson:    intent,
 	})
 	if err != nil {
 		t.Fatalf("resumeInterruptedSession() error = %v", err)

@@ -108,8 +108,16 @@ allocated_position AS (
   FROM target_session
   WHERE s.team_id = public.memoh_current_team_id()
     AND s.id = target_session.session_id
+    AND $9::bigint IS NULL
     AND NOT EXISTS (SELECT 1 FROM existing)
   RETURNING (s.next_turn_position - 1)::bigint AS turn_position
+),
+turn_slot AS (
+  SELECT $9::bigint AS turn_position
+  WHERE $9::bigint IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM existing)
+  UNION ALL
+  SELECT allocated_position.turn_position FROM allocated_position
 )
 INSERT INTO session_runs (
   run_id,
@@ -129,13 +137,13 @@ SELECT
   target_session.session_id,
   $3,
   $4,
-  allocated_position.turn_position,
+  turn_slot.turn_position,
   'accepted',
   $5,
   $6,
   NULLIF($7::text, '')
 FROM target_session
-CROSS JOIN allocated_position
+CROSS JOIN turn_slot
 ON CONFLICT (team_id, session_id, invocation_id) DO NOTHING
 RETURNING run_id, team_id, bot_id, session_id, invocation_id, turn_id, turn_position, state, input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation, abort_requested_at, proposed_terminal_state, proposed_error_code, proposed_error_message, finish_proposed_at, error_code, error_message, created_at, updated_at, initiator_id
 `
@@ -149,6 +157,7 @@ type AdmitLockedSessionRunParams struct {
 	InputFingerprint string      `json:"input_fingerprint"`
 	InitiatorID      string      `json:"initiator_id"`
 	SessionID        pgtype.UUID `json:"session_id"`
+	TurnPosition     pgtype.Int8 `json:"turn_position"`
 }
 
 // Durable admission. There is no queue: SR-OWN-001 permits answering busy, so a
@@ -166,12 +175,14 @@ type AdmitLockedSessionRunParams struct {
 // redelivery makes it a routine event — or when the session does not exist. The
 // caller re-selects by invocation to tell those two apart.
 //
-// A position is allocated only for an admission that can still succeed: never
+// A new turn's position is allocated only for an admission that can still succeed: never
 // for a known duplicate (the NOT EXISTS guard below) and never for a rejected
 // one (the rollback). The single exception is two callers racing on the *same*
 // invocation_id, where both pass the guard against the statement snapshot and
 // the loser's increment commits with no row. That leaves a gap in turn_position,
 // which is ordering-only and never read as a count.
+// A run that answers a request row which already has a turn joins that turn
+// (the caller passes its position) and draws nothing from the counter.
 func (q *Queries) AdmitLockedSessionRun(ctx context.Context, arg AdmitLockedSessionRunParams) (SessionRun, error) {
 	row := q.db.QueryRow(ctx, admitLockedSessionRun,
 		arg.RunID,
@@ -182,6 +193,7 @@ func (q *Queries) AdmitLockedSessionRun(ctx context.Context, arg AdmitLockedSess
 		arg.InputFingerprint,
 		arg.InitiatorID,
 		arg.SessionID,
+		arg.TurnPosition,
 	)
 	var i SessionRun
 	err := row.Scan(

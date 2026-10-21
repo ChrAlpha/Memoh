@@ -33,31 +33,35 @@ type ChatRequest struct {
 	// the id the client was handed at run_accepted, instead of the history layer
 	// minting a second one (SR-TURN-001). Empty means no admission decided the
 	// turn — channel inbound and schedules — and history allocates it.
-	TurnID                    string                `json:"-"`
-	TurnPosition              *int64                `json:"-"`
-	Token                     string                `json:"-"`
-	UserID                    string                `json:"-"`
-	SourceChannelIdentityID   string                `json:"-"`
-	DisplayName               string                `json:"-"`
-	RouteID                   string                `json:"-"`
-	ChatToken                 string                `json:"-"`
-	ExternalMessageID         string                `json:"-"`
-	ReplyTarget               string                `json:"-"`
-	ConversationType          string                `json:"-"`
-	ConversationName          string                `json:"-"`
-	SourceReplyToMessageID    string                `json:"-"`
-	ReplySender               string                `json:"-"`
-	ReplyPreview              string                `json:"-"`
-	ReplyAttachments          []turn.Attachment     `json:"-"`
-	MentionsBot               bool                  `json:"-"`
-	RepliesToBot              bool                  `json:"-"`
-	ForwardMessageID          string                `json:"-"`
-	ForwardFromUserID         string                `json:"-"`
-	ForwardFromConversationID string                `json:"-"`
-	ForwardSender             string                `json:"-"`
-	ForwardDate               int64                 `json:"-"`
-	UserMessagePersisted      bool                  `json:"-"`
-	PersistedUserMessageID    string                `json:"-"`
+	TurnID                    string            `json:"-"`
+	TurnPosition              *int64            `json:"-"`
+	Token                     string            `json:"-"`
+	UserID                    string            `json:"-"`
+	SourceChannelIdentityID   string            `json:"-"`
+	DisplayName               string            `json:"-"`
+	RouteID                   string            `json:"-"`
+	ChatToken                 string            `json:"-"`
+	ExternalMessageID         string            `json:"-"`
+	ReplyTarget               string            `json:"-"`
+	ConversationType          string            `json:"-"`
+	ConversationName          string            `json:"-"`
+	SourceReplyToMessageID    string            `json:"-"`
+	ReplySender               string            `json:"-"`
+	ReplyPreview              string            `json:"-"`
+	ReplyAttachments          []turn.Attachment `json:"-"`
+	MentionsBot               bool              `json:"-"`
+	RepliesToBot              bool              `json:"-"`
+	ForwardMessageID          string            `json:"-"`
+	ForwardFromUserID         string            `json:"-"`
+	ForwardFromConversationID string            `json:"-"`
+	ForwardSender             string            `json:"-"`
+	ForwardDate               int64             `json:"-"`
+	UserMessagePersisted      bool              `json:"-"`
+	PersistedUserMessageID    string            `json:"-"`
+	// RequestStaysInContext keeps the persisted request row in the model's
+	// history. A continuation whose instruction restates the task drops it so
+	// the task appears once; one whose task lives only in that row keeps it.
+	RequestStaysInContext     bool                  `json:"-"`
 	ReusePersistedUserMessage bool                  `json:"-"`
 	EventID                   string                `json:"-"`
 	RawQuery                  string                `json:"-"`

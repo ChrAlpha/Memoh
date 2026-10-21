@@ -82,6 +82,10 @@ type AdmitInput struct {
 	// when the requester has one, otherwise its channel identity id. Empty for
 	// a run nobody requested. It decides who may answer the run's approvals.
 	InitiatorID string
+	// JoinTurn is set by an entry that answers a request row which already has
+	// a turn (a discuss batch, a continuation): the run takes that turn instead
+	// of opening one nobody will write to.
+	JoinTurn *ledger.Turn
 	// Payload is the canonically encoded submission. Its fingerprint decides
 	// whether a repeated invocation_id is the same submit or a conflict, so the
 	// encoding must be stable for equal inputs — same key order, no timestamps,
@@ -214,12 +218,17 @@ func (m *Manager) Admit(ctx context.Context, in AdmitInput) (Admission, error) {
 	}
 
 	fingerprint := fingerprintPayload(in.Payload)
+	turnID := uuid.NewString()
+	if in.JoinTurn != nil {
+		turnID = in.JoinTurn.ID
+	}
 	run, created, err := m.runs.Admit(ctx, ledger.AdmitParams{
 		RunID:            uuid.NewString(),
 		BotID:            in.BotID,
 		SessionID:        in.SessionID,
 		InvocationID:     in.InvocationID,
-		TurnID:           uuid.NewString(),
+		TurnID:           turnID,
+		JoinTurn:         in.JoinTurn,
 		Input:            in.Payload,
 		InputFingerprint: fingerprint,
 		ResumeRunID:      in.ResumeRunID,

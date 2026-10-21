@@ -351,7 +351,7 @@ func (e queueEnv) parkMessage(t *testing.T, id, mergeKey, text string, edit func
 func TestQueuedInputsOfOneSenderAreAnsweredByOneRun(t *testing.T) {
 	env := newQueueEnv(t)
 	held := heldStep("first answer")
-	proc := newQueueProcess(t, env, held, &discussStep{text: "one answer to all three"})
+	proc := newQueueProcess(t, env, held, &discussStep{text: "one answer to all three"}, &discussStep{text: "answer to the panel text"})
 	release := startHeldRun(t, proc, env, held)
 	alice := env.participant(t, false)
 	env.parkMessage(t, "m1", alice.identityID, "pick up milk", func(c *turn.StartTurnCommand) { c.MentionsBot = true }, time.Unix(100, 0))

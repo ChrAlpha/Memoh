@@ -86,6 +86,7 @@ func (q *Queries) GetDiscussSession(ctx context.Context, arg GetDiscussSessionPa
 const listDiscussPendingInputs = `-- name: ListDiscussPendingInputs :many
 SELECT
   m.id,
+  m.turn_id,
   m.turn_position,
   m.sender_channel_identity_id,
   COALESCE((e.event_data->>'mentions_me')::boolean, false)::boolean AS mentions_me,
@@ -114,6 +115,7 @@ type ListDiscussPendingInputsParams struct {
 
 type ListDiscussPendingInputsRow struct {
 	ID                      pgtype.UUID `json:"id"`
+	TurnID                  pgtype.UUID `json:"turn_id"`
 	TurnPosition            pgtype.Int8 `json:"turn_position"`
 	SenderChannelIdentityID pgtype.UUID `json:"sender_channel_identity_id"`
 	MentionsMe              bool        `json:"mentions_me"`
@@ -139,6 +141,7 @@ func (q *Queries) ListDiscussPendingInputs(ctx context.Context, arg ListDiscussP
 		var i ListDiscussPendingInputsRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.TurnID,
 			&i.TurnPosition,
 			&i.SenderChannelIdentityID,
 			&i.MentionsMe,

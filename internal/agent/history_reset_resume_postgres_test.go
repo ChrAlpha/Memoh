@@ -83,6 +83,11 @@ func (h wsStepHistoryHarness) interruptedTurn(t *testing.T, p resumeProcess, tas
 	if err != nil || !admission.Started {
 		t.Fatalf("admit turn = (%+v, %v)", admission, err)
 	}
+	// The request row a chat turn writes with its admission, in the run's turn.
+	if _, err := h.pool.Exec(ctx, `INSERT INTO bot_history_messages (id, bot_id, session_id, role, content, run_id, turn_id, turn_position, turn_message_seq, turn_visible)
+		VALUES ($1, $2, $3, 'user', '{}', $4, $5, $6, 1, true)`, uuid.NewString(), h.botID, h.sessionID, admission.RunID, admission.TurnID, admission.TurnPosition); err != nil {
+		t.Fatalf("write request row: %v", err)
+	}
 	fenced := runtimefence.WithContext(ctx, runtimefence.Fence{BotID: h.botID, SessionID: h.sessionID, Token: admission.Handle.FencingToken})
 	if err := p.service.admit.RecordResume(fenced, runreq.ChatRequest{RunID: admission.RunID, ChatID: h.botID, Query: task}); err != nil {
 		t.Fatalf("record resume intent: %v", err)

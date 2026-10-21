@@ -19,6 +19,7 @@ WHERE team_id = public.memoh_current_team_id()
 -- The attention flags live on the input's session event.
 SELECT
   m.id,
+  m.turn_id,
   m.turn_position,
   m.sender_channel_identity_id,
   COALESCE((e.event_data->>'mentions_me')::boolean, false)::boolean AS mentions_me,

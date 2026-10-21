@@ -77,6 +77,9 @@ func (f *Store) Admit(_ context.Context, params ledger.AdmitParams) (ledger.Run,
 			position++
 		}
 	}
+	if params.JoinTurn != nil {
+		position = params.JoinTurn.Position
+	}
 	run := &ledger.Run{
 		RunID:            params.RunID,
 		BotID:            params.BotID,

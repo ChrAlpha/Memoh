@@ -14,7 +14,7 @@
 -- redelivery makes it a routine event — or when the session does not exist. The
 -- caller re-selects by invocation to tell those two apart.
 --
--- A position is allocated only for an admission that can still succeed: never
+-- A new turn's position is allocated only for an admission that can still succeed: never
 -- for a known duplicate (the NOT EXISTS guard below) and never for a rejected
 -- one (the rollback). The single exception is two callers racing on the *same*
 -- invocation_id, where both pass the guard against the statement snapshot and
@@ -51,8 +51,18 @@ allocated_position AS (
   FROM target_session
   WHERE s.team_id = public.memoh_current_team_id()
     AND s.id = target_session.session_id
+    AND sqlc.narg(turn_position)::bigint IS NULL
     AND NOT EXISTS (SELECT 1 FROM existing)
   RETURNING (s.next_turn_position - 1)::bigint AS turn_position
+),
+-- A run that answers a request row which already has a turn joins that turn
+-- (the caller passes its position) and draws nothing from the counter.
+turn_slot AS (
+  SELECT sqlc.narg(turn_position)::bigint AS turn_position
+  WHERE sqlc.narg(turn_position)::bigint IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM existing)
+  UNION ALL
+  SELECT allocated_position.turn_position FROM allocated_position
 )
 INSERT INTO session_runs (
   run_id,
@@ -72,13 +82,13 @@ SELECT
   target_session.session_id,
   sqlc.arg(invocation_id),
   sqlc.arg(turn_id),
-  allocated_position.turn_position,
+  turn_slot.turn_position,
   'accepted',
   sqlc.arg(input_json),
   sqlc.arg(input_fingerprint),
   NULLIF(sqlc.arg(initiator_id)::text, '')
 FROM target_session
-CROSS JOIN allocated_position
+CROSS JOIN turn_slot
 ON CONFLICT (team_id, session_id, invocation_id) DO NOTHING
 RETURNING *;
 
