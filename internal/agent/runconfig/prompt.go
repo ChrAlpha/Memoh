@@ -49,6 +49,7 @@ func (b *Builder) Prepare(ctx context.Context, cfg native.RunConfig) native.RunC
 	systemParams := native.SystemPromptParams{
 		SessionType:               cfg.SessionType,
 		ReplyDelivery:             cfg.ReplyDelivery,
+		Platform:                  cfg.Identity.CurrentPlatform,
 		Bot:                       cfg.Bot,
 		Skills:                    cfg.Skills,
 		Files:                     files,

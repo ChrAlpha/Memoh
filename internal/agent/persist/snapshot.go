@@ -124,7 +124,7 @@ func hasPersistableAssistantOutput(messages []runreq.ModelMessage) bool {
 }
 
 func (w *Writer) persistTurnFailure(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, code apperror.Code) ([]messagepkg.Message, error) {
-	if code == "" || req.SkipHistoryTurn {
+	if code == "" {
 		return nil, nil
 	}
 	storeReq := req

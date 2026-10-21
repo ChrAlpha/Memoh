@@ -36,9 +36,6 @@ func FailureRowMetadata(f outcome.RunFailure, origin string, metadata map[string
 // (StepCommitter.RecordFailure), which is what keeps a failure from appearing
 // to be a second turn.
 func (w *Writer) FailureRow(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, f outcome.RunFailure, origin string) ([]messagepkg.Message, error) {
-	if req.SkipHistoryTurn {
-		return nil, nil
-	}
 	storeReq := req
 	if req.ReusePersistedUserMessage {
 		storeReq.UserMessagePersisted = true

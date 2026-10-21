@@ -788,6 +788,8 @@
       "interface": "界面偏好",
       "interfaceDescription": "这些设置将立即生效并保存在本地设备上。",
       "colorScheme": "配色方案",
+      "showExamplesEntry": "侧边栏示例入口",
+      "showExamplesEntryDescription": "在侧边栏左下角显示「看看 Memoh 能做什么」",
       "colorSchemeDescription": "为品牌、状态和 UI 元素选择一套调色盘。",
       "typography": "字体与字号",
       "uiFontFamily": "界面字体",
@@ -1126,6 +1128,12 @@
       "fragmentSeparator": "、"
     },
     "currentBot": "当前 Bot",
+    "stopResponse": "停止生成回复",
+    "composer": {
+      "selectBot": "请选择 Bot 后发送消息",
+      "selectModel": "请选择模型后发送消息",
+      "modeChanging": "正在保存模式，请稍后发送。"
+    },
     "queue": {
       "steer": "当前回复",
       "followUp": "接下来",
@@ -1135,6 +1143,7 @@
       "steerPlaceholder": "输入要插入当前回复的内容…",
       "enqueueSteer": "插入当前回复",
       "enqueueFollowUp": "添加到接下来",
+      "textOnly": "排队消息仅支持文本，请移除附件和技能后再发送。",
       "steerQueued": "已加入当前回复队列",
       "steerFailed": "无法插入当前回复，消息仍保留在队列中。",
       "reorder": "调整顺序",
@@ -1863,6 +1872,10 @@
       "channel": "渠道"
     },
     "sidebarEntry": "看看 Memoh 能做什么",
+    "hideSidebarEntry": "隐藏此入口",
+    "sidebarEntryHidden": "已隐藏，可在外观设置中恢复",
+    "undoHideSidebarEntry": "撤销",
+    "sidebarEntrySaveFailed": "没能保存，请稍后再试。",
     "galleryTitle": "看看 Memoh 能做什么",
     "galleryDescription": "选一个示例填进输入框，发送前可以修改。",
     "refresh": "换一批",
@@ -2057,6 +2070,10 @@
     "fetchProviders": "抓取",
     "searchHint": "供 web_search 工具使用的搜索服务。",
     "fetchHint": "供 web_fetch 工具读取网页内容。",
+    "httpHeaders": "HTTP Headers",
+    "headerName": "Header 名称",
+    "headerValue": "Header 值",
+    "addHeader": "添加 Header",
     "selectHint": "请选择或新建一个搜索提供方",
     "unsupportedProvider": "该提供方暂未实现配置面板",
     "nativeManaged": "Native 由 Memoh 管理，并始终保持启用。",
@@ -2574,10 +2591,6 @@
     "avatarUpdateSuccess": "头像已更新",
     "avatarUpdateFailed": "更新头像失败",
     "typePlaceholder": "选择 Bot 类型",
-    "types": {
-      "personal": "个人",
-      "public": "公开"
-    },
     "active": "运行中",
     "inactive": "未启用",
     "lifecycle": {

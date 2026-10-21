@@ -374,7 +374,9 @@ func (a *SlackAdapter) handleSocketModeEvent(
 			return
 		}
 		if evt.Request != nil {
-			conn.sm.Ack(*evt.Request)
+			if err := conn.sm.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil && a.logger != nil {
+				a.logger.WarnContext(ctx, "Slack Socket Mode acknowledgement failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
+			}
 		}
 
 		if eventsAPIEvent.Type != slackevents.CallbackEvent {
@@ -405,12 +407,16 @@ func (a *SlackAdapter) handleSocketModeEvent(
 
 	case socketmode.EventTypeInteractive:
 		if evt.Request != nil {
-			conn.sm.Ack(*evt.Request)
+			if err := conn.sm.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil && a.logger != nil {
+				a.logger.WarnContext(ctx, "Slack Socket Mode acknowledgement failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
+			}
 		}
 
 	case socketmode.EventTypeSlashCommand:
 		if evt.Request != nil {
-			conn.sm.Ack(*evt.Request)
+			if err := conn.sm.AckCtx(ctx, evt.Request.EnvelopeID, nil); err != nil && a.logger != nil {
+				a.logger.WarnContext(ctx, "Slack Socket Mode acknowledgement failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
+			}
 		}
 	}
 }

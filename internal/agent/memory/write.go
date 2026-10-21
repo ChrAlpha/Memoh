@@ -31,7 +31,15 @@ func (k *Keeper) RoundPersisted(ctx context.Context, req runreq.ChatRequest, per
 
 // write is the body of one memory unit.
 func (k *Keeper) write(ctx context.Context, req runreq.ChatRequest, botID string, persisted []messagepkg.Message) error {
-	if req.UserMessagePersisted || req.ReusePersistedUserMessage {
+	requestIncluded := false
+	for _, message := range persisted {
+		if strings.EqualFold(strings.TrimSpace(message.Role), "user") && !messagepkg.IsInternalFeedback(message.Metadata) &&
+			((req.PersistedUserMessageID != "" && message.ID == req.PersistedUserMessageID) || (req.TurnID != "" && message.TurnID == req.TurnID)) {
+			requestIncluded = true
+			break
+		}
+	}
+	if (req.UserMessagePersisted || req.ReusePersistedUserMessage) && !requestIncluded {
 		userMessage, err := k.messages.GetByIDBySession(ctx, req.ThreadID, req.PersistedUserMessageID)
 		if err != nil {
 			// The round is still written, without its user message.

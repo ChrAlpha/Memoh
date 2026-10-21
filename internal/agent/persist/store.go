@@ -68,6 +68,11 @@ func (w *Writer) StoreRoundResult(ctx context.Context, req runreq.ChatRequest, m
 	if len(filtered) == 0 {
 		return nil, nil
 	}
+	if req.TurnReplacement != nil {
+		// Starting the new attempt and choosing it are one history transaction,
+		// including terminal-only callers that do not use SDK step commits.
+		opts.RequireCompletePersist = true
+	}
 	opts = opts.withContextLifecycleMetadata(w.logger, req, filtered)
 
 	persisted, persistErr := w.storeMessagesResult(ctx, req, filtered, modelID, opts)
@@ -75,14 +80,18 @@ func (w *Writer) StoreRoundResult(ctx context.Context, req runreq.ChatRequest, m
 	if persistErr != nil {
 		return persisted, persistErr
 	}
-	if len(persisted) != len(filtered) {
+	expectedMessages := len(filtered)
+	if req.TurnReplacement != nil && strings.TrimSpace(req.TurnReplacement.RequestMessageID) != "" {
+		expectedMessages++ // The transaction clones the retry's original user.
+	}
+	if len(persisted) != expectedMessages {
 		if opts.RequireCompletePersist {
-			return persisted, fmt.Errorf("persisted %d of %d messages", len(persisted), len(filtered))
+			return persisted, fmt.Errorf("persisted %d of %d messages", len(persisted), expectedMessages)
 		}
 		w.logger.WarnContext(ctx, "skipping memory extraction for partially persisted round",
 			slog.String("bot_id", req.BotID),
 			slog.Int("persisted", len(persisted)),
-			slog.Int("expected", len(filtered)),
+			slog.Int("expected", expectedMessages),
 		)
 		return persisted, nil
 	}
@@ -154,6 +163,7 @@ func (w *Writer) storeMessagesResult(ctx context.Context, req runreq.ChatRequest
 			return nil, errors.New("complete round persistence requires an atomic message persister")
 		}
 		persisted, handled, persistErr := atomic.PersistRound(ctx, persistInputs, messagepkg.RoundPersistenceOptions{
+			Replacement:                       req.TurnReplacement,
 			CleanupRuntimeDecisionProjections: opts.CleanupRuntimeDecisionProjections,
 			AgentPublication:                  opts.AgentPublication,
 			AgentTurnID:                       opts.AgentTurnID,
@@ -327,7 +337,6 @@ func (w *Writer) buildPersistInputs(ctx context.Context, req runreq.ChatRequest,
 			SessionMode:             sessionMode,
 			RuntimeType:             runtimeType,
 			TurnRequestMessageID:    turnRequestMessageID,
-			SkipHistoryTurn:         req.SkipHistoryTurn,
 			// Assistant and tool rows bind to the request message's turn, so they
 			// carry the run for traceability but never a turn of their own.
 			RunID:        req.RunID,

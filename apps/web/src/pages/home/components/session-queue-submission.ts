@@ -33,6 +33,10 @@ export class SessionQueueSubmissionGate {
     this.createInvocationId = createInvocationId
   }
 
+  get pending(): boolean {
+    return this.active !== null
+  }
+
   begin(input: SessionQueueSubmissionInput): SessionQueueSubmission | null {
     if (this.active) return null
 

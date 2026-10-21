@@ -37,6 +37,9 @@ func (s *RecordingMessages) PersistRound(_ context.Context, inputs []messagepkg.
 		return nil, true, s.persistErr
 	}
 	persisted := make([]messagepkg.Message, 0, len(inputs))
+	if options.Replacement != nil && options.Replacement.RequestMessageID != "" {
+		persisted = append(persisted, messagepkg.Message{ID: "cloned-request", Role: "user"})
+	}
 	for _, input := range inputs {
 		s.Persisted = append(s.Persisted, input)
 		persisted = append(persisted, messagepkg.Message{

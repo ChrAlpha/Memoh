@@ -12,6 +12,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/title"
 	"github.com/felinics/memoh/internal/agent/turn"
+	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -28,6 +29,7 @@ type webRunService interface {
 	RunWebRetry(admission *web.Admission, input web.RetryLatestMessageInput, delivery drive.RunDelivery)
 	RunWebEdit(admission *web.Admission, input web.EditLatestMessageInput, delivery drive.RunDelivery)
 	PrepareRetryLatestTurnOperation(ctx context.Context, sessionID, turnID string) (string, error)
+	PrepareRetryRequestUserTurn(ctx context.Context, sessionID, requestMessageID string) (*chatview.UITurn, error)
 	PrepareEditLatestTurnOperation(ctx context.Context, sessionID, turnID string) (string, error)
 	ResolveTurnIDForMessage(ctx context.Context, sessionID, messageID string) (string, error)
 	ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, messagepkg.Message, error)

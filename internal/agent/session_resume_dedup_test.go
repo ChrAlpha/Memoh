@@ -23,7 +23,7 @@ type resumeTurnMessages struct {
 	requestMessageID string
 }
 
-func (m *resumeTurnMessages) GetVisibleHistoryTurnRequestMessageIDByTurn(context.Context, string, string) (string, error) {
+func (m *resumeTurnMessages) GetRunTurnRequestMessageID(context.Context, string, string, string) (string, error) {
 	return m.requestMessageID, nil
 }
 

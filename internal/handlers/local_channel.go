@@ -2271,6 +2271,9 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				prepareAnchor: func(ctx context.Context) (string, error) {
 					return h.webRuns.PrepareRetryLatestTurnOperation(ctx, sessionID, targetTurnID)
 				},
+				prepareUser: func(ctx context.Context, requestMessageID string) (*chatview.UITurn, error) {
+					return h.webRuns.PrepareRetryRequestUserTurn(ctx, sessionID, requestMessageID)
+				},
 			}
 			admitted, runRef := h.admitWSRun(streamBaseCtx, writer, botID, channelIdentityID, ref, "ws.retry_message", retrySubmission, retryAdmission.build, nil, nil)
 			if admitted == nil {

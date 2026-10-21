@@ -31,10 +31,13 @@ func appendDiscoveryRoots(roots []Root, extra ...Root) []Root {
 }
 
 // orderedDiscoveryRoots defines the source precedence consumed by resolve():
-// user > built-in > legacy > compat > Registry.
+// user (/data/skills/<skill>) > user compatibility (/data/skills/user/personal)
+// > built-in > legacy > compat > Registry.
 func orderedDiscoveryRoots(ctx context.Context, client fileClient, rawCompatRoots []string) []Root {
-	userRoots, registryRoots := discoverManagedSkillRoots(ctx, client)
-	roots := appendDiscoveryRoots(userRoots, DiscoveryRoots(rawCompatRoots)...)
+	compatUserRoots, registryRoots := discoverManagedSkillRoots(ctx, client)
+	roots := []Root{{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true}}
+	roots = appendDiscoveryRoots(roots, compatUserRoots...)
+	roots = appendDiscoveryRoots(roots, DiscoveryRoots(rawCompatRoots)...)
 	roots = appendDiscoveryRoots(roots, registryRoots...)
 	return roots
 }

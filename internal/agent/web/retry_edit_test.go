@@ -75,7 +75,7 @@ func TestResolveTurnIDForMessageRejectsAMessageWithoutAVisibleTurn(t *testing.T)
 }
 
 func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
-	t.Run("retry begins at the turn's own assistant anchor", func(t *testing.T) {
+	t.Run("retry replaces the original request and output", func(t *testing.T) {
 		messages := &replacementOperationMessageService{
 			latest: messagepkg.HistoryTurn{
 				ID:                 "turn-old",
@@ -89,8 +89,8 @@ func TestPrepareReplacementOperationUsesPersistedTurnBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatalf("prepare retry operation: %v", err)
 		}
-		if got != "assistant-first" {
-			t.Fatalf("replace from message = %q, want assistant-first", got)
+		if got != "user-request" {
+			t.Fatalf("replace from message = %q, want user-request", got)
 		}
 	})
 

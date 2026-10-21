@@ -39,10 +39,10 @@ type StepCommitter struct {
 	turnRequestMessageID string
 	persisted            []messagepkg.Message
 	memoryPersisted      []messagepkg.Message
-	messages             []runreq.ModelMessage
+	memoryExpectedRows   int
 	nextStep             int // In-process ordering guard, not a durable replay cursor.
 	finalized            bool
-	replacementFinalized bool
+	replacementStarted   bool
 	// checkpointed means an interrupted step was written: the run already has
 	// a history row for the model call it stopped in.
 	checkpointed bool
@@ -53,8 +53,7 @@ type StepCommitter struct {
 // cannot write steps, or an input whose turn is not named.
 func (w *Writer) NewStepCommitter(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext) *StepCommitter {
 	if strings.TrimSpace(req.RunID) == "" ||
-		strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" ||
-		(req.SkipHistoryTurn && req.TurnReplacement == nil) {
+		strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
 		return nil
 	}
 	if _, ok := runtimefence.FromContext(ctx); !ok {
@@ -70,9 +69,6 @@ func (w *Writer) NewStepCommitter(ctx context.Context, req runreq.ChatRequest, r
 			queueStep.steerEnabled = false
 			w.logger.WarnContext(ctx, "steer consumer could not be published", slog.String("run_id", req.RunID), slog.Any("error", err))
 		}
-	}
-	if req.TurnReplacement != nil && queueStep == nil {
-		return nil
 	}
 	requestMessageID := ""
 	switch {
@@ -207,7 +203,7 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 		c.nextStep++
 		return native.StepDirective{}, nil
 	}
-	if (hasAssistantOutput || mode == stepSteered) && stepIndex == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
+	if (hasAssistantOutput || failure.Code != "" || mode == stepSteered) && len(c.persisted) == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
 		messages = runreq.PrependTurnUserMessage(c.req, messages)
 	}
 	storeReq := c.req
@@ -247,6 +243,9 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 	}
 	c.stampSteerTurn(inputs)
 	agentStep := messagepkg.AgentStep{RunID: c.req.RunID, Messages: inputs, Interrupted: interrupted}
+	if !c.replacementStarted && len(inputs) > 0 {
+		agentStep.Replacement = c.req.TurnReplacement
+	}
 	var persisted []messagepkg.Message
 	var queueErr error
 	if c.queueStep != nil && mode != stepInterrupted {
@@ -256,7 +255,7 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 			kind = queueStepSteered
 		}
 		result, commitErr := c.queueStep.commit(
-			stepCtx, kind, agentStep, c.persisted,
+			stepCtx, kind, agentStep,
 		)
 		if !result.historyCommitted {
 			return fail(commitErr)
@@ -266,7 +265,6 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 		// not lose it or write the same step again.
 		queueErr = commitErr
 		persisted = result.persisted
-		c.replacementFinalized = result.replacementFinalized
 		if queueErr == nil {
 			c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, result)
 			if result.claimedSteer != nil {
@@ -284,6 +282,9 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 	if err != nil {
 		return fail(err)
 	}
+	if agentStep.Replacement != nil {
+		c.replacementStarted = true
+	}
 	if len(persisted) > 0 {
 		c.rc.RunConfig.ContextLifecycle.SetAssistantMessageID(runreq.LastPersistedAssistantMessageID(persisted))
 	}
@@ -300,14 +301,24 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 	if mode == stepInterrupted && len(persisted) > 0 {
 		c.checkpointed = true
 	}
-	if c.replacementFinalized {
-		c.writer.publishReplacementMessageCreated(c.req.BotID, c.persisted)
-	}
 	if !interrupted {
 		// Unfinished reasoning/text is history context, not a fact source for
 		// asynchronous long-term memory extraction.
 		c.memoryPersisted = append(c.memoryPersisted, persisted...)
-		c.messages = append(c.messages, messages...)
+		c.memoryExpectedRows += len(inputs)
+		if agentStep.Replacement != nil && strings.TrimSpace(agentStep.Replacement.RequestMessageID) != "" {
+			c.memoryExpectedRows++ // The retry transaction also writes its own request.
+		}
+	} else {
+		// A checkpoint can be the first transaction of a replacement. Its
+		// user inputs are complete facts even when its assistant output is
+		// partial; retain their durable identities for a later successful run.
+		for _, message := range persisted {
+			if strings.EqualFold(strings.TrimSpace(message.Role), "user") && !messagepkg.IsInternalFeedback(message.Metadata) {
+				c.memoryPersisted = append(c.memoryPersisted, message)
+				c.memoryExpectedRows++
+			}
+		}
 	}
 	if queueErr != nil {
 		return fail(queueErr)
@@ -394,12 +405,11 @@ func (c *StepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int
 }
 
 // RecordFailure writes the history of a run that failed with f, before the run
-// is finished. A run with committed steps that replaces no turn, or text the
-// stream showed for the model call that failed, gets an interrupted step
-// carrying f's code and args and that text. Otherwise the run gets the user
-// message and failure row for a turn without step commits. A model call the
-// runtime already checkpointed is not written again. It returns the rows the
-// failure row wrote; a checkpoint joins the committed steps.
+// is finished. Text the stream showed for the model call that failed is
+// written as an interrupted step carrying f's code and args. An empty failure
+// still records an assistant row through the same transaction, including a
+// replacement's first user clone and turn binding. A model call the runtime
+// already checkpointed is not written again.
 func (c *StepCommitter) RecordFailure(ctx context.Context, partialText string, f outcome.RunFailure) ([]messagepkg.Message, error) {
 	if c == nil || f.Code == "" {
 		return nil, nil
@@ -407,25 +417,13 @@ func (c *StepCommitter) RecordFailure(ctx context.Context, partialText string, f
 	c.mu.Lock()
 	skip := c.finalized || c.checkpointed
 	stepIndex := c.nextStep
-	persistedSteps := len(c.persisted)
 	c.mu.Unlock()
 	if skip {
 		return nil, nil
 	}
-	if strings.TrimSpace(partialText) != "" || (persistedSteps > 0 && c.req.TurnReplacement == nil) {
-		record := &step.Record{Messages: toolexec.BuildStepMessages(partialText, nil, nil, nil, nil, nil)}
-		_, err := c.persist(ctx, stepIndex, record, stepInterrupted, f)
-		return nil, err
-	}
-	// A replacement turn finalizes through its coordinator, which only a
-	// committed step reaches.
-	if persistedSteps > 0 || c.req.TurnReplacement != nil {
-		return nil, nil
-	}
-	if _, err := StepContext(ctx, c.ownerContext); err != nil {
-		return nil, err
-	}
-	return c.writer.FailureRow(context.WithoutCancel(ctx), c.req, c.rc, f, "")
+	record := &step.Record{Messages: toolexec.BuildStepMessages(partialText, nil, nil, nil, nil, nil)}
+	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, f)
+	return nil, err
 }
 
 // Finish closes the run's history once its steps are committed: it records the
@@ -442,7 +440,7 @@ func (c *StepCommitter) Finish(ctx context.Context, inputTokens int) error {
 	}
 	persisted := append([]messagepkg.Message(nil), c.persisted...)
 	memoryPersisted := append([]messagepkg.Message(nil), c.memoryPersisted...)
-	messages := append([]runreq.ModelMessage(nil), c.messages...)
+	memoryExpectedRows := c.memoryExpectedRows
 	if len(persisted) == 0 {
 		c.finalized = true
 	}
@@ -460,7 +458,7 @@ func (c *StepCommitter) Finish(ctx context.Context, inputTokens int) error {
 	if c.req.OutboundAssetCollector != nil {
 		c.writer.LinkOutboundAssets(ctx, c.req.BotID, c.req.ThreadID, runreq.OutboundAssetRefsToMessageRefs(c.req.OutboundAssetCollector()))
 	}
-	if !c.req.SkipMemoryExtraction && len(memoryPersisted) == len(messages) && len(memoryPersisted) > 0 {
+	if !c.req.SkipMemoryExtraction && len(memoryPersisted) == memoryExpectedRows && len(memoryPersisted) > 0 {
 		c.writer.rounds.RoundPersisted(ctx, c.req, memoryPersisted)
 	}
 	if inputTokens > 0 {

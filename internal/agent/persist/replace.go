@@ -3,84 +3,13 @@ package persist
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/runreq"
-	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
-
-func (w *Writer) ReplaceTurn(
-	ctx context.Context,
-	req runreq.ChatRequest,
-	oldTurnID string,
-	requestMessageID string,
-	reason string,
-	persisted []messagepkg.Message,
-) error {
-	replacementID := firstAssistantID(persisted)
-	if replacementID == "" {
-		replacementID = latestPersistedID(persisted)
-	}
-	if replacementID == "" {
-		return errors.New("replacement message was not persisted")
-	}
-	if strings.TrimSpace(requestMessageID) == "" {
-		requestMessageID = firstUserID(persisted)
-	}
-	forkAnchorUpdate := w.PrepareForkAnchorUpdate(ctx, req.ThreadID, req.HistoryCutoffBeforeMessageID)
-	if _, err := w.messages.ReplaceTurn(
-		context.WithoutCancel(ctx),
-		req.ThreadID,
-		oldTurnID,
-		req.TurnID,
-		req.TurnPosition,
-		requestMessageID,
-		replacementID,
-		reason,
-	); err != nil {
-		w.logger.ErrorContext(ctx, "replace history turn failed", slog.String("reason", reason), slog.Any("error", err))
-		w.CleanupReplacementMessages(ctx, persisted)
-		return fmt.Errorf("replace history turn: %w", err)
-	}
-	w.applyForkAnchorUpdate(context.WithoutCancel(ctx), req.ThreadID, forkAnchorUpdate)
-	w.publishReplacementMessageCreated(req.BotID, persisted)
-	return nil
-}
-
-func (w *Writer) publishReplacementMessageCreated(botID string, persisted []messagepkg.Message) {
-	if len(persisted) == 0 {
-		return
-	}
-	var latest messagepkg.Message
-	for i := len(persisted) - 1; i >= 0; i-- {
-		if strings.TrimSpace(persisted[i].ID) == "" {
-			continue
-		}
-		latest = persisted[i]
-		break
-	}
-	if strings.TrimSpace(latest.ID) == "" {
-		return
-	}
-	eventBotID := strings.TrimSpace(botID)
-	if eventBotID == "" {
-		eventBotID = strings.TrimSpace(latest.BotID)
-	}
-	data, err := json.Marshal(latest)
-	if err != nil {
-		w.logger.Warn("marshal replacement message event failed", slog.Any("error", err))
-		return
-	}
-	w.events.Publish(messageevent.Event{
-		Type:  messageevent.EventTypeMessageCreated,
-		BotID: eventBotID,
-		Data:  data,
-	})
-}
 
 type ForkAnchorUpdate struct {
 	Metadata map[string]any
@@ -131,16 +60,6 @@ func (w *Writer) PrepareForkAnchorUpdate(ctx context.Context, sessionID string, 
 	nextMetadata := runreq.CloneMetadataMap(sess.Metadata)
 	nextMetadata["forked_from"] = nextFork
 	return &ForkAnchorUpdate{Metadata: nextMetadata}
-}
-
-func (w *Writer) applyForkAnchorUpdate(ctx context.Context, sessionID string, update *ForkAnchorUpdate) {
-	sessionID = strings.TrimSpace(sessionID)
-	if update == nil || sessionID == "" {
-		return
-	}
-	if _, err := w.sessions.UpdateMetadata(ctx, sessionID, update.Metadata); err != nil {
-		w.logForkAnchorUpdateWarning("persist fork anchor update failed", sessionID, err)
-	}
 }
 
 func (w *Writer) latestInheritedAssistantBefore(ctx context.Context, sessionID string, beforeMessageID string) string {
@@ -238,31 +157,4 @@ func VisibleMessageText(msg messagepkg.Message) string {
 		}
 	}
 	return strings.TrimSpace(string(msg.Content))
-}
-
-func firstAssistantID(messages []messagepkg.Message) string {
-	for _, msg := range messages {
-		if strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") {
-			return strings.TrimSpace(msg.ID)
-		}
-	}
-	return ""
-}
-
-func firstUserID(messages []messagepkg.Message) string {
-	for _, msg := range messages {
-		if strings.EqualFold(strings.TrimSpace(msg.Role), "user") {
-			return strings.TrimSpace(msg.ID)
-		}
-	}
-	return ""
-}
-
-func latestPersistedID(messages []messagepkg.Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if id := strings.TrimSpace(messages[i].ID); id != "" {
-			return id
-		}
-	}
-	return ""
 }

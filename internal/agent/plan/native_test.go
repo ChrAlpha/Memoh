@@ -264,25 +264,3 @@ func TestNativePlanResumeFailsWithoutALiveQueue(t *testing.T) {
 		}
 	})
 }
-
-// A retry or an edit run carries the turn it replaces into its executor.
-func TestNativePlanCarriesTheReplacement(t *testing.T) {
-	t.Parallel()
-
-	replacement := &drive.TurnReplacement{}
-	planner := tailPlanner(t, &agenttest.RecordingMessages{}, tailManager(t))
-	plan, err := planner.nativePlan(context.Background(), tailRequest(), runreq.ResolvedContext{}, native.RunConfig{}, nativeOptions{Steps: stepsOff, Replacement: replacement})
-	if err != nil {
-		t.Fatalf("nativePlan() error = %v", err)
-	}
-	if tailExecutor(t, plan).replace != replacement {
-		t.Fatal("the executor does not carry the replacement")
-	}
-	plan, err = planner.nativePlan(context.Background(), tailRequest(), runreq.ResolvedContext{}, native.RunConfig{}, nativeOptions{Steps: stepsOff})
-	if err != nil {
-		t.Fatalf("nativePlan() error = %v", err)
-	}
-	if tailExecutor(t, plan).replace != nil {
-		t.Fatal("a run that replaces nothing carries a replacement")
-	}
-}

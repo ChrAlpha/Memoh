@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
+	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -175,6 +176,11 @@ func (a inertAgent) RunWebEdit(*web.Admission, web.EditLatestMessageInput, drive
 func (a inertAgent) PrepareRetryLatestTurnOperation(context.Context, string, string) (string, error) {
 	a.fail()
 	return "", nil
+}
+
+func (a inertAgent) PrepareRetryRequestUserTurn(context.Context, string, string) (*chatview.UITurn, error) {
+	a.fail()
+	return nil, nil
 }
 
 func (a inertAgent) PrepareEditLatestTurnOperation(context.Context, string, string) (string, error) {

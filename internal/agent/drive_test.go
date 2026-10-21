@@ -206,8 +206,8 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 		{entry: "edit", phase: outcome.PhaseSetup, code: apperror.CodeAgentProviderAuthFailed},
 		{entry: "retry", phase: outcome.PhaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
 		{entry: "edit", phase: outcome.PhaseExecution, code: apperror.CodeAgentProviderAuthFailed, wantRow: true},
-		{entry: "retry", phase: outcome.PhaseExecution, code: apperror.CodeInternal},
-		{entry: "edit", phase: outcome.PhaseExecution, code: apperror.CodeInternal},
+		{entry: "retry", phase: outcome.PhaseExecution, code: apperror.CodeInternal, wantRow: true},
+		{entry: "edit", phase: outcome.PhaseExecution, code: apperror.CodeInternal, wantRow: true},
 		{entry: "retry", phase: outcome.PhaseCommit, code: apperror.CodeAgentProviderAuthFailed},
 		{entry: "edit", phase: outcome.PhaseCommit, code: apperror.CodeAgentProviderAuthFailed},
 	} {

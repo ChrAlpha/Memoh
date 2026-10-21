@@ -264,7 +264,7 @@ func TestMessageProviderUsageGatesRegisteredTools(t *testing.T) {
 			t.Fatalf("Usage should expose structured message parts guidance containing %q, got:\n%s", want, got)
 		}
 	}
-	for _, want := range []string{"$...$", "$$...$$", "display LaTeX"} {
+	for _, want := range []string{"\\(...\\)", "\\[...\\]", "display LaTeX"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("Usage should expose Markdown math guidance containing %q, got:\n%s", want, got)
 		}

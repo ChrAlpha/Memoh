@@ -18,16 +18,17 @@ import (
 
 // These tests run a Web retry and a Web edit the way the WebSocket does,
 // against the PostgreSQL ledger, and read back the turn that replaced the
-// latest one. The run is fenced, so it commits its steps, and the queue
-// coordinator finalizes the replacement in the final step's transaction. That
+// latest one. The run is fenced, so it commits its steps, and its first step
+// replaces the old turn in the same transaction that writes the new one. That
 // is the only rewrite of the old turn: a second one finds no visible turn left
 // to replace and fails the run.
 
-// countingReplacements counts the two ways a turn is rewritten.
+// countingReplacements counts the ways a turn is rewritten: a standalone
+// ReplaceTurn, and a step that starts a replacement.
 type countingReplacements struct {
 	*messagepkg.DBService
-	replaced  atomic.Int32
-	finalized atomic.Int32
+	replaced atomic.Int32
+	started  atomic.Int32
 }
 
 func (c *countingReplacements) ReplaceTurn(ctx context.Context, sessionID, oldTurnID, replacementTurnID string, replacementTurnPosition *int64, requestMessageID, assistantMessageID, reason string) (messagepkg.HistoryTurn, error) {
@@ -35,13 +36,15 @@ func (c *countingReplacements) ReplaceTurn(ctx context.Context, sessionID, oldTu
 	return c.DBService.ReplaceTurn(ctx, sessionID, oldTurnID, replacementTurnID, replacementTurnPosition, requestMessageID, assistantMessageID, reason)
 }
 
-func (c *countingReplacements) FinalizeAgentReplacement(ctx context.Context, sessionID string, replacement messagepkg.TurnReplacement, requestMessageID, assistantMessageID string) error {
-	c.finalized.Add(1)
-	return c.DBService.FinalizeAgentReplacement(ctx, sessionID, replacement, requestMessageID, assistantMessageID)
+func (c *countingReplacements) PersistAgentStep(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
+	if step.Replacement != nil {
+		c.started.Add(1)
+	}
+	return c.DBService.PersistAgentStep(ctx, step)
 }
 
 func (c *countingReplacements) rewrites() string {
-	return "replace=" + strconv.Itoa(int(c.replaced.Load())) + " finalize=" + strconv.Itoa(int(c.finalized.Load()))
+	return "replace=" + strconv.Itoa(int(c.replaced.Load())) + " started=" + strconv.Itoa(int(c.started.Load()))
 }
 
 type wsReplacementHarness struct {
@@ -166,15 +169,16 @@ func TestPostgresWSStepHistoryRetry(t *testing.T) {
 	if got.sessionRun != [3]string{"completed", "", ""} {
 		t.Fatalf("session_runs = %q, failure frames %q", got.sessionRun, got.failureFrames)
 	}
-	if rewrites := h.counter.rewrites(); rewrites != "replace=0 finalize=1" {
-		t.Errorf("rewrites = %s, want the coordinator's finalize only", rewrites)
+	if rewrites := h.counter.rewrites(); rewrites != "replace=0 started=1" {
+		t.Errorf("rewrites = %s, want the first step's replacement only", rewrites)
 	}
-	// The request row moves to the new turn; the old answer stays in the
-	// table, hidden with the turn it belonged to.
+	// The retry clones its request into the new turn; the old request and
+	// answer stay in the table, hidden with the turn they belonged to.
 	assertStrings(t, "history rows", h.rowVisibility(t), []string{
 		`assistant "ANSWER-1" hidden`,
 		`assistant "ANSWER-2"`,
 		`user "` + directLifecyclePrompt + `"`,
+		`user "` + directLifecyclePrompt + `" hidden`,
 	})
 	assertStrings(t, "history turns", got.turns, []string{
 		`user "` + directLifecyclePrompt + `"`,
@@ -189,8 +193,8 @@ func TestPostgresWSStepHistoryEdit(t *testing.T) {
 	if got.sessionRun != [3]string{"completed", "", ""} {
 		t.Fatalf("session_runs = %q, failure frames %q", got.sessionRun, got.failureFrames)
 	}
-	if rewrites := h.counter.rewrites(); rewrites != "replace=0 finalize=1" {
-		t.Errorf("rewrites = %s, want the coordinator's finalize only", rewrites)
+	if rewrites := h.counter.rewrites(); rewrites != "replace=0 started=1" {
+		t.Errorf("rewrites = %s, want the first step's replacement only", rewrites)
 	}
 	// The whole old turn is hidden; the edited request and its answer are
 	// the visible turn.

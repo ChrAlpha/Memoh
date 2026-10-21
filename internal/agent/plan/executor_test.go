@@ -56,38 +56,33 @@ func testWriterOn(messages messagepkg.Service, manager *sessionruntime.Manager) 
 	})
 }
 
-// A replacement run without step commits has no queue coordinator to finalize
-// it: the ending writes the new turn from the terminal snapshot, and the
-// replacement's PostPersist then rewrites the old turn, once.
-func TestNativeReplacementWithoutStepCommitsRewritesTheTurnOnce(t *testing.T) {
+// A replacement run without step commits has no queue coordinator: the ending
+// writes the new turn from the terminal snapshot, in the same transaction that
+// replaces the old turn, once.
+func TestNativeReplacementWithoutStepCommitsWritesTheTurnOnce(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
 	position := int64(2)
+	replacement := &messagepkg.TurnReplacement{OldTurnID: "old-turn", ReplacementTurnID: "new-turn", ReplacementTurnPosition: &position, RequestMessageID: "request-message", Reason: "retry"}
 	req := runreq.ChatRequest{
 		BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 		UserMessagePersisted: true, PersistedUserMessageID: "request-message",
 		ReusePersistedUserMessage: true, TurnID: "new-turn", TurnPosition: &position,
+		TurnReplacement: replacement,
 	}
 	snapshot, err := json.Marshal([]sdk.Message{sdk.AssistantMessage("ANSWER")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rewrites int
-	var persistedAtRewrite int
 	exec := &nativeExecutor{
 		agent: fixedStream{
 			{Type: native.EventAgentStart},
 			{Type: native.EventTextDelta, Delta: "ANSWER"},
 			{Type: native.EventAgentEnd, Messages: snapshot, EndReason: event.EndCompleted},
 		},
-		req:    req,
-		timing: persist.NewReasoningTimingTracker(nil),
-		replace: &drive.TurnReplacement{PostPersist: func(_ context.Context, persisted []messagepkg.Message) error {
-			rewrites++
-			persistedAtRewrite = len(persisted)
-			return nil
-		}},
+		req:     req,
+		timing:  persist.NewReasoningTimingTracker(nil),
 		persist: testWriter(t, messages),
 	}
 
@@ -98,8 +93,8 @@ func TestNativeReplacementWithoutStepCommitsRewritesTheTurnOnce(t *testing.T) {
 	if len(messages.Persisted) == 0 {
 		t.Fatal("the terminal snapshot was not written")
 	}
-	if rewrites != 1 || persistedAtRewrite == 0 {
-		t.Fatalf("PostPersist calls = %d with %d persisted messages, want one call after the new turn was written", rewrites, persistedAtRewrite)
+	if len(messages.RoundOptions) != 1 || messages.RoundOptions[0].Replacement != replacement {
+		t.Fatalf("round options = %#v, want one write carrying the replacement", messages.RoundOptions)
 	}
 }
 

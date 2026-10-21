@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
+	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -62,7 +63,7 @@ type EditLatestMessageInput struct {
 func (r *Runner) RetrySpec(admission *Admission, input RetryLatestMessageInput, delivery drive.RunDelivery) drive.RunSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
-	replace := &webReplacement{runner: r, reason: "retry", oldTurnID: targetTurnID}
+	replace := &webReplacement{runner: r, reason: "retry", sessionID: sessionID, oldTurnID: targetTurnID}
 	spec := RunSpec(admission, runreq.ChatRequest{
 		BotID:                    strings.TrimSpace(input.BotID),
 		ChatID:                   strings.TrimSpace(input.BotID),
@@ -79,7 +80,6 @@ func (r *Runner) RetrySpec(admission *Admission, input RetryLatestMessageInput, 
 		ReasoningEffort:          strings.TrimSpace(input.ReasoningEffort),
 		WorkspaceTargetID:        strings.TrimSpace(input.WorkspaceTargetID),
 		ToolHTTPURL:              strings.TrimSpace(input.ToolHTTPURL),
-		SkipHistoryTurn:          true,
 		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
 	}, delivery, outcome.InputAccepted)
 	spec.Replacement = replace.hooks()
@@ -111,7 +111,7 @@ func (r *Runner) RetrySpec(admission *Admission, input RetryLatestMessageInput, 
 		}
 		req.HistoryCutoffBeforeMessageID = cutoffMessageID
 		req.RequiredHistoryMessageID = requestMessage.ID
-		return r.plan.ChatSetup(ctx, replace.target(ctx, req, requestMessage.ID), spec)
+		return r.plan.ChatSetup(ctx, replace.target(ctx, req, req.PersistedUserMessageID), spec)
 	}
 	return spec
 }
@@ -127,7 +127,7 @@ func (r *Runner) EditSpec(admission *Admission, input EditLatestMessageInput, de
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	text := strings.TrimSpace(input.Text)
-	replace := &webReplacement{runner: r, reason: "edit", oldTurnID: targetTurnID}
+	replace := &webReplacement{runner: r, reason: "edit", sessionID: sessionID, oldTurnID: targetTurnID}
 	spec := RunSpec(admission, runreq.ChatRequest{
 		BotID:                    strings.TrimSpace(input.BotID),
 		ChatID:                   strings.TrimSpace(input.BotID),
@@ -147,7 +147,6 @@ func (r *Runner) EditSpec(admission *Admission, input EditLatestMessageInput, de
 		ReasoningEffort:          strings.TrimSpace(input.ReasoningEffort),
 		WorkspaceTargetID:        strings.TrimSpace(input.WorkspaceTargetID),
 		ToolHTTPURL:              strings.TrimSpace(input.ToolHTTPURL),
-		SkipHistoryTurn:          true,
 		OnModelPreferenceSettled: input.OnModelPreferenceSettled,
 	}, delivery, outcome.InputAccepted)
 	spec.Replacement = replace.hooks()
@@ -165,32 +164,27 @@ func (r *Runner) EditSpec(admission *Admission, input EditLatestMessageInput, de
 	return spec
 }
 
-// webReplacement is the turn a retry or an edit replaces. Its request is
-// resolved in the run's setup, and the replacement hooks read it from there:
-// the preflight checks the turn is still the latest once the workspace is
-// ready, and the history write rewrites it once the new turn is durable.
+// webReplacement is the turn a retry or an edit replaces. The preflight checks
+// the turn is still the latest once the workspace is ready; the replacement
+// the request carries starts the new turn in the first history transaction.
 type webReplacement struct {
 	runner    *Runner
 	reason    string
+	sessionID string
 	oldTurnID string
-
-	req              runreq.ChatRequest
-	requestMessageID string
 }
 
 func (r *webReplacement) hooks() *drive.TurnReplacement {
 	return &drive.TurnReplacement{
 		Preflight: func(ctx context.Context) error {
-			return r.runner.ensureLatestVisibleTurn(ctx, r.req.ThreadID, r.oldTurnID)
-		},
-		PostPersist: func(ctx context.Context, persisted []messagepkg.Message) error {
-			return r.runner.persist.ReplaceTurn(ctx, r.req, r.oldTurnID, r.requestMessageID, r.reason, persisted)
+			return r.runner.ensureLatestVisibleTurn(ctx, r.sessionID, r.oldTurnID)
 		},
 	}
 }
 
-// target records the request that replaces the turn and returns it carrying
-// the replacement the history write stores the new turn under.
+// target returns req carrying the replacement its first history transaction
+// starts the new turn under. A retry names its persisted request, which that
+// transaction clones; an edit and a retry of a hook-refused turn name none.
 func (r *webReplacement) target(ctx context.Context, req runreq.ChatRequest, requestMessageID string) runreq.ChatRequest {
 	replacement := &messagepkg.TurnReplacement{
 		OldTurnID:               r.oldTurnID,
@@ -203,17 +197,32 @@ func (r *webReplacement) target(ctx context.Context, req runreq.ChatRequest, req
 		replacement.SessionMetadata = update.Metadata
 	}
 	req.TurnReplacement = replacement
-	r.req = req
-	r.requestMessageID = requestMessageID
 	return req
 }
 
 // PrepareRetry validates the replacement target before
 // Session Runtime publishes it to subscribers and returns the exact persisted
-// message where the old assistant tail begins.
+// user message where the replaced turn begins. A retry has its own user row, so
+// the live projection replaces the old request as well as its output.
 func (r *Runner) PrepareRetry(ctx context.Context, sessionID, turnID string) (string, error) {
-	_, replaceFromMessageID, err := r.prepareRetryLatestTurnOperation(ctx, strings.TrimSpace(sessionID), strings.TrimSpace(turnID))
-	return replaceFromMessageID, err
+	turn, _, err := r.prepareRetryLatestTurnOperation(ctx, strings.TrimSpace(sessionID), strings.TrimSpace(turnID))
+	return strings.TrimSpace(turn.RequestMessageID), err
+}
+
+// PrepareRetryRequestUserTurn projects the validated request for admission.
+// Its assets already belong to history and must not be ingested a second time.
+// Admission assigns the new turn identity; the first committed step assigns
+// the retry's durable request identity.
+func (r *Runner) PrepareRetryRequestUserTurn(ctx context.Context, sessionID, requestMessageID string) (*chatview.UITurn, error) {
+	request, err := r.messages.GetByIDBySession(ctx, strings.TrimSpace(sessionID), strings.TrimSpace(requestMessageID))
+	if err != nil {
+		return nil, err
+	}
+	turns := chatview.ConvertMessagesToUITurns([]messagepkg.Message{request})
+	if len(turns) != 1 || !strings.EqualFold(strings.TrimSpace(turns[0].Role), "user") {
+		return nil, errors.New("retry target request is not a visible user message")
+	}
+	return &turns[0], nil
 }
 
 func (r *Runner) prepareRetryLatestTurnOperation(ctx context.Context, sessionID, turnID string) (messagepkg.HistoryTurn, string, error) {

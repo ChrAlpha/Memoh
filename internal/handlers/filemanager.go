@@ -214,6 +214,13 @@ func archiveDownloadName(containerPath string, isDir bool) string {
 	return name
 }
 
+// attachmentDisposition encodes the filename per RFC 6266/5987 so the header
+// stays ASCII. Raw UTF-8 crashes clients that rebuild headers as ByteStrings,
+// such as Electron's net.fetch.
+func attachmentDisposition(fileName string) string {
+	return mime.FormatMediaType("attachment", map[string]string{"filename": fileName})
+}
+
 func fsContentRevision(data []byte) string {
 	sum := sha256.Sum256(data)
 	return fmt.Sprintf("sha256:%x", sum)
@@ -471,7 +478,7 @@ func (h *ContainerdHandler) FSDownload(c echo.Context) error {
 	if entry.GetIsDir() {
 		fileName := archiveDownloadName(containerPath, true)
 		c.Response().Header().Set(echo.HeaderContentType, "application/gzip")
-		c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+		c.Response().Header().Set("Content-Disposition", attachmentDisposition(fileName))
 		return h.writeArchive(ctx, client, []string{containerPath}, c.Response().Writer)
 	}
 
@@ -492,7 +499,7 @@ func (h *ContainerdHandler) FSDownload(c echo.Context) error {
 		contentType = "application/octet-stream"
 	}
 
-	c.Response().Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, fileName))
+	c.Response().Header().Set("Content-Disposition", attachmentDisposition(fileName))
 	return c.Blob(http.StatusOK, contentType, data)
 }
 

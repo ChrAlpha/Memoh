@@ -30,7 +30,6 @@ type nativeExecutor struct {
 	req       runreq.ChatRequest
 	committer *persist.StepCommitter // nil when steps are not committed as they complete
 	timing    *persist.ReasoningTimingTracker
-	replace   *drive.TurnReplacement
 	persist   *persist.Writer
 
 	// Written by execute, read by commit after execute returned.
@@ -127,9 +126,6 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 		}
 		summary.Persisted = append(summary.Persisted, e.committer.PersistedMessages()...)
 		summary.UsageTokens = tokens
-		// A replacement turn that commits its steps is finalized by its queue
-		// coordinator in the final step's transaction; rewriting it here
-		// again would find no visible old turn left to replace.
 		return summary, nil
 	}
 	if e.snapshot == nil {
@@ -139,7 +135,7 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 		if e.visible {
 			return summary, outcome.RuntimeHistoryError(errors.New("agent terminal event has no persistable snapshot"))
 		}
-		return summary, e.postPersist(ctx, summary)
+		return summary, nil
 	}
 	snap := *e.snapshot
 	snap.FailureCode = persist.FailureRowCode(f)
@@ -157,7 +153,7 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 	summary.Text = terminalText(snap)
 	summary.Usage = snap.Usage
 	summary.UsageTokens = persist.ExtractInputTokensFromUsage(snap.Usage)
-	return summary, e.postPersist(ctx, summary)
+	return summary, nil
 }
 
 // recordFailure writes the failure into the run's history: the text the failed
@@ -176,20 +172,6 @@ func (e *nativeExecutor) recordFailure(ctx context.Context, f outcome.RunFailure
 		return nil, nil
 	}
 	return e.persist.FailureRow(ctx, e.req, e.rc, f, "")
-}
-
-// postPersist rewrites the replaced turn once its own history is written, for
-// a run without step commits. A replacement turn that cannot be rewritten
-// failed, and the failure belongs to the ending rather than to the turn it
-// replaced.
-func (e *nativeExecutor) postPersist(ctx context.Context, summary drive.CommitSummary) error {
-	if e.replace == nil || e.replace.PostPersist == nil {
-		return nil
-	}
-	if err := e.replace.PostPersist(ctx, summary.Persisted); err != nil {
-		return outcome.RuntimeHistoryError(err)
-	}
-	return nil
 }
 
 // inputTokens is the token count the ending's history write accounts the run

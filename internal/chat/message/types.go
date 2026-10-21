@@ -191,6 +191,9 @@ type AgentStep struct {
 	RunID       string
 	Messages    []PersistInput
 	Interrupted bool
+	// Replacement starts a new attempt in the same transaction as its first
+	// messages. Subsequent steps append normally to their persisted request.
+	Replacement *TurnReplacement
 }
 
 // TurnSlot names a turn before any of its rows exist. Admission already draws
@@ -210,13 +213,6 @@ type TurnSlotAllocator interface {
 
 type AgentStepPersister interface {
 	PersistAgentStep(ctx context.Context, step AgentStep) ([]Message, error)
-}
-
-// AgentReplacementPersister owns the fenced database transactions for hidden
-// retry/edit steps and their final visible-turn replacement.
-type AgentReplacementPersister interface {
-	PersistAgentReplacementStep(context.Context, AgentStep) ([]Message, error)
-	FinalizeAgentReplacement(context.Context, string, TurnReplacement, string, string) error
 }
 
 // CompactionSummary is one live compaction artifact of a session.

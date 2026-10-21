@@ -122,7 +122,9 @@ const searchText = ref('')
 
 const { data: botData, status } = useQuery(getBotsQuery())
 
-const isLoading = computed(() => status.value === 'loading')
+// Colada's status is 'pending' until the first result arrives; background
+// refetches keep 'success', so the skeleton only covers the initial load.
+const isLoading = computed(() => status.value === 'pending')
 
 const realBots = computed(() => botData.value?.items ?? [])
 
@@ -139,7 +141,8 @@ const allBots = computed(() => {
   const n = previewCount.value
   if (n <= 0 || real.length === 0) return []
   return Array.from({ length: n }, (_, i) => {
-    const base = real[i % real.length]
+    // real is non-empty (checked above), so the modulo index always hits.
+    const base = real[i % real.length]!
     if (i < real.length) return base
     // clone extras with a unique id/name so :key and routing stay sane
     return { ...base, id: `${base.id}__preview-${i}`, name: `${base.name ?? base.id}-preview-${i}` }

@@ -537,19 +537,18 @@ func TestPlanNativeContinuationWithoutStepPersisterFailsAtSetup(t *testing.T) {
 
 // ---- D. chat replacement --------------------------------------------------
 
-func TestPlanNativeChatReplacementPostPersistRunsOnceWithoutCommitter(t *testing.T) {
+func TestPlanNativeChatReplacementWritesTheNewTurnOnceWithoutCommitter(t *testing.T) {
 	t.Parallel()
-	service, _, _ := newChatPlanService(t, false)
-	var calls int
-	var received []messagepkg.Message
-	spec := drive.RunSpec{Replacement: &drive.TurnReplacement{
-		PostPersist: func(_ context.Context, persisted []messagepkg.Message) error {
-			calls++
-			received = persisted
-			return nil
-		},
-	}}
-	plan, err := adaptChat(context.Background(), service, chatPlanRequest(), spec)
+	_, agent := newCapturingAgent(native.Limits{})
+	messages := &agenttest.RecordingMessages{}
+	service := newChatTurnFixture(t, directLifecycleModelSuccess,
+		withFixtureDeps(func(d *Deps) { d.Agent = agent }), withFixtureMessages(messages),
+	).fixture.service
+	position := int64(2)
+	replacement := &messagepkg.TurnReplacement{OldTurnID: "old-turn", ReplacementTurnID: "new-turn", ReplacementTurnPosition: &position, Reason: "edit"}
+	req := chatPlanRequest()
+	req.TurnReplacement = replacement
+	plan, err := adaptChat(context.Background(), service, req, drive.RunSpec{Replacement: &drive.TurnReplacement{}})
 	if err != nil {
 		t.Fatalf("chat plan error = %v", err)
 	}
@@ -560,11 +559,11 @@ func TestPlanNativeChatReplacementPostPersistRunsOnceWithoutCommitter(t *testing
 	if _, err := ending.Commit(context.Background(), nil, false); err != nil {
 		t.Fatalf("Commit() error = %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("PostPersist calls = %d, want 1", calls)
+	if len(messages.RoundOptions) != 1 || messages.RoundOptions[0].Replacement != replacement {
+		t.Fatalf("round options = %#v, want one write carrying the replacement", messages.RoundOptions)
 	}
-	if len(received) == 0 {
-		t.Fatal("PostPersist received no persisted messages")
+	if len(messages.Persisted) == 0 {
+		t.Fatal("the new turn wrote no messages")
 	}
 }
 
@@ -663,7 +662,7 @@ type decisionHistory struct {
 	err       error
 }
 
-func (m *decisionHistory) GetVisibleHistoryTurnRequestMessageIDByTurn(context.Context, string, string) (string, error) {
+func (m *decisionHistory) GetRunTurnRequestMessageID(context.Context, string, string, string) (string, error) {
 	return m.requestID, m.err
 }
 

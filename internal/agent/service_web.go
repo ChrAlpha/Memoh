@@ -5,6 +5,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -32,9 +33,15 @@ func (s *Service) RunWebEdit(admission *web.Admission, input web.EditLatestMessa
 }
 
 // PrepareRetryLatestTurnOperation validates the replacement target of a retry
-// and returns the message where the old assistant tail begins.
+// and returns the user message where the replaced turn begins.
 func (s *Service) PrepareRetryLatestTurnOperation(ctx context.Context, sessionID, turnID string) (string, error) {
 	return s.web.PrepareRetry(ctx, sessionID, turnID)
+}
+
+// PrepareRetryRequestUserTurn projects a retry's persisted request for the
+// run admission.
+func (s *Service) PrepareRetryRequestUserTurn(ctx context.Context, sessionID, requestMessageID string) (*chatview.UITurn, error) {
+	return s.web.PrepareRetryRequestUserTurn(ctx, sessionID, requestMessageID)
 }
 
 // PrepareEditLatestTurnOperation validates the replacement target of an edit

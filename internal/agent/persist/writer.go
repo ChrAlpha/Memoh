@@ -10,7 +10,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
@@ -67,8 +66,6 @@ type Deps struct {
 	Bot *botenv.Env
 	// Runtime is the live steer queue.
 	Runtime SteerRuntime
-	// Events broadcasts the rows of a replaced turn; without it none are sent.
-	Events messageevent.Publisher
 	// Rounds is told which rows a round wrote; without it nothing follows.
 	Rounds RoundObserver
 	// Commits is told when a run's history is written; without it nothing
@@ -85,7 +82,6 @@ type Writer struct {
 	sessions Sessions
 	botenv   *botenv.Env
 	runtime  SteerRuntime
-	events   messageevent.Publisher
 	rounds   RoundObserver
 	commits  CommitObserver
 	promoted PromotedInputs
@@ -104,13 +100,9 @@ func New(d Deps) *Writer {
 		sessions: d.Sessions,
 		botenv:   d.Bot,
 		runtime:  d.Runtime,
-		events:   d.Events,
 		rounds:   d.Rounds,
 		commits:  d.Commits,
 		promoted: d.Promoted,
-	}
-	if w.events == nil {
-		w.events = noEvents{}
 	}
 	if w.rounds == nil {
 		w.rounds = noRounds{}
@@ -123,10 +115,6 @@ func New(d Deps) *Writer {
 	}
 	return w
 }
-
-type noEvents struct{}
-
-func (noEvents) Publish(messageevent.Event) {}
 
 type noRounds struct{}
 

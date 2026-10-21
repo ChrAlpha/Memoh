@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -168,8 +170,53 @@ func TestFSDownloadFileReturnsOriginalBytes(t *testing.T) {
 	if got := rec.Body.String(); got != "hello workspace" {
 		t.Fatalf("download body = %q", got)
 	}
-	if got := rec.Header().Get("Content-Disposition"); !strings.Contains(got, `filename="readme.txt"`) {
-		t.Fatalf("content disposition = %q", got)
+	assertAttachmentFilename(t, rec.Header().Get("Content-Disposition"), "readme.txt")
+}
+
+// Header values must stay ASCII: Electron's net.fetch rebuilds response
+// headers through undici, which throws on any character above U+00FF.
+func TestFSDownloadEncodesNonASCIIFilename(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		path string
+		dir  bool
+		want string
+	}{
+		{name: "file", path: "/data/游戏说明.pdf", want: "游戏说明.pdf"},
+		{name: "directory", path: "/data/项目", dir: true, want: "项目.tar.gz"},
+		{name: "quote", path: `/data/say "hi".txt`, want: `say "hi".txt`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newSkillsTestEnv(t)
+			if tt.dir {
+				env.writeSkillFile(t, tt.path+"/readme.md", "# docs\n")
+			} else {
+				env.writeSkillFile(t, tt.path, "content")
+			}
+
+			rec, err := env.callFileManager(t, http.MethodGet, "/bots/:bot_id/container/fs/download?path="+url.QueryEscape(tt.path), nil, env.handler.FSDownload)
+			if err != nil || rec.Code != http.StatusOK {
+				t.Fatalf("FSDownload status = %d, error = %v", rec.Code, err)
+			}
+			header := rec.Header().Get("Content-Disposition")
+			for i := 0; i < len(header); i++ {
+				if header[i] >= 0x80 {
+					t.Fatalf("content disposition %q has non-ASCII byte at %d", header, i)
+				}
+			}
+			assertAttachmentFilename(t, header, tt.want)
+		})
+	}
+}
+
+func assertAttachmentFilename(t *testing.T, header, want string) {
+	t.Helper()
+	disposition, params, err := mime.ParseMediaType(header)
+	if err != nil {
+		t.Fatalf("parse content disposition %q: %v", header, err)
+	}
+	if disposition != "attachment" || params["filename"] != want {
+		t.Fatalf("content disposition %q = %q filename %q, want attachment filename %q", header, disposition, params["filename"], want)
 	}
 }
 

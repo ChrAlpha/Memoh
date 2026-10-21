@@ -293,13 +293,13 @@ func WantsFailureRow(o InputOwnership, end RunEnd, f *RunFailure, hook, replacin
 		}
 	case InputAccepted:
 		// The input left the submitter. Every failure at or after setup leaves
-		// the message and a row; a replacement turn keeps its own row only for
-		// the codes that name a failure the user has to see.
+		// the message and a row; a replacement turn records its own failed
+		// attempt, which exists only once execution has begun.
 		if f == nil {
 			return false
 		}
 		if replacing {
-			return f.Phase == PhaseExecution && f.Code != "" && HistoryFailureCode(f.Code) == f.Code
+			return f.Phase == PhaseExecution && f.Code != ""
 		}
 		return f.Phase != PhaseCommit
 	}

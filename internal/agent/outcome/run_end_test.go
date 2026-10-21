@@ -121,7 +121,7 @@ func TestNameRunEndTable(t *testing.T) {
 			wantRow:  false,
 		},
 		{
-			name:      "a replacement turn keeps only named codes",
+			name:      "a replacement turn records a named failure",
 			facts:     EndingFacts{Phase: PhaseExecution, Declared: providerErr},
 			wantEnd:   EndFailed,
 			wantCode:  apperror.CodeAgentProviderAuthFailed,
@@ -130,8 +130,17 @@ func TestNameRunEndTable(t *testing.T) {
 			wantRow:   true,
 		},
 		{
-			name:      "a replacement turn drops an unnamed failure",
+			name:      "a replacement turn records an unnamed failure",
 			facts:     EndingFacts{Phase: PhaseExecution, Declared: errors.New("boom")},
+			wantEnd:   EndFailed,
+			wantCode:  apperror.CodeRuntimeRunFailed,
+			input:     InputAccepted,
+			replacing: true,
+			wantRow:   true,
+		},
+		{
+			name:      "a replacement turn that failed in setup leaves no row",
+			facts:     EndingFacts{Phase: PhaseSetup, Declared: errors.New("target is no longer the latest turn")},
 			wantEnd:   EndFailed,
 			wantCode:  apperror.CodeRuntimeRunFailed,
 			input:     InputAccepted,
@@ -231,7 +240,6 @@ func expectedRow(o InputOwnership, phase RunPhase, replacing bool) bool {
 		return phase == PhaseExecution || phase == PhasePublish
 	default:
 		if replacing {
-			// Only codes the history whitelist names.
 			return phase == PhaseExecution
 		}
 		return phase != PhaseCommit

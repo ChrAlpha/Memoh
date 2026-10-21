@@ -792,6 +792,8 @@
       "interface": "Interface",
       "interfaceDescription": "These settings are stored locally and apply immediately.",
       "colorScheme": "Color Scheme",
+      "showExamplesEntry": "Examples in sidebar",
+      "showExamplesEntryDescription": "Show “See what Memoh can do” at the bottom of the sidebar",
       "colorSchemeDescription": "Select a palette for brand, status, and UI elements.",
       "typography": "Typography",
       "uiFontFamily": "UI Font Family",
@@ -1126,6 +1128,12 @@
       "fragmentSeparator": ", "
     },
     "currentBot": "Current Bot",
+    "stopResponse": "Stop generating response",
+    "composer": {
+      "selectBot": "Select a Bot to send a message",
+      "selectModel": "Select a model to send a message",
+      "modeChanging": "Saving mode. Please wait before sending."
+    },
     "queue": {
       "steer": "Current response",
       "followUp": "Up next",
@@ -1135,6 +1143,7 @@
       "steerPlaceholder": "Add something to the current response…",
       "enqueueSteer": "Add to current response",
       "enqueueFollowUp": "Add to up next",
+      "textOnly": "Queued messages support text only. Remove attachments and skills to continue.",
       "steerQueued": "Added to the current response queue",
       "steerFailed": "Could not steer the current response. The message is still queued.",
       "reorder": "Reorder",
@@ -1863,6 +1872,10 @@
       "channel": "a channel"
     },
     "sidebarEntry": "See what Memoh can do",
+    "hideSidebarEntry": "Hide this entry",
+    "sidebarEntryHidden": "Hidden. Restore it in Appearance settings.",
+    "undoHideSidebarEntry": "Undo",
+    "sidebarEntrySaveFailed": "Couldn’t save. Please try again later.",
     "galleryTitle": "See what Memoh can do",
     "galleryDescription": "Pick an example to put it in the chat box. You can edit it before sending.",
     "refresh": "Refresh",
@@ -2057,6 +2070,10 @@
     "fetchProviders": "Fetch",
     "searchHint": "Providers used by the web_search tool.",
     "fetchHint": "Providers used by the web_fetch tool to read pages.",
+    "httpHeaders": "HTTP headers",
+    "headerName": "Header name",
+    "headerValue": "Header value",
+    "addHeader": "Add header",
     "selectHint": "Select or create a web search provider",
     "unsupportedProvider": "This provider does not have a settings panel yet",
     "nativeManaged": "Native is managed by Memoh and is always enabled.",
@@ -2574,10 +2591,6 @@
     "avatarUpdateSuccess": "Avatar updated",
     "avatarUpdateFailed": "Failed to update avatar",
     "typePlaceholder": "Select bot type",
-    "types": {
-      "personal": "Personal",
-      "public": "Public"
-    },
     "active": "Active",
     "inactive": "Inactive",
     "lifecycle": {

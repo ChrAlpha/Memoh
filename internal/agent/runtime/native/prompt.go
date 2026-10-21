@@ -40,8 +40,9 @@ func init() {
 	scheduleTmpl = mustReadPrompt("prompts/schedule.md")
 
 	includes = map[string]string{
-		"_memory":     mustReadPrompt("prompts/_memory.md"),
-		"_identities": mustReadPrompt("prompts/_identities.md"),
+		"_memory":            mustReadPrompt("prompts/_memory.md"),
+		"_identities":        mustReadPrompt("prompts/_identities.md"),
+		"_output_formatting": mustReadPrompt("prompts/_output_formatting.md"),
 	}
 
 	systemCommonTmpl = resolveIncludes(systemCommonTmpl)
@@ -109,6 +110,7 @@ func GenerateSystemPrompt(params SystemPromptParams) string {
 type SystemPromptParams struct {
 	SessionType               string
 	ReplyDelivery             sessionfacts.ReplyDelivery
+	Platform                  string
 	Bot                       BotInfo
 	Skills                    []SkillEntry
 	Files                     []SystemFile
@@ -187,6 +189,7 @@ func buildSkillsHeader(count int) string {
 	var sb strings.Builder
 	sb.WriteString("## Skills\n\n")
 	sb.WriteString("Memoh-managed skills are stored in `" + skillset.ManagedDir() + "/`. ")
+	sb.WriteString("**Create user skills directly as `" + skillset.ManagedDir() + "/<skill-name>/SKILL.md`.** ")
 	sb.WriteString("Compatible external skill directories inside the bot workspace may also be discovered automatically. ")
 	sb.WriteString("Each skill is represented by a `SKILL.md` file in one of the discovered source directories. ")
 	sb.WriteString("Only activate a skill when it is relevant to the current task and a skill-loading capability is available.\n\n")

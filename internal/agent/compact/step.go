@@ -21,11 +21,10 @@ import (
 // calls. The compaction reads the run's committed steps back from its thread,
 // so it applies to runs that commit them as they complete.
 //
-// A retry or edit run is the exception in what it may read. Its steps are
-// stored without a turn until the run ends (PersistAgentReplacementStep) and
-// are discarded if it fails, so no summary may cover them: it would describe
-// output nobody ever saw. Such a run compacts only the visible history before
-// its cutoff and carries its own messages over from the loop's memory.
+// A retry or edit run is the exception in what it may read. The turn it
+// replaces is cut off from its history, and its own first step starts the
+// replacement. Such a run compacts only the visible history before its cutoff
+// and carries its own messages over from the loop's memory.
 func (c *Compactor) BindStep(cfg *native.RunConfig, req runreq.ChatRequest, committer *persist.StepCommitter) {
 	if committer == nil || !c.runner.enabled() {
 		return

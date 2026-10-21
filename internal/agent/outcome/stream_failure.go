@@ -11,8 +11,7 @@ import (
 )
 
 // HistoryFailureCode is code when a failed turn's history records it, and empty
-// otherwise, for the turns snapshotFailureCode and a replacement turn leave to
-// it.
+// otherwise.
 func HistoryFailureCode(code apperror.Code) apperror.Code {
 	switch code {
 	case apperror.CodeAgentResponseTimeout,

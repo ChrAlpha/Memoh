@@ -265,6 +265,7 @@ describe('chat transcript controller', () => {
     transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-assistant-1',
+      invocationId: '',
       status: 'waiting_decision',
       operation: null,
       turns: [pendingProjection],
@@ -316,6 +317,7 @@ describe('chat transcript controller', () => {
     transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-assistant-1',
+      invocationId: '',
       status: 'waiting_decision',
       operation: null,
       turns: [pendingProjection],
@@ -434,6 +436,7 @@ describe('chat transcript controller', () => {
     transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-1',
+      invocationId: '',
       status: 'running',
       operation: null,
       streaming: true,
@@ -448,6 +451,7 @@ describe('chat transcript controller', () => {
     transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-1',
+      invocationId: '',
       status: 'completed',
       operation: null,
       streaming: false,
@@ -488,6 +492,7 @@ describe('chat transcript controller', () => {
       transcript.applyRuntimeTranscript({
         runId: 'run-1',
         turnId: 'turn-1',
+        invocationId: '',
         status: 'running',
         operation: null,
         streaming: true,
@@ -571,6 +576,7 @@ describe('chat transcript controller', () => {
       transcript.applyRuntimeTranscript({
         runId: 'run-edit',
         turnId: 'turn-edit',
+        invocationId: '',
         status: 'running',
         operation: {
           kind: 'edit',
@@ -601,6 +607,7 @@ describe('chat transcript controller', () => {
     transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-1',
+      invocationId: '',
       status: 'admitting',
       operation: null,
       streaming: true,
@@ -609,6 +616,7 @@ describe('chat transcript controller', () => {
     transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-1',
+      invocationId: '',
       status: 'running',
       operation: {
         kind: 'retry',
@@ -839,6 +847,7 @@ describe('chat transcript controller', () => {
     const applied = transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-1',
+      invocationId: '',
       status: 'running',
       operation: {
         kind: 'edit',
@@ -872,6 +881,7 @@ describe('chat transcript controller', () => {
       transcript.applyRuntimeTranscript({
         runId: 'run-edit',
         turnId: 'turn-edit',
+        invocationId: '',
         status: 'running',
         operation: {
           kind: 'edit',
@@ -968,6 +978,7 @@ describe('idle runtime snapshot reconciliation', () => {
     transcript.applyRuntimeTranscript({
       runId: 'run-1',
       turnId: 'turn-user-1',
+      invocationId: '',
       status: 'completed',
       operation: null,
       turns: [{

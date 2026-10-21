@@ -348,7 +348,6 @@ func assemble(d Deps, w wiring) *Service {
 		Sessions: d.Sessions,
 		Bot:      service.botenv,
 		Runtime:  d.SessionRuntime,
-		Events:   d.Events,
 		Rounds:   service.memory,
 		Commits:  service.compact,
 		Promoted: promoted,

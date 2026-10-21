@@ -34,9 +34,6 @@ type nativeOptions struct {
 	CanRequestUserInput bool
 	// Steps is how the run commits its steps.
 	Steps stepMode
-	// Replacement is the turn a retry or edit run replaces; nil for any other
-	// run.
-	Replacement *drive.TurnReplacement
 }
 
 // nativePlan is the tail every native run shares: it applies the run's flags,
@@ -74,7 +71,6 @@ func (p *Planner) nativePlan(ctx context.Context, req runreq.ChatRequest, rc run
 			req:       req,
 			committer: stepCommitter,
 			timing:    reasoningTiming,
-			replace:   opts.Replacement,
 			persist:   p.persist,
 		},
 		Req:        req,

@@ -1,6 +1,6 @@
 module github.com/felinics/memoh
 
-go 1.25.7
+go 1.26.10
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -10,7 +10,7 @@ require (
 	github.com/coder/websocket v1.8.14
 	github.com/containerd/cgroups/v3 v3.1.2
 	github.com/containerd/containerd/api v1.10.0
-	github.com/containerd/containerd/v2 v2.2.1
+	github.com/containerd/containerd/v2 v2.2.9
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/go-cni v1.1.13
 	github.com/containernetworking/cni v1.3.0
@@ -32,7 +32,7 @@ require (
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/kenshaw/emoji v0.4.1
 	github.com/labstack/echo-jwt/v4 v4.4.0
-	github.com/labstack/echo/v4 v4.15.0
+	github.com/labstack/echo/v4 v4.15.3
 	github.com/larksuite/oapi-sdk-go/v3 v3.12.1
 	github.com/line/line-bot-sdk-go/v8 v8.20.1
 	github.com/modelcontextprotocol/go-sdk v1.7.0
@@ -47,10 +47,10 @@ require (
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/slack-go/slack v0.19.0
+	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.12.1
 	github.com/swaggo/swag v1.16.6
-	github.com/yuin/goldmark v1.7.13
+	github.com/yuin/goldmark v1.7.17
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0
 	go.opentelemetry.io/contrib/instrumentation/runtime v0.71.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.46.0
@@ -60,7 +60,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.uber.org/fx v1.24.0
-	golang.org/x/crypto v0.55.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/time v0.15.0
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
@@ -77,7 +77,7 @@ require (
 	github.com/gowebpki/jcs v1.0.1 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.30.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.11.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 )
 
@@ -86,7 +86,7 @@ require (
 	github.com/JohannesKaufmann/dom v0.2.0 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/Microsoft/hcsshim v0.14.0-rc.1 // indirect
+	github.com/Microsoft/hcsshim v0.14.1 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de // indirect
 	github.com/aws/aws-sdk-go-v2 v1.41.5 // indirect
@@ -137,11 +137,11 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
-	github.com/klauspost/compress v1.18.4 // indirect
-	github.com/labstack/gommon v0.4.2 // indirect
+	github.com/klauspost/compress v1.18.7 // indirect
+	github.com/labstack/gommon v0.5.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/locker v1.0.1 // indirect
 	github.com/moby/sys/atomicwriter v0.1.0 // indirect
@@ -149,7 +149,7 @@ require (
 	github.com/moby/sys/mountinfo v0.7.2 // indirect
 	github.com/moby/sys/sequential v0.6.0 // indirect
 	github.com/moby/sys/signal v0.7.1 // indirect
-	github.com/moby/sys/user v0.4.0 // indirect
+	github.com/moby/sys/user v0.4.1 // indirect
 	github.com/moby/sys/userns v0.1.0 // indirect
 	github.com/moby/term v0.5.2 // indirect
 	github.com/morikuni/aec v1.1.0 // indirect
@@ -160,7 +160,7 @@ require (
 	github.com/opencontainers/selinux v1.13.1 // indirect
 	github.com/petermattis/goid v0.0.0-20260113132338-7c7de50cc741 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
-	github.com/pion/dtls/v3 v3.1.2 // indirect
+	github.com/pion/dtls/v3 v3.1.4 // indirect
 	github.com/pion/interceptor v0.1.44 // indirect
 	github.com/pion/logging v0.2.4 // indirect
 	github.com/pion/mdns/v2 v2.1.0 // indirect
@@ -168,8 +168,8 @@ require (
 	github.com/pion/rtcp v1.2.16 // indirect
 	github.com/pion/sctp v1.9.5 // indirect
 	github.com/pion/srtp/v3 v3.0.10 // indirect
-	github.com/pion/stun/v3 v3.1.2 // indirect
-	github.com/pion/transport/v4 v4.0.1 // indirect
+	github.com/pion/stun/v3 v3.1.5 // indirect
+	github.com/pion/transport/v4 v4.0.2 // indirect
 	github.com/pion/turn/v5 v5.0.3 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -199,11 +199,11 @@ require (
 	go.uber.org/zap v1.27.1 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/mod v0.38.0
-	golang.org/x/net v0.58.0
-	golang.org/x/sync v0.22.0
-	golang.org/x/text v0.41.0 // indirect
-	golang.org/x/tools v0.48.0 // indirect
+	golang.org/x/mod v0.41.0
+	golang.org/x/net v0.60.0
+	golang.org/x/sync v0.23.0
+	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/tools v0.49.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260825221802-da73d73af1c5
 	gotest.tools/v3 v3.5.2 // indirect
 	sigs.k8s.io/yaml v1.6.0 // indirect

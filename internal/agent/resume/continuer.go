@@ -282,7 +282,7 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 	// so the model sees the task once; a run whose task is only that row (a
 	// discuss batch) keeps it. Without a resolvable row (older records, lookup
 	// failure) the steps cannot be filed under it and both copies stay.
-	requestMessageID, lookupErr := c.transcript.ContinuationRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{TurnID: runreq.PGUUIDString(row.TurnID)})
+	requestMessageID, lookupErr := c.transcript.ContinuationRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{RunID: row.RunID.String(), TurnID: runreq.PGUUIDString(row.TurnID)})
 	if lookupErr != nil {
 		c.logger.WarnContext(runCtx, "resume request message lookup failed", slog.String("run_id", admission.RunID), slog.Any("error", lookupErr))
 		requestMessageID = ""

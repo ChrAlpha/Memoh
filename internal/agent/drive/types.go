@@ -30,9 +30,7 @@ type RunSpec struct {
 	// Input says who holds the run's input, which is the one fact that decides
 	// whether a failure leaves a user message and a failure row.
 	Input outcome.InputOwnership
-	// Replacement is set for retry and edit. Its presence is also what makes
-	// the ending a replacement turn rather than a new one: the turn it replaces
-	// is already in history, so no new user row is written.
+	// Replacement is set for retry and edit.
 	Replacement *TurnReplacement
 	// Publisher overrides the session projection publisher; a decision
 	// continuation also writes the answering caller's output.
@@ -56,9 +54,6 @@ type AdmittedRun struct {
 type TurnReplacement struct {
 	// Preflight runs after the workspace target is prepared, before the hook.
 	Preflight func(ctx context.Context) error
-	// PostPersist rewrites the replaced turn after the ending's history write
-	// when no queue coordinator finalizes it.
-	PostPersist func(ctx context.Context, persisted []messagepkg.Message) error
 }
 
 // RunPlan is what Setup resolved.

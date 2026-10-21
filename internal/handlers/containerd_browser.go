@@ -294,11 +294,11 @@ func (h *ContainerdHandler) HandleBrowserProxy(c echo.Context) error {
 func newBrowserReverseProxy(client *bridge.Client, port int) *httputil.ReverseProxy {
 	targetAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 	target := &url.URL{Scheme: "http", Host: targetAddr}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	director := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		director(req)
-		req.Host = targetAddr
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(req *httputil.ProxyRequest) {
+			req.SetURL(target)
+			req.SetXForwarded()
+		},
 	}
 	proxy.Transport = &http.Transport{
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {

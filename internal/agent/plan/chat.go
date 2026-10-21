@@ -102,7 +102,6 @@ func (p *Planner) ChatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		LiveToolStream:      true,
 		CanRequestUserInput: true,
 		Steps:               stepsFresh,
-		Replacement:         spec.Replacement,
 	}
 	if spec.Unattended {
 		opts.Steps = stepsOff
