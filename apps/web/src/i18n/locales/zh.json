@@ -1125,6 +1125,12 @@
       "fragmentSeparator": "、"
     },
     "currentBot": "当前 Bot",
+    "stopResponse": "停止生成回复",
+    "composer": {
+      "selectBot": "请选择 Bot 后发送消息",
+      "selectModel": "请选择模型后发送消息",
+      "modeChanging": "正在保存模式，请稍后发送。"
+    },
     "queue": {
       "steer": "当前回复",
       "followUp": "接下来",
@@ -1134,6 +1140,7 @@
       "steerPlaceholder": "输入要插入当前回复的内容…",
       "enqueueSteer": "插入当前回复",
       "enqueueFollowUp": "添加到接下来",
+      "textOnly": "排队消息仅支持文本，请移除附件和技能后再发送。",
       "steerQueued": "已加入当前回复队列",
       "steerFailed": "无法插入当前回复，消息仍保留在队列中。",
       "reorder": "调整顺序",

@@ -1109,6 +1109,12 @@
       "fragmentSeparator": "、"
     },
     "currentBot": "現在のBot",
+    "stopResponse": "応答の生成を停止",
+    "composer": {
+      "selectBot": "Botを選択してから送信してください",
+      "selectModel": "モデルを選択してから送信してください",
+      "modeChanging": "モードを保存中です。しばらく待ってから送信してください。"
+    },
     "queue": {
       "steer": "現在の応答",
       "followUp": "次のメッセージ",
@@ -1118,6 +1124,7 @@
       "steerPlaceholder": "現在の応答に追加する内容を入力…",
       "enqueueSteer": "現在の応答に追加",
       "enqueueFollowUp": "次のメッセージに追加",
+      "textOnly": "キューに追加できるのはテキストのみです。添付ファイルとスキルを削除してから送信してください。",
       "steerQueued": "現在の応答キューに追加済み",
       "steerFailed": "現在の応答に追加できませんでした。メッセージはキューに残っています。",
       "reorder": "並べ替え",

@@ -1125,6 +1125,12 @@
       "fragmentSeparator": ", "
     },
     "currentBot": "Current Bot",
+    "stopResponse": "Stop generating response",
+    "composer": {
+      "selectBot": "Select a Bot to send a message",
+      "selectModel": "Select a model to send a message",
+      "modeChanging": "Saving mode. Please wait before sending."
+    },
     "queue": {
       "steer": "Current response",
       "followUp": "Up next",
@@ -1134,6 +1140,7 @@
       "steerPlaceholder": "Add something to the current response…",
       "enqueueSteer": "Add to current response",
       "enqueueFollowUp": "Add to up next",
+      "textOnly": "Queued messages support text only. Remove attachments and skills to continue.",
       "steerQueued": "Added to the current response queue",
       "steerFailed": "Could not steer the current response. The message is still queued.",
       "reorder": "Reorder",

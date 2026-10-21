@@ -910,7 +910,7 @@
                     <!-- Send and stop are one brand circle: the surface never
                          changes between the two states, only the glyph cross-fades
                          (arrow ⇄ stop square), so the button can't blink color or
-                         shape mid-turn. While streaming it stays clickable to abort. -->
+                         shape mid-turn. The resolved action owns both glyph and click. -->
                     <div
                       class="absolute inset-0 [transition:opacity_150ms_ease,scale_281ms_cubic-bezier(0.34,1.56,0.64,1)] motion-reduce:transition-none"
                       :class="sendButtonVisible ? 'scale-100 opacity-100' : 'pointer-events-none scale-0 opacity-0'"
@@ -919,11 +919,11 @@
                         type="button"
                         variant="brand"
                         shape="circle"
-                        :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending || composerHasNoModel || goalSubmissionBlocked || !!runtimeModeUnavailableReason)"
-                        :title="goalSubmissionBlocked ? goalExecutionBlockedReason : undefined"
-                        :class="runtimeModeChanging && !streaming && showSend && !!currentBotId && !activeChatReadOnly && !loadingMessages && !composerAgentConfigPending && !composerHasNoModel ? 'disabled:opacity-100' : undefined"
-                        :aria-busy="firstSendAwaiting || undefined"
-                        :aria-label="streaming && showSend ? $t(composerQueueCommand?.mode === 'steer' ? 'chat.queue.enqueueSteer' : 'chat.queue.enqueueFollowUp') : (streaming ? 'Stop generating response' : 'Send message')"
+                        :disabled="composerButton.disabled"
+                        :aria-description="composerActionReason || undefined"
+                        :class="composerButton.preserveOpacity ? 'disabled:opacity-100' : undefined"
+                        :aria-busy="composerButton.busy || undefined"
+                        :aria-label="$t(composerButton.labelKey)"
                         class="size-full"
                         @click="handleSendButton"
                       >
@@ -934,15 +934,15 @@
                           <!-- The arrow, which bends into the busy ring while a
                                first send waits for the server. -->
                           <SendMorphIcon
-                            :busy="firstSendAwaiting"
+                            :busy="composerButton.busy"
                             class="col-start-1 row-start-1 size-[18px] max-md:size-5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
-                            :class="streaming && !firstSendAwaiting ? 'opacity-0' : 'opacity-100'"
+                            :class="composerButton.icon === 'stop' ? 'opacity-0' : 'opacity-100'"
                           />
                           <svg
                             viewBox="0 0 24 24"
                             fill="currentColor"
                             class="col-start-1 row-start-1 size-4 max-md:size-4.5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
-                            :class="streaming && !firstSendAwaiting ? 'opacity-100' : 'opacity-0'"
+                            :class="composerButton.icon === 'stop' ? 'opacity-100' : 'opacity-0'"
                           >
                             <rect
                               x="4"
@@ -1273,7 +1273,7 @@ import { Memoh as MemohIcon, MemohColor } from '@memohai/icon'
 import { AddIcon, UploadIcon } from '@memohai/icon/ui'
 
 import { EXTERNAL_AGENT_DEFAULT_PROJECT_MODE, EXTERNAL_AGENT_DEFAULT_PROJECT_PATH, normalizeAgentID } from '@/utils/external-agent'
-import { ref, reactive, computed, onBeforeUnmount, useTemplateRef, watch, onWatcherCleanup, nextTick, onActivated, onDeactivated } from 'vue'
+import { ref, reactive, shallowReactive, computed, onBeforeUnmount, useTemplateRef, watch, onWatcherCleanup, nextTick, onActivated, onDeactivated } from 'vue'
 import {
   ImagePlus,
   ChevronDown,
@@ -1350,6 +1350,7 @@ import { provideChatViewTarget } from '../composables/useChatViewContext'
 import { provideConnectorLogos } from '../composables/useConnectorLogos'
 import { enqueueSteerQueue, enqueueFollowUpQueue, fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionListItem, type CommandEventResponse, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
 import { parseSessionQueueCommand, SessionQueueSubmissionGate } from './session-queue-submission'
+import { composerActionPresentation, dispatchComposerAction, resolveComposerAction, type ComposerAction, type ComposerActionSource } from './composer-action'
 import { localizeRuntimeControls, localizeRuntimeCommandResult } from '@/utils/runtime-control-presentation'
 import { commandResultPresentation, isCommandResultItemVisible, resolveCommandResultSelection } from './slash-command-result'
 import SendMorphIcon from './send-morph-icon.vue'
@@ -1409,6 +1410,7 @@ const {
   handlePaste,
 } = useComposerAttachments()
 
+const inputText = ref('')
 const composerError = ref('')
 const forkDialogOpen = ref(false)
 const pendingForkTurnId = ref('')
@@ -2233,11 +2235,6 @@ const goalCommandAvailable = computed(() => runtimeControlSnapshot.value?.comman
 const goalDraftScope = ref('')
 const goalDraftEnabled = computed(() => goalCommandAvailable.value && goalDraftScope.value === runtimeModeScope.value)
 const goalExecutionBlockedReason = computed(() => goalSupported.value && planModeEnabled.value ? t('errors.runtime_control.goal_requires_default_mode') : '')
-const goalSubmissionBlocked = computed(() => {
-  if (streaming.value || !goalSupported.value || !goalExecutionBlockedReason.value) return false
-  const text = inputText.value.trim()
-  return /^\/goal(?:\s|$)/i.test(text) || (goalDraftEnabled.value && !text.startsWith('/'))
-})
 const goalRequests = reactive(new Map<string, symbol>())
 const goalChanging = computed(() => goalRequests.has(runtimeModeScope.value))
 const goalControlsDisabled = computed(() => activeChatReadOnly.value || !paneTarget.value.sessionId || loadingMessages.value || goalChanging.value)
@@ -2408,7 +2405,9 @@ function selectSlashQuickAction(action: { id: string, label: string }) {
   if (runLocalQuickAction(action.id, action.label)) {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')
-    void nextTick(focusTextarea)
+    // The model menu owns focus once opened; returning it to the textarea
+    // would immediately dismiss the menu as an outside interaction.
+    if (action.id !== 'model') void nextTick(focusTextarea)
     return
   }
   sendSlashCommandText(action.label)
@@ -2615,27 +2614,6 @@ const unavailableRuntimeModes = computed(() => composerModelCatalog.value.unavai
 const runtimeModeUnavailableReason = computed(() => unavailableRuntimeModes.value.includes(currentRuntimeModeId.value)
   ? t('chat.runtimeModeModelUnavailable')
   : '')
-// What the dock's error line shows. Standing reasons (goal blocked by plan
-// mode, runtime mode without a usable model) win over the transient
-// composerError, matching their precedence before dismissal existed.
-const rawComposerPanelError = computed(() => goalSubmissionBlocked.value
-  ? goalExecutionBlockedReason.value
-  : runtimeModeUnavailableReason.value || composerError.value)
-// Every error line can be dismissed, standing reasons included: a user who
-// already understands the reason should not be forced to keep reading it.
-// Dismissal hides that exact message only — a different message, or the same
-// one returning after it went away, shows again. The underlying state (and
-// the send button's disabled state) is untouched.
-const dismissedComposerPanelError = ref('')
-const composerPanelError = computed(() => rawComposerPanelError.value === dismissedComposerPanelError.value ? '' : rawComposerPanelError.value)
-watch(rawComposerPanelError, (message) => {
-  if (!message) dismissedComposerPanelError.value = ''
-})
-function dismissComposerPanelError() {
-  dismissedComposerPanelError.value = rawComposerPanelError.value
-  // A transient error is consumed outright; a standing reason only gets hidden.
-  if (composerError.value === dismissedComposerPanelError.value) composerError.value = ''
-}
 const dismissedRuntimeGoalError = ref('')
 const visibleRuntimeGoalError = computed(() => runtimeGoalError.value === dismissedRuntimeGoalError.value ? '' : runtimeGoalError.value)
 watch(runtimeGoalError, (message) => {
@@ -3297,8 +3275,7 @@ const {
   openBySrc: galleryOpenBySrc,
 } = useMediaGallery(messages)
 
-const inputText = ref('')
-const queueSubmissionGate = new SessionQueueSubmissionGate()
+const queueSubmissionGate = shallowReactive(new SessionQueueSubmissionGate())
 const composerQueueCommand = computed(() => parseSessionQueueCommand(inputText.value, composerRuntimeCommands.value))
 const composerPlaceholder = computed(() => {
   if (activeChatReadOnly.value) return t('chat.readonlyHint')
@@ -3325,7 +3302,57 @@ useUnfocusedComposerInput({
   onPaste: handlePaste,
 })
 
-const showSend = computed(() => Boolean(inputText.value.trim()) || pendingFiles.value.length > 0 || requestedSkills.value.length > 0)
+const composerAction = computed(() => resolveComposerAction({
+  text: inputText.value,
+  hasFiles: pendingFiles.value.length > 0,
+  hasSkills: skillSlashEnabled.value && requestedSkills.value.length > 0,
+  streaming: streaming.value,
+  awaitingFirstSend: firstSendAwaiting.value,
+  queuePending: queueSubmissionGate.pending,
+  active: isActive.value,
+  hasBot: !!currentBotId.value,
+  hasSession: !!activeSessionId.value,
+  readOnly: activeChatReadOnly.value,
+  loadingMessages: loadingMessages.value,
+  configPending: composerAgentConfigPending.value ? 'agent' : runtimeModeChanging.value ? 'mode' : false,
+  hasNoModel: composerHasNoModel.value,
+  modeUnavailable: !!runtimeModeUnavailableReason.value,
+  modeChangeDisabled: runtimeModeDisabled.value,
+  agentUnavailable: !!defaultExternalAgentComposerError.value && !hasExplicitSessionSelection.value,
+  localCommand: localQuickActionIDForSlash(inputText.value.trim()),
+  runtimeCommands: composerRuntimeCommands.value,
+  runtimeCommandsUnresolved: activeUsesExternalAgentComposer.value && !runtimeControlSnapshot.value,
+  goalDraft: goalDraftEnabled.value,
+  goalBlocked: !!goalExecutionBlockedReason.value,
+}))
+const composerButton = computed(() => composerActionPresentation(composerAction.value))
+const composerActionReason = computed(() => {
+  const reason = composerAction.value.blockedReason
+  if (!reason || reason === 'inactive') return ''
+  return reason === 'agent-unavailable' ? defaultExternalAgentComposerError.value : t(reason)
+})
+
+// Waiting disables the action without becoming an error or hiding a real failure.
+const rawComposerPanelError = computed(() => {
+  const reason = composerAction.value.blockedReason
+  const waiting = reason === 'common.loading' || reason === 'chat.composer.modeChanging'
+  return (waiting ? '' : composerActionReason.value) || composerError.value
+})
+// Every error line can be dismissed, standing reasons included: a user who
+// already understands the reason should not be forced to keep reading it.
+// Dismissal hides that exact message only — a different message, or the same
+// one returning after it went away, shows again. The underlying state (and
+// the send button's disabled state) is untouched.
+const dismissedComposerPanelError = ref('')
+const composerPanelError = computed(() => rawComposerPanelError.value === dismissedComposerPanelError.value ? '' : rawComposerPanelError.value)
+watch(rawComposerPanelError, (message) => {
+  if (!message) dismissedComposerPanelError.value = ''
+})
+function dismissComposerPanelError() {
+  dismissedComposerPanelError.value = rawComposerPanelError.value
+  // A transient error is consumed outright; a standing reason only gets hidden.
+  if (composerError.value === dismissedComposerPanelError.value) composerError.value = ''
+}
 
 // TODO(voice-input): shelved until a default transcription model ships —
 // today the mic dead-ends users into a settings detour. The whole path (mic
@@ -3337,12 +3364,11 @@ const voiceInputEnabled = false
 
 // Whether the trailing slot shows the send button (vs. its inactive
 // occupant — see inactiveSlotVisible just below, its exact complement).
-// Streaming always wins the slot for stop, same as before; unlike the old
-// ring-era rule this no longer special-cases ACP: the inactive occupant —
+// The resolved action owns visibility in every runtime: the inactive occupant —
 // not a dimmed disabled send — is what fills the slot on empty input in
 // EVERY mode (the mic when voice input is on, a look-alike placeholder while
 // it's shelved).
-const sendButtonVisible = computed(() => showSend.value || streaming.value)
+const sendButtonVisible = computed(() => composerButton.value.visible)
 
 // The slot's inactive occupant: a grayed send stand-in while voice input is
 // shelved, the mic itself once voiceInputEnabled flips back on (nothing to
@@ -4067,158 +4093,107 @@ async function handleEditMessage(turnId: string, text: string, done?: (started: 
   }
 }
 
-async function handleSend() {
-  if (!isActive.value) return
-  if (!skillSlashEnabled.value && requestedSkills.value.length) {
-    requestedSkills.value = []
-  }
-  const text = inputText.value.trim()
-  const files = [...pendingFiles.value]
-  const skills = [...requestedSkills.value]
-  if (goalSubmissionBlocked.value) {
-    composerError.value = goalExecutionBlockedReason.value
-    return
-  }
-  if (localQuickActionIDForSlash(text) === 'goal') {
-    if (runtimeModeDisabled.value || localQuickActionBlocked()) return
-    goalDraftScope.value = goalDraftEnabled.value ? '' : runtimeModeScope.value
-    inputText.value = ''
-    saveInputDraft(inputDraftKey.value, '')
-    return
-  }
-  if (localQuickActionIDForSlash(text) === 'plan') {
-    if (runtimeModeDisabled.value || localQuickActionBlocked()) return
+async function handleSend(source: ComposerActionSource = 'submit') {
+  // Resolve again at the gesture boundary; render state may already be stale.
+  if (!skillSlashEnabled.value && requestedSkills.value.length) requestedSkills.value = []
+  const action = composerAction.value
+  await dispatchComposerAction(action, source, {
+    stop: () => { chatStore.abort(paneTarget.value) },
+    send: executeComposerSend,
+    enqueue: executeComposerEnqueue,
+    'local-command': executeLocalComposerCommand,
+    'runtime-command': ({ command }) => executeRuntimeComposerCommand(command),
+  })
+}
+
+async function executeLocalComposerCommand(action: Extract<ComposerAction, { kind: 'local-command' }>) {
+  if (action.id === 'plan') {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')
     await togglePlanMode()
     return
   }
-  const selector = text.startsWith('/') ? text.slice(1).split(/\s/, 1)[0] : ''
-  const runtimeCommand = composerRuntimeCommands.value.find(command => command.name === selector)
-  if (runtimeCommand && runtimeCommand.kind !== 'turn') {
-    if (activeChatReadOnly.value || loadingMessages.value || localQuickActionBlocked()) return
-    if (streaming.value && runtimeCommand.kind === 'operation') {
-      composerError.value = t('errors.session_runtime.session_busy')
-      return
-    }
-    if (runtimeCommand.kind === 'operation') {
-      clearCurrentCommandEvent()
-      composerError.value = ''
-      inputText.value = ''
-      saveInputDraft(inputDraftKey.value, '')
-      await runSessionCompaction(() => runtimeControls.execute(runtimeCommand.name!))
-      return
-    }
-    const draftKey = inputDraftKey.value
-    const title = `/${runtimeCommand.name}`
-    const complete = chatStore.beginCommandEvent({
-      type: 'command_result', terminal: false, action_id: runtimeCommand.name,
-      result: { kind: 'runtime_command', title, text: runtimeCommand.running_text, text_key: 'common.loading' },
-    }, currentPaneCommandScope())
-    inputText.value = ''
-    saveInputDraft(draftKey, '')
-    try {
-      const result = await runtimeControls.execute(runtimeCommand.name!)
-      complete({
-        type: 'command_result', terminal: true, action_id: runtimeCommand.name,
-        result: { kind: 'runtime_command', title, ...(Object.keys(result).length ? result : { text: runtimeCommand.completed_text, text_key: 'common.toast.success' }) },
-      })
-    } catch (error) {
-      complete({ type: 'command_error', terminal: true, code: parseMemohError(error)?.code || 'runtime_control.failed', message: resolveApiErrorMessage(error, t('errors.runtime_control.failed')) })
-    }
-    return
-  }
-  const queueCommand = composerQueueCommand.value
-  if (queueCommand) {
-    if (files.length || skills.length) {
-      composerError.value = files.length
-        ? t('chat.slash.attachmentsUnsupported')
-        : t('errors.slash.skill_syntax_invalid')
-      return
-    }
-    if (!queueCommand.text || !activeSessionId.value) {
-      composerError.value = t('errors.queue_request_invalid')
-      return
-    }
-  }
-  if (streaming.value || queueCommand) {
-    // Until controls load, a slash input may be a runtime command.
-    const runtimeCommandUnresolved = activeUsesExternalAgentComposer.value
-      && !runtimeControlSnapshot.value
-      && text.startsWith('/')
-      && !queueCommand
-    // The queue carries plain text only: a runtime turn command or a goal
-    // draft would run as an ordinary message once dequeued.
-    if (runtimeCommand || runtimeCommandUnresolved || (goalDraftEnabled.value && text && !text.startsWith('/'))) {
-      composerError.value = t('errors.session_runtime.session_busy')
-      return
-    }
-    if (!text || files.length || skills.length || !currentBotId.value || !activeSessionId.value || activeChatReadOnly.value) return
-    const botId = currentBotId.value
-    const sessionId = activeSessionId.value
-    const mode = queueCommand?.mode ?? 'follow-up'
-    const queueText = queueCommand?.text ?? text
-    const sentDraftKey = inputDraftKey.value
-    const sentContext = captureChatPaneSendContext(
-      paneTarget.value,
-      inputDraftKey.value || 'chat',
-    )
-    const submission = queueSubmissionGate.begin({ botId, sessionId, mode, text: queueText })
-    if (!submission) return
-
-    composerError.value = ''
-    inputText.value = ''
-    saveInputDraft(sentDraftKey, '')
-    try {
-      const enqueue = mode === 'steer' ? enqueueSteerQueue : enqueueFollowUpQueue
-      await enqueue(botId, sessionId, queueText, submission.invocationId)
-      queueSubmissionGate.succeed(submission)
-      queueLocalRefresh.value++
-    } catch (error) {
-      queueSubmissionGate.fail(submission)
-      if (matchesChatPaneSendContext(
-        sentContext,
-        paneTarget.value,
-        inputDraftKey.value || 'chat',
-      )) {
-        if (!inputText.value.trim()) {
-          inputText.value = text
-          saveInputDraft(sentDraftKey, text)
-        }
-        composerError.value = resolveApiErrorMessage(error, t('chat.sendFailed'))
-      }
-    }
-    return
-  }
-  if (
-    (!text && !files.length && !skills.length)
-    || loadingMessages.value
-    || activeChatReadOnly.value
-    || composerConfigPending.value
-    // Keyboard send bypasses the disabled button, so the no-model gate is
-    // repeated here rather than living only on the control.
-    || composerHasNoModel.value
-    || !!runtimeModeUnavailableReason.value
-  ) return
-  const localAction = localQuickActionIDForSlash(text)
-  if (localAction && localQuickActionBlocked()) return
-  if (localAction && runLocalQuickAction(localAction, text)) {
+  if (runLocalQuickAction(action.id, action.text)) {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')
+  }
+}
+
+async function executeRuntimeComposerCommand(runtimeCommand: RuntimeCommand) {
+  if (runtimeCommand.kind === 'operation') {
+    clearCurrentCommandEvent()
+    composerError.value = ''
+    inputText.value = ''
+    saveInputDraft(inputDraftKey.value, '')
+    await runSessionCompaction(() => runtimeControls.execute(runtimeCommand.name!))
     return
   }
+  const draftKey = inputDraftKey.value
+  const title = `/${runtimeCommand.name}`
+  const complete = chatStore.beginCommandEvent({
+    type: 'command_result', terminal: false, action_id: runtimeCommand.name,
+    result: { kind: 'runtime_command', title, text: runtimeCommand.running_text, text_key: 'common.loading' },
+  }, currentPaneCommandScope())
+  inputText.value = ''
+  saveInputDraft(draftKey, '')
+  try {
+    const result = await runtimeControls.execute(runtimeCommand.name!)
+    complete({
+      type: 'command_result', terminal: true, action_id: runtimeCommand.name,
+      result: { kind: 'runtime_command', title, ...(Object.keys(result).length ? result : { text: runtimeCommand.completed_text, text_key: 'common.toast.success' }) },
+    })
+  } catch (error) {
+    complete({ type: 'command_error', terminal: true, code: parseMemohError(error)?.code || 'runtime_control.failed', message: resolveApiErrorMessage(error, t('errors.runtime_control.failed')) })
+  }
+  return
+}
+
+async function executeComposerEnqueue(action: Extract<ComposerAction, { kind: 'enqueue' }>) {
+  const text = inputText.value.trim()
+  const botId = currentBotId.value!
+  const sessionId = activeSessionId.value
+  const mode = action.mode
+  const queueText = action.text
+  const sentDraftKey = inputDraftKey.value
+  const sentContext = captureChatPaneSendContext(
+    paneTarget.value,
+    inputDraftKey.value || 'chat',
+  )
+  const submission = queueSubmissionGate.begin({ botId, sessionId, mode, text: queueText })
+  if (!submission) return
+
+  composerError.value = ''
+  inputText.value = ''
+  saveInputDraft(sentDraftKey, '')
+  try {
+    const enqueue = mode === 'steer' ? enqueueSteerQueue : enqueueFollowUpQueue
+    await enqueue(botId, sessionId, queueText, submission.invocationId)
+    queueSubmissionGate.succeed(submission)
+    queueLocalRefresh.value++
+  } catch (error) {
+    queueSubmissionGate.fail(submission)
+    if (matchesChatPaneSendContext(
+      sentContext,
+      paneTarget.value,
+      inputDraftKey.value || 'chat',
+    )) {
+      if (!inputText.value.trim()) {
+        inputText.value = text
+        saveInputDraft(sentDraftKey, text)
+      }
+      composerError.value = resolveApiErrorMessage(error, t('chat.sendFailed'))
+    }
+  }
+  return
+}
+
+async function executeComposerSend(action: Extract<ComposerAction, { kind: 'send' }>) {
+  const text = action.text
+  const files = [...pendingFiles.value]
+  const skills = [...requestedSkills.value]
   const sentGoalScope = goalDraftScope.value
-  const goalSend = goalDraftEnabled.value && !text.startsWith('/')
+  const goalSend = action.goal
   const sendText = goalSend ? `/goal ${text}` : text
-  if ((goalSend || /^\/goal(?:\s|$)/.test(text)) && (files.length || skills.length)) {
-    composerError.value = t('chat.goal.textOnly')
-    return
-  }
-  const isNewCommand = /^\/new(?:\s|$)/i.test(text)
-  if (defaultExternalAgentComposerError.value && !hasExplicitSessionSelection.value && !isNewCommand) {
-    composerError.value = defaultExternalAgentComposerError.value
-    return
-  }
   const sentDraftKey = inputDraftKey.value
   const sentContext = captureChatPaneSendContext(
     paneTarget.value,
@@ -4335,13 +4310,7 @@ async function handleSend() {
 }
 
 function handleSendButton() {
-  // A first send waits for the server to confirm it.
-  if (firstSendAwaiting.value) return
-  if (streaming.value && !showSend.value) {
-    chatStore.abort(paneTarget.value)
-    return
-  }
-  void handleSend()
+  void handleSend('button')
 }
 
 </script>
