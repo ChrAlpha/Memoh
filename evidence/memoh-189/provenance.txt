@@ -1,0 +1,60 @@
+MEMOH-189 Telegram forum topics: live run evidence
+
+Redaction: the group chat id is shown as <group_chat_id>, the private chat id as <dm_chat_id>, and the test
+bot username as <test_bot>. In the screenshots, the Telegram sender name, the bot mention and the chat id are
+covered with solid black boxes. Topic ids (/2, /3) are left visible because they are what this run checks.
+
+Code: ChrAlpha/Memoh fix/telegram-forum-topics @ 3703bb528da88bb2943fd3f3bf2b705cd3d525bb (base felinics/Memoh main 80b35c24a)
+Stack: devenv/docker-compose.yml in an isolated project (memoh-s6), split mode (server + channel services).
+  The channel service was restarted after the last commit so its `go run` binary includes 3703bb528.
+Model: scripted OpenAI-compatible provider (deterministic). "TOPIC_PING <label>" makes the agent call `send`
+  with no target in discuss mode. "TOPIC_SEND <target> <label>" calls `send` with an explicit target.
+  Telegram and Memoh are real; only the model is scripted.
+Telegram: real bot <test_bot> (bot admin) in forum supergroup "memoh topics test" (<group_chat_id>).
+  The user posted in General, topic 2 and topic 3.
+  The user visually confirmed in Telegram that each PONG landed in its own topic and that the explicit
+  cross-topic send landed in topic 3. No Telegram-side screenshots were taken.
+
+Screenshots (Memoh Web UI of the same run):
+  01-session-list.png               four group sessions (General x2, topic 2, topic 3) + the DM session
+  02-topic2-session-cross-send.png  topic 2 session: only "TOPIC_PING C" + "TOPIC_SEND <group_chat_id>/3 X";
+                                    the send tool call targets <group_chat_id>/3
+  03-topic3-session.png             topic 3 session: only "TOPIC_PING B"; send "PONG B"
+  04-general-session.png            General session: only "TOPIC_PING A"
+
+Routes after the run (bot_channel_routes):
+  chat             thread  conversation_type  default_reply_target
+  <group_chat_id>  2       group              <group_chat_id>/2
+  <group_chat_id>  (none)  group              <group_chat_id>
+  <group_chat_id>  3       group              <group_chat_id>/3
+  <dm_chat_id>     (none)  private            <dm_chat_id>
+
+Inbound messages per route (bot_session_events; session = first 8 chars):
+  thread  session   msg  text
+  -       d9fb1b5b  5    TOPIC_PING A
+  3       6552460c  6    TOPIC_PING B
+  2       ad72d2b4  7    TOPIC_PING C
+  -       6fc25442  8    TOPIC_PING A
+  3       6552460c  9    TOPIC_PING B
+  2       ad72d2b4  10   TOPIC_PING C
+  -       d9fb1b5b  11   TOPIC_PING A
+  3       6552460c  12   TOPIC_PING B
+  2       ad72d2b4  13   TOPIC_PING C
+  -       d9fb1b5b  14   TOPIC_PING A
+  3       6552460c  17   TOPIC_PING B
+  2       ad72d2b4  24   TOPIC_SEND <group_chat_id>/3 X
+
+Outbound sends to the group (channel service "send outbound success"):
+  2026-10-21T14:15:22.027Z target=<group_chat_id>
+  2026-10-21T14:15:22.057Z target=<group_chat_id>
+  2026-10-21T14:15:22.155Z target=<group_chat_id>/3
+  2026-10-21T14:15:22.174Z target=<group_chat_id>/2
+  2026-10-21T14:15:22.841Z target=<group_chat_id>
+  2026-10-21T14:15:22.954Z target=<group_chat_id>/3
+  2026-10-21T14:15:27.098Z target=<group_chat_id>/2
+  2026-10-21T14:15:27.130Z target=<group_chat_id>/3
+  2026-10-21T14:23:38.875Z target=<group_chat_id>/3   (explicit cross-topic send from topic 2)
+
+Note: the General route holds two sessions (d9fb1b5b, 6fc25442). Messages 5-14 reached the bot at the
+same moment (once it became an admin), and the existing unlocked get-then-create on a route raced. This
+predates this change. Topic routes each got exactly one session.
