@@ -279,6 +279,13 @@ func ApplyAction(ctx context.Context, client fileClient, rawCompatRoots []string
 		if err != nil {
 			return err
 		}
+		shared, err := HoldsNamespacedSkills(ctx, client, dirPath)
+		if err != nil {
+			return err
+		}
+		if shared {
+			return ErrSkillNameTaken
+		}
 		if err := client.Mkdir(ctx, dirPath); err != nil {
 			return err
 		}

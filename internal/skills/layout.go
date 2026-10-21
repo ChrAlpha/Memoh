@@ -280,4 +280,7 @@ var (
 	// ErrSkillNotFound reports that the Skill an action names is not among
 	// the discovered Skills.
 	ErrSkillNotFound = errors.New("skill not found")
+	// ErrSkillNameTaken reports that the directory a Skill name maps to is
+	// already used by other Skills.
+	ErrSkillNameTaken = errors.New("skill name taken")
 )
