@@ -334,7 +334,7 @@ func spanTestEntries() []spanTestEntry {
 			// registered.
 			return func() { admitter.Cancel() }, func() { awaitEntryReturned(t, done) }
 		}},
-		{name: "session_resume", options: []testOption{withAllowedTeam("00000000-0000-0000-0000-000000000001")}, start: func(t *testing.T, service *Service, admitter *agenttest.LifecycleAdmitter) (func(), func()) {
+		{name: "session_resume", options: []testOption{withAllowedTeam("00000000-0000-0000-0000-000000000001"), withDeps(func(d *Deps) { d.Messages = resumeRequestMessages() })}, start: func(t *testing.T, service *Service, admitter *agenttest.LifecycleAdmitter) (func(), func()) {
 			const teamID = "00000000-0000-0000-0000-000000000001"
 			raw, err := json.Marshal(map[string]any{"resume": admit.ResumeContext{
 				Version: 1, ChatID: agenttest.LifecycleBotID, UserID: "user-1", Query: directLifecyclePrompt, SessionType: sessionmode.Chat,
@@ -347,6 +347,7 @@ func spanTestEntries() []spanTestEntry {
 				RunID:     db.ParseUUIDOrEmpty(uuid.NewString()),
 				BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
 				SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
+				TurnID:    db.ParseUUIDOrEmpty(uuid.NewString()),
 				InputJson: raw,
 			})
 			if err != nil {

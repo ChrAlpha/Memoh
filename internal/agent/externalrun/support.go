@@ -526,6 +526,16 @@ func (h *Host) persistRuntimeDecisionProjection(ctx context.Context, req runreq.
 	if strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
 		return nil
 	}
+	if strings.TrimSpace(req.PersistedUserMessageID) == "" {
+		// The leading user row was not written, so the run has no request row
+		// to file the projection under. The round writes the user row with its
+		// output at the end of the turn.
+		h.logger.WarnContext(ctx, "skip External Agent decision projection without a request row",
+			slog.String("bot_id", req.BotID),
+			slog.String("session_id", req.ThreadID),
+			slog.String("tool_call_id", ev.ToolCallID))
+		return nil
+	}
 	output := runreq.SDKMessagesToModelMessages(external.TranscriptFromEvents([]event.StreamEvent{ev}, ""))
 	sessionMode, runtimeType := h.persist.SessionRuntimeSnapshot(ctx, req)
 	for _, msg := range output {

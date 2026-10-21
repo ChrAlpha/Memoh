@@ -17,6 +17,11 @@ import (
 // row it is answering now nor one under its root turn.
 var ErrRunRequestNotFound = errors.New("run request row not found")
 
+// ErrRunRowTurnNotFound says a row written by a run could not be filed: it
+// names no request row, or its request row is deleted or hidden by a
+// replacement. History does not guess another turn for it.
+var ErrRunRowTurnNotFound = errors.New("run row has no request row to file its turn under")
+
 type boundReplacementQueries interface {
 	LockHistoryTurnReplacementSession(context.Context, sqlc.LockHistoryTurnReplacementSessionParams) (pgtype.UUID, error)
 	CloneHistoryTurnRequestForRetry(context.Context, sqlc.CloneHistoryTurnRequestForRetryParams) (pgtype.UUID, error)

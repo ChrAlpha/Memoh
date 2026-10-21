@@ -784,11 +784,16 @@ func (p *SpawnProvider) runAgentRequest(ctx context.Context, key string, req *ag
 		p.recordAdmissionFailure(ctx, req, admitErr)
 		return p.completeAgentRequest(ctx, key, req, rejectedAgentRun(req, admitErr))
 	}
-	requestMessageID, persisted := p.persistUserMessage(context.WithoutCancel(runCtx), req)
-	req.messagePersisted = persisted
-	if persisted {
-		req.requestMessageID = requestMessageID
+	requestMessageID, err := p.persistUserMessage(context.WithoutCancel(runCtx), req)
+	if err != nil {
+		// Every row the run writes is filed under the task row, so a run whose
+		// task row was not written has nowhere to write.
+		result := rejectedAgentRun(req, err)
+		finishRun(result)
+		return p.completeAgentRequest(ctx, key, req, result)
 	}
+	req.messagePersisted = requestMessageID != ""
+	req.requestMessageID = requestMessageID
 	result := p.runSubagentTask(runCtx, req)
 	if result.AttemptResolved && result.AttemptOutcome == SpawnAttemptAbort {
 		if p.agentTaskStopRequested(req.taskID) {
@@ -1575,9 +1580,12 @@ func (p *SpawnProvider) persistMessages(
 	includeUser bool,
 ) error {
 	if includeUser {
-		id, ok := p.persistUserMessage(ctx, req)
-		if !ok {
-			return errors.New("persist subagent task message")
+		id, err := p.persistUserMessage(ctx, req)
+		if err != nil {
+			return err
+		}
+		if id == "" {
+			return errors.New("persist subagent task message: message store is unavailable")
 		}
 		req.requestMessageID = id
 	}
@@ -1648,10 +1656,11 @@ func (p *SpawnProvider) persistMessages(
 // persistUserMessage files the task message as the admitted turn's request row
 // (SR-TURN-001): history and the live runtime view then agree on which turn
 // this run writes into. It returns the persisted message id so assistant and
-// tool rows can bind to it.
-func (p *SpawnProvider) persistUserMessage(ctx context.Context, req *agentRequest) (string, bool) {
+// tool rows can bind to it. The id is empty with no error when there is no
+// message store or session to write to.
+func (p *SpawnProvider) persistUserMessage(ctx context.Context, req *agentRequest) (string, error) {
 	if p.messageService == nil || strings.TrimSpace(req.agentSessionID) == "" {
-		return "", false
+		return "", nil
 	}
 	userContent, _ := historyfrag.MarshalStoredSDKMessage(sdk.UserMessage(req.message))
 	input := messagepkg.PersistInput{
@@ -1669,9 +1678,9 @@ func (p *SpawnProvider) persistUserMessage(ctx context.Context, req *agentReques
 	persisted, err := p.messageService.Persist(ctx, input)
 	if err != nil {
 		p.logger.WarnContext(ctx, "persist subagent user message failed", slog.Any("error", err))
-		return "", false
+		return "", fmt.Errorf("persist subagent task message: %w", err)
 	}
-	return persisted.ID, true
+	return persisted.ID, nil
 }
 
 func (p *SpawnProvider) listModelCatalog(ctx context.Context, providerID string) ([]subagentModelCatalogItem, error) {

@@ -31,7 +31,7 @@ func (m *resumeTurnMessages) GetRunTurnRequest(_ context.Context, _, _, rootTurn
 
 // resumeProviderRequests resumes an interrupted run whose request row is in
 // history, and returns the requests the model received.
-func resumeProviderRequests(t *testing.T, turnID string) []sdk.Request {
+func resumeProviderRequests(t *testing.T) []sdk.Request {
 	t.Helper()
 	history := &resumeTurnMessages{
 		driveHistoryMessages: driveHistoryMessages{history: []messagepkg.Message{
@@ -52,10 +52,8 @@ func resumeProviderRequests(t *testing.T, turnID string) []sdk.Request {
 		RunID:     db.ParseUUIDOrEmpty(driveInterruptedRunID),
 		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
 		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
+		TurnID:    db.ParseUUIDOrEmpty(driveReplacedTurnID),
 		InputJson: raw,
-	}
-	if turnID != "" {
-		row.TurnID = db.ParseUUIDOrEmpty(turnID)
 	}
 	done, err := startContinuation(context.Background(), fixture.service, row)
 	if err != nil {
@@ -81,7 +79,7 @@ func countPromptInRequests(t *testing.T, requests []sdk.Request) int {
 // The resume instruction carries the original task, so the history copy of the
 // request row is dropped when the interrupted turn's row can be named.
 func TestResumeSendsTheOriginalTaskToTheModelOnce(t *testing.T) {
-	requests := resumeProviderRequests(t, driveReplacedTurnID)
+	requests := resumeProviderRequests(t)
 	if got := countPromptInRequests(t, requests); got != 1 {
 		t.Fatalf("original task appears %d times in the provider request, want 1", got)
 	}
@@ -168,14 +166,5 @@ func TestResumeWithoutRequestRowIsUnrecoverable(t *testing.T) {
 	}
 	if got := len(fixture.admitter.Admitted()); got != 0 {
 		t.Fatalf("a run without a request row reached admission %d times", got)
-	}
-}
-
-// A record without a turn (written before the turn was tracked) has no row to
-// name; resume still runs and keeps both copies.
-func TestResumeWithoutTurnKeepsHistoryCopy(t *testing.T) {
-	requests := resumeProviderRequests(t, "")
-	if got := countPromptInRequests(t, requests); got != 2 {
-		t.Fatalf("original task appears %d times, want 2 without a resolvable turn", got)
 	}
 }

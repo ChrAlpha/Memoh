@@ -188,7 +188,7 @@ func (w *Writer) storeMessagesResult(ctx context.Context, req runreq.ChatRequest
 	if req.UserMessagePersisted || req.ReusePersistedUserMessage {
 		turnRequestMessageID = strings.TrimSpace(req.PersistedUserMessageID)
 	}
-	return w.persistMessageInputs(ctx, persistInputs, turnRequestMessageID), nil
+	return w.persistMessageInputs(ctx, persistInputs, turnRequestMessageID)
 }
 
 func (w *Writer) buildPersistInputs(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts RoundOptions) ([]messagepkg.PersistInput, error) {
@@ -383,24 +383,34 @@ func (w *Writer) persistSessionWorkspaceTarget(ctx context.Context, req runreq.C
 	return err
 }
 
-func (w *Writer) persistMessageInputs(ctx context.Context, inputs []messagepkg.PersistInput, initialTurnRequestMessageID string) []messagepkg.Message {
+// persistMessageInputs writes the round row by row. A row that cannot be
+// written ends the round when later rows depend on it: a user row is the
+// request every following row of the run is filed under, and a run row that
+// found no request has no turn to be filed in. The rows written before the
+// failure are returned with the error. Any other row failing is logged and the
+// round goes on, so one bad row does not discard the rest.
+func (w *Writer) persistMessageInputs(ctx context.Context, inputs []messagepkg.PersistInput, initialTurnRequestMessageID string) ([]messagepkg.Message, error) {
 	persisted := make([]messagepkg.Message, 0, len(inputs))
 	turnRequestMessageID := strings.TrimSpace(initialTurnRequestMessageID)
 	for _, input := range inputs {
 		if !input.SkipHistoryTurn {
 			input.TurnRequestMessageID = turnRequestMessageID
 		}
+		isRequest := strings.EqualFold(strings.TrimSpace(input.Role), "user") && !input.SkipHistoryTurn && !messagepkg.IsInternalFeedback(input.Metadata)
 		persistedMessage, err := w.messages.Persist(ctx, input)
 		if err != nil {
+			if isRequest || errors.Is(err, messagepkg.ErrRunRowTurnNotFound) {
+				return persisted, fmt.Errorf("persist %s message: %w", input.Role, err)
+			}
 			w.logger.WarnContext(ctx, "persist message failed", slog.Any("error", err))
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !input.SkipHistoryTurn && !messagepkg.IsInternalFeedback(input.Metadata) {
+		if isRequest {
 			turnRequestMessageID = persistedMessage.ID
 		}
 		persisted = append(persisted, persistedMessage)
 	}
-	return persisted
+	return persisted, nil
 }
 
 func (w *Writer) SessionRuntimeSnapshot(ctx context.Context, req runreq.ChatRequest) (string, string) {

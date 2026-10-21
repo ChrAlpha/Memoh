@@ -572,6 +572,19 @@ func (s *DBService) preparePersistMessage(ctx context.Context, input PersistInpu
 	return prepared, nil
 }
 
+// requireRunRowRequest rejects a run's assistant or tool row that names no
+// request row: such a row has no turn of its own, and the store does not guess
+// one. Rows that belong to no run may name none.
+func (p preparedPersistMessage) requireRunRowRequest(input PersistInput) error {
+	if input.SkipHistoryTurn || !p.createArg.RunID.Valid || p.turnRequestMessageID.Valid {
+		return nil
+	}
+	if historyBindingRole(input.Role, input.Metadata) == "user" {
+		return nil
+	}
+	return ErrRunRowTurnNotFound
+}
+
 func (s *DBService) persistDirectWithoutTx(ctx context.Context, input PersistInput) (Message, bool, error) {
 	if input.SkipHistoryTurn || len(input.Assets) > 0 {
 		return Message{}, false, nil
@@ -590,6 +603,9 @@ func (s *DBService) persistDirectWithoutTx(ctx context.Context, input PersistInp
 	}
 	if !prepared.sessionID.Valid {
 		return Message{}, false, nil
+	}
+	if err := prepared.requireRunRowRequest(input); err != nil {
+		return Message{}, true, err
 	}
 	result, pgMsgID, handled, err := persistDirectHistoryMessage(ctx, direct, prepared.createArg, prepared.metadata, input.Role, prepared.turnRequestMessageID, prepared.turn())
 	if err != nil {
@@ -611,6 +627,9 @@ func (s *DBService) persist(ctx context.Context, input PersistInput) (Message, e
 		return Message{}, err
 	}
 	createArg := prepared.createArg
+	if err := prepared.requireRunRowRequest(input); err != nil {
+		return Message{}, err
+	}
 
 	var pgTurnRequestMessageID pgtype.UUID
 	if !input.SkipHistoryTurn {
@@ -633,7 +652,7 @@ func (s *DBService) persist(ctx context.Context, input PersistInput) (Message, e
 
 	result := toMessageFromCreate(row)
 	if !input.SkipHistoryTurn {
-		if err := s.persistHistoryTurn(ctx, prepared.botID, prepared.sessionID, row.ID, historyBindingRole(input.Role, input.Metadata), pgTurnRequestMessageID); err != nil {
+		if err := s.persistHistoryTurn(ctx, prepared.botID, prepared.sessionID, row.ID, historyBindingRole(input.Role, input.Metadata), pgTurnRequestMessageID, prepared.createArg.RunID.Valid); err != nil {
 			s.cleanupPersistedMessage(ctx, row.ID)
 			return Message{}, err
 		}
@@ -745,6 +764,9 @@ func persistDirectHistoryMessage(
 			RunID:                   createArg.RunID,
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
+			if createArg.RunID.Valid {
+				return Message{}, pgtype.UUID{}, true, ErrRunRowTurnNotFound
+			}
 			return Message{}, pgtype.UUID{}, false, nil
 		}
 		if err != nil {
@@ -827,7 +849,12 @@ func (s *DBService) cleanupPersistedMessage(ctx context.Context, messageID pgtyp
 	}
 }
 
-func (s *DBService) persistHistoryTurn(ctx context.Context, botID pgtype.UUID, sessionID pgtype.UUID, messageID pgtype.UUID, role string, requestMessageID pgtype.UUID) error {
+// persistHistoryTurn files a message that is already written under its turn.
+// A run's row belongs to the turn of its request row: fromRun rows that name no
+// request, or whose request is gone or hidden, get ErrRunRowTurnNotFound.
+// Only rows that belong to no run may be appended to the session's latest
+// visible turn.
+func (s *DBService) persistHistoryTurn(ctx context.Context, botID pgtype.UUID, sessionID pgtype.UUID, messageID pgtype.UUID, role string, requestMessageID pgtype.UUID, fromRun bool) error {
 	if s == nil || s.queries == nil || !sessionID.Valid {
 		return nil
 	}
@@ -879,6 +906,9 @@ func (s *DBService) persistHistoryTurn(ctx context.Context, botID pgtype.UUID, s
 				return fmt.Errorf("append assistant message to requested history turn: %w", err)
 			}
 		}
+		if fromRun {
+			return ErrRunRowTurnNotFound
+		}
 		if _, err := writer.AppendMessageToLatestHistoryTurn(ctx, sqlc.AppendMessageToLatestHistoryTurnParams{
 			SessionID: sessionID,
 			MessageID: messageID,
@@ -912,6 +942,9 @@ func (s *DBService) persistHistoryTurn(ctx context.Context, botID pgtype.UUID, s
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return fmt.Errorf("append tool message to requested history turn: %w", err)
 			}
+		}
+		if fromRun {
+			return ErrRunRowTurnNotFound
 		}
 		if _, err := writer.AppendMessageToLatestHistoryTurn(ctx, sqlc.AppendMessageToLatestHistoryTurnParams{
 			SessionID: sessionID,

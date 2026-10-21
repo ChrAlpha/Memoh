@@ -17,6 +17,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -340,7 +341,15 @@ func continuationContext(ctx context.Context) (context.Context, func()) {
 // model runs on from there. live says whether a caller receives the run's
 // events as they happen.
 func (r *Responder) DecidedContinuation(ctx context.Context, call decide.DecidedCall, live bool) Continuation {
-	request, reqErr := r.transcript.ContinuationRequest(ctx, call.SessionID, call.RunHandle)
+	// An answer no session runtime routed has no run to name a request row; its
+	// result is stored without one. A routed run always has, and must find it.
+	var (
+		request messagepkg.RunTurnRequest
+		reqErr  error
+	)
+	if call.RunID != "" {
+		request, reqErr = r.transcript.ContinuationRequest(ctx, call.SessionID, call.RunHandle)
+	}
 	req := runreq.ChatRequest{
 		RunID:                   runreq.RunID(call.RunID),
 		RunHandle:               call.RunHandle,

@@ -22,6 +22,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -33,7 +34,7 @@ import (
 // asked for rather than on an intermediate request value.
 func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess,
-		withFixtureOptions(withAllowedTeam("00000000-0000-0000-0000-000000000001")))
+		withFixtureOptions(withAllowedTeam("00000000-0000-0000-0000-000000000001")), withFixtureMessages(resumeRequestMessages()))
 	service := fixture.fixture.service
 	deadline := time.Now().Add(time.Minute)
 	data := admit.ResumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, UserID: "sender", Query: "original task", DeadlineAt: &deadline}
@@ -46,6 +47,7 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 		RunID:     db.ParseUUIDOrEmpty(uuid.NewString()),
 		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
 		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
+		TurnID:    db.ParseUUIDOrEmpty(uuid.NewString()),
 		InputJson: raw,
 	}
 	done, err := startContinuation(t.Context(), service, row)
@@ -177,7 +179,7 @@ func TestResumeScanWakesPendingAndOnlyUnrecoverableIntentsAreRetired(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		return sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(teamID), RunID: db.ParseUUIDOrEmpty(uuid.NewString()), BotID: db.ParseUUIDOrEmpty(botID), SessionID: db.ParseUUIDOrEmpty(uuid.NewString()), InputJson: raw}
+		return sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(teamID), RunID: db.ParseUUIDOrEmpty(uuid.NewString()), BotID: db.ParseUUIDOrEmpty(botID), SessionID: db.ParseUUIDOrEmpty(uuid.NewString()), TurnID: db.ParseUUIDOrEmpty(uuid.NewString()), InputJson: raw}
 	}
 	expired := row(uuid.NewString(), admit.ResumeContext{Version: 1, ChatID: agenttest.LifecycleBotID, Query: "late", DeadlineAt: &past})
 	unsupported := row(uuid.NewString(), admit.ResumeContext{Version: 2, ChatID: agenttest.LifecycleBotID, Query: "future format"})
@@ -188,6 +190,7 @@ func TestResumeScanWakesPendingAndOnlyUnrecoverableIntentsAreRetired(t *testing.
 	q := newResumeIntentQueries(expired, unsupported, unready, resumable)
 	var unreadyChecks atomic.Int32
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess,
+		withFixtureMessages(resumeRequestMessages()),
 		withFixtureOptions(withAllowedTeam(teamID), withWorkspaceReadiness(func(_ context.Context, botID, _ string) error {
 			if botID == unreadyBot {
 				unreadyChecks.Add(1)
@@ -221,4 +224,10 @@ func TestResumeScanWakesPendingAndOnlyUnrecoverableIntentsAreRetired(t *testing.
 	if len(inputs) != 1 || inputs[0].InvocationID != "resume:"+resumable.RunID.String() {
 		t.Fatalf("admission=%+v, want only the resumable run", inputs)
 	}
+}
+
+// resumeRequestMessages is a history that holds the request row of whichever
+// run is resumed.
+func resumeRequestMessages() *agenttest.RecordingMessages {
+	return &agenttest.RecordingMessages{RunRequest: &messagepkg.RunTurnRequest{MessageID: uuid.NewString(), TurnID: uuid.NewString(), TurnPosition: 1}}
 }

@@ -452,7 +452,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 // of, from the intent it saved.
 func driveResume(t *testing.T) []sdk.Request {
 	t.Helper()
-	fixture, recorder := newDriveRequestFixture(t, withFixtureOptions(withAllowedTeam(driveTeamID)))
+	fixture, recorder := newDriveRequestFixture(t, withFixtureOptions(withAllowedTeam(driveTeamID)), withFixtureMessages(&resumeTurnMessages{requestMessageID: driveRequestMessageID}))
 	raw, err := json.Marshal(map[string]any{"resume": admit.ResumeContext{
 		Version:           1,
 		Query:             directLifecyclePrompt,
@@ -471,6 +471,7 @@ func driveResume(t *testing.T) []sdk.Request {
 		RunID:     db.ParseUUIDOrEmpty(driveInterruptedRunID),
 		BotID:     db.ParseUUIDOrEmpty(agenttest.LifecycleBotID),
 		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
+		TurnID:    db.ParseUUIDOrEmpty(driveReplacedTurnID),
 		InputJson: raw,
 	})
 	if err != nil {
@@ -558,7 +559,7 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 		ToolCallID: approval.ToolCallID, ToolName: approval.ToolName,
 		Result: sdk.TextOutput("command finished"),
 	}
-	call := fixture.service.decider.ToolApprovalCall(decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, sessionruntime.RunHandle{}))
+	call := fixture.service.decider.ToolApprovalCall(decide.NewCommittedToolApproval(approval, input, false))
 	call.Verdict, call.Result = decide.VerdictAnswered, result
 	cont := fixture.service.answer.DecidedContinuation(context.Background(), call, true)
 	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
