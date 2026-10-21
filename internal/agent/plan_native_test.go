@@ -662,8 +662,8 @@ type decisionHistory struct {
 	err       error
 }
 
-func (m *decisionHistory) GetRunTurnRequestMessageID(context.Context, string, string, string) (string, error) {
-	return m.requestID, m.err
+func (m *decisionHistory) GetRunTurnRequest(context.Context, string, string, string) (messagepkg.RunTurnRequest, error) {
+	return messagepkg.RunTurnRequest{MessageID: m.requestID}, m.err
 }
 
 const planWorkspaceTargetID = "plan-workspace-target"

@@ -84,11 +84,10 @@ func TestDiscussRunJoinsTheBatchHeadTurn(t *testing.T) {
 	}
 }
 
-// A continuation joins the interrupted run's turn and takes over its intent:
-// interrupted again, only the continuation is owed.
-func TestContinuationJoinsTheInterruptedTurnAndOnlyTheLatestIsOwed(t *testing.T) {
-	ctx := context.Background()
-	env := newDiscussEnv(t, "group")
+// interruptedDiscussRun answers one passive message and marks that run lost, the
+// way a restart leaves it, and returns it with the turn it ran in.
+func interruptedDiscussRun(t *testing.T, env discussEnv) (runID, invocation string, original runTurn) {
+	t.Helper()
 	alice := env.participant(t, false)
 	proc := newDiscussProcess(t, env, &discussStep{send: "starting"})
 	hw := env.write(t, passiveInput{from: alice, externalID: "m1", text: "long task"})
@@ -96,32 +95,48 @@ func TestContinuationJoinsTheInterruptedTurnAndOnlyTheLatestIsOwed(t *testing.T)
 	require.Equal(t, pending.DiscussAdmitted, outcome)
 	waitDiscussRun(t, done)
 	interrupted := env.waitRunState(t, env.invocation(hw), "completed")
-	_, err := env.pool.Exec(ctx, `UPDATE session_runs SET state = 'lost', error_code = 'session_runtime.interrupted' WHERE run_id = $1`, interrupted.runID)
+	_, err := env.pool.Exec(context.Background(), `UPDATE session_runs SET state = 'lost', error_code = 'session_runtime.interrupted' WHERE run_id = $1`, interrupted.runID)
 	require.NoError(t, err)
-	original := env.runTurn(t, env.invocation(hw))
-	before := env.counter(t)
+	return interrupted.runID, env.invocation(hw), env.runTurn(t, env.invocation(hw))
+}
 
+// resumeInterrupted starts the continuation the ledger owes for runID in a
+// process of its own and waits for it to end.
+func resumeInterrupted(t *testing.T, env discussEnv, runID string, steps ...*discussStep) {
+	t.Helper()
+	ctx := context.Background()
 	rows, err := dbsqlc.New(env.pool).ListInterruptedSessionRuns(ctx, db.ParseUUIDOrEmpty(uuid.Nil.String()))
 	require.NoError(t, err)
 	var row dbsqlc.SessionRun
 	for _, candidate := range rows {
-		if candidate.RunID.String() == interrupted.runID {
+		if candidate.RunID.String() == runID {
 			row = candidate
 		}
 	}
 	require.True(t, row.RunID.Valid, "the interrupted run is owed a continuation")
-	proc = newDiscussProcessWith(t, env, []discussOption{
+	proc := newDiscussProcessWith(t, env, []discussOption{
 		discussTeam(row.TeamID.String()),
 		discussDeps(func(d *Deps) {
 			d.Accounts = accounts.NewService(nil, titleModelAccountStore{account: dbstore.AccountRecord{ID: env.ownerID, IsActive: true}})
 			d.BotPermissions = &agenttest.PermissionChecker{Values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
 		}),
-	})
+	}, steps...)
 	resumed, err := startContinuation(ctx, proc.svc, row)
 	require.NoError(t, err)
 	waitDiscussRun(t, resumed)
+}
 
-	invocation := "resume:" + interrupted.runID
+// A continuation joins the interrupted run's turn and takes over its intent:
+// interrupted again, only the continuation is owed.
+func TestContinuationJoinsTheInterruptedTurnAndOnlyTheLatestIsOwed(t *testing.T) {
+	ctx := context.Background()
+	env := newDiscussEnv(t, "group")
+	runID, _, original := interruptedDiscussRun(t, env)
+	before := env.counter(t)
+
+	resumeInterrupted(t, env, runID)
+
+	invocation := "resume:" + runID
 	require.Equal(t, original, env.runTurn(t, invocation), "the continuation takes the interrupted run's turn")
 	require.Equal(t, before, env.counter(t), "joining a turn draws no position")
 	for _, turnID := range env.rowsOfRun(t, invocation) {
@@ -130,13 +145,13 @@ func TestContinuationJoinsTheInterruptedTurnAndOnlyTheLatestIsOwed(t *testing.T)
 
 	// Interrupted a second time, it alone is owed: the source's intent ended
 	// with the admission, though both runs hold the same position.
-	_, err = env.pool.Exec(ctx, `
+	_, err := env.pool.Exec(ctx, `
 		UPDATE session_runs SET state = 'lost', error_code = 'session_runtime.interrupted',
 		       input_json = input_json || '{"resume":{"version":1,"chat_id":"c"}}'::jsonb
 		WHERE session_id = $1 AND invocation_id = $2`, env.sessionID, invocation)
 	require.NoError(t, err)
 	var owed []string
-	rows, err = dbsqlc.New(env.pool).ListInterruptedSessionRuns(ctx, db.ParseUUIDOrEmpty(uuid.Nil.String()))
+	rows, err := dbsqlc.New(env.pool).ListInterruptedSessionRuns(ctx, db.ParseUUIDOrEmpty(uuid.Nil.String()))
 	require.NoError(t, err)
 	for _, candidate := range rows {
 		if candidate.SessionID.String() == env.sessionID {
@@ -144,4 +159,38 @@ func TestContinuationJoinsTheInterruptedTurnAndOnlyTheLatestIsOwed(t *testing.T)
 		}
 	}
 	require.Equal(t, []string{invocation}, owed)
+}
+
+// A steer applied inside the interrupted run opens a later turn, and the
+// continuation answers that turn's request row. It joins the turn that row
+// belongs to, so every row it writes is in its own turn and no position is
+// drawn.
+func TestContinuationJoinsTheTurnOfTheRequestItAnswers(t *testing.T) {
+	ctx := context.Background()
+	env := newDiscussEnv(t, "group")
+	runID, _, original := interruptedDiscussRun(t, env)
+
+	var steerTurn runTurn
+	steerTurn.turnID = uuid.NewString()
+	require.NoError(t, env.pool.QueryRow(ctx, `
+		UPDATE bot_sessions SET next_turn_position = next_turn_position + 1
+		WHERE id = $1 RETURNING next_turn_position - 1`, env.sessionID).Scan(&steerTurn.position))
+	_, err := env.pool.Exec(ctx, `
+		INSERT INTO bot_history_messages (id, bot_id, session_id, role, content, run_id, turn_id, turn_position, turn_message_seq, turn_visible)
+		VALUES ($1, $2, $3, 'user', '{"role":"user","content":"steer"}', $4, $5, $6, 1, true)`,
+		uuid.NewString(), env.botID, env.sessionID, runID, steerTurn.turnID, steerTurn.position)
+	require.NoError(t, err)
+	require.Greater(t, steerTurn.position, original.position)
+	before := env.counter(t)
+
+	resumeInterrupted(t, env, runID, &discussStep{send: "resumed"})
+
+	invocation := "resume:" + runID
+	require.Equal(t, steerTurn, env.runTurn(t, invocation), "the continuation joins the steer's turn, not the run's root turn")
+	require.Equal(t, before, env.counter(t), "joining a turn draws no position")
+	written := env.rowsOfRun(t, invocation)
+	require.NotEmpty(t, written)
+	for _, turnID := range written {
+		require.Equal(t, steerTurn.turnID, turnID, "every row the continuation wrote is in its own turn")
+	}
 }

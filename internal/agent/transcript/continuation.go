@@ -5,23 +5,26 @@ import (
 	"strings"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-type continuationTurnRequestMessageResolver interface {
-	GetRunTurnRequestMessageID(context.Context, string, string, string) (string, error)
+type continuationTurnRequestResolver interface {
+	GetRunTurnRequest(context.Context, string, string, string) (messagepkg.RunTurnRequest, error)
 }
 
-func (t *Reader) ContinuationRequestMessageID(ctx context.Context, sessionID string, runHandle sessionruntime.RunHandle) (string, error) {
+// ContinuationRequest is the request row a continuation of runHandle answers
+// and the turn that row belongs to. An applied steer opens a later turn within
+// the run. Its next tool result and resumed model output belong there, even
+// though admission's run handle still names the original request turn. The
+// result is empty when the run names no turn or the store cannot resolve one.
+func (t *Reader) ContinuationRequest(ctx context.Context, sessionID string, runHandle sessionruntime.RunHandle) (messagepkg.RunTurnRequest, error) {
 	turnID := strings.TrimSpace(runHandle.TurnID)
 	if turnID == "" {
-		return "", nil
+		return messagepkg.RunTurnRequest{}, nil
 	}
-	resolver, ok := t.messages.(continuationTurnRequestMessageResolver)
+	resolver, ok := t.messages.(continuationTurnRequestResolver)
 	if !ok {
-		return "", nil
+		return messagepkg.RunTurnRequest{}, nil
 	}
-	// An applied steer opens a later turn within this run. Its next tool
-	// result and resumed model output belong there, even though admission's
-	// run handle still names the original request turn.
-	return resolver.GetRunTurnRequestMessageID(ctx, sessionID, strings.TrimSpace(runHandle.RunID), turnID)
+	return resolver.GetRunTurnRequest(ctx, sessionID, strings.TrimSpace(runHandle.RunID), turnID)
 }

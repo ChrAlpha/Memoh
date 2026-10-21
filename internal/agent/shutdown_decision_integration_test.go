@@ -103,12 +103,12 @@ func TestPostgresRedisDecisionSurvivesGracefulShutdown(t *testing.T) {
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			return err
 		}
-		requestID, err := service.transcript.ContinuationRequestMessageID(runCtx, sessionID, handle)
+		request, err := service.transcript.ContinuationRequest(runCtx, sessionID, handle)
 		if err != nil {
 			return err
 		}
-		if requestID != requestMessageID {
-			return fmt.Errorf("continuation request id = %q, want %q", requestID, requestMessageID)
+		if request.MessageID != requestMessageID {
+			return fmt.Errorf("continuation request id = %q, want %q", request.MessageID, requestMessageID)
 		}
 		// Commit through the same application service used by the routed handler.
 		if _, err := service.decider.CommitUserInputResponse(commandCtx, input); err != nil {

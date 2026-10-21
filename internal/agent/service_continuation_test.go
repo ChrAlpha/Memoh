@@ -16,28 +16,28 @@ type continuationTurnRequestResolver struct {
 	rootTurnID       string
 }
 
-func (s *continuationTurnRequestResolver) GetRunTurnRequestMessageID(_ context.Context, sessionID, runID, rootTurnID string) (string, error) {
+func (s *continuationTurnRequestResolver) GetRunTurnRequest(_ context.Context, sessionID, runID, rootTurnID string) (messagepkg.RunTurnRequest, error) {
 	s.sessionID, s.runID, s.rootTurnID = sessionID, runID, rootTurnID
-	return s.requestMessageID, nil
+	return messagepkg.RunTurnRequest{MessageID: s.requestMessageID, TurnID: "request-turn-id", TurnPosition: 7}, nil
 }
 
-func TestContinuationTurnRequestMessageIDUsesAdmittedTurn(t *testing.T) {
+func TestContinuationRequestUsesAdmittedTurn(t *testing.T) {
 	t.Parallel()
 
 	messages := &continuationTurnRequestResolver{
 		requestMessageID: "request-message-id",
 	}
 	service := newTestService(t, Deps{Messages: messages})
-	got, err := service.transcript.ContinuationRequestMessageID(
+	got, err := service.transcript.ContinuationRequest(
 		context.Background(),
 		"session-id",
 		sessionruntime.RunHandle{RunID: "run-id", TurnID: "turn-id"},
 	)
 	if err != nil {
-		t.Fatalf("continuationTurnRequestMessageID() error = %v", err)
+		t.Fatalf("ContinuationRequest() error = %v", err)
 	}
-	if got != "request-message-id" {
-		t.Fatalf("continuation request message ID = %q, want %q", got, "request-message-id")
+	if got.MessageID != "request-message-id" || got.TurnID != "request-turn-id" || got.TurnPosition != 7 {
+		t.Fatalf("continuation request = %#v, want the resolver's row with its turn", got)
 	}
 	if messages.sessionID != "session-id" || messages.runID != "run-id" || messages.rootTurnID != "turn-id" {
 		t.Fatalf("continuation lookup omitted run/turn identity: %#v", messages)

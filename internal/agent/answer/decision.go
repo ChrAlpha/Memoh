@@ -340,7 +340,7 @@ func continuationContext(ctx context.Context) (context.Context, func()) {
 // model runs on from there. live says whether a caller receives the run's
 // events as they happen.
 func (r *Responder) DecidedContinuation(ctx context.Context, call decide.DecidedCall, live bool) Continuation {
-	requestMessageID, reqErr := r.transcript.ContinuationRequestMessageID(ctx, call.SessionID, call.RunHandle)
+	request, reqErr := r.transcript.ContinuationRequest(ctx, call.SessionID, call.RunHandle)
 	req := runreq.ChatRequest{
 		RunID:                   runreq.RunID(call.RunID),
 		RunHandle:               call.RunHandle,
@@ -352,7 +352,7 @@ func (r *Responder) DecidedContinuation(ctx context.Context, call decide.Decided
 		ReplyTarget:             call.ReplyTarget,
 		ConversationType:        call.ConversationType,
 		UserMessagePersisted:    true,
-		PersistedUserMessageID:  requestMessageID,
+		PersistedUserMessageID:  request.MessageID,
 		// An answer stored as a tool result schedules no user-message memory
 		// extraction.
 		SkipMemoryExtraction: call.SkipMemoryExtraction,

@@ -153,6 +153,14 @@ type ToolTailRoundPersister interface {
 	PersistToolTailRound(ctx context.Context, inputs []PersistInput) ([]Message, bool, error)
 }
 
+// RunTurnRequest is the request row a run is answering and the history turn
+// that row belongs to.
+type RunTurnRequest struct {
+	MessageID    string
+	TurnID       string
+	TurnPosition int64
+}
+
 type TurnReplacement struct {
 	OldTurnID               string
 	ReplacementTurnID       string

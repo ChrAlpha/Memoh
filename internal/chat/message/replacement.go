@@ -16,7 +16,7 @@ type boundReplacementQueries interface {
 	LockHistoryTurnReplacementSession(context.Context, sqlc.LockHistoryTurnReplacementSessionParams) (pgtype.UUID, error)
 	CloneHistoryTurnRequestForRetry(context.Context, sqlc.CloneHistoryTurnRequestForRetryParams) (pgtype.UUID, error)
 	SelectBoundHistoryTurnReplacement(context.Context, sqlc.SelectBoundHistoryTurnReplacementParams) (pgtype.UUID, error)
-	GetRunHistoryTurnRequestMessageID(context.Context, sqlc.GetRunHistoryTurnRequestMessageIDParams) (pgtype.UUID, error)
+	GetRunHistoryTurnRequest(context.Context, sqlc.GetRunHistoryTurnRequestParams) (sqlc.GetRunHistoryTurnRequestRow, error)
 }
 
 // persistBoundMessages is shared by step commits and terminal round commits.
@@ -165,27 +165,31 @@ func (s *DBService) selectBoundReplacement(ctx context.Context, input PersistInp
 	return s.updateReplacementSessionMetadata(ctx, input.SessionID, replacement.SessionMetadata)
 }
 
-// GetRunTurnRequestMessageID follows applied input within the run. The root
-// fallback also supports inbound requests persisted before run admission.
-func (s *DBService) GetRunTurnRequestMessageID(ctx context.Context, sessionID, runID, rootTurnID string) (string, error) {
+// GetRunTurnRequest follows applied input within the run: the request row the
+// run is answering now and the turn that row belongs to. The root fallback
+// also supports inbound requests persisted before run admission.
+func (s *DBService) GetRunTurnRequest(ctx context.Context, sessionID, runID, rootTurnID string) (RunTurnRequest, error) {
 	reader, ok := s.queries.(boundReplacementQueries)
 	if !ok {
-		return "", errors.New("message store does not support run request lookup")
+		return RunTurnRequest{}, errors.New("message store does not support run request lookup")
 	}
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
-		return "", err
+		return RunTurnRequest{}, err
 	}
 	pgRunID, err := dbpkg.ParseUUID(runID)
 	if err != nil {
-		return "", err
+		return RunTurnRequest{}, err
 	}
 	pgTurnID, err := dbpkg.ParseUUID(rootTurnID)
 	if err != nil {
-		return "", err
+		return RunTurnRequest{}, err
 	}
-	id, err := reader.GetRunHistoryTurnRequestMessageID(ctx, sqlc.GetRunHistoryTurnRequestMessageIDParams{
+	row, err := reader.GetRunHistoryTurnRequest(ctx, sqlc.GetRunHistoryTurnRequestParams{
 		SessionID: pgSessionID, RunID: pgRunID, RootTurnID: pgTurnID,
 	})
-	return id.String(), err
+	if err != nil {
+		return RunTurnRequest{}, err
+	}
+	return RunTurnRequest{MessageID: row.ID.String(), TurnID: row.TurnID.String(), TurnPosition: row.TurnPosition.Int64}, nil
 }

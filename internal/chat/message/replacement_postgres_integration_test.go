@@ -125,9 +125,13 @@ func TestPostgresRuntimeFenceReplacementSteerDecisionContinuation(t *testing.T) 
 			assertBoundReplacementRow(t, f, deferred[0].ID, f.replacement.ReplacementTurnID, 3, true)
 			assertBoundReplacementRow(t, f, deferred[1].ID, slot.TurnID, 1, true)
 			assertBoundReplacementRow(t, f, deferred[2].ID, slot.TurnID, 2, true)
-			requestID, err := f.service.GetRunTurnRequestMessageID(f.owner, f.sessionID.String(), f.runID, f.replacement.ReplacementTurnID)
+			request, err := f.service.GetRunTurnRequest(f.owner, f.sessionID.String(), f.runID, f.replacement.ReplacementTurnID)
+			requestID := request.MessageID
 			if err != nil || requestID != deferred[1].ID {
-				t.Fatalf("continuation request = %q, %v, want steer %s", requestID, err, deferred[1].ID)
+				t.Fatalf("continuation request = %#v, %v, want steer %s", request, err, deferred[1].ID)
+			}
+			if request.TurnID != slot.TurnID || request.TurnPosition != slot.Position {
+				t.Fatalf("continuation request turn = (%s, %d), want the steer's (%s, %d)", request.TurnID, request.TurnPosition, slot.TurnID, slot.Position)
 			}
 			result, err := f.service.Persist(f.owner, f.input("tool", `{"role":"tool","content":[{"type":"tool-result","toolCallId":"decision","result":{"approved":true}}]}`, requestID))
 			if err != nil {

@@ -2505,8 +2505,8 @@ func (q *Queries) GetMessageByIDBySession(ctx context.Context, arg GetMessageByI
 	return i, err
 }
 
-const getRunHistoryTurnRequestMessageID = `-- name: GetRunHistoryTurnRequestMessageID :one
-SELECT request.id
+const getRunHistoryTurnRequest = `-- name: GetRunHistoryTurnRequest :one
+SELECT request.id, request.turn_id, request.turn_position
 FROM bot_history_messages request
 WHERE request.team_id = public.memoh_current_team_id()
   AND request.session_id = $1
@@ -2517,18 +2517,25 @@ ORDER BY request.turn_position DESC
 LIMIT 1
 `
 
-type GetRunHistoryTurnRequestMessageIDParams struct {
+type GetRunHistoryTurnRequestParams struct {
 	SessionID  pgtype.UUID `json:"session_id"`
 	RunID      pgtype.UUID `json:"run_id"`
 	RootTurnID pgtype.UUID `json:"root_turn_id"`
 }
 
-// Resolve the most recent applied input of this run, including steer turns.
-func (q *Queries) GetRunHistoryTurnRequestMessageID(ctx context.Context, arg GetRunHistoryTurnRequestMessageIDParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, getRunHistoryTurnRequestMessageID, arg.SessionID, arg.RunID, arg.RootTurnID)
-	var id pgtype.UUID
-	err := row.Scan(&id)
-	return id, err
+type GetRunHistoryTurnRequestRow struct {
+	ID           pgtype.UUID `json:"id"`
+	TurnID       pgtype.UUID `json:"turn_id"`
+	TurnPosition pgtype.Int8 `json:"turn_position"`
+}
+
+// Resolve the most recent applied input of this run, including steer turns,
+// with the turn it belongs to.
+func (q *Queries) GetRunHistoryTurnRequest(ctx context.Context, arg GetRunHistoryTurnRequestParams) (GetRunHistoryTurnRequestRow, error) {
+	row := q.db.QueryRow(ctx, getRunHistoryTurnRequest, arg.SessionID, arg.RunID, arg.RootTurnID)
+	var i GetRunHistoryTurnRequestRow
+	err := row.Scan(&i.ID, &i.TurnID, &i.TurnPosition)
+	return i, err
 }
 
 const getTurnAgentTurnID = `-- name: GetTurnAgentTurnID :one

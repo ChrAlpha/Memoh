@@ -29,6 +29,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/bots"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
@@ -262,10 +263,28 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 		cancel()
 		return nil, err
 	}
+	// The interrupted turn's request row is already in history, and the
+	// continuation's steps are filed under it. The run answers that row, so it
+	// joins the turn the row belongs to: the interrupted run's root turn, or the
+	// later turn an applied steer opened. When the saved query restates the task
+	// in the instruction below, context assembly drops the history copy so the
+	// model sees the task once; a run whose task is only that row (a discuss
+	// batch) keeps it. Without a resolvable row (older records, lookup failure)
+	// the steps cannot be filed under it, both copies stay, and the run joins
+	// its root turn.
+	join := ledger.Turn{ID: runreq.PGUUIDString(row.TurnID), Position: row.TurnPosition}
+	request, lookupErr := c.transcript.ContinuationRequest(ctx, row.SessionID.String(), sessionruntime.RunHandle{RunID: row.RunID.String(), TurnID: join.ID})
+	if lookupErr != nil {
+		c.logger.WarnContext(ctx, "resume request message lookup failed", slog.String("run_id", row.RunID.String()), slog.Any("error", lookupErr))
+		request = messagepkg.RunTurnRequest{}
+	}
+	if request.TurnID != "" {
+		join = ledger.Turn{ID: request.TurnID, Position: request.TurnPosition}
+	}
 	runCtx, admission, _, err := c.admit.Triggered(runBase, admit.Trigger{
 		BotID: row.BotID.String(), ThreadID: row.SessionID.String(), InvocationID: "resume:" + row.RunID.String(),
 		Submission: payload, StopCause: outcome.ErrRunStopped, ResumeRunID: row.RunID.String(),
-		JoinTurn: &ledger.Turn{ID: runreq.PGUUIDString(row.TurnID), Position: row.TurnPosition},
+		JoinTurn: &join,
 	})
 	if err != nil {
 		cancel()
@@ -276,20 +295,9 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 		}
 		return nil, err
 	}
-	// The interrupted turn's request row is already in history, and the
-	// continuation's steps are filed under it. When the saved query restates
-	// the task in the instruction below, context assembly drops the history copy
-	// so the model sees the task once; a run whose task is only that row (a
-	// discuss batch) keeps it. Without a resolvable row (older records, lookup
-	// failure) the steps cannot be filed under it and both copies stay.
-	requestMessageID, lookupErr := c.transcript.ContinuationRequestMessageID(ctx, row.SessionID.String(), sessionruntime.RunHandle{RunID: row.RunID.String(), TurnID: runreq.PGUUIDString(row.TurnID)})
-	if lookupErr != nil {
-		c.logger.WarnContext(runCtx, "resume request message lookup failed", slog.String("run_id", admission.RunID), slog.Any("error", lookupErr))
-		requestMessageID = ""
-	}
 	req := runreq.ChatRequest{
 		BotID: row.BotID.String(), ThreadID: row.SessionID.String(), ChatID: data.ChatID,
-		PersistedUserMessageID: requestMessageID, RequestStaysInContext: data.Query == "",
+		PersistedUserMessageID: request.MessageID, RequestStaysInContext: data.Query == "",
 		RunID: admission.RunID, RunHandle: admission.Handle, TurnID: admission.TurnID, TurnPosition: &admission.TurnPosition,
 		Query: Instruction + data.Query, UserID: data.UserID, SourceChannelIdentityID: data.ChannelIdentityID,
 		Token: token, ChatToken: chatToken, CurrentChannel: data.CurrentChannel, ReplyTarget: data.ReplyTarget,

@@ -1223,9 +1223,10 @@ WITH replacement AS MATERIALIZED (
 SELECT replacement.turn_id FROM replacement
 WHERE EXISTS (SELECT 1 FROM hidden);
 
--- name: GetRunHistoryTurnRequestMessageID :one
--- Resolve the most recent applied input of this run, including steer turns.
-SELECT request.id
+-- name: GetRunHistoryTurnRequest :one
+-- Resolve the most recent applied input of this run, including steer turns,
+-- with the turn it belongs to.
+SELECT request.id, request.turn_id, request.turn_position
 FROM bot_history_messages request
 WHERE request.team_id = public.memoh_current_team_id()
   AND request.session_id = sqlc.arg(session_id)

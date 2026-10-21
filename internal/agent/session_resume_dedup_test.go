@@ -23,8 +23,8 @@ type resumeTurnMessages struct {
 	requestMessageID string
 }
 
-func (m *resumeTurnMessages) GetRunTurnRequestMessageID(context.Context, string, string, string) (string, error) {
-	return m.requestMessageID, nil
+func (m *resumeTurnMessages) GetRunTurnRequest(_ context.Context, _, _, rootTurnID string) (messagepkg.RunTurnRequest, error) {
+	return messagepkg.RunTurnRequest{MessageID: m.requestMessageID, TurnID: rootTurnID}, nil
 }
 
 // resumeProviderRequests resumes an interrupted run whose request row is in
