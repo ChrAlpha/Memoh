@@ -23,6 +23,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/bots"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	sessiontest "github.com/felinics/memoh/internal/testutil/sessionruntime"
 )
@@ -228,7 +229,7 @@ func TestRuntimeUserInputCommandCommitsAndResumesSameRun(t *testing.T) {
 	if err := manager.Start(context.Background()); err != nil {
 		t.Fatalf("start runtime manager: %v", err)
 	}
-	resolver := newTestService(t, Deps{SessionRuntime: manager}, withManagerEvents(manager), withDecide(func(d *decide.Deps) { d.UserInput = fake }), withAnswer(func(d *answer.Deps) {
+	resolver := newTestService(t, Deps{SessionRuntime: manager, Messages: &agenttest.RecordingMessages{RunRequest: &messagepkg.RunTurnRequest{MessageID: "request-message-id", TurnID: "request-turn-id"}}}, withManagerEvents(manager), withDecide(func(d *decide.Deps) { d.UserInput = fake }), withAnswer(func(d *answer.Deps) {
 		d.Continuer = continueFunc(func(context.Context, decide.DecidedCall, runreq.ChatRequest, bool) (drive.RunPlan, error) {
 			continuationStartedOnce.Do(func() { close(continuationStarted) })
 			return drive.RunPlan{Exec: runFuncExecutor(func(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {

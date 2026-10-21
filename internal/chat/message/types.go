@@ -274,6 +274,9 @@ type Service interface {
 	ListBeforeMessageBySession(ctx context.Context, sessionID string, beforeMessageID string, limit int32) ([]Message, error)
 	LocateByExternalIDBySession(ctx context.Context, sessionID string, externalMessageID string, beforeLimit int32, afterLimit int32) (LocateResult, error)
 	GetByIDBySession(ctx context.Context, sessionID string, messageID string) (Message, error)
+	// GetRunTurnRequest finds the request row a run answers and its turn, or
+	// reports ErrRunRequestNotFound.
+	GetRunTurnRequest(ctx context.Context, sessionID, runID, rootTurnID string) (RunTurnRequest, error)
 	ListVisibleFromBySession(ctx context.Context, sessionID string, messageID string) ([]Message, error)
 	// ListVisibleFromForModelBySession is ListVisibleFromBySession for a window
 	// that reaches a model: ContextIncludesUnadmittedPassive decides whether

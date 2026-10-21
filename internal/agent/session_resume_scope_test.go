@@ -18,8 +18,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runreq"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -235,7 +237,11 @@ func TestPostgresResumeScopesUseOrdinaryRoleAndPreserveTenantIntoExecution(t *te
 	// those reads ran under is how the binding is observed: a turn that ran
 	// under another tenant's scope would be reading another team's rows.
 	s, admitter := newAdmittedTurnTestService(t, withLogger(slog.Default()),
-		withDeps(func(d *Deps) { d.Queries = q }), withTeamScopes(scopes))
+		withDeps(func(d *Deps) {
+			d.Queries = q
+			// The interrupted runs' request rows are in history.
+			d.Messages = &agenttest.RecordingMessages{RunRequest: &messagepkg.RunTurnRequest{MessageID: uuid.NewString(), TurnID: uuid.NewString(), TurnPosition: 1}}
+		}), withTeamScopes(scopes))
 	scan := resume.Scan{}
 	for range 2 {
 		if err := s.resume.ScanInterrupted(ctx, &scan); err != nil {

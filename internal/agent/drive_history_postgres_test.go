@@ -173,6 +173,14 @@ func TestDriveHistoryResumeWritesNoConversationRows(t *testing.T) {
 		sessionruntime.RunErrorInterrupted, intent); err != nil {
 		t.Fatalf("seed interrupted run: %v", err)
 	}
+	// The request the interrupted run was answering is already in history.
+	requestID := uuid.NewString()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO bot_history_messages (id, bot_id, session_id, role, content, run_id, turn_id, turn_position, turn_message_seq, turn_visible)
+		VALUES ($1, $2, $3, 'user', '{"role":"user","content":"finish the task"}', $4, $5, 1, 1, true)
+	`, requestID, botID, sessionID, interruptedID, interruptedTurnID); err != nil {
+		t.Fatalf("seed request row: %v", err)
+	}
 
 	done, err := startContinuation(ctx, service, dbsqlc.SessionRun{
 		TeamID:       db.ParseUUIDOrEmpty(runreq.SingleTeam("").CurrentScope(ctx)),
@@ -193,7 +201,7 @@ func TestDriveHistoryResumeWritesNoConversationRows(t *testing.T) {
 	}
 
 	rows := historyRowsFor(t, fixture, sessionID)
-	if len(rows) != 0 {
-		t.Fatalf("resume wrote conversation history: %+v", rows)
+	if len(rows) != 1 || rows[0].ID != requestID {
+		t.Fatalf("resume wrote conversation history beyond the request row: %+v", rows)
 	}
 }

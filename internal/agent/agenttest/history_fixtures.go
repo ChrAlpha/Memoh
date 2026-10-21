@@ -172,3 +172,8 @@ func PersistedHistoryMessage(t *testing.T, id string, role string, text string) 
 		Content: content,
 	}
 }
+
+// GetRunTurnRequest reports no request row: the double stores none.
+func (*AssembleMessages) GetRunTurnRequest(context.Context, string, string, string) (messagepkg.RunTurnRequest, error) {
+	return messagepkg.RunTurnRequest{}, messagepkg.ErrRunRequestNotFound
+}

@@ -18,6 +18,8 @@ type RecordingMessages struct {
 	ReplacementTurnID       string
 	ReplacementTurnPosition *int64
 	Deleted                 [][]string
+	// RunRequest is the request row GetRunTurnRequest finds; nil finds none.
+	RunRequest *messagepkg.RunTurnRequest
 }
 
 func (s *RecordingMessages) Persist(_ context.Context, input messagepkg.PersistInput) (messagepkg.Message, error) {
@@ -167,4 +169,12 @@ func (*RecordingMessages) DeleteBySession(context.Context, string) error {
 
 func (*RecordingMessages) LinkAssets(context.Context, string, []messagepkg.AssetRef) error {
 	return nil
+}
+
+// GetRunTurnRequest finds RunRequest, or reports no request row.
+func (s *RecordingMessages) GetRunTurnRequest(context.Context, string, string, string) (messagepkg.RunTurnRequest, error) {
+	if s.RunRequest != nil {
+		return *s.RunRequest, nil
+	}
+	return messagepkg.RunTurnRequest{}, messagepkg.ErrRunRequestNotFound
 }

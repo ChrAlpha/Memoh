@@ -1186,3 +1186,7 @@ func messageContentTextForTest(message sdk.Message) string {
 	}
 	return b.String()
 }
+
+func (*fakeAgentMessageService) GetRunTurnRequest(context.Context, string, string, string) (messagepkg.RunTurnRequest, error) {
+	return messagepkg.RunTurnRequest{}, messagepkg.ErrRunRequestNotFound
+}

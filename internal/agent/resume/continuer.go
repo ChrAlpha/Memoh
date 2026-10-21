@@ -269,15 +269,21 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 	// later turn an applied steer opened. When the saved query restates the task
 	// in the instruction below, context assembly drops the history copy so the
 	// model sees the task once; a run whose task is only that row (a discuss
-	// batch) keeps it. Without a resolvable row (older records, lookup failure)
-	// the steps cannot be filed under it, both copies stay, and the run joins
-	// its root turn.
-	join := ledger.Turn{ID: runreq.PGUUIDString(row.TurnID), Position: row.TurnPosition}
-	request, lookupErr := c.transcript.ContinuationRequest(ctx, row.SessionID.String(), sessionruntime.RunHandle{RunID: row.RunID.String(), TurnID: join.ID})
-	if lookupErr != nil {
-		c.logger.WarnContext(ctx, "resume request message lookup failed", slog.String("run_id", row.RunID.String()), slog.Any("error", lookupErr))
-		request = messagepkg.RunTurnRequest{}
+	// batch) keeps it. A failed lookup leaves the intent for the next trigger; a
+	// run with no row has nothing to answer.
+	root := ledger.Turn{ID: runreq.PGUUIDString(row.TurnID), Position: row.TurnPosition}
+	request, err := c.transcript.ContinuationRequest(ctx, row.SessionID.String(), sessionruntime.RunHandle{RunID: row.RunID.String(), TurnID: root.ID})
+	if errors.Is(err, messagepkg.ErrRunRequestNotFound) {
+		cancel()
+		return nil, fmt.Errorf("%w: the interrupted run's request row is not in history: %w", runreq.ErrResumeUnrecoverable, err)
 	}
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	// A record written before turns were tracked names no turn, so there is no
+	// row to look for; it joins its root turn.
+	join := root
 	if request.TurnID != "" {
 		join = ledger.Turn{ID: request.TurnID, Position: request.TurnPosition}
 	}

@@ -10,7 +10,9 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/pending"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/bots"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -100,9 +102,9 @@ func interruptedDiscussRun(t *testing.T, env discussEnv) (runID, invocation stri
 	return interrupted.runID, env.invocation(hw), env.runTurn(t, env.invocation(hw))
 }
 
-// resumeInterrupted starts the continuation the ledger owes for runID in a
-// process of its own and waits for it to end.
-func resumeInterrupted(t *testing.T, env discussEnv, runID string, steps ...*discussStep) {
+// startInterrupted starts the continuation the ledger owes for runID in a
+// process of its own and returns what the start gave.
+func startInterrupted(t *testing.T, env discussEnv, runID string, steps ...*discussStep) (<-chan struct{}, error) {
 	t.Helper()
 	ctx := context.Background()
 	rows, err := dbsqlc.New(env.pool).ListInterruptedSessionRuns(ctx, db.ParseUUIDOrEmpty(uuid.Nil.String()))
@@ -121,9 +123,68 @@ func resumeInterrupted(t *testing.T, env discussEnv, runID string, steps ...*dis
 			d.BotPermissions = &agenttest.PermissionChecker{Values: map[string]bool{env.botID + ":" + env.ownerID + ":" + bots.PermissionChat: true}}
 		}),
 	}, steps...)
-	resumed, err := startContinuation(ctx, proc.svc, row)
+	return startContinuation(ctx, proc.svc, row)
+}
+
+// resumeInterrupted starts the continuation the ledger owes for runID and waits
+// for it to end.
+func resumeInterrupted(t *testing.T, env discussEnv, runID string, steps ...*discussStep) {
+	t.Helper()
+	resumed, err := startInterrupted(t, env, runID, steps...)
 	require.NoError(t, err)
 	waitDiscussRun(t, resumed)
+}
+
+// historySnapshot lists every history row of the session with the turn it is
+// in, so a test can show that nothing was written or moved.
+func historySnapshot(t *testing.T, env discussEnv) []string {
+	t.Helper()
+	rows, err := env.pool.Query(context.Background(), `
+		SELECT id::text || ':' || COALESCE(turn_id::text, '') || ':' || COALESCE(turn_position, 0)::text || ':' || turn_visible::text
+		FROM bot_history_messages WHERE session_id = $1 ORDER BY id`, env.sessionID)
+	require.NoError(t, err)
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var line string
+		require.NoError(t, rows.Scan(&line))
+		out = append(out, line)
+	}
+	require.NoError(t, rows.Err())
+	return out
+}
+
+// A retry interrupted before its first step commits has no request row of its
+// own: the new row is written in that step's transaction, and the previous
+// turn is still the latest visible one. The continuation has nothing to
+// answer, so it is not started, and the previous turn is left as it was.
+func TestContinuationWithoutRequestRowIsRetiredAndWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	env := newDiscussEnv(t, "group")
+	runID, _, original := interruptedDiscussRun(t, env)
+	// The interrupted run's own turn never got its rows.
+	_, err := env.pool.Exec(ctx, `DELETE FROM bot_history_messages WHERE session_id = $1 AND turn_id = $2`, env.sessionID, original.turnID)
+	require.NoError(t, err)
+	// The turn the retry replaces is still visible.
+	var previous runTurn
+	previous.turnID = uuid.NewString()
+	require.NoError(t, env.pool.QueryRow(ctx, `
+		UPDATE bot_sessions SET next_turn_position = next_turn_position + 1
+		WHERE id = $1 RETURNING next_turn_position - 1`, env.sessionID).Scan(&previous.position))
+	_, err = env.pool.Exec(ctx, `
+		INSERT INTO bot_history_messages (id, bot_id, session_id, role, content, run_id, turn_id, turn_position, turn_message_seq, turn_visible)
+		VALUES ($1, $2, $3, 'user', '{"role":"user","content":"previous task"}', NULL, $4, $5, 1, true)`,
+		uuid.NewString(), env.botID, env.sessionID, previous.turnID, previous.position)
+	require.NoError(t, err)
+	before, runsBefore := historySnapshot(t, env), env.allRuns(t)
+
+	done, err := startInterrupted(t, env, runID)
+
+	require.ErrorIs(t, err, runreq.ErrResumeUnrecoverable)
+	require.ErrorIs(t, err, messagepkg.ErrRunRequestNotFound)
+	require.Nil(t, done)
+	require.Equal(t, before, historySnapshot(t, env), "no row was written, and none moved")
+	require.Equal(t, runsBefore, env.allRuns(t), "no run was admitted")
 }
 
 // A continuation joins the interrupted run's turn and takes over its intent:

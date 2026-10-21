@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -57,6 +58,57 @@ func TestFullContinuationSlotsDeferTheSessionWithoutAWarning(t *testing.T) {
 			}
 		})
 	}
+}
+
+// flakyContinuations is owed one continuation whose start fails with err until
+// the test clears it, and counts what is retired.
+type flakyContinuations struct {
+	err     error
+	retired int
+	started int
+}
+
+func (f *flakyContinuations) Owed(context.Context, sessionruntime.Key) (Continuation, bool, error) {
+	return Continuation{}, f.retired == 0, nil
+}
+
+func (f *flakyContinuations) Start(context.Context, Continuation) (<-chan struct{}, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	f.started++
+	return make(chan struct{}), nil
+}
+
+func (f *flakyContinuations) Retire(context.Context, Continuation, error) error {
+	f.retired++
+	return nil
+}
+
+// A start that fails for a reason that may clear keeps the intent and defers
+// the session; one marked unrecoverable retires the intent.
+func TestStartFailureKeepsTheIntentUnlessItIsUnrecoverable(t *testing.T) {
+	continuations := &flakyContinuations{err: errors.New("database unavailable")}
+	inputs := New(Deps{Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Continuations: continuations})
+	started, deferred, err := inputs.admitContinuation(t.Context(), sessionruntime.Key{BotID: "bot-1", SessionID: "session-1"})
+	require.NoError(t, err)
+	require.False(t, started)
+	require.True(t, deferred, "the session waits for the next trigger")
+	require.Zero(t, continuations.retired, "the intent stays")
+
+	continuations.err = nil
+	started, deferred, err = inputs.admitContinuation(t.Context(), sessionruntime.Key{BotID: "bot-1", SessionID: "session-1"})
+	require.NoError(t, err)
+	require.True(t, started)
+	require.False(t, deferred)
+
+	continuations = &flakyContinuations{err: fmt.Errorf("%w: no request row", runreq.ErrResumeUnrecoverable)}
+	inputs = New(Deps{Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Continuations: continuations})
+	started, deferred, err = inputs.admitContinuation(t.Context(), sessionruntime.Key{BotID: "bot-1", SessionID: "session-1"})
+	require.NoError(t, err)
+	require.False(t, started)
+	require.False(t, deferred, "nothing is owed once the intent is retired")
+	require.Equal(t, 1, continuations.retired)
 }
 
 type closedTurns struct{}

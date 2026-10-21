@@ -6,11 +6,16 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
+
+// ErrRunRequestNotFound says a run has no request row in history: neither the
+// row it is answering now nor one under its root turn.
+var ErrRunRequestNotFound = errors.New("run request row not found")
 
 type boundReplacementQueries interface {
 	LockHistoryTurnReplacementSession(context.Context, sqlc.LockHistoryTurnReplacementSessionParams) (pgtype.UUID, error)
@@ -167,7 +172,8 @@ func (s *DBService) selectBoundReplacement(ctx context.Context, input PersistInp
 
 // GetRunTurnRequest follows applied input within the run: the request row the
 // run is answering now and the turn that row belongs to. The root fallback
-// also supports inbound requests persisted before run admission.
+// also supports inbound requests persisted before run admission. A run with no
+// such row gets ErrRunRequestNotFound.
 func (s *DBService) GetRunTurnRequest(ctx context.Context, sessionID, runID, rootTurnID string) (RunTurnRequest, error) {
 	reader, ok := s.queries.(boundReplacementQueries)
 	if !ok {
@@ -188,6 +194,9 @@ func (s *DBService) GetRunTurnRequest(ctx context.Context, sessionID, runID, roo
 	row, err := reader.GetRunHistoryTurnRequest(ctx, sqlc.GetRunHistoryTurnRequestParams{
 		SessionID: pgSessionID, RunID: pgRunID, RootTurnID: pgTurnID,
 	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return RunTurnRequest{}, ErrRunRequestNotFound
+	}
 	if err != nil {
 		return RunTurnRequest{}, err
 	}

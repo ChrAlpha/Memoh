@@ -21,6 +21,9 @@ type Messages interface {
 	ListActiveAfterCompactionBySessionWithinBytes(ctx context.Context, sessionID string, maxBytes int64) (messagepkg.SessionHistoryAfterCompaction, error)
 	ListVisibleFromForModelBySession(ctx context.Context, sessionID string, messageID string) ([]messagepkg.Message, error)
 	GetByIDBySession(ctx context.Context, sessionID string, messageID string) (messagepkg.Message, error)
+	// GetRunTurnRequest finds the request row a run answers, or reports
+	// messagepkg.ErrRunRequestNotFound.
+	GetRunTurnRequest(ctx context.Context, sessionID, runID, rootTurnID string) (messagepkg.RunTurnRequest, error)
 }
 
 // Queries is the part of the database the compaction artifacts are read from.
