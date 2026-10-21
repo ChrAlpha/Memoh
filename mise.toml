@@ -6,9 +6,9 @@ config_roots = ["apps/web", "cmd/agent"]
 
 [tools]
 # Go version from go.mod
-go = "1.25.6"
+go = "1.26.10"
 # Node.js for frontend packages
-node = "25"
+node = "24.22.1"
 # pnpm for workspace management
 pnpm = "10"
 # sqlc for sql management

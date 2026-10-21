@@ -158,6 +158,15 @@ func TestBrowserReverseProxyHTTPThroughBridgeTunnel(t *testing.T) {
 		if !strings.HasPrefix(r.Host, "127.0.0.1:") {
 			t.Fatalf("upstream host = %q, want 127.0.0.1:<port>", r.Host)
 		}
+		if got := r.Header.Get("X-Forwarded-Host"); got != "session.browser.localhost" {
+			t.Fatalf("forwarded host = %q, want original browser host", got)
+		}
+		if got := r.Header.Get("X-Forwarded-Proto"); got != "http" {
+			t.Fatalf("forwarded proto = %q, want http", got)
+		}
+		if got := r.Header.Get("X-Forwarded-For"); strings.Contains(got, "spoofed") {
+			t.Fatalf("forwarded client retained untrusted header: %q", got)
+		}
 		body, _ := io.ReadAll(r.Body)
 		if string(body) != "payload" {
 			t.Fatalf("upstream body = %q", string(body))
@@ -173,6 +182,9 @@ func TestBrowserReverseProxyHTTPThroughBridgeTunnel(t *testing.T) {
 	proxy := newBrowserReverseProxy(client, port)
 
 	req := httptest.NewRequest(http.MethodPost, "http://session.browser.localhost/hello?name=memoh", bytes.NewBufferString("payload"))
+	req.Header.Set("X-Forwarded-Host", "spoofed.example")
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("X-Forwarded-For", "spoofed")
 	rec := httptest.NewRecorder()
 	proxy.ServeHTTP(rec, req) //nolint:gosec // Test proxy target is a local httptest server reached through the bridge tunnel.
 
