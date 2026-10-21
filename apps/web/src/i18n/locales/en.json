@@ -444,6 +444,7 @@
     },
     "skill": {
       "builtin_read_only": "Built-in Skills are managed by Memoh and cannot be edited or deleted.",
+      "directory_shared": "This Skill's folder also holds other Skills, so it cannot be renamed or deleted here. Remove its SKILL.md in Files instead.",
       "name_invalid": "The Skill needs a valid name in its YAML frontmatter.",
       "name_taken": "A Skill with this name already exists. Choose a different name.",
       "not_found": "This Skill was not found. Refresh the list and try again.",

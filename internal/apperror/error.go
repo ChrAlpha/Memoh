@@ -83,6 +83,7 @@ const (
 	CodeSkillRegistryReadOnly                    Code = "skill.registry_read_only"
 	CodeSkillNameInvalid                         Code = "skill.name_invalid"
 	CodeSkillNotFound                            Code = "skill.not_found"
+	CodeSkillDirectoryShared                     Code = "skill.directory_shared"
 	CodeTTSTextTooLong                           Code = "tts.text_too_long"
 	CodeTTSModelNotConfigured                    Code = "tts.model_not_configured"
 	CodeWorkspaceArchiveInvalid                  Code = "workspace.archive_invalid"
@@ -767,6 +768,10 @@ var catalog = map[Code]Definition{
 	CodeSkillNotFound: {
 		HTTPStatus: http.StatusNotFound,
 		Detail:     "This Skill was not found. Refresh the list and try again.",
+	},
+	CodeSkillDirectoryShared: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This Skill's folder also holds other Skills, so it cannot be renamed or deleted as one Skill.",
 	},
 	CodeTTSTextTooLong: {
 		HTTPStatus:  http.StatusBadRequest,

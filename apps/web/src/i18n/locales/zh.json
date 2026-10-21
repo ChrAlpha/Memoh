@@ -444,6 +444,7 @@
     },
     "skill": {
       "builtin_read_only": "Memoh 自带 Skill 由系统管理，无法编辑或删除。",
+      "directory_shared": "该 Skill 的文件夹中还包含其他 Skill，无法在这里重命名或删除。请在文件中删除它的 SKILL.md。",
       "name_invalid": "Skill 的 YAML frontmatter 中需要有效的名称。",
       "name_taken": "已存在同名 Skill，请换一个名称。",
       "not_found": "未找到该技能，请刷新列表后重试。",

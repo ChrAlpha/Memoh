@@ -822,6 +822,7 @@
     },
     "skill": {
       "builtin_read_only": "Memoh 組み込みの Skill はシステムによって管理されているため、編集または削除できません。",
+      "directory_shared": "この Skill のフォルダには他の Skill も含まれているため、ここでは名前の変更や削除ができません。ファイルからこの SKILL.md を削除してください。",
       "name_invalid": "Skill の YAML frontmatter に有効な名前が必要です。",
       "name_taken": "同じ名前の Skill がすでに存在します。別の名前を使用してください。",
       "not_found": "このスキルが見つかりません。一覧を更新してからやり直してください。",

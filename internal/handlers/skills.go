@@ -190,6 +190,13 @@ func (h *ContainerdHandler) upsertSkills(
 		}
 		dirPath := path.Dir(plan.WritePath)
 		if plan.RenameFromDir != "" {
+			shared, inspectErr := skillset.HoldsNamespacedSkills(ctx, client, plan.RenameFromDir)
+			if inspectErr != nil {
+				return skillSaveHTTPError(fmt.Errorf("inspect renamed skill directory: %w", inspectErr))
+			}
+			if shared {
+				return apperror.New(apperror.CodeSkillDirectoryShared, nil)
+			}
 			if _, statErr := client.Stat(ctx, dirPath); statErr == nil {
 				return apperror.New(apperror.CodeSkillNameTaken, nil)
 			} else if !errors.Is(statErr, bridge.ErrNotFound) {
@@ -211,6 +218,17 @@ func (h *ContainerdHandler) upsertSkills(
 			}
 			continue
 		}
+		// A new Skill must not land on top of a directory that holds other
+		// Skills; editing an existing Skill in place stays allowed.
+		if editPath == "" || path.Dir(path.Clean(editPath)) != dirPath {
+			shared, inspectErr := skillset.HoldsNamespacedSkills(ctx, client, dirPath)
+			if inspectErr != nil {
+				return skillSaveHTTPError(fmt.Errorf("inspect skill directory: %w", inspectErr))
+			}
+			if shared {
+				return apperror.New(apperror.CodeSkillNameTaken, nil)
+			}
+		}
 		// A pooled client can pass getGRPCClient and still fail on first use
 		// when the workspace just stopped; classify per-op errors so the dial
 		// diagnostics never reach the response body.
@@ -231,6 +249,8 @@ func skillActionHTTPError(err error) error {
 	switch {
 	case errors.Is(err, skillset.ErrSkillNotFound):
 		return apperror.Wrap(apperror.CodeSkillNotFound, err, nil)
+	case errors.Is(err, skillset.ErrSkillNameTaken):
+		return apperror.Wrap(apperror.CodeSkillNameTaken, err, nil)
 	case errors.Is(err, skillset.ErrRegistrySkillReadOnly):
 		return apperror.Wrap(apperror.CodeSkillRegistryReadOnly, err, nil)
 	case errors.Is(err, skillset.ErrBuiltinSkillReadOnly):
@@ -317,13 +337,22 @@ func (h *ContainerdHandler) deleteSkills(ctx context.Context, botID string, sour
 			return errs.Wrap(dirErr, "resolve skill directory")
 		}
 		target := deleteTarget{sourcePath: path.Clean(strings.TrimSpace(sourcePath)), skillDir: skillDir}
+		// The Skill itself must exist, and its directory must not also hold
+		// other Skills, which a recursive delete would remove with it.
+		if _, statErr := client.Stat(ctx, target.sourcePath); statErr != nil {
+			return fsHTTPError(statErr)
+		}
+		shared, inspectErr := skillset.HoldsNamespacedSkills(ctx, client, target.skillDir)
+		if inspectErr != nil {
+			return fsHTTPError(inspectErr)
+		}
+		if shared {
+			return apperror.New(apperror.CodeSkillDirectoryShared, nil)
+		}
 		targets = append(targets, target)
 	}
 
 	for _, target := range targets {
-		if _, statErr := client.Stat(ctx, target.skillDir); statErr != nil {
-			return fsHTTPError(statErr)
-		}
 		if err := client.DeleteFile(ctx, target.skillDir, true); err != nil {
 			return fsHTTPError(err)
 		}
