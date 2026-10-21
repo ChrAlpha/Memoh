@@ -798,7 +798,7 @@ func (a *TelegramAdapter) handleAskUserWizardCallback(ctx context.Context, cfg c
 	// Free-text input is opt-in. Auto-prompting on page entry adds another
 	// message and reply preview before the user has chosen to answer.
 	if needText {
-		a.promptAskUserText(ctx, bot, loc, req, parsed.QIndex, chatID, msgID)
+		a.promptAskUserText(ctx, bot, loc, req, parsed.QIndex, chatID, telegramMessageThreadID(cb.Message), msgID)
 	}
 	return true
 }
@@ -825,7 +825,7 @@ func interactionOpFromCallback(cb askUserCallback) (op userinput.InteractionOp, 
 
 // promptAskUserText sends a force-reply prompt for the question at qIndex and
 // binds the sent message to the request so the next reply routes back here.
-func (a *TelegramAdapter) promptAskUserText(ctx context.Context, bot *tele.Bot, loc *i18n.Localizer, req userinput.Request, qIndex int, cardChatID int64, cardMsgID int) {
+func (a *TelegramAdapter) promptAskUserText(ctx context.Context, bot *tele.Bot, loc *i18n.Localizer, req userinput.Request, qIndex int, cardChatID int64, cardThreadID int, cardMsgID int) {
 	if bot == nil || cardChatID == 0 || qIndex < 0 || qIndex >= len(req.UIPayload.Questions) {
 		return
 	}
@@ -838,6 +838,7 @@ func (a *TelegramAdapter) promptAskUserText(ctx context.Context, bot *tele.Bot, 
 	}
 	opts := &tele.SendOptions{
 		ReplyMarkup: &tele.ReplyMarkup{ForceReply: true, Selective: true},
+		ThreadID:    cardThreadID,
 	}
 	if cardMsgID > 0 {
 		opts.ReplyTo = &tele.Message{ID: cardMsgID, Chat: &tele.Chat{ID: cardChatID}}

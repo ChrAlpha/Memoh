@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	tele "gopkg.in/telebot.v4"
 
 	"github.com/felinics/memoh/internal/agent/adapter/channelmessaging"
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/messaging"
 )
@@ -243,22 +245,69 @@ func TestTelegramPrivateTopicStreamDraftsCarryThread(t *testing.T) {
 	assertTelegramCallsTarget(t, got, "555", "9")
 }
 
-func TestTelegramAskUserErrorStaysInTopic(t *testing.T) {
-	calls := captureTelegramCalls(t)
-	adapter := NewTelegramAdapter(nil)
-	adapter.userInput = &guardedInteractionStore{}
-	bot, _ := getOrCreateBotForTest(adapter, "", "")
+type topicInteractionStore struct {
+	askUserInteractionService
+	result userinput.AdvanceInteractionResult
+	err    error
+}
+
+func (s *topicInteractionStore) AdvanceInteraction(context.Context, userinput.AdvanceInteractionInput) (userinput.AdvanceInteractionResult, error) {
+	return s.result, s.err
+}
+
+func TestTelegramAskUserMessagesStayInTopic(t *testing.T) {
 	forum := &tele.Chat{ID: -100123, Type: tele.ChatSuperGroup, IsForum: true}
-	adapter.askUserPromptStore().put(forum.ID, 80, askUserTextPrompt{RequestID: "req-1", QuestionID: "q1"})
-	update := &tele.Update{Message: &tele.Message{
-		ID: 81, Chat: forum, ThreadID: 45, TopicMessage: true, Text: "answer",
-		Sender:  &tele.User{ID: 7},
-		ReplyTo: &tele.Message{ID: 80, Chat: forum},
-	}}
-	if !adapter.tryHandleAskUserTextReply(context.Background(), channel.ChannelConfig{BotID: "bot-1"}, nil, bot, update) {
-		t.Fatal("expected ask_user reply to be handled")
+	pending := userinput.Request{ID: testAskUserRequestID, UIPayload: userinput.UIPayload{Questions: []userinput.UIQuestion{{ID: "q1", Text: "Notes?", Kind: userinput.QuestionKindText}}}}
+	for _, tc := range []struct {
+		name     string
+		allow    bool
+		store    *topicInteractionStore
+		callback bool
+	}{
+		{name: "forbidden", store: &topicInteractionStore{}},
+		{name: "unavailable", allow: true, store: &topicInteractionStore{err: errors.New("down")}},
+		{name: "rejected", allow: true, store: &topicInteractionStore{result: userinput.AdvanceInteractionResult{Handled: true, Reject: userinput.RejectEmptyText}}},
+		{name: "force-reply prompt", allow: true, callback: true, store: &topicInteractionStore{result: userinput.AdvanceInteractionResult{Handled: true, Request: pending}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := captureTelegramCalls(t)
+			adapter := NewTelegramAdapter(nil)
+			adapter.userInput = tc.store
+			adapter.SetUserInputAuthorizer(func(context.Context, channel.ChannelConfig, channel.InboundMessage) (bool, error) {
+				return tc.allow, nil
+			})
+			bot, _ := getOrCreateBotForTest(adapter, "", "")
+			ctx := context.Background()
+			cfg := channel.ChannelConfig{BotID: "bot-1"}
+			sender := &tele.User{ID: 7}
+			if tc.callback {
+				card := &tele.Message{ID: 80, Chat: forum, ThreadID: 45, TopicMessage: true, Sender: sender}
+				update := &tele.Update{Callback: &tele.Callback{ID: "cb", Sender: sender, Message: card, Data: encodeAskUserCallback("x", testAskUserRequestID, "en", 0)}}
+				if !adapter.handleAskUserWizardCallback(ctx, cfg, nil, bot, update) {
+					t.Fatal("expected ask_user callback to be handled")
+				}
+			} else {
+				adapter.askUserPromptStore().put(forum.ID, 80, askUserTextPrompt{RequestID: testAskUserRequestID, QuestionID: "q1"})
+				update := &tele.Update{Message: &tele.Message{
+					ID: 81, Chat: forum, ThreadID: 45, TopicMessage: true, Text: "answer", Sender: sender,
+					ReplyTo: &tele.Message{ID: 80, Chat: forum},
+				}}
+				if !adapter.tryHandleAskUserTextReply(ctx, cfg, nil, bot, update) {
+					t.Fatal("expected ask_user reply to be handled")
+				}
+			}
+			var sends []telegramCall
+			for _, call := range *calls {
+				if call.method == "sendMessage" {
+					sends = append(sends, call)
+				}
+			}
+			if len(sends) != 1 {
+				t.Fatalf("expected one sendMessage, got %v", *calls)
+			}
+			assertTelegramCallsTarget(t, sends, "-100123", "45")
+		})
 	}
-	assertTelegramCallsTarget(t, *calls, "-100123", "45")
 }
 
 type telegramTopicStubStore struct {
@@ -277,10 +326,9 @@ func (telegramTopicStubStore) GetChannelIdentityConfig(context.Context, string, 
 	return channel.ChannelIdentityBinding{}, nil
 }
 
-// TestTelegramTopicSendToolLandsInInboundTopic drives the headline contract
-// end to end: an inbound Telegram message becomes the session reply target,
-// and the discuss-mode send tool with no explicit target delivers back into
-// the same topic through the real channel manager and adapter.
+// TestTelegramTopicSendToolLandsInInboundTopic feeds the adapter's inbound
+// reply target to the discuss-mode send tool with no explicit target and
+// checks delivery through the messaging executor, channel manager and adapter.
 func TestTelegramTopicSendToolLandsInInboundTopic(t *testing.T) {
 	forum := &tele.Chat{ID: -100123, Type: tele.ChatSuperGroup, Title: "Forum", IsForum: true}
 	for _, tc := range []struct {
