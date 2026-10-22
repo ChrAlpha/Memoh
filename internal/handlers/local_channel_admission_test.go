@@ -13,13 +13,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
-	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -145,16 +144,16 @@ func emptyWSAdmissionView(context.Context, sessionruntime.RunHandle) (sessionrun
 }
 
 // admit runs one admission the way the message case does.
-func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)) (*web.Admission, wsTurnRef) {
+func (h wsRunHarness) admit(ref wsTurnRef, submission []byte, build func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error)) (agentapi.WebAdmission, wsTurnRef) {
 	return h.handler.admitWSRun(context.Background(), h.writer, wsAdmissionBotID, "", ref, "ws.message", submission, build, nil, nil)
 }
 
 // send runs an admitted Web send to its end and returns once the session has
 // released it.
-func (h wsRunHarness) send(t *testing.T, admitted *web.Admission, ref wsTurnRef) {
+func (h wsRunHarness) send(t *testing.T, admitted agentapi.WebAdmission, ref wsTurnRef) {
 	t.Helper()
 	ended := make(chan struct{})
-	h.handler.webRuns.RunWebSend(admitted, runreq.ChatRequest{
+	h.handler.webRuns.RunWebSend(admitted, agentapi.WebSendInput{
 		BotID: wsAdmissionBotID, ChatID: wsAdmissionBotID, ThreadID: wsAdmissionSessionID, Query: "hi",
 	}, newWSRunDelivery(h.writer, ref, func() { close(ended) }))
 	select {
@@ -200,7 +199,7 @@ func TestWSRunAnnouncesTheAdmittedTurnAndReleasesTheSession(t *testing.T) {
 
 	h := newWSRunHarness(t, nil)
 	admitted, ref := h.admit(wsAdmissionTestRef(), wsAdmissionTestSubmission(), emptyWSAdmissionView)
-	if admitted == nil || ref.RunID == "" || ref.RunID != admitted.RunID {
+	if admitted == nil || ref.RunID == "" || ref.RunID != admitted.RunID() {
 		t.Fatalf("admission = %+v, ref = %+v, want the admitted run", admitted, ref)
 	}
 	frames := h.frames(t)
@@ -208,11 +207,11 @@ func TestWSRunAnnouncesTheAdmittedTurnAndReleasesTheSession(t *testing.T) {
 		t.Fatalf("frames before execution = %#v, want only the acceptance", frames)
 	}
 	accepted := frames[0]
-	if accepted["type"] != "run_accepted" || accepted["run_id"] != admitted.RunID || accepted["turn_id"] != admitted.TurnID {
+	if accepted["type"] != "run_accepted" || accepted["run_id"] != admitted.RunID() || accepted["turn_id"] != admitted.TurnID() {
 		t.Fatalf("run_accepted = %#v, want the admitted run and turn", accepted)
 	}
-	if accepted["epoch"] != admitted.Cursor.Epoch || accepted["epoch"] == "" {
-		t.Fatalf("run_accepted cursor = %#v, want the activation cursor %+v", accepted, admitted.Cursor)
+	if accepted["epoch"] != admitted.Cursor().Epoch || accepted["epoch"] == "" {
+		t.Fatalf("run_accepted cursor = %#v, want the activation cursor %+v", accepted, admitted.Cursor())
 	}
 	if _, present := accepted["duplicate"]; present {
 		t.Fatalf("a first acceptance marked itself duplicate: %#v", accepted)
@@ -221,22 +220,22 @@ func TestWSRunAnnouncesTheAdmittedTurnAndReleasesTheSession(t *testing.T) {
 	h.send(t, admitted, ref)
 
 	frames = h.frames(t)
-	if len(frames) != 1 || frames[0]["type"] != "error" || frames[0]["run_id"] != admitted.RunID {
+	if len(frames) != 1 || frames[0]["type"] != "error" || frames[0]["run_id"] != admitted.RunID() {
 		t.Fatalf("frames = %#v, want the run's failure on the initiating socket", frames)
 	}
 	if got := frames[0]["code"]; got != string(apperror.CodeRuntimeRunFailed) {
 		t.Fatalf("failure frame code = %#v, want %s", got, apperror.CodeRuntimeRunFailed)
 	}
-	run, err := h.runs.Get(context.Background(), admitted.RunID)
+	run, err := h.runs.Get(context.Background(), admitted.RunID())
 	if err != nil || run.State != ledger.StateFailed || run.ErrorCode != string(apperror.CodeRuntimeRunFailed) {
 		t.Fatalf("session_runs = %+v, %v; want failed %s", run, err, apperror.CodeRuntimeRunFailed)
 	}
 
 	next, _ := h.admit(wsTurn("invocation-2", wsAdmissionSessionID), wsSubmission{Kind: "message", SessionID: wsAdmissionSessionID, Text: "again"}.encode(), emptyWSAdmissionView)
-	if next == nil || next.RunID == admitted.RunID {
+	if next == nil || next.RunID() == admitted.RunID() {
 		t.Fatalf("next admission = %+v, want a new run once the first released the session", next)
 	}
-	h.send(t, next, wsTurn("invocation-2", wsAdmissionSessionID).withRun(next.RunID))
+	h.send(t, next, wsTurn("invocation-2", wsAdmissionSessionID).withRun(next.RunID()))
 }
 
 func TestAdmitWSRunBuildsNormalMessageRequestUserTurn(t *testing.T) {
@@ -275,7 +274,7 @@ func TestAdmitWSRunBuildsNormalMessageRequestUserTurn(t *testing.T) {
 		t.Fatalf("request user turns = %#v, want one", view.UserTurns)
 	}
 	requestTurn := view.UserTurns[0]
-	if requestTurn.TurnID != admitted.TurnID || requestTurn.Role != "user" || requestTurn.Text != "hello" || requestTurn.UserMessageKind != "text" ||
+	if requestTurn.TurnID != admitted.TurnID() || requestTurn.Role != "user" || requestTurn.Text != "hello" || requestTurn.UserMessageKind != "text" ||
 		!requestTurn.Timestamp.Equal(timestamp) || requestTurn.Platform != "local" ||
 		requestTurn.SenderUserID != "user-1" || requestTurn.ExternalMessageID != "invocation-1" {
 		t.Fatalf("request user turn = %#v", requestTurn)
@@ -364,7 +363,7 @@ func TestAdmitWSRunPublishesReplacementOperation(t *testing.T) {
 			}
 			if test.wantReplacement {
 				if operation.ReplacementUserTurn == nil ||
-					operation.ReplacementUserTurn.TurnID != admitted.TurnID ||
+					operation.ReplacementUserTurn.TurnID != admitted.TurnID() ||
 					operation.ReplacementUserTurn.Text != test.wantText ||
 					operation.ReplacementUserTurn.ID != "" ||
 					operation.ReplacementUserTurn.TurnPosition != nil ||
@@ -435,11 +434,11 @@ func TestAdmitWSRunReplayNamesTheTurnWithoutACursor(t *testing.T) {
 		t.Fatalf("frames = %#v, want one acceptance", frames)
 	}
 	accepted := frames[0]
-	if accepted["type"] != "run_accepted" || accepted["run_id"] != first.RunID || accepted["duplicate"] != true {
+	if accepted["type"] != "run_accepted" || accepted["run_id"] != first.RunID() || accepted["duplicate"] != true {
 		t.Fatalf("replay acceptance = %#v", accepted)
 	}
-	if accepted["turn_id"] != first.TurnID {
-		t.Fatalf("replay acceptance turn_id = %#v, want %s", accepted["turn_id"], first.TurnID)
+	if accepted["turn_id"] != first.TurnID() {
+		t.Fatalf("replay acceptance turn_id = %#v, want %s", accepted["turn_id"], first.TurnID())
 	}
 	if _, present := accepted["epoch"]; present {
 		t.Fatalf("replay reported a cursor it did not produce: %#v", accepted)
@@ -462,8 +461,8 @@ func TestAdmitWSRunSubmitsTheClientsIdentity(t *testing.T) {
 	defer h.send(t, admitted, ref)
 
 	run, err := h.runs.GetByInvocation(context.Background(), wsAdmissionSessionID, "invocation-1")
-	if err != nil || run.RunID != admitted.RunID {
-		t.Fatalf("ledger run by invocation = %+v, %v; want run %s", run, err, admitted.RunID)
+	if err != nil || run.RunID != admitted.RunID() {
+		t.Fatalf("ledger run by invocation = %+v, %v; want run %s", run, err, admitted.RunID())
 	}
 }
 
@@ -523,7 +522,7 @@ func TestWSRunPersistsPreContextFailureLifecycle(t *testing.T) {
 	}
 	h.send(t, admitted, ref)
 
-	if run, err := h.runs.Get(context.Background(), admitted.RunID); err != nil || run.State != ledger.StateFailed {
+	if run, err := h.runs.Get(context.Background(), admitted.RunID()); err != nil || run.State != ledger.StateFailed {
 		t.Fatalf("session_runs = %+v, %v; want failed", run, err)
 	}
 	if len(queries.params) != 0 || len(queries.upserts) != 1 {

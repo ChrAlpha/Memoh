@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -356,7 +357,7 @@ func (w *Writer) buildPersistInputs(ctx context.Context, req runreq.ChatRequest,
 	return persistInputs, nil
 }
 
-func workspaceTargetMetadata(target *runreq.WorkspaceTarget) map[string]any {
+func workspaceTargetMetadata(target *agentapi.WorkspaceTarget) map[string]any {
 	if target == nil || strings.TrimSpace(target.TargetID) == "" {
 		return nil
 	}

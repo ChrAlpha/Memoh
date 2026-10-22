@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -110,7 +111,7 @@ func TestAssembleDerivesMarkersForRequiredPullbacks(t *testing.T) {
 func TestWorkspaceTransitionRendererMatchesLiveAndReplay(t *testing.T) {
 	t.Parallel()
 
-	current := &runreq.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
+	current := &agentapi.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
 	reader := New(Deps{})
 	live := reader.CurrentWorkspaceMessage(t.Context(), runreq.ChatRequest{WorkspaceTarget: current})
 	if live == nil {
@@ -131,7 +132,7 @@ func TestWorkspaceTransitionRendererMatchesLiveAndReplay(t *testing.T) {
 func TestCurrentWorkspaceMessageOmitsUnchangedTarget(t *testing.T) {
 	t.Parallel()
 
-	current := &runreq.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
+	current := &agentapi.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
 	reader := New(Deps{Sessions: workspaceSessions(current)})
 
 	if got := reader.CurrentWorkspaceMessage(t.Context(), runreq.ChatRequest{
@@ -145,8 +146,8 @@ func TestCurrentWorkspaceMessageOmitsUnchangedTarget(t *testing.T) {
 func TestWorkspaceTransitionRendererMatchesLiveAndReplayAfterChange(t *testing.T) {
 	t.Parallel()
 
-	previous := &runreq.WorkspaceTarget{TargetID: "computer-a", Kind: "remote", Name: "Computer A"}
-	current := &runreq.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
+	previous := &agentapi.WorkspaceTarget{TargetID: "computer-a", Kind: "remote", Name: "Computer A"}
+	current := &agentapi.WorkspaceTarget{TargetID: "computer-b", Kind: "remote", Name: "Computer B"}
 	reader := New(Deps{Sessions: workspaceSessions(previous)})
 	live := reader.CurrentWorkspaceMessage(t.Context(), runreq.ChatRequest{
 		ThreadID:        "session-1",
@@ -168,7 +169,7 @@ func TestWorkspaceTransitionRendererMatchesLiveAndReplayAfterChange(t *testing.T
 	}
 }
 
-func workspaceSessions(target *runreq.WorkspaceTarget) *agenttest.Sessions {
+func workspaceSessions(target *agentapi.WorkspaceTarget) *agenttest.Sessions {
 	return &agenttest.Sessions{
 		GetFn: func(context.Context, string) (session.Thread, error) {
 			return session.Thread{Metadata: map[string]any{

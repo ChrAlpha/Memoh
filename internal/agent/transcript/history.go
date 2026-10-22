@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -17,7 +18,7 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 		return records
 	}
 	result := make([]historyfrag.HistoryRecord, 0, len(records)+2)
-	var previous *runreq.WorkspaceTarget
+	var previous *agentapi.WorkspaceTarget
 	for _, record := range records {
 		if current := workspaceTargetFromMetadata(record.Metadata); current != nil && !sameWorkspaceTarget(previous, current) {
 			text := renderWorkspaceTransition(previous, current)
@@ -32,7 +33,7 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 	return result
 }
 
-func renderWorkspaceTransition(previous, current *runreq.WorkspaceTarget) string {
+func renderWorkspaceTransition(previous, current *agentapi.WorkspaceTarget) string {
 	if current == nil || strings.TrimSpace(current.TargetID) == "" {
 		return ""
 	}
@@ -58,7 +59,7 @@ func renderWorkspaceTransition(previous, current *runreq.WorkspaceTarget) string
 	)
 }
 
-func sameWorkspaceTarget(left, right *runreq.WorkspaceTarget) bool {
+func sameWorkspaceTarget(left, right *agentapi.WorkspaceTarget) bool {
 	if left == nil || right == nil {
 		return left == right
 	}
@@ -66,7 +67,7 @@ func sameWorkspaceTarget(left, right *runreq.WorkspaceTarget) bool {
 		strings.TrimSpace(left.Kind) == strings.TrimSpace(right.Kind)
 }
 
-func workspaceTargetFromMetadata(metadata map[string]any) *runreq.WorkspaceTarget {
+func workspaceTargetFromMetadata(metadata map[string]any) *agentapi.WorkspaceTarget {
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -74,7 +75,7 @@ func workspaceTargetFromMetadata(metadata map[string]any) *runreq.WorkspaceTarge
 	if !ok {
 		return nil
 	}
-	target := &runreq.WorkspaceTarget{
+	target := &agentapi.WorkspaceTarget{
 		TargetID: strings.TrimSpace(runreq.ReadAnyString(raw["target_id"])),
 		Kind:     strings.TrimSpace(runreq.ReadAnyString(raw["kind"])),
 		Name:     strings.TrimSpace(runreq.ReadAnyString(raw["name"])),
@@ -93,7 +94,7 @@ func (t *Reader) CurrentWorkspaceMessage(ctx context.Context, req runreq.ChatReq
 	if current == nil || strings.TrimSpace(current.TargetID) == "" {
 		return nil
 	}
-	var previous *runreq.WorkspaceTarget
+	var previous *agentapi.WorkspaceTarget
 	if strings.TrimSpace(req.ThreadID) != "" {
 		if sess, err := t.sessions.Get(ctx, req.ThreadID); err == nil {
 			if raw, ok := sess.Metadata["workspace_target"].(map[string]any); ok {

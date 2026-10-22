@@ -3,6 +3,7 @@ package runreq
 import (
 	"encoding/json"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -90,8 +91,8 @@ type ChatRequest struct {
 	// external input past the session's cover position. Only the admission
 	// knows where that position was when the run took the session, and the
 	// images those rows carry go to the model with them.
-	DiscussBatchMessageIDs []string         `json:"-"`
-	WorkspaceTarget        *WorkspaceTarget `json:"-"`
+	DiscussBatchMessageIDs []string                  `json:"-"`
+	WorkspaceTarget        *agentapi.WorkspaceTarget `json:"-"`
 
 	// OutboundAssetCollector returns asset refs accumulated during outbound
 	// streaming. It is never serialized across the turn transport.
@@ -115,14 +116,6 @@ type ChatRequest struct {
 	Messages          []turn.ModelMessage          `json:"messages,omitempty"`
 	Attachments       []turn.Attachment            `json:"attachments,omitempty"`
 	RequestedSkills   []turn.RequestedSkillContext `json:"-"`
-}
-
-// WorkspaceTarget is the immutable execution-location snapshot resolved for
-// one application request.
-type WorkspaceTarget struct {
-	TargetID string `json:"target_id"`
-	Kind     string `json:"kind"`
-	Name     string `json:"name"`
 }
 
 // The canonical turn value objects are re-exported inside application so the

@@ -75,7 +75,7 @@ func driveIMStartTurn(t *testing.T) []sdk.Request {
 // runWebReplacement admits a Web retry or edit and runs it to its end.
 func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*web.Admission, agentapi.RunDelivery)) {
 	t.Helper()
-	admission, err := fixture.service.AdmitWebRun(context.Background(), web.AdmitInput{
+	admission, err := admitWebRun(context.Background(), fixture.service, agentapi.WebAdmitInput{
 		BotID:        agenttest.LifecycleBotID,
 		SessionID:    agenttest.LifecycleSessionID,
 		InvocationID: "web-replacement",
@@ -96,7 +96,7 @@ func driveWebRetry(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t, driveRequestRuntime(t), withFixtureMessages(driveReplaceableHistory(t)))
 	runWebReplacement(t, fixture, func(admission *web.Admission, delivery agentapi.RunDelivery) {
-		fixture.service.RunWebRetry(admission, web.RetryLatestMessageInput{
+		fixture.service.RunWebRetry(admission, agentapi.WebRetryInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,
 			TargetTurnID: driveReplacedTurnID,
@@ -110,7 +110,7 @@ func driveWebEdit(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t, driveRequestRuntime(t), withFixtureMessages(driveReplaceableHistory(t)))
 	runWebReplacement(t, fixture, func(admission *web.Admission, delivery agentapi.RunDelivery) {
-		fixture.service.RunWebEdit(admission, web.EditLatestMessageInput{
+		fixture.service.RunWebEdit(admission, agentapi.WebEditInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,
 			TargetTurnID: driveReplacedTurnID,

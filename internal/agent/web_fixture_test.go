@@ -111,7 +111,7 @@ func (d *webTestDelivery) payloads(t *testing.T) chan runreq.WSStreamEvent {
 // events the socket's end received and the run's failure.
 func streamWebSend(ctx context.Context, t *testing.T, svc *Service, req runreq.ChatRequest) (chan runreq.WSStreamEvent, error) {
 	t.Helper()
-	admission, err := svc.AdmitWebRun(ctx, web.AdmitInput{
+	admission, err := admitWebRun(ctx, svc, agentapi.WebAdmitInput{
 		BotID:        req.BotID,
 		SessionID:    req.ThreadID,
 		InvocationID: "web-invocation",
@@ -121,7 +121,7 @@ func streamWebSend(ctx context.Context, t *testing.T, svc *Service, req runreq.C
 		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
 	delivery := newWebTestDelivery()
-	svc.RunWebSend(admission, req, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
+	svc.web.RunSend(admission, req, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
 	events := delivery.payloads(t)
 	_, ended := delivery.wait(t)
 	return events, ended.Failure
@@ -166,7 +166,7 @@ func newWebTestRuntime(t *testing.T, opts ...testOption) (*Service, *sessionrunt
 
 func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *web.Admission {
 	t.Helper()
-	admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
+	admission, err := admitWebRun(context.Background(), svc, agentapi.WebAdmitInput{
 		BotID:        webTestBotID,
 		SessionID:    webTestSessionID,
 		InvocationID: invocationID,
@@ -891,7 +891,7 @@ func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, r
 func (h wsStepHistoryHarness) runRequest(t *testing.T, stop func(ctx context.Context, runID string), mutate func(*runreq.ChatRequest)) wsStepHistoryRun {
 	t.Helper()
 	baseCtx := context.Background()
-	admission, err := h.service.AdmitWebRun(baseCtx, web.AdmitInput{
+	admission, err := admitWebRun(baseCtx, h.service, agentapi.WebAdmitInput{
 		BotID:        h.botID,
 		SessionID:    h.sessionID,
 		InvocationID: uuid.NewString(),
@@ -900,12 +900,12 @@ func (h wsStepHistoryHarness) runRequest(t *testing.T, stop func(ctx context.Con
 	if err != nil {
 		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
-	if admission.Duplicate {
+	if admission.Duplicate() {
 		t.Fatal("AdmitWebRun() did not start the run")
 	}
 	delivery := &wsStepHistoryDelivery{done: make(chan struct{})}
 	if stop != nil {
-		delivery.onText = func() { go stop(baseCtx, admission.RunID) }
+		delivery.onText = func() { go stop(baseCtx, admission.RunID()) }
 	}
 	req := runreq.ChatRequest{
 		BotID:           h.botID,
@@ -917,7 +917,7 @@ func (h wsStepHistoryHarness) runRequest(t *testing.T, stop func(ctx context.Con
 		CurrentChannel:  "local",
 	}
 	if mutate == nil {
-		h.service.RunWebSend(admission, req, delivery)
+		h.service.web.RunSend(admission, req, delivery)
 	} else {
 		// The request is adjusted after admission wired it, which is the only
 		// way to give the run an input channel of the test's own.
@@ -933,7 +933,7 @@ func (h wsStepHistoryHarness) runRequest(t *testing.T, stop func(ctx context.Con
 	case <-time.After(20 * time.Second):
 		t.Fatal("WS turn did not finish")
 	}
-	out := h.read(t, admission.RunID)
+	out := h.read(t, admission.RunID())
 	out.events = delivery.events
 	out.failureFrames = delivery.failureFrames
 	out.text = delivery.text.String()
@@ -1067,4 +1067,14 @@ func historyRowText(row messagepkg.Message) string {
 		return b.String()
 	}
 	return string(content.Content)
+}
+
+// admitWebRun admits through the service and hands back the concrete
+// admission, for tests that start the run's spec themselves.
+func admitWebRun(ctx context.Context, s *Service, in agentapi.WebAdmitInput) (*web.Admission, error) {
+	admission, err := s.AdmitWebRun(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	return admission.(*web.Admission), nil
 }

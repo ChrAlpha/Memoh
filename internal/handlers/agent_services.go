@@ -4,12 +4,10 @@ import (
 	"context"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
-	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -20,15 +18,15 @@ import (
 // webRunService is what the Web socket needs to admit and run a send, a retry
 // or an edit, and to check what it carries.
 type webRunService interface {
-	AdmitWebRun(ctx context.Context, in web.AdmitInput) (*web.Admission, error)
-	RunWebSend(admission *web.Admission, req runreq.ChatRequest, delivery agentapi.RunDelivery)
-	RunWebRetry(admission *web.Admission, input web.RetryLatestMessageInput, delivery agentapi.RunDelivery)
-	RunWebEdit(admission *web.Admission, input web.EditLatestMessageInput, delivery agentapi.RunDelivery)
+	AdmitWebRun(ctx context.Context, in agentapi.WebAdmitInput) (agentapi.WebAdmission, error)
+	RunWebSend(admission agentapi.WebAdmission, req agentapi.WebSendInput, delivery agentapi.RunDelivery)
+	RunWebRetry(admission agentapi.WebAdmission, input agentapi.WebRetryInput, delivery agentapi.RunDelivery)
+	RunWebEdit(admission agentapi.WebAdmission, input agentapi.WebEditInput, delivery agentapi.RunDelivery)
 	PrepareRetryLatestTurnOperation(ctx context.Context, sessionID, turnID string) (string, error)
 	PrepareRetryRequestUserTurn(ctx context.Context, sessionID, requestMessageID string) (*chatview.UITurn, error)
 	PrepareEditLatestTurnOperation(ctx context.Context, sessionID, turnID string) (string, error)
 	ResolveTurnIDForMessage(ctx context.Context, sessionID, messageID string) (string, error)
-	ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req runreq.ChatRequest) (runreq.ChatRequest, messagepkg.Message, error)
+	ApplyUserMessageHookAndPersistUserTurn(ctx context.Context, req agentapi.WebSendInput) (agentapi.WebSendInput, messagepkg.Message, error)
 	ValidateWorkspaceTarget(ctx context.Context, botID, targetID string) error
 	ReconcileSessionModelPreference(ctx context.Context, botID, modelRef, effort string) (string, string, error)
 }

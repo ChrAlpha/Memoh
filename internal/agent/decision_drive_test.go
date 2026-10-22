@@ -151,10 +151,10 @@ func webEntrySpecs(svc *Service, admission *web.Admission, delivery agentapi.Run
 			BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",
 			Query: directLifecyclePrompt, UserVisibleText: directLifecyclePrompt,
 		}, delivery, outcome.InputHeld),
-		"retry": svc.web.RetrySpec(admission, web.RetryLatestMessageInput{
+		"retry": svc.web.RetrySpec(admission, agentapi.WebRetryInput{
 			BotID: "bot-1", SessionID: "session-1", TargetTurnID: "old-turn",
 		}, delivery),
-		"edit": svc.web.EditSpec(admission, web.EditLatestMessageInput{
+		"edit": svc.web.EditSpec(admission, agentapi.WebEditInput{
 			BotID: "bot-1", SessionID: "session-1", TargetTurnID: "old-turn", Text: "edited",
 		}, delivery),
 	}
@@ -189,11 +189,11 @@ func TestDriveWebEntryFailureRowsFollowInputOwnership(t *testing.T) {
 
 			messages := &agenttest.RecordingMessages{}
 			svc := newDriveService(t, &agenttest.EventRecorder{}, &agenttest.ScriptedAdmitter{Started: true}, withDeps(func(d *Deps) { d.Messages = messages }))
-			admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
+			admission, err := admitWebRun(context.Background(), svc, agentapi.WebAdmitInput{
 				BotID: "bot-1", SessionID: "session-1", InvocationID: name,
 				Payload: []byte(`{"kind":"` + tc.entry + `"}`),
 			})
-			if err != nil || admission.Duplicate {
+			if err != nil || admission.Duplicate() {
 				t.Fatalf("AdmitWebRun() = %+v, %v; want a started run", admission, err)
 			}
 			// The setup is replaced by the phase's failure, so what the ending

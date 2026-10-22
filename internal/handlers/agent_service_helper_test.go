@@ -19,7 +19,6 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
-	"github.com/felinics/memoh/internal/agent/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -160,16 +159,20 @@ type inertAgent struct{}
 
 func (inertAgent) fail() { panic("handler test reached the agent service") }
 
-func (a inertAgent) AdmitWebRun(context.Context, web.AdmitInput) (*web.Admission, error) {
+func (a inertAgent) AdmitWebRun(context.Context, agentapi.WebAdmitInput) (agentapi.WebAdmission, error) {
 	a.fail()
 	return nil, nil
 }
-func (a inertAgent) RunWebSend(*web.Admission, runreq.ChatRequest, agentapi.RunDelivery) { a.fail() }
-func (a inertAgent) RunWebRetry(*web.Admission, web.RetryLatestMessageInput, agentapi.RunDelivery) {
+
+func (a inertAgent) RunWebSend(agentapi.WebAdmission, agentapi.WebSendInput, agentapi.RunDelivery) {
 	a.fail()
 }
 
-func (a inertAgent) RunWebEdit(*web.Admission, web.EditLatestMessageInput, agentapi.RunDelivery) {
+func (a inertAgent) RunWebRetry(agentapi.WebAdmission, agentapi.WebRetryInput, agentapi.RunDelivery) {
+	a.fail()
+}
+
+func (a inertAgent) RunWebEdit(agentapi.WebAdmission, agentapi.WebEditInput, agentapi.RunDelivery) {
 	a.fail()
 }
 
@@ -193,9 +196,9 @@ func (a inertAgent) ResolveTurnIDForMessage(context.Context, string, string) (st
 	return "", nil
 }
 
-func (a inertAgent) ApplyUserMessageHookAndPersistUserTurn(context.Context, runreq.ChatRequest) (runreq.ChatRequest, messagepkg.Message, error) {
+func (a inertAgent) ApplyUserMessageHookAndPersistUserTurn(context.Context, agentapi.WebSendInput) (agentapi.WebSendInput, messagepkg.Message, error) {
 	a.fail()
-	return runreq.ChatRequest{}, messagepkg.Message{}, nil
+	return agentapi.WebSendInput{}, messagepkg.Message{}, nil
 }
 
 func (a inertAgent) ValidateWorkspaceTarget(context.Context, string, string) error {

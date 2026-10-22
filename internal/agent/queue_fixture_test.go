@@ -15,7 +15,6 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
-	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/auth"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -327,8 +326,8 @@ func (e queueEnv) webQueueTurn(text string) func(context.Context) (turn.StartTur
 	}
 }
 
-func (e queueEnv) webSend(invocation, text string) web.AdmitInput {
-	return web.AdmitInput{
+func (e queueEnv) webSend(invocation, text string) agentapi.WebAdmitInput {
+	return agentapi.WebAdmitInput{
 		BotID: e.botID, SessionID: e.sessionID, InvocationID: invocation,
 		Payload: []byte(`{"kind":"message","text":` + strconvQuote(text) + `}`),
 		Admission: func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {

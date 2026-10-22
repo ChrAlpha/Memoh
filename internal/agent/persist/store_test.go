@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -485,10 +486,10 @@ func TestWorkspaceTargetMetadataNamesTheTarget(t *testing.T) {
 	if got := workspaceTargetMetadata(nil); got != nil {
 		t.Fatalf("metadata without a target = %#v, want none", got)
 	}
-	if got := workspaceTargetMetadata(&runreq.WorkspaceTarget{TargetID: " "}); got != nil {
+	if got := workspaceTargetMetadata(&agentapi.WorkspaceTarget{TargetID: " "}); got != nil {
 		t.Fatalf("metadata of a blank target = %#v, want none", got)
 	}
-	got := workspaceTargetMetadata(&runreq.WorkspaceTarget{TargetID: " computer-b ", Kind: "remote", Name: "B"})
+	got := workspaceTargetMetadata(&agentapi.WorkspaceTarget{TargetID: " computer-b ", Kind: "remote", Name: "B"})
 	location, _ := got["execution_location"].(map[string]any)
 	if location["target_id"] != "computer-b" || location["kind"] != "remote" || location["name"] != "B" {
 		t.Fatalf("metadata = %#v, want the trimmed target", got)

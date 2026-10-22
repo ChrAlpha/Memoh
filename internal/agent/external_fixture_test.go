@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -21,7 +22,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/bots"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
@@ -257,7 +257,7 @@ func (r runtimeTypedSessions) Get(ctx context.Context, sessionID string) (sessio
 // run the way a routed Stop does. A run that failed reports its failure in the
 // outcome.
 func streamExternalWebSend(ctx context.Context, s *Service, req runreq.ChatRequest, eventCh chan<- runreq.WSStreamEvent, abortCh <-chan struct{}) (outcome.RunOutcome, error) {
-	admission, err := s.AdmitWebRun(ctx, web.AdmitInput{
+	admission, err := admitWebRun(ctx, s, agentapi.WebAdmitInput{
 		BotID:        req.BotID,
 		SessionID:    req.ThreadID,
 		InvocationID: "web-invocation",
@@ -276,7 +276,7 @@ func streamExternalWebSend(ctx context.Context, s *Service, req runreq.ChatReque
 		}
 	}()
 	delivery := newWebTestDelivery()
-	s.RunWebSend(admission, req, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
+	s.web.RunSend(admission, req, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.
 	select {
 	case <-delivery.done:
 	case <-time.After(10 * time.Second):

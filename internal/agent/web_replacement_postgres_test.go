@@ -80,7 +80,7 @@ func (h wsReplacementHarness) latestTurnID(t *testing.T) string {
 // replace admits one replacement run and runs it to its terminal write.
 func (h wsReplacementHarness) replace(t *testing.T, start func(*web.Admission, agentapi.RunDelivery)) wsStepHistoryRun {
 	t.Helper()
-	admission, err := h.service.AdmitWebRun(context.Background(), web.AdmitInput{
+	admission, err := admitWebRun(context.Background(), h.service, agentapi.WebAdmitInput{
 		BotID:        h.botID,
 		SessionID:    h.sessionID,
 		InvocationID: uuid.NewString(),
@@ -89,7 +89,7 @@ func (h wsReplacementHarness) replace(t *testing.T, start func(*web.Admission, a
 	if err != nil {
 		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
-	if admission.Duplicate {
+	if admission.Duplicate() {
 		t.Fatal("AdmitWebRun() did not start the run")
 	}
 	delivery := &wsStepHistoryDelivery{done: make(chan struct{})}
@@ -99,7 +99,7 @@ func (h wsReplacementHarness) replace(t *testing.T, start func(*web.Admission, a
 	case <-time.After(20 * time.Second):
 		t.Fatal("replacement turn did not finish")
 	}
-	out := h.read(t, admission.RunID)
+	out := h.read(t, admission.RunID())
 	out.failureFrames = delivery.failureFrames
 	return out
 }
@@ -108,7 +108,7 @@ func (h wsReplacementHarness) retry(t *testing.T) wsStepHistoryRun {
 	t.Helper()
 	target := h.latestTurnID(t)
 	return h.replace(t, func(admission *web.Admission, delivery agentapi.RunDelivery) {
-		h.service.RunWebRetry(admission, web.RetryLatestMessageInput{
+		h.service.RunWebRetry(admission, agentapi.WebRetryInput{
 			BotID: h.botID, SessionID: h.sessionID, TargetTurnID: target,
 		}, delivery)
 	})
@@ -118,7 +118,7 @@ func (h wsReplacementHarness) edit(t *testing.T, text string) wsStepHistoryRun {
 	t.Helper()
 	target := h.latestTurnID(t)
 	return h.replace(t, func(admission *web.Admission, delivery agentapi.RunDelivery) {
-		h.service.RunWebEdit(admission, web.EditLatestMessageInput{
+		h.service.RunWebEdit(admission, agentapi.WebEditInput{
 			BotID: h.botID, SessionID: h.sessionID, TargetTurnID: target, Text: text,
 		}, delivery)
 	})

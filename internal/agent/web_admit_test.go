@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/drive/drivetest"
@@ -38,7 +39,7 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 
 	svc, _, _ := newWebTestRuntime(t)
 	var built sessionruntime.RunHandle
-	admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
+	admission, err := admitWebRun(context.Background(), svc, agentapi.WebAdmitInput{
 		BotID:        webTestBotID,
 		SessionID:    webTestSessionID,
 		InvocationID: "invocation-1",
@@ -51,10 +52,10 @@ func TestAdmitWebRunNamesTheRunBeforeItExecutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
-	if admission.Duplicate || admission.RunID == "" || admission.TurnID == "" || admission.Cursor.Epoch == "" {
+	if admission.Duplicate() || admission.RunID() == "" || admission.TurnID() == "" || admission.Cursor().Epoch == "" {
 		t.Fatalf("admission = %+v, want a started run with its turn and cursor", admission)
 	}
-	if built.RunID != admission.RunID || built.FencingToken <= 0 {
+	if built.RunID != admission.RunID() || built.FencingToken <= 0 {
 		t.Fatalf("admission view built for %+v, want the admitted run with its fence", built)
 	}
 
@@ -86,7 +87,7 @@ func TestAdmitWebRunRecordsTheSenderAsInitiator(t *testing.T) {
 	t.Parallel()
 
 	svc, _, runs := newWebTestRuntime(t)
-	admission, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
+	admission, err := admitWebRun(context.Background(), svc, agentapi.WebAdmitInput{
 		BotID:        webTestBotID,
 		SessionID:    webTestSessionID,
 		InvocationID: "invocation-1",
@@ -96,7 +97,7 @@ func TestAdmitWebRunRecordsTheSenderAsInitiator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
-	if got := ledgerRun(t, runs, admission.RunID).InitiatorID; got != "account-1" {
+	if got := ledgerRun(t, runs, admission.RunID()).InitiatorID; got != "account-1" {
 		t.Fatalf("run initiator = %q, want account-1", got)
 	}
 	delivery := newWebTestDelivery()
@@ -115,11 +116,11 @@ func TestAdmitWebRunRedeliveryIsADuplicate(t *testing.T) {
 	delivery.wait(t)
 
 	again := admitWebTestRun(t, svc, "invocation-1")
-	if !again.Duplicate || again.RunID != first.RunID || again.TurnID != first.TurnID {
-		t.Fatalf("redelivery = %+v, want a duplicate of run %s", again, first.RunID)
+	if !again.Duplicate() || again.RunID() != first.RunID() || again.TurnID() != first.TurnID() {
+		t.Fatalf("redelivery = %+v, want a duplicate of run %s", again, first.RunID())
 	}
-	if again.Cursor != (sessionruntime.Cursor{}) {
-		t.Fatalf("duplicate cursor = %+v, want none: a duplicate reserved nothing", again.Cursor)
+	if again.Cursor() != (sessionruntime.Cursor{}) {
+		t.Fatalf("duplicate cursor = %+v, want none: a duplicate reserved nothing", again.Cursor())
 	}
 }
 
@@ -139,7 +140,7 @@ func TestAdmitWebRunRefusesABusySession(t *testing.T) {
 		delivery.wait(t)
 	})
 
-	_, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
+	_, err := admitWebRun(context.Background(), svc, agentapi.WebAdmitInput{
 		BotID: webTestBotID, SessionID: webTestSessionID, InvocationID: "invocation-2",
 		Payload: []byte(`{"kind":"message","text":"second"}`),
 	})
@@ -165,7 +166,7 @@ func TestAdmitWebRunWithoutAQueueRefusesABusySendWithoutBuildingItsQueueTurn(t *
 	})
 
 	built := false
-	_, err := svc.AdmitWebRun(context.Background(), web.AdmitInput{
+	_, err := admitWebRun(context.Background(), svc, agentapi.WebAdmitInput{
 		BotID: webTestBotID, SessionID: webTestSessionID, InvocationID: "invocation-2",
 		Payload: []byte(`{"kind":"message","text":"second"}`),
 		QueueTurn: func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
@@ -191,12 +192,12 @@ func TestWebRunEndReleasesTheSession(t *testing.T) {
 	delivery := newWebTestDelivery()
 	svc.web.Start(first, webTestSpec(first, delivery, &drivetest.ScriptedExecutor{Terminal: ptrTo(agenttest.TerminalEvent(t, "done"))}))
 	delivery.wait(t)
-	if got := ledgerRun(t, runs, first.RunID).State; got != ledger.StateCompleted {
+	if got := ledgerRun(t, runs, first.RunID()).State; got != ledger.StateCompleted {
 		t.Fatalf("first run state = %q, want completed", got)
 	}
 
 	next := admitWebTestRun(t, svc, "invocation-2")
-	if next.Duplicate || next.RunID == first.RunID {
+	if next.Duplicate() || next.RunID() == first.RunID() {
 		t.Fatalf("next admission = %+v, want a new run", next)
 	}
 	next.Stop(outcome.ErrRunStopped)
@@ -235,7 +236,7 @@ func TestWebHistoryWriteFailureEndsTheRunFailedWithoutFinishing(t *testing.T) {
 	svc.web.Start(admission, webTestSpec(admission, delivery, exec))
 	events, ended := delivery.wait(t)
 
-	run := ledgerRun(t, runs, admission.RunID)
+	run := ledgerRun(t, runs, admission.RunID())
 	if run.State != ledger.StateFailed || run.ErrorCode != string(apperror.CodeSessionHistoryInconsistent) {
 		t.Fatalf("session_runs = %q %q, want failed %s", run.State, run.ErrorCode, apperror.CodeSessionHistoryInconsistent)
 	}
@@ -306,7 +307,7 @@ func TestWebPublicationRefusalEndsTheRun(t *testing.T) {
 	svc.web.Start(admission, webTestSpec(admission, delivery, exec))
 	events, _ := delivery.wait(t)
 
-	run := ledgerRun(t, runs, admission.RunID)
+	run := ledgerRun(t, runs, admission.RunID())
 	if run.State != ledger.StateFailed || run.ErrorCode != string(apperror.CodeSessionPublishFailed) {
 		t.Fatalf("session_runs = %q %q, want failed %s", run.State, run.ErrorCode, apperror.CodeSessionPublishFailed)
 	}
@@ -335,7 +336,7 @@ func TestWebStopIsRecordedAsAStop(t *testing.T) {
 			name: "routed abort",
 			stop: func(t *testing.T, manager *sessionruntime.Manager, admission *web.Admission, _ context.CancelFunc) {
 				t.Helper()
-				if _, err := manager.AbortControl(context.Background(), webTestBotID, webTestSessionID, admission.RunID, "control-1"); err != nil {
+				if _, err := manager.AbortControl(context.Background(), webTestBotID, webTestSessionID, admission.RunID(), "control-1"); err != nil {
 					t.Fatalf("AbortControl() error = %v", err)
 				}
 			},
@@ -353,7 +354,7 @@ func TestWebStopIsRecordedAsAStop(t *testing.T) {
 			svc, manager, runs := newWebTestRuntime(t)
 			callerCtx, cancelCaller := context.WithCancel(context.Background())
 			defer cancelCaller()
-			admission, err := svc.AdmitWebRun(callerCtx, web.AdmitInput{
+			admission, err := admitWebRun(callerCtx, svc, agentapi.WebAdmitInput{
 				BotID: webTestBotID, SessionID: webTestSessionID, InvocationID: "invocation-1",
 				Payload: []byte(`{"kind":"message","text":"hi"}`),
 			})
@@ -368,7 +369,7 @@ func TestWebStopIsRecordedAsAStop(t *testing.T) {
 			tc.stop(t, manager, admission, cancelCaller)
 			events, ended := delivery.wait(t)
 
-			run := ledgerRun(t, runs, admission.RunID)
+			run := ledgerRun(t, runs, admission.RunID())
 			if run.State != ledger.StateAborted || run.ErrorCode != "" {
 				t.Fatalf("session_runs = %q %q, want aborted without a code", run.State, run.ErrorCode)
 			}
@@ -451,14 +452,14 @@ func TestWebRetryRejectsTurnReplacementForACP(t *testing.T) {
 		Sessions: acpRuntimeSessionServiceForTest("user-1"),
 		Messages: driveReplaceableHistory(t),
 	}, withTurnAdmitter(agenttest.NewScriptedAdmitter()), withACPPool(pool))
-	admission, err := resolver.AdmitWebRun(context.Background(), web.AdmitInput{
+	admission, err := admitWebRun(context.Background(), resolver, agentapi.WebAdmitInput{
 		BotID: "bot-1", SessionID: "session-1", InvocationID: "retry-1", Payload: []byte(`{"kind":"retry_message"}`),
 	})
 	if err != nil {
 		t.Fatalf("AdmitWebRun() error = %v", err)
 	}
 	delivery := newWebTestDelivery()
-	resolver.RunWebRetry(admission, web.RetryLatestMessageInput{
+	resolver.RunWebRetry(admission, agentapi.WebRetryInput{
 		BotID: "bot-1", SessionID: "session-1", TargetTurnID: driveReplacedTurnID,
 	}, delivery)
 

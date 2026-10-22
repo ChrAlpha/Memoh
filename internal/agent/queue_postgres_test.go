@@ -876,16 +876,16 @@ func TestWebSendOnABusySessionWaitsInTheQueueAndRunsInItsTurn(t *testing.T) {
 
 	queued, err := proc.svc.AdmitWebRun(ctx, env.webSend("web-1", "typed while it runs"))
 	require.NoError(t, err)
-	require.True(t, queued.Queued)
-	require.False(t, queued.Duplicate)
-	require.NotEmpty(t, queued.QueuedItemID)
-	require.Empty(t, queued.RunID, "no run exists yet")
+	require.True(t, queued.Queued())
+	require.False(t, queued.Duplicate())
+	require.NotEmpty(t, queued.QueuedItemID())
+	require.Empty(t, queued.RunID(), "no run exists yet")
 	require.Equal(t, "queued", env.stateOf(t, "web-1"))
 
 	again, err := proc.svc.AdmitWebRun(ctx, env.webSend("web-1", "typed while it runs"))
 	require.NoError(t, err)
-	require.True(t, again.Queued && again.Duplicate, "a repeated send is answered as the repeat it is")
-	require.Empty(t, again.QueuedItemID)
+	require.True(t, again.Queued() && again.Duplicate(), "a repeated send is answered as the repeat it is")
+	require.Empty(t, again.QueuedItemID())
 	var rows int
 	require.NoError(t, env.pool.QueryRow(ctx, `SELECT count(*) FROM session_queued_inputs WHERE session_id = $1 AND invocation_id = 'web-1'`, env.sessionID).Scan(&rows))
 	require.Equal(t, 1, rows, "the repeat added nothing")
@@ -899,7 +899,7 @@ func TestWebSendOnABusySessionWaitsInTheQueueAndRunsInItsTurn(t *testing.T) {
 
 	repeat, err := proc.svc.AdmitWebRun(ctx, env.webSend("web-1", "typed while it runs"))
 	require.NoError(t, err)
-	require.True(t, repeat.Queued && repeat.Duplicate, "a send the queue has taken is answered as the repeat it is")
+	require.True(t, repeat.Queued() && repeat.Duplicate(), "a send the queue has taken is answered as the repeat it is")
 }
 
 // A send that would pass input already waiting joins the queue behind it, even
@@ -911,7 +911,7 @@ func TestWebSendBehindQueuedInputWaitsItsTurn(t *testing.T) {
 
 	queued, err := proc.svc.AdmitWebRun(context.Background(), env.webSend("web-2", "typed after"))
 	require.NoError(t, err)
-	require.True(t, queued.Queued, "the session is idle but the queue is not empty")
+	require.True(t, queued.Queued(), "the session is idle but the queue is not empty")
 	require.Equal(t, "queued", env.stateOf(t, "waiting"))
 }
 

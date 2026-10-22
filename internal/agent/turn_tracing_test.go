@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/drive"
@@ -172,7 +173,7 @@ func TestTurnSpanCoversTheWebSocketEntryPoint(t *testing.T) {
 // admitTracingWebRun admits a Web run on bot b, session s.
 func admitTracingWebRun(t *testing.T, service *Service) *web.Admission {
 	t.Helper()
-	admission, err := service.AdmitWebRun(context.Background(), web.AdmitInput{
+	admission, err := admitWebRun(context.Background(), service, agentapi.WebAdmitInput{
 		BotID: "b", SessionID: "s", InvocationID: "trace-1", Payload: []byte(`{"kind":"message"}`),
 	})
 	if err != nil {
@@ -274,7 +275,7 @@ type spanTestEntry struct {
 func spanTestEntries() []spanTestEntry {
 	return []spanTestEntry{
 		{name: "web_send", start: func(t *testing.T, service *Service, _ *agenttest.LifecycleAdmitter) (func(), func()) {
-			admission, err := service.AdmitWebRun(context.Background(), web.AdmitInput{
+			admission, err := admitWebRun(context.Background(), service, agentapi.WebAdmitInput{
 				BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 				InvocationID: "span-web", Payload: []byte(`{"kind":"message"}`),
 			})
@@ -282,7 +283,7 @@ func spanTestEntries() []spanTestEntry {
 				t.Fatalf("AdmitWebRun() error = %v", err)
 			}
 			delivery := newWebTestDelivery()
-			service.RunWebSend(admission, runreq.ChatRequest{
+			service.RunWebSend(admission, agentapi.WebSendInput{
 				BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 				Query: directLifecyclePrompt,
 			}, delivery) //nolint:contextcheck // The run's context is the one admission derived from ctx.

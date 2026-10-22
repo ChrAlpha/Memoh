@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/bots"
@@ -56,7 +57,7 @@ type resolvedWorkspace struct {
 	// and nothing selected one.
 	TargetID string
 	// Target is the resolved snapshot, nil when resolution was skipped.
-	Target *runreq.WorkspaceTarget
+	Target *agentapi.WorkspaceTarget
 	// WorkdirPath is the session's bound working directory, if any.
 	WorkdirPath string
 }
@@ -112,7 +113,7 @@ func (b *Builder) ResolveWorkspace(ctx context.Context, in WorkspaceInput) (cont
 		}
 		return ctx, out, err
 	}
-	out.Target = &runreq.WorkspaceTarget{
+	out.Target = &agentapi.WorkspaceTarget{
 		TargetID: strings.TrimSpace(resolved.TargetID),
 		Kind:     strings.TrimSpace(resolved.Kind),
 		Name:     strings.TrimSpace(resolved.Name),
@@ -145,23 +146,23 @@ func UserPrincipal(req runreq.ChatRequest) *WorkspacePrincipal {
 	return &WorkspacePrincipal{UserID: req.UserID}
 }
 
-func (b *Builder) ResolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*runreq.WorkspaceTarget, error) {
+func (b *Builder) ResolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*agentapi.WorkspaceTarget, error) {
 	resolved, err := b.targets.ResolveWorkspaceTarget(ctx, botID, targetID)
 	if err != nil {
 		return nil, err
 	}
-	return &runreq.WorkspaceTarget{
+	return &agentapi.WorkspaceTarget{
 		TargetID: strings.TrimSpace(resolved.TargetID),
 		Kind:     strings.TrimSpace(resolved.Kind),
 		Name:     strings.TrimSpace(resolved.Name),
 	}, nil
 }
 
-func WorkspaceTargetFromRunConfig(cfg native.RunConfig) *runreq.WorkspaceTarget {
+func WorkspaceTargetFromRunConfig(cfg native.RunConfig) *agentapi.WorkspaceTarget {
 	if strings.TrimSpace(cfg.Identity.WorkspaceTargetID) == "" {
 		return nil
 	}
-	return &runreq.WorkspaceTarget{
+	return &agentapi.WorkspaceTarget{
 		TargetID: strings.TrimSpace(cfg.Identity.WorkspaceTargetID),
 		Kind:     strings.TrimSpace(cfg.Identity.WorkspaceTargetKind),
 		Name:     strings.TrimSpace(cfg.Identity.WorkspaceTargetName),

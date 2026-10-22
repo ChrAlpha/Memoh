@@ -17,51 +17,10 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-// RetryLatestMessageInput names the turn a Web retry replaces and who asks.
-// The run that replaces it is the admission's, so the input carries none of
-// the run's identity.
-type RetryLatestMessageInput struct {
-	BotID     string
-	SessionID string
-	// TargetTurnID names the round being replaced. It is distinct from the
-	// admission's turn, which names the new turn this operation runs.
-	TargetTurnID           string
-	ActorChannelIdentityID string
-	ActorUserID            string
-	ChatToken              string
-	Model                  string
-	ReasoningEffort        string
-	WorkspaceTargetID      string
-	ToolHTTPURL            string
-	// OnModelPreferenceSettled releases subsequent picker writes once this
-	// turn's preference write-back has finished (issue #879). Same contract
-	// as ChatRequest.OnModelPreferenceSettled.
-	OnModelPreferenceSettled func()
-}
-
-// EditLatestMessageInput names the turn a Web edit replaces and its new text.
-type EditLatestMessageInput struct {
-	BotID     string
-	SessionID string
-	// TargetTurnID names the round being replaced. See RetryLatestMessageInput.
-	TargetTurnID           string
-	Text                   string
-	Attachments            []runreq.ChatAttachment
-	ActorChannelIdentityID string
-	ActorUserID            string
-	ChatToken              string
-	Model                  string
-	ReasoningEffort        string
-	WorkspaceTargetID      string
-	ToolHTTPURL            string
-	// OnModelPreferenceSettled: see RetryLatestMessageInput.
-	OnModelPreferenceSettled func()
-}
-
 // RetrySpec is the run of a Web retry. The turn it replaces is resolved in
 // the run's setup: a target that is no longer the latest turn is the run's own
 // failure, reported to the caller like any other.
-func (r *Runner) RetrySpec(admission *Admission, input RetryLatestMessageInput, delivery agentapi.RunDelivery) drive.RunSpec {
+func (r *Runner) RetrySpec(admission *Admission, input agentapi.WebRetryInput, delivery agentapi.RunDelivery) drive.RunSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	replace := &webReplacement{runner: r, reason: "retry", sessionID: sessionID, oldTurnID: targetTurnID}
@@ -124,7 +83,7 @@ func isPreflightUserMessageHookFailure(message messagepkg.Message) bool {
 
 // EditSpec is the run of a Web edit: the latest turn's request replaced by
 // new text, and the turn answered again.
-func (r *Runner) EditSpec(admission *Admission, input EditLatestMessageInput, delivery agentapi.RunDelivery) drive.RunSpec {
+func (r *Runner) EditSpec(admission *Admission, input agentapi.WebEditInput, delivery agentapi.RunDelivery) drive.RunSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	text := strings.TrimSpace(input.Text)

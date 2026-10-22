@@ -12,9 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/felinics/memoh/internal/agent"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
-	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/auth"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -74,7 +74,7 @@ func TestAdmitWSRunAnswersASendQueuedBehindARunWithRunQueued(t *testing.T) {
 			},
 			&auth.RouteCredentials{BotID: botID.String(), ChatID: botID.String(), ReplyTarget: botID.String()}, nil
 	}
-	admit := func(ref wsTurnRef, queue func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error)) (*web.Admission, wsTurnRef) {
+	admit := func(ref wsTurnRef, queue func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error)) (agentapi.WebAdmission, wsTurnRef) {
 		return handler.admitWSRun(ctx, writer, botID.String(), "", ref, "ws.message", []byte(`{"kind":"message","text":"x"}`), emptyWSAdmissionView, queue, nil)
 	}
 

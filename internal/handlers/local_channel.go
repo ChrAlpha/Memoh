@@ -27,14 +27,12 @@ import (
 	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	chatview "github.com/felinics/memoh/internal/agent/view"
-	"github.com/felinics/memoh/internal/agent/web"
 	"github.com/felinics/memoh/internal/apperror"
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	"github.com/felinics/memoh/internal/auth"
@@ -1475,11 +1473,11 @@ func (h *LocalChannelHandler) abortWSRun(ctx context.Context, writer *wsWriter, 
 // there is nothing to execute. release is called once whatever this call
 // reserved for the session is no longer needed: here when nothing runs, and
 // by the run's delivery end otherwise.
-func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID, initiatorID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), queueTurn func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error), release func()) (*web.Admission, wsTurnRef) {
+func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, botID, initiatorID string, ref wsTurnRef, operation string, submission []byte, admission func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error), queueTurn func(context.Context) (turn.StartTurnCommand, *auth.RouteCredentials, error), release func()) (agentapi.WebAdmission, wsTurnRef) {
 	if release == nil {
 		release = func() {}
 	}
-	admitted, err := h.webRuns.AdmitWebRun(ctx, web.AdmitInput{
+	admitted, err := h.webRuns.AdmitWebRun(ctx, agentapi.WebAdmitInput{
 		BotID:        botID,
 		SessionID:    ref.SessionID,
 		InvocationID: ref.InvocationID,
@@ -1495,22 +1493,22 @@ func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, 
 		release()
 		return nil, ref
 	}
-	if admitted.Queued {
+	if admitted.Queued() {
 		// A send that waits has no run to execute and no turn to publish: it is
 		// answered in the queue, and its run is announced to the session's
 		// subscribers when it starts.
-		sendWSRunQueued(writer, ref, wsRunQueued{ItemID: admitted.QueuedItemID, Duplicate: admitted.Duplicate})
+		sendWSRunQueued(writer, ref, wsRunQueued{ItemID: admitted.QueuedItemID(), Duplicate: admitted.Duplicate()})
 		release()
 		return nil, ref
 	}
-	ref = ref.withRun(admitted.RunID)
+	ref = ref.withRun(admitted.RunID())
 	sendWSRunAccepted(writer, ref, wsRunAcceptance{
-		TurnID:       admitted.TurnID,
-		TurnPosition: admitted.TurnPosition,
-		Cursor:       admitted.Cursor,
-		Duplicate:    admitted.Duplicate,
+		TurnID:       admitted.TurnID(),
+		TurnPosition: admitted.TurnPosition(),
+		Cursor:       admitted.Cursor(),
+		Duplicate:    admitted.Duplicate(),
 	})
-	if admitted.Duplicate {
+	if admitted.Duplicate() {
 		release()
 		return nil, ref
 	}
@@ -2091,14 +2089,14 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 			userMessagePersisted := false
 			persistedUserMessageID := ""
 			externalMessageID := ""
-			var preparedActivationReq *runreq.ChatRequest
+			var preparedActivationReq *agentapi.WebSendInput
 			if hasSkillActivation {
 				// The persisted user turn is deduplicated by the client's
 				// invocation id: it exists before any run does, and the
 				// invocation is precisely the key a redelivery would repeat.
 				externalMessageID = ref.InvocationID
 				ingestedActivationAttachments = h.ingestWSInboundAttachments(streamBaseCtx, botID, chatAttachments)
-				userReq := runreq.ChatRequest{
+				userReq := agentapi.WebSendInput{
 					BotID:                   botID,
 					ChatID:                  botID,
 					ThreadID:                sessionID,
@@ -2168,7 +2166,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 			if admitted == nil {
 				continue
 			}
-			req := runreq.ChatRequest{
+			req := agentapi.WebSendInput{
 				OnModelPreferenceSettled: wsModelPreferenceSettled(writer, runRef),
 				BotID:                    botID,
 				ChatID:                   botID,
@@ -2252,7 +2250,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				SessionID: sessionID,
 				TurnID:    targetTurnID,
 			}.encode()
-			retryInput := web.RetryLatestMessageInput{
+			retryInput := agentapi.WebRetryInput{
 				BotID:                  botID,
 				SessionID:              sessionID,
 				TargetTurnID:           targetTurnID,
@@ -2330,7 +2328,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				TurnID:      targetTurnID,
 				Attachments: digestWSAttachments(msg.Attachments),
 			}.encode()
-			editInput := web.EditLatestMessageInput{
+			editInput := agentapi.WebEditInput{
 				BotID:                  botID,
 				SessionID:              sessionID,
 				TargetTurnID:           targetTurnID,
