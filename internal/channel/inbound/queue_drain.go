@@ -135,6 +135,7 @@ func (p *ChannelInboundProcessor) readBusyBatch(ctx context.Context, batch BusyB
 			continue
 		}
 		input.ItemID = item.ID
+		input.ReceivedAt = item.ReceivedAt
 		inputs = append(inputs, input)
 	}
 	return inputs

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/require"
@@ -77,7 +76,7 @@ func startedAs(t *testing.T, claims *auth.RouteCredentials) turn.StartTurnComman
 		BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", IdempotencyKey: "m1",
 		Query: "hello", UserVisibleText: "hello", ReplyTarget: "im-chat-1",
 	}
-	payload, err := turnwire.NewQueuedInput(cmd, claims, time.Now()).Marshal()
+	payload, err := turnwire.NewQueuedInput(cmd, claims).Marshal()
 	require.NoError(t, err)
 	require.Empty(t, turnwire.ParseQueuedInput(payload).Command.Token, "the queue never stores the turn's credentials")
 	require.NotContains(t, string(payload), "queue-test-secret")

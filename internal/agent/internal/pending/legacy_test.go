@@ -19,7 +19,7 @@ func legacyItem(t *testing.T, teamID string) sessionruntime.LegacyFollowUp {
 		// The release that wrote it stored the turn's own credentials.
 		Token: "old-token", ChatToken: "old-chat-token",
 	}
-	payload, err := turnwire.NewQueuedInput(cmd, nil, time.Time{}).Marshal()
+	payload, err := turnwire.NewQueuedInput(cmd, nil).Marshal()
 	require.NoError(t, err)
 	// NewQueuedInput blanks the tokens; put them back the way the old release
 	// wrote them.

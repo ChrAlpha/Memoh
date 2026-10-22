@@ -2,7 +2,6 @@ package runreq
 
 import (
 	"strings"
-	"time"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -15,7 +14,7 @@ import (
 // text, the turn it replays and the identities its credentials are issued
 // for. The credentials themselves are never stored.
 func EncodeQueueCommand(cmd turn.StartTurnCommand, claims *auth.RouteCredentials) ([]byte, error) {
-	return turnwire.NewQueuedInput(cmd, claims, time.Time{}).Marshal()
+	return turnwire.NewQueuedInput(cmd, claims).Marshal()
 }
 
 // RewriteQueuePayloadText replaces the user text of a stored item while

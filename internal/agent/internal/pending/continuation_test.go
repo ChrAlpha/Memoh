@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -149,7 +148,7 @@ func TestAdmissionAfterTheRuntimeClosedReportsItWithoutAWarning(t *testing.T) {
 			SchemaVersion: turnwire.StartTurnVersion, TeamID: "team-1", Mode: turn.ModeChat,
 			BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1", IdempotencyKey: "m1", Query: "hello",
 		}
-		payload, err := turnwire.NewQueuedInput(cmd, nil, time.Now()).Marshal()
+		payload, err := turnwire.NewQueuedInput(cmd, nil).Marshal()
 		require.NoError(t, err)
 		queue := &releasingBatch{oneBatch: oneBatch{batch: sessionruntime.QueueBatch{ID: "b", Items: []sessionruntime.QueuedInput{{
 			ID: "i", BotID: "bot-1", SessionID: "session-1", InvocationID: "m1", Payload: payload,

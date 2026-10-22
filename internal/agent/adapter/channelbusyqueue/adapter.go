@@ -25,6 +25,7 @@ func (a *Adapter) Enqueue(ctx context.Context, in inbound.BusyInput) error {
 		InvocationID: in.InvocationID,
 		MergeKey:     in.MergeKey,
 		Payload:      in.Payload,
+		ReceivedAt:   in.ReceivedAt,
 	})
 	switch {
 	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
@@ -43,7 +44,7 @@ func (a *Adapter) ClaimBatch(ctx context.Context, botID, sessionID string) (inbo
 	}
 	inputs := make([]inbound.BusyBatchInput, len(batch.Items))
 	for i, item := range batch.Items {
-		inputs[i] = inbound.BusyBatchInput{ID: item.ID, Payload: item.Payload}
+		inputs[i] = inbound.BusyBatchInput{ID: item.ID, Payload: item.Payload, ReceivedAt: item.ReceivedAt}
 	}
 	return inbound.BusyBatch{
 		ID: batch.ID, ClaimToken: batch.ClaimToken, BotID: botID, SessionID: sessionID,

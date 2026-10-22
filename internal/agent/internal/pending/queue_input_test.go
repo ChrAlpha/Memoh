@@ -58,7 +58,7 @@ func TestQueuedTextFollowUpReplaysRecordedIdentity(t *testing.T) {
 	input.TeamID, input.UserID, input.SourceChannelIdentityID = "team-cloud", "user-9", "identity-9"
 	cmd, err := queueTurnCommand(input)
 	require.NoError(t, err)
-	payload, err := turnwire.NewQueuedInput(cmd, nil, time.Time{}).Marshal()
+	payload, err := turnwire.NewQueuedInput(cmd, nil).Marshal()
 	require.NoError(t, err)
 
 	key := sessionruntime.Key{BotID: "bot-1", SessionID: "session-1"}
@@ -88,7 +88,7 @@ func TestRestoreInputReportsWhatAnItemIsMissing(t *testing.T) {
 		return sessionruntime.QueuedInput{ID: "f1", BotID: "bot", SessionID: "session", Payload: payload}
 	}
 	encode := func(cmd turn.StartTurnCommand) []byte {
-		payload, err := turnwire.NewQueuedInput(cmd, nil, time.Time{}).Marshal()
+		payload, err := turnwire.NewQueuedInput(cmd, nil).Marshal()
 		require.NoError(t, err)
 		return payload
 	}

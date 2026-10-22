@@ -45,7 +45,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND id = $2
   AND origin = 'follow_up'
   AND state = 'queued'
-RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 `
 
 type BeginQueuedInputPromotionParams struct {
@@ -67,6 +67,7 @@ func (q *Queries) BeginQueuedInputPromotion(ctx context.Context, arg BeginQueued
 		&i.Payload,
 		&i.Position,
 		&i.EnqueuedDuringRunID,
+		&i.ReceivedAt,
 		&i.State,
 		&i.BatchID,
 		&i.ClaimToken,
@@ -116,7 +117,7 @@ SET state = 'claimed',
 WHERE team_id = public.memoh_current_team_id()
   AND id = ANY($4::uuid[])
   AND state = 'queued'
-RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 `
 
 type ClaimQueuedInputsParams struct {
@@ -151,6 +152,7 @@ func (q *Queries) ClaimQueuedInputs(ctx context.Context, arg ClaimQueuedInputsPa
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -234,7 +236,7 @@ func (q *Queries) CountQueuedSessionInputs(ctx context.Context, arg CountQueuedS
 }
 
 const getSessionQueuedInput = `-- name: GetSessionQueuedInput :one
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -260,6 +262,7 @@ func (q *Queries) GetSessionQueuedInput(ctx context.Context, arg GetSessionQueue
 		&i.Payload,
 		&i.Position,
 		&i.EnqueuedDuringRunID,
+		&i.ReceivedAt,
 		&i.State,
 		&i.BatchID,
 		&i.ClaimToken,
@@ -274,7 +277,7 @@ func (q *Queries) GetSessionQueuedInput(ctx context.Context, arg GetSessionQueue
 }
 
 const getSessionQueuedInputByInvocation = `-- name: GetSessionQueuedInputByInvocation :one
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -300,6 +303,7 @@ func (q *Queries) GetSessionQueuedInputByInvocation(ctx context.Context, arg Get
 		&i.Payload,
 		&i.Position,
 		&i.EnqueuedDuringRunID,
+		&i.ReceivedAt,
 		&i.State,
 		&i.BatchID,
 		&i.ClaimToken,
@@ -347,6 +351,7 @@ INSERT INTO session_queued_inputs (
   merge_key,
   payload,
   enqueued_during_run_id,
+  received_at,
   created_at
 ) VALUES (
   $1,
@@ -357,10 +362,11 @@ INSERT INTO session_queued_inputs (
   $6,
   $7,
   $8,
-  COALESCE($9::timestamptz, now())
+  $9::timestamptz,
+  COALESCE($10::timestamptz, now())
 )
 ON CONFLICT (team_id, session_id, invocation_id) DO NOTHING
-RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 `
 
 type InsertSessionQueuedInputParams struct {
@@ -372,6 +378,7 @@ type InsertSessionQueuedInputParams struct {
 	MergeKey            string             `json:"merge_key"`
 	Payload             []byte             `json:"payload"`
 	EnqueuedDuringRunID string             `json:"enqueued_during_run_id"`
+	ReceivedAt          pgtype.Timestamptz `json:"received_at"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -387,6 +394,7 @@ func (q *Queries) InsertSessionQueuedInput(ctx context.Context, arg InsertSessio
 		arg.MergeKey,
 		arg.Payload,
 		arg.EnqueuedDuringRunID,
+		arg.ReceivedAt,
 		arg.CreatedAt,
 	)
 	var i SessionQueuedInput
@@ -401,6 +409,7 @@ func (q *Queries) InsertSessionQueuedInput(ctx context.Context, arg InsertSessio
 		&i.Payload,
 		&i.Position,
 		&i.EnqueuedDuringRunID,
+		&i.ReceivedAt,
 		&i.State,
 		&i.BatchID,
 		&i.ClaimToken,
@@ -456,7 +465,7 @@ func (q *Queries) ListDrainableQueuedSessions(ctx context.Context, arg ListDrain
 }
 
 const listLapsedQueuedInputs = `-- name: ListLapsedQueuedInputs :many
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -494,6 +503,7 @@ func (q *Queries) ListLapsedQueuedInputs(ctx context.Context, arg ListLapsedQueu
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -515,7 +525,7 @@ func (q *Queries) ListLapsedQueuedInputs(ctx context.Context, arg ListLapsedQueu
 }
 
 const listQueuedInputsToClaim = `-- name: ListQueuedInputsToClaim :many
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -552,6 +562,7 @@ func (q *Queries) ListQueuedInputsToClaim(ctx context.Context, arg ListQueuedInp
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -573,7 +584,7 @@ func (q *Queries) ListQueuedInputsToClaim(ctx context.Context, arg ListQueuedInp
 }
 
 const listSessionQueuedInputs = `-- name: ListSessionQueuedInputs :many
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -607,6 +618,7 @@ func (q *Queries) ListSessionQueuedInputs(ctx context.Context, arg ListSessionQu
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -628,7 +640,7 @@ func (q *Queries) ListSessionQueuedInputs(ctx context.Context, arg ListSessionQu
 }
 
 const listSessionQueuedInputsForUpdate = `-- name: ListSessionQueuedInputsForUpdate :many
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -663,6 +675,7 @@ func (q *Queries) ListSessionQueuedInputsForUpdate(ctx context.Context, arg List
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -684,7 +697,7 @@ func (q *Queries) ListSessionQueuedInputsForUpdate(ctx context.Context, arg List
 }
 
 const listSessionQueuedPromotions = `-- name: ListSessionQueuedPromotions :many
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = $1
@@ -712,6 +725,7 @@ func (q *Queries) ListSessionQueuedPromotions(ctx context.Context, sessionID pgt
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -733,7 +747,7 @@ func (q *Queries) ListSessionQueuedPromotions(ctx context.Context, sessionID pgt
 }
 
 const listStaleQueuedPromotions = `-- name: ListStaleQueuedPromotions :many
-SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+SELECT id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 FROM session_queued_inputs
 WHERE team_id = public.memoh_current_team_id()
   AND state IN ('promoting', 'promoted')
@@ -767,6 +781,7 @@ func (q *Queries) ListStaleQueuedPromotions(ctx context.Context, arg ListStaleQu
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -911,7 +926,7 @@ SET claim_token = $1,
 WHERE team_id = public.memoh_current_team_id()
   AND batch_id = $3
   AND state = 'claimed'
-RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 `
 
 type RenewQueuedBatchClaimParams struct {
@@ -940,6 +955,7 @@ func (q *Queries) RenewQueuedBatchClaim(ctx context.Context, arg RenewQueuedBatc
 			&i.Payload,
 			&i.Position,
 			&i.EnqueuedDuringRunID,
+			&i.ReceivedAt,
 			&i.State,
 			&i.BatchID,
 			&i.ClaimToken,
@@ -1026,7 +1042,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND id = $3
   AND origin = $4
   AND state = 'queued'
-RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
+RETURNING id, team_id, bot_id, session_id, origin, invocation_id, merge_key, payload, position, enqueued_during_run_id, received_at, state, batch_id, claim_token, claimed_until, run_invocation_id, error_code, created_at, updated_at, settled_at
 `
 
 type UpdateSessionQueuedInputPayloadParams struct {
@@ -1055,6 +1071,7 @@ func (q *Queries) UpdateSessionQueuedInputPayload(ctx context.Context, arg Updat
 		&i.Payload,
 		&i.Position,
 		&i.EnqueuedDuringRunID,
+		&i.ReceivedAt,
 		&i.State,
 		&i.BatchID,
 		&i.ClaimToken,

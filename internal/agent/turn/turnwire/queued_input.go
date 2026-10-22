@@ -24,17 +24,19 @@ type QueuedInput struct {
 	// starts with no credentials, as a text typed into the queue panel always
 	// did.
 	Claims *auth.RouteCredentials `json:"claims,omitempty"`
-	// ReceivedAt is when the platform delivered the input. A reply is judged
-	// against it, not against the moment the input leaves the queue.
-	ReceivedAt time.Time `json:"received_at,omitzero"`
 	// ItemID is the queue item the input was read from. It is not stored: the
 	// reader sets it, so the turn's earlier messages carry the identity of the
 	// items they waited as.
 	ItemID string `json:"-"`
+	// ReceivedAt is when the platform delivered the input; a reply is judged
+	// against it, not against the moment the input leaves the queue. The queue
+	// holds it in a column and the reader sets it, as for ItemID. Zero is
+	// unknown.
+	ReceivedAt time.Time `json:"-"`
 }
 
 // NewQueuedInput builds the stored form of cmd. Its credentials are dropped.
-func NewQueuedInput(cmd turn.StartTurnCommand, claims *auth.RouteCredentials, receivedAt time.Time) QueuedInput {
+func NewQueuedInput(cmd turn.StartTurnCommand, claims *auth.RouteCredentials) QueuedInput {
 	text := strings.TrimSpace(cmd.UserVisibleText)
 	if text == "" {
 		text = strings.TrimSpace(cmd.Query)
@@ -42,7 +44,7 @@ func NewQueuedInput(cmd turn.StartTurnCommand, claims *auth.RouteCredentials, re
 	wire := FromStartTurn(cmd)
 	wire.Token = ""
 	wire.ChatToken = ""
-	return QueuedInput{Text: text, Command: &wire, Claims: claims, ReceivedAt: receivedAt}
+	return QueuedInput{Text: text, Command: &wire, Claims: claims}
 }
 
 // Marshal encodes the input for storage.

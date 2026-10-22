@@ -472,7 +472,7 @@ func TestUnstartableInputIsRejectedAndDoesNotBlockTheQueue(t *testing.T) {
 	foreign.TeamID = "00000000-0000-0000-0000-0000000000ff"
 	_, err = env.store.Enqueue(ctx, sessionruntime.QueueEnqueue{
 		Key: env.key(), Origin: sessionruntime.QueueOriginFollowUp, InvocationID: "foreign",
-		Payload: queuedPayload(t, foreign, time.Now()),
+		Payload: queuedPayload(t, foreign), ReceivedAt: time.Now(),
 	})
 	require.NoError(t, err)
 	env.park(t, "fine", "", "this one starts")

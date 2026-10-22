@@ -174,7 +174,7 @@ func (r *Runner) enqueueSend(ctx context.Context, in agentapi.WebAdmitInput) (*A
 		return nil, err
 	}
 	cmd.IdempotencyKey = strings.TrimSpace(in.InvocationID)
-	payload, err := turnwire.NewQueuedInput(cmd, claims, time.Now()).Marshal()
+	payload, err := turnwire.NewQueuedInput(cmd, claims).Marshal()
 	if err != nil {
 		return nil, fmt.Errorf("encode queued send: %w", err)
 	}
@@ -184,6 +184,7 @@ func (r *Runner) enqueueSend(ctx context.Context, in agentapi.WebAdmitInput) (*A
 		InvocationID: strings.TrimSpace(in.InvocationID),
 		MergeKey:     runreq.FirstNonEmpty(cmd.SourceChannelIdentityID, cmd.UserID),
 		Payload:      payload,
+		ReceivedAt:   time.Now(),
 	})
 	switch {
 	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):

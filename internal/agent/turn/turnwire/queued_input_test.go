@@ -25,9 +25,12 @@ func queuedCommand(text string) turn.StartTurnCommand {
 func storedInput(t *testing.T, text string, at time.Time) turnwire.QueuedInput {
 	t.Helper()
 	claims := auth.RouteCredentials{BotID: "bot-1", ChatID: "bot-1", ReplyTarget: "chat-1", UserID: "user-" + text}
-	payload, err := turnwire.NewQueuedInput(queuedCommand(text), &claims, at).Marshal()
+	payload, err := turnwire.NewQueuedInput(queuedCommand(text), &claims).Marshal()
 	require.NoError(t, err)
-	return turnwire.ParseQueuedInput(payload)
+	input := turnwire.ParseQueuedInput(payload)
+	// The queue keeps the arrival time in a column, and the reader sets it.
+	input.ReceivedAt = at
+	return input
 }
 
 // What is stored never contains a token: it would expire while the input waits,
@@ -35,7 +38,7 @@ func storedInput(t *testing.T, text string, at time.Time) turnwire.QueuedInput {
 func TestStoredInputCarriesNoCredentialsOnlyClaims(t *testing.T) {
 	cmd := queuedCommand("hello")
 	claims := auth.RouteCredentials{BotID: "bot-1", ChatID: "bot-1", ReplyTarget: "chat-1", UserID: "user-1"}
-	payload, err := turnwire.NewQueuedInput(cmd, &claims, time.Unix(100, 0).UTC()).Marshal()
+	payload, err := turnwire.NewQueuedInput(cmd, &claims).Marshal()
 	require.NoError(t, err)
 	require.NotContains(t, string(payload), "secret-token")
 	require.NotContains(t, string(payload), "secret-chat-token")
@@ -48,7 +51,8 @@ func TestStoredInputCarriesNoCredentialsOnlyClaims(t *testing.T) {
 	require.Equal(t, "hello", restored.Query)
 	require.Equal(t, "ext-hello", restored.ExternalMessageID)
 	require.Equal(t, claims, *input.Claims)
-	require.True(t, input.ReceivedAt.Equal(time.Unix(100, 0)))
+	require.NotContains(t, string(payload), "received_at", "the arrival time lives in the queue's column, not in the payload")
+	require.True(t, input.ReceivedAt.IsZero())
 	require.Equal(t, "hello", input.VisibleText())
 }
 

@@ -196,6 +196,7 @@ func RestoreInput(item sessionruntime.QueuedInput) (turnwire.QueuedInput, error)
 	case strings.TrimSpace(cmd.Query) == "" && len(cmd.Attachments) == 0:
 		return turnwire.QueuedInput{}, errQueuedCommandWithoutInput
 	}
+	input.ReceivedAt = item.ReceivedAt
 	return input, nil
 }
 

@@ -448,7 +448,7 @@ func TestBlockedWorkspaceCheckDoesNotBlockQueueingOrTerminalCallbacks(t *testing
 	go func() {
 		_, err := proc.svc.pending.Enqueue(context.Background(), sessionruntime.QueueEnqueue{
 			Key: env.key(), Origin: sessionruntime.QueueOriginFollowUp, InvocationID: "f2",
-			Payload: queuedPayload(t, env.turnCommand("f2", "typed while the check hangs"), time.Now()),
+			Payload: queuedPayload(t, env.turnCommand("f2", "typed while the check hangs")), ReceivedAt: time.Now(),
 		})
 		returned <- err
 	}()

@@ -248,6 +248,43 @@ func TestQueuedInputsBatchGroupsNeighboursWithOneMergeKey(t *testing.T) {
 	}, batches, "a batch is the neighbours of one sender, and an input without a key stands alone")
 }
 
+// The arrival time of an input is kept in its own column and read back with the
+// input a claim hands out. An input that arrived with none keeps none: it is not
+// given the time it was written, because the reply window is judged from it.
+func TestQueuedInputsKeepTheirArrivalTimeAndOnlyThat(t *testing.T) {
+	env := newQueueEnv(t)
+	ctx := context.Background()
+	arrived := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Microsecond)
+
+	known, err := env.store.Enqueue(ctx, QueueEnqueue{
+		Key: env.key, Origin: QueueOriginPlatformBusy, InvocationID: "known", MergeKey: "alice", Payload: []byte(`{"text":"known"}`),
+		ReceivedAt: arrived,
+	})
+	require.NoError(t, err)
+	require.True(t, known.ReceivedAt.Equal(arrived), "the enqueue returns the arrival time it was given")
+	unknown := env.enqueue(t, QueueOriginPlatformBusy, "unknown", "alice", "unknown")
+	require.True(t, unknown.ReceivedAt.IsZero(), "no arrival time stays unknown")
+	require.False(t, unknown.CreatedAt.IsZero())
+
+	again, err := env.store.Enqueue(ctx, QueueEnqueue{
+		Key: env.key, Origin: QueueOriginPlatformBusy, InvocationID: "known", MergeKey: "alice", Payload: []byte(`{"text":"known"}`),
+		ReceivedAt: arrived.Add(time.Minute),
+	})
+	require.NoError(t, err, "a redelivery of the same input is the same input, whenever the platform says it arrived")
+	require.Equal(t, known.ID, again.ID)
+
+	edited, err := env.store.Edit(ctx, env.key, QueueOriginPlatformBusy, known.ID, []byte(`{"text":"edited"}`))
+	require.NoError(t, err)
+	require.True(t, edited.ReceivedAt.Equal(arrived), "editing the text does not move the arrival time")
+
+	batch, ok, err := env.store.ClaimBatch(ctx, env.key, QueueOriginPlatformBusy)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, batch.Items, 2)
+	require.True(t, batch.Items[0].ReceivedAt.Equal(arrived))
+	require.True(t, batch.Items[1].ReceivedAt.IsZero())
+}
+
 func TestQueuedInputsClaimWaitsForAFreeSession(t *testing.T) {
 	env := newQueueEnv(t)
 	ctx := context.Background()

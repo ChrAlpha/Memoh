@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -48,6 +49,9 @@ type BusyInput struct {
 	// alone.
 	MergeKey string
 	Payload  []byte
+	// ReceivedAt is when the platform delivered the message. The reply window
+	// is judged from it.
+	ReceivedAt time.Time
 }
 
 // BusyBatch is the inputs one run answers, taken from the queue by a claim.
@@ -64,6 +68,8 @@ type BusyBatch struct {
 type BusyBatchInput struct {
 	ID      string
 	Payload []byte
+	// ReceivedAt is when the platform delivered the message; zero is unknown.
+	ReceivedAt time.Time
 }
 
 // BusySession names a session with input waiting for this process.
@@ -137,7 +143,7 @@ func (p *ChannelInboundProcessor) parkBusyTurn(ctx context.Context, in busyTurn)
 	if isLocalChannelType(in.msg.Channel) {
 		origin = BusyOriginFollowUp
 	}
-	payload, err := turnwire.NewQueuedInput(cmd, &in.claims, in.msg.ReceivedAt).Marshal()
+	payload, err := turnwire.NewQueuedInput(cmd, &in.claims).Marshal()
 	if err != nil {
 		return err
 	}
@@ -147,7 +153,7 @@ func (p *ChannelInboundProcessor) parkBusyTurn(ctx context.Context, in busyTurn)
 	}
 	err = p.busyQueue.Enqueue(ctx, BusyInput{
 		BotID: cmd.BotID, SessionID: cmd.ThreadID, Origin: origin,
-		InvocationID: invocationID, MergeKey: busyMergeKey(cmd), Payload: payload,
+		InvocationID: invocationID, MergeKey: busyMergeKey(cmd), Payload: payload, ReceivedAt: in.msg.ReceivedAt,
 	})
 	switch {
 	case errors.Is(err, ErrBusyQueueFull):

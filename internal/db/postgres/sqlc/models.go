@@ -825,6 +825,7 @@ type SessionQueuedInput struct {
 	Payload             []byte             `json:"payload"`
 	Position            int64              `json:"position"`
 	EnqueuedDuringRunID string             `json:"enqueued_during_run_id"`
+	ReceivedAt          pgtype.Timestamptz `json:"received_at"`
 	State               string             `json:"state"`
 	BatchID             pgtype.UUID        `json:"batch_id"`
 	ClaimToken          pgtype.UUID        `json:"claim_token"`

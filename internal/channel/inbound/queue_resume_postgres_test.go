@@ -293,11 +293,12 @@ func (e resumeEnv) parkPlatform(t *testing.T, invocation, text string) {
 	cmd := e.command(invocation, text)
 	payload, err := turnwire.NewQueuedInput(cmd, &auth.RouteCredentials{
 		BotID: e.botID, ChatID: e.botID, ReplyTarget: resumeTarget, UserID: e.ownerID,
-	}, time.Now()).Marshal()
+	}).Marshal()
 	require.NoError(t, err)
 	_, err = e.queued.Enqueue(context.Background(), sessionruntime.QueueEnqueue{
 		Key:    sessionruntime.Key{BotID: e.botID, SessionID: e.sessionID},
 		Origin: sessionruntime.QueueOriginPlatformBusy, InvocationID: invocation, Payload: payload,
+		ReceivedAt: time.Now(),
 	})
 	require.NoError(t, err)
 }

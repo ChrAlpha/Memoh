@@ -70,6 +70,9 @@ type QueuedInput struct {
 	State               QueuedState
 	// ClaimToken is set while the input is being promoted.
 	ClaimToken string
+	// ReceivedAt is when the input arrived, as its sender's platform says. Zero
+	// is unknown: the input came from Redis, or nobody recorded it.
+	ReceivedAt time.Time
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
@@ -94,8 +97,11 @@ type QueueEnqueue struct {
 	MergeKey            string
 	Payload             []byte
 	EnqueuedDuringRunID string
-	// CreatedAt is the arrival time when it is older than this call, as for an
-	// input moved over from Redis; zero means now.
+	// ReceivedAt is when the input arrived. The reply window of a platform
+	// message is judged from it, so zero (unknown) means the window is closed.
+	ReceivedAt time.Time
+	// CreatedAt is the time the input waited since when it is older than this
+	// call, as for an input moved over from Redis; zero means now.
 	CreatedAt time.Time
 }
 
@@ -198,6 +204,7 @@ func queuedInputFromRow(row dbsqlc.SessionQueuedInput) QueuedInput {
 		Position:            row.Position,
 		EnqueuedDuringRunID: row.EnqueuedDuringRunID,
 		State:               QueuedState(row.State),
+		ReceivedAt:          dbpkg.TimeFromPg(row.ReceivedAt),
 		CreatedAt:           dbpkg.TimeFromPg(row.CreatedAt),
 		UpdatedAt:           dbpkg.TimeFromPg(row.UpdatedAt),
 	}
@@ -281,6 +288,9 @@ func (s *QueuedInputs) Enqueue(ctx context.Context, in QueueEnqueue) (QueuedInpu
 	}
 	if !in.CreatedAt.IsZero() {
 		params.CreatedAt = pgtype.Timestamptz{Time: in.CreatedAt, Valid: true}
+	}
+	if !in.ReceivedAt.IsZero() {
+		params.ReceivedAt = pgtype.Timestamptz{Time: in.ReceivedAt, Valid: true}
 	}
 	row, err := q.InsertSessionQueuedInput(ctx, params)
 	switch {

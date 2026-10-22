@@ -160,7 +160,7 @@ func driveFollowUp(t *testing.T) []sdk.Request {
 		Channels:                []string{"telegram"},
 		ReplyTarget:             "im-chat-1",
 		ConversationType:        "private",
-	}, nil, time.Time{}).Marshal()
+	}, nil).Marshal()
 	if err != nil {
 		t.Fatal(err)
 	}

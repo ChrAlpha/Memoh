@@ -188,13 +188,13 @@ func modelTexts(t *testing.T, proc *discussProcess) []string {
 	return out
 }
 
-// queuedPayload is a stored input as a channel parks it: the turn, who it
-// answers, and when it arrived.
-func queuedPayload(t *testing.T, cmd turn.StartTurnCommand, at time.Time) []byte {
+// queuedPayload is a stored input as a channel parks it: the turn and who it
+// answers.
+func queuedPayload(t *testing.T, cmd turn.StartTurnCommand) []byte {
 	t.Helper()
 	payload, err := turnwire.NewQueuedInput(cmd, &auth.RouteCredentials{
 		BotID: cmd.BotID, ChatID: cmd.ChatID, ReplyTarget: cmd.ReplyTarget, UserID: "user-1",
-	}, at).Marshal()
+	}).Marshal()
 	require.NoError(t, err)
 	return payload
 }
@@ -203,7 +203,7 @@ func (e queueEnv) park(t *testing.T, invocation, mergeKey, text string) sessionr
 	t.Helper()
 	item, err := e.store.Enqueue(context.Background(), sessionruntime.QueueEnqueue{
 		Key: e.key(), Origin: sessionruntime.QueueOriginFollowUp, InvocationID: invocation, MergeKey: mergeKey,
-		Payload: queuedPayload(t, e.turnCommand(invocation, text), time.Now()),
+		Payload: queuedPayload(t, e.turnCommand(invocation, text)), ReceivedAt: time.Now(),
 	})
 	require.NoError(t, err)
 	return item
@@ -255,7 +255,7 @@ func (e queueEnv) parkMessage(t *testing.T, id, mergeKey, text string, edit func
 	}
 	item, err := e.store.Enqueue(context.Background(), sessionruntime.QueueEnqueue{
 		Key: e.key(), Origin: sessionruntime.QueueOriginFollowUp, InvocationID: id, MergeKey: mergeKey,
-		Payload: queuedPayload(t, cmd, at),
+		Payload: queuedPayload(t, cmd), ReceivedAt: at,
 	})
 	require.NoError(t, err)
 	return item

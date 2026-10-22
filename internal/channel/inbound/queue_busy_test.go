@@ -39,6 +39,7 @@ type busyItem struct {
 	id, botID, sessionID, invocation, mergeKey string
 	origin                                     BusyOrigin
 	payload                                    []byte
+	receivedAt                                 time.Time
 	state                                      string
 	batch                                      string
 }
@@ -60,7 +61,7 @@ func (q *memoryBusyQueue) addLocked(in BusyInput) {
 	q.next++
 	q.items = append(q.items, &busyItem{
 		id: fmt.Sprintf("item-%d", q.next), botID: in.BotID, sessionID: in.SessionID, origin: in.Origin,
-		invocation: in.InvocationID, mergeKey: in.MergeKey, payload: in.Payload, state: "queued",
+		invocation: in.InvocationID, mergeKey: in.MergeKey, payload: in.Payload, receivedAt: in.ReceivedAt, state: "queued",
 	})
 }
 
@@ -103,7 +104,7 @@ func (q *memoryBusyQueue) ClaimBatch(_ context.Context, botID, sessionID string)
 	batch := BusyBatch{ID: fmt.Sprintf("batch-%d", q.batches), ClaimToken: "token", BotID: botID, SessionID: sessionID}
 	for _, item := range picked {
 		item.state, item.batch = "claimed", batch.ID
-		batch.Inputs = append(batch.Inputs, BusyBatchInput{ID: item.id, Payload: item.payload})
+		batch.Inputs = append(batch.Inputs, BusyBatchInput{ID: item.id, Payload: item.payload, ReceivedAt: item.receivedAt})
 	}
 	return batch, true, nil
 }
@@ -407,11 +408,12 @@ func validBusyInput(t *testing.T, id, text, mergeKey string) BusyInput {
 		Query: text, UserVisibleText: text, CurrentChannel: "testchat",
 		ReplyTarget: "target-busy", ExternalMessageID: id, IdempotencyKey: "testchat:route-busy:" + id,
 	}
-	payload, err := turnwire.NewQueuedInput(cmd, nil, time.Unix(50, 0).UTC()).Marshal()
+	payload, err := turnwire.NewQueuedInput(cmd, nil).Marshal()
 	require.NoError(t, err)
 	return BusyInput{
 		BotID: "bot-busy", SessionID: "session-busy", Origin: BusyOriginPlatform,
 		InvocationID: cmd.IdempotencyKey, MergeKey: mergeKey, Payload: payload,
+		ReceivedAt: time.Unix(50, 0).UTC(),
 	}
 }
 
@@ -438,8 +440,8 @@ func TestBusyPlatformMessagesWaitAndAreAnsweredByOneRunWhenTheSessionIsFree(t *t
 	require.Empty(t, h.sender.sent, "no hint and no reply while it waits")
 	require.Empty(t, h.replies.delivered())
 	for i, want := range []time.Time{time.Unix(100, 0), time.Unix(200, 0)} {
+		require.True(t, stored[i].receivedAt.Equal(want), "the arrival time is kept for the reply window")
 		input := turnwire.ParseQueuedInput(stored[i].payload)
-		require.True(t, input.ReceivedAt.Equal(want), "the arrival time is kept for the reply window")
 		cmd, err := input.StartCommand()
 		require.NoError(t, err)
 		require.Empty(t, cmd.Token, "the queue holds no credentials")
@@ -755,6 +757,23 @@ func TestBatchWhoseReplyWindowHasClosedIsAnsweredWithoutAReply(t *testing.T) {
 	h.kick()
 	waitFor(t, "the batch to settle", func() bool { return h.queue.stateOf("item-1") == "consumed" })
 	require.Empty(t, h.replies.delivered(), "a reply the channel no longer accepts is not sent")
+	require.Len(t, h.gateway.started(), 1, "the run still answered the message")
+}
+
+// An input whose arrival time nobody recorded, as one moved over from Redis,
+// has no reply window to answer in: it is judged closed, not from the time it
+// happened to be written.
+func TestBatchWithoutAnArrivalTimeIsAnsweredWithoutAReply(t *testing.T) {
+	h := newBusyHarness(t, "testchat", reactionCaps)
+	h.replies.replyWindow = time.Hour
+	parked := validBusyInput(t, "msg-1", "hello", "identity-1")
+	parked.ReceivedAt = time.Time{}
+	h.queue.park(parked)
+
+	h.free()
+	h.kick()
+	waitFor(t, "the batch to settle", func() bool { return h.queue.stateOf("item-1") == "consumed" })
+	require.Empty(t, h.replies.delivered(), "an unknown arrival time is outside the reply window")
 	require.Len(t, h.gateway.started(), 1, "the run still answered the message")
 }
 

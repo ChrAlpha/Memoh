@@ -15,6 +15,7 @@ INSERT INTO session_queued_inputs (
   merge_key,
   payload,
   enqueued_during_run_id,
+  received_at,
   created_at
 ) VALUES (
   sqlc.arg(id),
@@ -25,6 +26,7 @@ INSERT INTO session_queued_inputs (
   sqlc.arg(merge_key),
   sqlc.arg(payload),
   sqlc.arg(enqueued_during_run_id),
+  sqlc.narg(received_at)::timestamptz,
   COALESCE(sqlc.narg(created_at)::timestamptz, now())
 )
 ON CONFLICT (team_id, session_id, invocation_id) DO NOTHING
