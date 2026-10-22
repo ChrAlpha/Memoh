@@ -6,6 +6,7 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/felinics/memoh/internal/agent/admit"
@@ -42,8 +43,8 @@ type Deps struct {
 	ActiveTurns *runreq.ActiveTurnTracker
 	// Events receives the run's events.
 	Events Events
-	// Steps persists one fenced step at a time. A host without it declines
-	// incremental persistence, and the terminal snapshot writes the run.
+	// Steps persists one fenced step at a time. It is the only writer of a
+	// spawned run's history.
 	Steps messagepkg.AgentStepPersister
 }
 
@@ -59,8 +60,12 @@ type Host struct {
 	steps       messagepkg.AgentStepPersister
 }
 
-// New returns a Host.
-func New(d Deps) *Host {
+// New returns a Host. A host without a step persister could not write the
+// history of the runs it hosts, so that is an error.
+func New(d Deps) (*Host, error) {
+	if d.Steps == nil {
+		return nil, errors.New("subagent: Deps.Steps is required")
+	}
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -74,5 +79,5 @@ func New(d Deps) *Host {
 		activeTurns: d.ActiveTurns,
 		events:      d.Events,
 		steps:       d.Steps,
-	}
+	}, nil
 }

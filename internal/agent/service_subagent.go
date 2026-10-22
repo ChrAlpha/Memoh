@@ -23,7 +23,7 @@ func (s *Service) RecordSubagentResume(ctx context.Context, session tools.Sessio
 }
 
 // SubagentStepCommit returns the per-step persistence of a spawned agent's run.
-func (s *Service) SubagentStepCommit(ctx context.Context, botID, sessionID, modelID, turnRequestMessageID string, holder *contextfrag.LifecycleHolder, onPersisted func()) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error) {
+func (s *Service) SubagentStepCommit(ctx context.Context, botID, sessionID, modelID, turnRequestMessageID string, holder *contextfrag.LifecycleHolder, onPersisted func()) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error, error) {
 	return s.subagent.StepCommit(ctx, botID, sessionID, modelID, turnRequestMessageID, holder, onPersisted)
 }
 

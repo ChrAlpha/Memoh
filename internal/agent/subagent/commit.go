@@ -19,19 +19,14 @@ import (
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
-// StepCommit returns the per-step persistence callback for one spawned
-// agent run, or nil when incremental persistence is unavailable — no admitted
-// handle on the context, no fence, no persisted request row to bind steps to,
-// or a message service that cannot write fenced steps. A nil return means the
-// spawn path keeps its terminal-snapshot persistence, so this is a capability
-// probe as much as a constructor.
-//
-// The callbacks persist exactly what the legacy terminal path persists — every
-// non-user message of the step, marshalled whole — only earlier: each complete
-// step or safe interrupted checkpoint lands in one fenced transaction instead
-// of the whole run landing at the end. onPersisted fires after either kind of
-// durable write; the spawn provider uses it to stop retrying an attempt whose
-// output is already part of history.
+// StepCommit returns the per-step persistence callbacks for one spawned agent
+// run. They are the only writer of the run's history: each complete step or
+// safe interrupted checkpoint lands in one fenced transaction. The run must be
+// admitted and fenced and its task request row written; admission guarantees
+// all three, so a context or request that lacks one is an error and the run
+// does not start. onPersisted fires after either kind of durable write; the
+// spawn provider uses it to stop retrying an attempt whose output is already
+// part of history.
 func (h *Host) StepCommit(
 	ctx context.Context,
 	botID, sessionID, modelID, turnRequestMessageID string,
@@ -40,27 +35,22 @@ func (h *Host) StepCommit(
 ) (
 	func(context.Context, int, *step.Record) error,
 	func(context.Context, int, *step.Record) error,
+	error,
 ) {
-	if h.steps == nil {
-		return nil, nil
-	}
 	handle, ok := HandleFromContext(ctx)
 	if !ok || strings.TrimSpace(handle.RunID) == "" || handle.FencingToken <= 0 {
-		return nil, nil
+		return nil, nil, errors.New("subagent step commit requires an admitted run handle")
 	}
 	if _, ok := runtimefence.FromContext(ctx); !ok {
-		return nil, nil
+		return nil, nil, errors.New("subagent step commit requires a runtime fence")
 	}
 	if strings.TrimSpace(botID) == "" || strings.TrimSpace(sessionID) == "" {
-		return nil, nil
+		return nil, nil, errors.New("subagent step commit requires bot and session ids")
 	}
-	// No request row means the pre-run user message write failed. Committing
-	// steps anyway would file them under no turn and — because the spawn path
-	// then reports the run as persisted — permanently drop the task prompt.
-	// Decline instead: terminal persistence still writes the user message and
-	// the whole run behind it.
+	// Steps are filed under the task's request row; without it they would belong
+	// to no turn.
 	if strings.TrimSpace(turnRequestMessageID) == "" {
-		return nil, nil
+		return nil, nil, errors.New("subagent step commit requires the task request row")
 	}
 	committer := &stepCommitter{
 		persister:            h.steps,
@@ -73,7 +63,7 @@ func (h *Host) StepCommit(
 		contextLifecycle:     contextLifecycle,
 		onPersisted:          onPersisted,
 	}
-	return committer.commit, committer.interrupt
+	return committer.commit, committer.interrupt, nil
 }
 
 // stepCommitter appends a spawned agent's complete steps and safe

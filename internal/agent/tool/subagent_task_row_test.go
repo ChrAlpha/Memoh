@@ -23,7 +23,8 @@ func (s refusingTaskRowService) Persist(ctx context.Context, input messagepkg.Pe
 
 // Every row of a subagent run is filed under its task row. A task row that
 // cannot be written is an error for the caller, not an empty id to carry on
-// with; a run with no message store has nothing to file and gets no id.
+// with; a run with no message store has nothing to file under and is refused
+// the same way.
 func TestPersistUserMessageReportsAFailedTaskRow(t *testing.T) {
 	refused := errors.New("history write failed")
 	provider := &SpawnProvider{
@@ -36,7 +37,7 @@ func TestPersistUserMessageReportsAFailedTaskRow(t *testing.T) {
 	}
 
 	unstored := &SpawnProvider{logger: slog.New(slog.DiscardHandler)}
-	if id, err := unstored.persistUserMessage(t.Context(), req); err != nil || id != "" {
-		t.Fatalf("persistUserMessage() without a message store = (%q, %v), want no id and no error", id, err)
+	if id, err := unstored.persistUserMessage(t.Context(), req); err == nil || id != "" {
+		t.Fatalf("persistUserMessage() without a message store = (%q, %v), want no id and an error", id, err)
 	}
 }

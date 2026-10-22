@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -91,11 +90,6 @@ type SpawnRunConfig struct {
 	// retrying an attempt that has already produced durable output (and possibly
 	// real side effects): replaying the turn from the top would do that work twice.
 	OnStepPersisted func()
-	// BeforeTerminal is the fallback durability barrier when incremental step
-	// persistence is unavailable. The native adapter invokes it after a clean
-	// result is assembled but before publishing EventAgentEnd to the session
-	// runtime. Returning an error withholds that terminal proposal.
-	BeforeTerminal func(context.Context, *SpawnResult) error
 	// Attempt is one-based and MaxAttempts is the total outer-attempt budget.
 	// ResolveAttempt is called at most once after a failed native attempt. It is
 	// the spawn provider's authoritative disposition: retry keeps the admitted
@@ -142,9 +136,6 @@ type SpawnResult struct {
 	Text             string
 	Usage            *sdk.Usage
 	ContextLifecycle *contextfrag.LifecycleSnapshot
-	// Persisted reports that incremental step persistence owned this run's
-	// history, so the caller must not persist the result again.
-	Persisted bool
 }
 
 const (
@@ -446,15 +437,14 @@ type agentRunResult struct {
 }
 
 type agentRequest struct {
-	taskID           string
-	agentID          string
-	agentSessionID   string
-	message          string
-	messagePersisted bool
-	parentSession    SessionContext
-	config           sessionpkg.SubagentConfig
-	runtime          resolvedSubagentModel
-	systemPrompt     string
+	taskID         string
+	agentID        string
+	agentSessionID string
+	message        string
+	parentSession  SessionContext
+	config         sessionpkg.SubagentConfig
+	runtime        resolvedSubagentModel
+	systemPrompt   string
 	// admission is the run identity the durable gate allocated; persistence
 	// files this task's messages under admission.TurnID.
 	admission SubagentAdmission
@@ -792,7 +782,6 @@ func (p *SpawnProvider) runAgentRequest(ctx context.Context, key string, req *ag
 		finishRun(result)
 		return p.completeAgentRequest(ctx, key, req, result)
 	}
-	req.messagePersisted = requestMessageID != ""
 	req.requestMessageID = requestMessageID
 	result := p.runSubagentTask(runCtx, req)
 	if result.AttemptResolved && result.AttemptOutcome == SpawnAttemptAbort {
@@ -954,9 +943,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		}
 	}()
 	history := p.loadAgentMessages(context.WithoutCancel(ctx), req.agentSessionID)
-	if req.messagePersisted {
-		history = dropLatestMatchingUserMessage(history, req.message)
-	}
+	history = dropLatestMatchingUserMessage(history, req.message)
 	if req.config.Forked {
 		parentMessages, loadErr := p.loadAgentForkContext(context.WithoutCancel(ctx), req.agentSessionID)
 		if loadErr != nil {
@@ -1023,12 +1010,6 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 	// replaying the turn from the top would do that work twice.
 	var stepPersisted atomic.Bool
 	cfg.OnStepPersisted = func() { stepPersisted.Store(true) }
-	cfg.BeforeTerminal = func(persistCtx context.Context, result *SpawnResult) error {
-		if p.messageService == nil || req.agentSessionID == "" {
-			return errors.New("subagent terminal persistence is unavailable")
-		}
-		return p.persistMessages(context.WithoutCancel(persistCtx), req, result, !req.messagePersisted)
-	}
 
 	var lastErr error
 	for attempt := 0; attempt <= subagentMaxRetries; attempt++ {
@@ -1094,18 +1075,6 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 		if err == nil {
 			if !dispositionResolved {
 				attemptDisposition = cfg.ResolveCompletion()
-			}
-			if attemptDisposition == SpawnAttemptCompleted && !genResult.Persisted && p.messageService != nil && req.agentSessionID != "" {
-				// Non-native SpawnAgent implementations may not implement the
-				// BeforeTerminal callback. Preserve the fallback for them, but make
-				// its failure authoritative instead of reporting false completion.
-				if persistErr := p.persistMessages(context.WithoutCancel(ctx), req, genResult, !req.messagePersisted); persistErr != nil {
-					res.AttemptResolved = true
-					res.AttemptOutcome = SpawnAttemptFailure
-					res.fail(persistErr)
-					return res
-				}
-				genResult.Persisted = true
 			}
 			res.AttemptResolved = true
 			res.AttemptOutcome = attemptDisposition
@@ -1573,94 +1542,14 @@ func runSpawnProgress(ctx context.Context, emitter StreamEmitter, ticks <-chan t
 	}
 }
 
-func (p *SpawnProvider) persistMessages(
-	ctx context.Context,
-	req *agentRequest,
-	result *SpawnResult,
-	includeUser bool,
-) error {
-	if includeUser {
-		id, err := p.persistUserMessage(ctx, req)
-		if err != nil {
-			return err
-		}
-		if id == "" {
-			return errors.New("persist subagent task message: message store is unavailable")
-		}
-		req.requestMessageID = id
-	}
-
-	lastAssistantIdx := -1
-	for i, msg := range result.Messages {
-		if msg.Role == sdk.MessageRoleAssistant {
-			lastAssistantIdx = i
-		}
-	}
-
-	for i, msg := range result.Messages {
-		if msg.Role == sdk.MessageRoleUser {
-			continue
-		}
-		msg, toolCallDiffs := historyfrag.ExtractToolCallDiffsFromSDK(msg)
-		content, err := historyfrag.MarshalStoredSDKMessage(msg)
-		if err != nil {
-			// A malformed SDK message is a deterministic codec defect: retrying
-			// the whole attempt would reproduce it and discard every later valid
-			// message. Preserve the legacy skip behavior, but make the defect
-			// observable. Actual storage failures below remain authoritative.
-			p.logger.WarnContext(ctx, "marshal subagent message failed; skipping message",
-				slog.Any("error", err),
-				slog.Int("message_index", i))
-			continue
-		}
-		var usage json.RawMessage
-		if msg.Usage != nil {
-			usage, _ = json.Marshal(msg.Usage)
-		}
-		var metadata map[string]any
-		if i == lastAssistantIdx && result.ContextLifecycle != nil {
-			metadata = map[string]any{
-				contextfrag.MetadataContextLifecycleKey: result.ContextLifecycle.Summary(),
-			}
-		}
-		if len(toolCallDiffs) > 0 {
-			if metadata == nil {
-				metadata = make(map[string]any, 1)
-			}
-			metadata[messagepkg.ToolCallDiffsMetadataKey] = toolCallDiffs
-		}
-		persisted, err := p.messageService.Persist(ctx, messagepkg.PersistInput{
-			BotID:     req.parentSession.BotID,
-			SessionID: req.agentSessionID,
-			Role:      string(msg.Role),
-			Content:   content,
-			Metadata:  metadata,
-			Usage:     usage,
-			ModelID:   req.runtime.UUID,
-			// Bind to the task's request row so the whole task is one history
-			// turn; the run id is traceability, exactly like the chat path.
-			RunID:                strings.TrimSpace(req.admission.RunID),
-			TurnRequestMessageID: strings.TrimSpace(req.requestMessageID),
-		})
-		if err != nil {
-			p.logger.WarnContext(ctx, "persist subagent message failed", slog.Any("error", err))
-			return fmt.Errorf("persist subagent message: %w", err)
-		}
-		if i == lastAssistantIdx && result.ContextLifecycle != nil {
-			result.ContextLifecycle.AssistantMessageID = persisted.ID
-		}
-	}
-	return nil
-}
-
 // persistUserMessage files the task message as the admitted turn's request row
 // (SR-TURN-001): history and the live runtime view then agree on which turn
-// this run writes into. It returns the persisted message id so assistant and
-// tool rows can bind to it. The id is empty with no error when there is no
-// message store or session to write to.
+// this run writes into. It returns the persisted message id, which the run's
+// step rows bind to. A run with no row to bind to has nowhere to write, so an
+// unavailable message store or session is an error and the run is not admitted.
 func (p *SpawnProvider) persistUserMessage(ctx context.Context, req *agentRequest) (string, error) {
 	if p.messageService == nil || strings.TrimSpace(req.agentSessionID) == "" {
-		return "", nil
+		return "", errors.New("persist subagent task message: message store is unavailable")
 	}
 	userContent, _ := historyfrag.MarshalStoredSDKMessage(sdk.UserMessage(req.message))
 	input := messagepkg.PersistInput{

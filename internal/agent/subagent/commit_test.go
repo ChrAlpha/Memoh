@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -13,6 +14,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
@@ -31,47 +33,52 @@ func runContext(botID, sessionID string, token int64) context.Context {
 	})
 }
 
-func TestSubagentStepCommitRequiresHandleAndFence(t *testing.T) {
+func newHost(t *testing.T, store *agenttest.RecordingStepPersister) *Host {
+	t.Helper()
+	host, err := New(Deps{Steps: store})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return host
+}
+
+func TestSubagentHostRequiresStepPersister(t *testing.T) {
+	if _, err := New(Deps{}); err == nil {
+		t.Fatal("a host without a step persister was built")
+	}
+}
+
+// The run's history has no other writer, so a run that cannot commit steps is an
+// error rather than a run without history.
+func TestSubagentStepCommitRequiresHandleFenceAndRequestRow(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
 	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := New(Deps{Steps: store})
+	service := newHost(t, store)
 
-	if commit, interrupt := service.StepCommit(context.Background(), botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
-		t.Fatal("commit enabled without an admitted run handle")
+	refused := func(name string, ctx context.Context, requestID string) {
+		t.Helper()
+		if commit, interrupt, err := service.StepCommit(ctx, botID, sessionID, "model", requestID, nil, nil); err == nil || commit != nil || interrupt != nil {
+			t.Fatalf("%s: commit enabled (err=%v)", name, err)
+		}
 	}
-	noFence := withHandle(context.Background(), sessionruntime.RunHandle{
+	refused("no admitted run handle", context.Background(), "req-msg-1")
+	refused("no runtime fence", withHandle(context.Background(), sessionruntime.RunHandle{
 		BotID: botID, SessionID: sessionID, RunID: uuid.NewString(), Generation: "g", FencingToken: 7,
-	})
-	if commit, interrupt := service.StepCommit(noFence, botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
-		t.Fatal("commit enabled without a runtime fence")
-	}
+	}), "req-msg-1")
 	unfenced := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: botID, SessionID: sessionID, Token: 7})
-	unfenced = withHandle(unfenced, sessionruntime.RunHandle{
+	refused("zero fencing token", withHandle(unfenced, sessionruntime.RunHandle{
 		BotID: botID, SessionID: sessionID, RunID: uuid.NewString(), Generation: "g",
-	})
-	if commit, interrupt := service.StepCommit(unfenced, botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
-		t.Fatal("commit enabled with a zero fencing token")
-	}
-	// A failed pre-run user message write leaves no request row. Committing
-	// steps then would report the run persisted and lose the task prompt for
-	// good, so incremental persistence must decline and let the terminal path
-	// write the whole run, user message included.
-	if commit, interrupt := service.StepCommit(runContext(botID, sessionID, 7), botID, sessionID, "model", "  ", nil, nil); commit != nil || interrupt != nil {
-		t.Fatal("commit enabled without a persisted request row")
-	}
-	if commit, interrupt := service.StepCommit(runContext(botID, sessionID, 7), botID, sessionID, "model", "req-msg-1", nil, nil); commit == nil || interrupt == nil {
-		t.Fatal("commit not enabled for an admitted fenced subagent run")
-	}
-	bare := New(Deps{})
-	if commit, interrupt := bare.StepCommit(runContext(botID, sessionID, 7), botID, sessionID, "model", "req-msg-1", nil, nil); commit != nil || interrupt != nil {
-		t.Fatal("commit enabled without step persistence")
+	}), "req-msg-1")
+	refused("no request row", runContext(botID, sessionID, 7), "  ")
+	if commit, interrupt, err := service.StepCommit(runContext(botID, sessionID, 7), botID, sessionID, "model", "req-msg-1", nil, nil); err != nil || commit == nil || interrupt == nil {
+		t.Fatalf("commit not enabled for an admitted fenced subagent run: %v", err)
 	}
 }
 
 func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
 	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := New(Deps{Steps: store})
+	service := newHost(t, store)
 	ctx := runContext(botID, sessionID, 9)
 	holder := contextfrag.NewLifecycleHolder()
 	holder.SetManifest(contextfrag.Manifest{
@@ -79,9 +86,9 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 		Counts: contextfrag.ManifestCounts{Fragments: 3, Messages: 2},
 	})
 	persistedSteps := 0
-	commit, interrupt := service.StepCommit(ctx, botID, sessionID, "model-uuid", "req-msg-1", holder, func() { persistedSteps++ })
-	if commit == nil || interrupt == nil {
-		t.Fatal("step persistence callbacks not enabled")
+	commit, interrupt, err := service.StepCommit(ctx, botID, sessionID, "model-uuid", "req-msg-1", holder, func() { persistedSteps++ })
+	if err != nil {
+		t.Fatalf("StepCommit: %v", err)
 	}
 
 	if err := commit(ctx, 0, &step.Record{Messages: []sdk.Message{
@@ -161,10 +168,13 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 	botID, sessionID := uuid.NewString(), uuid.NewString()
 	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := New(Deps{Steps: store})
+	service := newHost(t, store)
 	ctx := runContext(botID, sessionID, 3)
 	persistedSteps := 0
-	commit, _ := service.StepCommit(ctx, botID, sessionID, "model", "req-msg-1", nil, func() { persistedSteps++ })
+	commit, _, err := service.StepCommit(ctx, botID, sessionID, "model", "req-msg-1", nil, func() { persistedSteps++ })
+	if err != nil {
+		t.Fatalf("StepCommit: %v", err)
+	}
 
 	if err := commit(ctx, 0, &step.Record{Messages: []sdk.Message{
 		{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{sdk.TextPart{Text: "only user"}}},
@@ -185,15 +195,48 @@ func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 
 func TestSubagentRejectsRevokedCheckpointWithDetachedCallback(t *testing.T) {
 	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
-	service := New(Deps{Steps: store})
+	service := newHost(t, store)
 	owner, cancel := context.WithCancelCause(runContext("bot", "session", 9))
-	_, checkpoint := service.StepCommit(owner, "bot", "session", "model", "request", nil, nil)
-	if checkpoint == nil {
-		t.Fatal("missing checkpoint callback")
+	_, checkpoint, err := service.StepCommit(owner, "bot", "session", "model", "request", nil, nil)
+	if err != nil {
+		t.Fatalf("StepCommit: %v", err)
 	}
 	cancel(sessionruntime.ErrRunOwnershipLost)
-	err := checkpoint(context.WithoutCancel(owner), 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("late")}})
+	err = checkpoint(context.WithoutCancel(owner), 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("late")}})
 	if !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || len(store.Steps) != 0 {
 		t.Fatalf("revoked subagent checkpoint: writes=%d err=%v", len(store.Steps), err)
+	}
+}
+
+// A tool call whose arguments cannot be encoded is typed as invalid argument
+// text, so the message persists with that text instead of being dropped.
+func TestSubagentStepCommitKeepsUnencodableInputAsText(t *testing.T) {
+	botID, sessionID := uuid.NewString(), uuid.NewString()
+	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
+	ctx := runContext(botID, sessionID, 4)
+	commit, _, err := newHost(t, store).StepCommit(ctx, botID, sessionID, "model-1", "request-1", nil, nil)
+	if err != nil {
+		t.Fatalf("StepCommit: %v", err)
+	}
+	if err := commit(ctx, 0, &step.Record{Messages: []sdk.Message{
+		{
+			Role: sdk.MessageRoleAssistant,
+			Content: []sdk.MessagePart{sdk.ToolCallPart{
+				ToolCallID: "bad-call", ToolName: "bad", Input: toolexec.ArgumentsFromValue(func() {}),
+			}},
+		},
+		sdk.AssistantMessage("durable report"),
+	}}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if len(store.Steps) != 1 || len(store.Steps[0].Messages) != 2 {
+		t.Fatalf("persisted steps = %#v, want one step with both assistant messages", store.Steps)
+	}
+	inputs := store.Steps[0].Messages
+	if inputs[0].Role != string(sdk.MessageRoleAssistant) || inputs[1].Role != string(sdk.MessageRoleAssistant) {
+		t.Fatalf("persisted inputs = %#v, want both assistant messages", inputs)
+	}
+	if !strings.Contains(string(inputs[0].Content), `"input":"0x`) {
+		t.Fatalf("unencodable input = %s, want the printed value as invalid argument text", inputs[0].Content)
 	}
 }

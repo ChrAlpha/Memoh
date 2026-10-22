@@ -48,7 +48,7 @@ func TestSpawnAdapterGenerateWithWatchdogKeepsRetryableAttemptNonTerminal(t *tes
 					return sdk.ModelResult{FinishReason: sdk.FinishReasonStop}, nil
 				},
 			}
-			adapter := NewSpawnAdapter(newTestAgent())
+			adapter := newCommittingSpawnAdapter()
 			var observed []StreamEvent
 			adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 				return func(event StreamEvent) SpawnRunObservation {
@@ -86,7 +86,7 @@ func TestSpawnAdapterGenerateWithWatchdogMakesFinalWatchdogAttemptTerminal(t *te
 			return sdk.ModelResult{FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newCommittingSpawnAdapter()
 	var observed []StreamEvent
 	var dispositionCalls int
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
@@ -148,7 +148,7 @@ func TestSpawnAdapterGenerateWithWatchdogDoesNotRetryPersistedInterruptedCheckpo
 			return parts, nil
 		},
 	}
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newCommittingSpawnAdapter()
 	var persisted atomic.Bool
 	var interruptedCalls atomic.Int32
 	adapter.SetStepCommitFactory(func(
@@ -159,13 +159,13 @@ func TestSpawnAdapterGenerateWithWatchdogDoesNotRetryPersistedInterruptedCheckpo
 		_ string,
 		_ *contextfrag.LifecycleHolder,
 		onPersisted func(),
-	) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error) {
+	) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error, error) {
 		return func(context.Context, int, *step.Record) error { return nil },
 			func(context.Context, int, *step.Record) error {
 				interruptedCalls.Add(1)
 				onPersisted()
 				return nil
-			}
+			}, nil
 	})
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
@@ -365,7 +365,7 @@ func TestSpawnAdapterArbitratesCleanEndBeforePublishingTerminal(t *testing.T) {
 					return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 				},
 			}
-			adapter := NewSpawnAdapter(newTestAgent())
+			adapter := newCommittingSpawnAdapter()
 			var observed []StreamEvent
 			adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 				return func(event StreamEvent) SpawnRunObservation {
@@ -403,84 +403,135 @@ func TestSpawnAdapterArbitratesCleanEndBeforePublishingTerminal(t *testing.T) {
 	}
 }
 
-func TestSpawnAdapterPersistsFallbackBeforePublishingTerminal(t *testing.T) {
+// A spawned run's history is written by its step commits, which finish before
+// the run's terminal event is published.
+func TestSpawnAdapterCommitsStepsBeforePublishingTerminal(t *testing.T) {
 	provider := &atomicMockProvider{
 		handler: func(_ int, _ sdk.Request) (sdk.ModelResult, error) {
 			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
 	adapter := NewSpawnAdapter(newTestAgent())
-	durable := false
-	terminalBeforeDurable := false
+	committed := false
+	terminalBeforeCommit := false
+	adapter.SetStepCommitFactory(func(
+		context.Context, string, string, string, string, *contextfrag.LifecycleHolder, func(),
+	) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error, error) {
+		commit := func(context.Context, int, *step.Record) error {
+			committed = true
+			return nil
+		}
+		return commit, commit, nil
+	})
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
-			if event.Type == EventAgentEnd && !durable {
-				terminalBeforeDurable = true
+			if event.Type == EventAgentEnd && !committed {
+				terminalBeforeCommit = true
 			}
 			return SpawnRunObservation{}
 		}
 	})
 
-	result, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
+	if _, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
 		Model:       &sdk.Model{ID: "spawn-terminal-barrier", Provider: provider, Type: sdk.ModelTypeChat},
 		Query:       "finish the task",
 		SessionType: sessionmode.Subagent,
 		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
-		BeforeTerminal: func(_ context.Context, result *tools.SpawnResult) error {
-			if result == nil || result.Text != "done" {
-				t.Fatalf("fallback result = %#v, want assembled output", result)
-			}
-			durable = true
-			return nil
-		},
-	}, func() {})
-	if err != nil {
+	}, func() {}); err != nil {
 		t.Fatalf("GenerateWithWatchdog() error = %v", err)
 	}
-	if terminalBeforeDurable {
-		t.Fatal("terminal event was published before fallback persistence")
-	}
-	if result == nil || !result.Persisted {
-		t.Fatalf("result = %#v, want fallback persistence recorded", result)
+	if !committed || terminalBeforeCommit {
+		t.Fatalf("committed = %v, terminal before the commit = %v", committed, terminalBeforeCommit)
 	}
 }
 
-func TestSpawnAdapterWithholdsTerminalWhenFallbackPersistenceFails(t *testing.T) {
+// A step whose history write fails ends the attempt as a failure and publishes
+// no terminal.
+func TestSpawnAdapterWithholdsTerminalWhenStepCommitFails(t *testing.T) {
 	provider := &atomicMockProvider{
 		handler: func(_ int, _ sdk.Request) (sdk.ModelResult, error) {
 			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
 	adapter := NewSpawnAdapter(newTestAgent())
+	persistErr := errors.New("history unavailable")
+	adapter.SetStepCommitFactory(func(
+		context.Context, string, string, string, string, *contextfrag.LifecycleHolder, func(),
+	) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error, error) {
+		commit := func(context.Context, int, *step.Record) error { return persistErr }
+		return commit, commit, nil
+	})
 	var terminalSeen bool
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
-			terminalSeen = terminalSeen || event.Type == EventAgentEnd || event.Type == EventAgentAbort
+			terminalSeen = terminalSeen || event.Type == EventAgentEnd
 			return SpawnRunObservation{}
 		}
 	})
-	persistErr := errors.New("history unavailable")
-	var reconciled tools.SpawnAttemptDisposition
 
 	_, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
 		Model:       &sdk.Model{ID: "spawn-terminal-barrier-failure", Provider: provider, Type: sdk.ModelTypeChat},
 		Query:       "finish the task",
 		SessionType: sessionmode.Subagent,
 		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
-		BeforeTerminal: func(context.Context, *tools.SpawnResult) error {
-			return persistErr
-		},
-		ReconcileTerminal: func(outcome tools.SpawnAttemptDisposition) {
-			reconciled = outcome
-		},
 	}, func() {})
 	if !errors.Is(err, persistErr) {
-		t.Fatalf("GenerateWithWatchdog() error = %v, want persistence failure", err)
+		t.Fatalf("GenerateWithWatchdog() error = %v, want the step write failure", err)
 	}
 	if terminalSeen {
-		t.Fatal("terminal event was published after fallback persistence failed")
+		t.Fatal("terminal event was published after the step write failed")
 	}
-	if reconciled != tools.SpawnAttemptFailure {
-		t.Fatalf("reconciled outcome = %v, want failure", reconciled)
+}
+
+// A run that cannot commit its steps does not start: the factory's refusal is
+// the run's error and the model is never called.
+func TestSpawnAdapterRefusesARunWhoseStepCommitIsRefused(t *testing.T) {
+	var calls atomic.Int32
+	provider := &atomicMockProvider{
+		handler: func(int, sdk.Request) (sdk.ModelResult, error) {
+			calls.Add(1)
+			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		},
 	}
+	refused := errors.New("no request row")
+	for name, adapter := range map[string]*SpawnAdapter{
+		"factory refuses": func() *SpawnAdapter {
+			a := NewSpawnAdapter(newTestAgent())
+			a.SetStepCommitFactory(func(
+				context.Context, string, string, string, string, *contextfrag.LifecycleHolder, func(),
+			) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error, error) {
+				return nil, nil, refused
+			})
+			return a
+		}(),
+		"no factory": NewSpawnAdapter(newTestAgent()),
+	} {
+		cfg := tools.SpawnRunConfig{
+			Model:       &sdk.Model{ID: "spawn-refused", Provider: provider, Type: sdk.ModelTypeChat},
+			Query:       "finish the task",
+			SessionType: sessionmode.Subagent,
+			Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
+		}
+		if _, err := adapter.GenerateWithWatchdog(context.Background(), cfg, func() {}); err == nil {
+			t.Fatalf("%s: GenerateWithWatchdog started the run", name)
+		}
+		if _, err := adapter.Generate(context.Background(), cfg); err == nil {
+			t.Fatalf("%s: Generate started the run", name)
+		}
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("model called %d times for refused runs", calls.Load())
+	}
+}
+
+// newCommittingSpawnAdapter is an adapter whose steps commit to nowhere.
+func newCommittingSpawnAdapter() *SpawnAdapter {
+	adapter := NewSpawnAdapter(newTestAgent())
+	adapter.SetStepCommitFactory(func(
+		context.Context, string, string, string, string, *contextfrag.LifecycleHolder, func(),
+	) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error, error) {
+		commit := func(context.Context, int, *step.Record) error { return nil }
+		return commit, commit, nil
+	})
+	return adapter
 }

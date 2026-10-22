@@ -513,7 +513,7 @@ func TestStopTurnAbortsParkedDecision(t *testing.T) {
 func TestDecisionContinuationsResumeAsTheParkedTurn(t *testing.T) {
 	t.Parallel()
 
-	service := newTestService(t, Deps{Messages: &continuationTurnRequestResolver{requestMessageID: "request-message-id"}})
+	service := newTestService(t, Deps{Messages: &continuationTurnRequestResolver{RecordingMessages: &agenttest.RecordingMessages{}, requestMessageID: "request-message-id"}})
 	handle := sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-id"}
 	ctx := context.Background()
 	for name, cont := range map[string]answer.Continuation{
@@ -574,7 +574,7 @@ func TestParkedRunDoesNotEndItsLifecycle(t *testing.T) {
 }
 
 type continuationTurnRequestResolver struct {
-	messagepkg.Service
+	*agenttest.RecordingMessages
 	requestMessageID string
 	sessionID        string
 	runID            string

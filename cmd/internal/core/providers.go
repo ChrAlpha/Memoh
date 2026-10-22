@@ -558,10 +558,8 @@ func injectToolProviders(a *native.Agent, msgService *message.DBService, hookSer
 		}
 		if sp, ok := p.(*agenttools.SpawnProvider); ok {
 			adapter := native.NewSpawnAdapter(a)
-			// Incremental step persistence and live runtime publishing both key
-			// off the admitted run handle AdmitSubagentRun leaves on the run
-			// context; when either is unavailable the adapter degrades to the
-			// terminal-snapshot behavior on its own.
+			// Step persistence and live runtime publishing both key off the
+			// admitted run handle AdmitSubagentRun leaves on the run context.
 			adapter.SetStepCommitFactory(agentService.SubagentStepCommit)
 			adapter.SetRunObserverFactory(agentService.SubagentRunObserver)
 			// A spawned run whose steps are committed compacts its own thread

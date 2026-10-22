@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -204,6 +205,11 @@ func (d Deps) validate() error {
 			return fmt.Errorf("agent: Deps.%s is required", r.name)
 		}
 	}
+	// The message store is the only writer of a run's history, spawned runs
+	// included, and writes it one fenced step at a time.
+	if _, ok := d.Messages.(messagepkg.AgentStepPersister); !ok {
+		return errors.New("agent: Deps.Messages must write agent steps")
+	}
 	return nil
 }
 
@@ -213,5 +219,5 @@ func New(d Deps) (*Service, error) {
 	if err := d.validate(); err != nil {
 		return nil, err
 	}
-	return assemble(d, wiring{}), nil
+	return assemble(d, wiring{})
 }

@@ -16,7 +16,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/apperror"
-	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 func newStepPersistProvider(t *testing.T, agent SpawnAgent, admitter SubagentAdmitter) (*SpawnProvider, *fakeAgentMessageService) {
@@ -191,7 +190,7 @@ func TestSubagentDoesNotRetryAfterPersistedStep(t *testing.T) {
 		t.Fatalf("agent ran %d times, want exactly 1 (no retry after a persisted step)", got)
 	}
 	if result["status"] != string(background.TaskFailed) {
-		t.Fatalf("status = %v, want failed", result["status"])
+		t.Fatalf("status = %v, want failed: %v", result["status"], result)
 	}
 	errText, _ := result["error"].(string)
 	if !strings.Contains(errText, "progress from this attempt is saved") ||
@@ -267,7 +266,7 @@ func TestSubagentDoesNotRetryProviderFailure(t *testing.T) {
 		t.Fatalf("agent ran %d times, want exactly 1 (no outer retry of a provider failure)", got)
 	}
 	if result["status"] != string(background.TaskFailed) {
-		t.Fatalf("status = %v, want failed", result["status"])
+		t.Fatalf("status = %v, want failed: %v", result["status"], result)
 	}
 	assertCatalogFailure(t, result, apperror.CodeAgentProviderOverloaded, "api error 529")
 }
@@ -286,20 +285,17 @@ func assertCatalogFailure(t *testing.T, result map[string]any, code apperror.Cod
 	}
 }
 
-// TestSubagentSkipsTerminalPersistWhenStepsOwnHistory: a result marked
-// Persisted means incremental persistence already wrote every step, so the
-// terminal snapshot must not write the messages again.
-func TestSubagentSkipsTerminalPersistWhenStepsOwnHistory(t *testing.T) {
+// TestSubagentProviderWritesOnlyTheRequestRow: the step committer is the only
+// writer of a run's history, so the provider itself writes the task's request
+// row and nothing of the run's output.
+func TestSubagentProviderWritesOnlyTheRequestRow(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{
 		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
 			return &SpawnResult{
-				Text: "done",
-				Messages: []sdk.Message{
-					sdk.AssistantMessage("done"),
-				},
-				Persisted: true,
+				Text:     "done",
+				Messages: []sdk.Message{sdk.AssistantMessage("done")},
 			}, nil
 		},
 	}
@@ -319,65 +315,89 @@ func TestSubagentSkipsTerminalPersistWhenStepsOwnHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list session messages: %v", err)
 	}
-	// Only the pre-run user message may be present; the assistant output was
-	// declared persisted by the step committer and must not be written twice.
-	for _, msg := range msgs {
-		if msg.Role != "user" {
-			t.Fatalf("terminal persist wrote a %s message despite Persisted=true", msg.Role)
-		}
+	if len(msgs) != 1 || msgs[0].Role != "user" {
+		t.Fatalf("provider wrote %#v, want the task's request row only", msgs)
 	}
 }
 
-// TestSubagentMessagesFileUnderAdmittedTurn: the task's user message becomes
-// the admitted turn's request row (TurnID + TurnPosition), and the assistant
-// rows bind to it via TurnRequestMessageID — one history turn per task, the
-// same turn the runtime view names, so a mid-stream reader sees one loop.
-func TestSubagentMessagesFileUnderAdmittedTurn(t *testing.T) {
+// TestSubagentRequestRowIsTheAdmittedTurnsRequest: the task's user message
+// becomes the admitted turn's request row (TurnID + TurnPosition), and the run's
+// steps bind to it through the config's TurnRequestMessageID, so one task is one
+// history turn, the same turn the runtime view names.
+func TestSubagentRequestRowIsTheAdmittedTurnsRequest(t *testing.T) {
 	t.Parallel()
 
+	var configured SpawnRunConfig
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			return &SpawnResult{
-				Text:     "done",
-				Messages: []sdk.Message{sdk.AssistantMessage("done")},
-			}, nil
+		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+			configured = cfg
+			return &SpawnResult{Text: "done", Messages: []sdk.Message{sdk.AssistantMessage("done")}}, nil
 		},
 	}
 	p, messageSvc := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
 	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
 
-	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
+	result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":   "worker",
 		"task": "do the work",
-	})
+	}))
 
 	inputs := messageSvc.persistInputs()
-	var userInput, assistantInput *messagepkg.PersistInput
-	for i := range inputs {
-		switch inputs[i].Role {
-		case "user":
-			userInput = &inputs[i]
-		case "assistant":
-			assistantInput = &inputs[i]
-		}
+	if len(inputs) != 1 || inputs[0].Role != "user" {
+		t.Fatalf("persisted inputs = %#v, want the request row", inputs)
 	}
-	if userInput == nil || assistantInput == nil {
-		t.Fatalf("expected user and assistant rows, got %d inputs", len(inputs))
-	}
+	userInput := inputs[0]
 	if userInput.TurnID == "" || userInput.TurnPosition == nil {
 		t.Fatalf("user row lacks the admitted turn identity: %+v", userInput)
 	}
 	if userInput.RunID == "" {
 		t.Fatal("user row lacks the run id")
 	}
-	if assistantInput.TurnID != "" || assistantInput.TurnPosition != nil {
-		t.Fatal("assistant row must not mint a turn of its own")
+	childSessionID, _ := result["session_id"].(string)
+	msgs, err := messageSvc.ListBySession(context.Background(), childSessionID)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("session messages = %#v, %v", msgs, err)
 	}
-	if assistantInput.TurnRequestMessageID == "" {
-		t.Fatal("assistant row does not bind to the task's request message")
+	if configured.TurnRequestMessageID == "" || configured.TurnRequestMessageID != msgs[0].ID {
+		t.Fatalf("run config binds steps to %q, want the request row %q", configured.TurnRequestMessageID, msgs[0].ID)
 	}
-	if assistantInput.RunID != userInput.RunID {
-		t.Fatalf("run ids diverge: user %q assistant %q", userInput.RunID, assistantInput.RunID)
+}
+
+// TestSubagentWithoutRequestRowIsNotAdmitted: a task whose request row cannot be
+// written has no turn for the run's steps, so the run does not start and the
+// caller sees the failure.
+func TestSubagentWithoutRequestRowIsNotAdmitted(t *testing.T) {
+	t.Parallel()
+
+	for name, prepare := range map[string]func(*SpawnProvider, *fakeAgentMessageService){
+		"write refused":    func(_ *SpawnProvider, messages *fakeAgentMessageService) { messages.persistErr = errors.New("db down") },
+		"no message store": func(p *SpawnProvider, _ *fakeAgentMessageService) { p.messageService = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var started atomic.Bool
+			agent := &mockSpawnAgent{
+				generateFunc: func(context.Context, SpawnRunConfig, func()) (*SpawnResult, error) {
+					started.Store(true)
+					return &SpawnResult{Text: "done", Messages: []sdk.Message{sdk.AssistantMessage("done")}}, nil
+				},
+			}
+			p, messageSvc := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
+			prepare(p, messageSvc)
+			session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+
+			result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
+				"id":   "worker",
+				"task": "do the work",
+			}))
+			if result["status"] != string(background.TaskFailed) {
+				t.Fatalf("status = %v, want failed: %v", result["status"], result)
+			}
+			if started.Load() {
+				t.Fatal("the run started without a request row")
+			}
+		})
 	}
 }
 

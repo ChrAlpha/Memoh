@@ -43,7 +43,7 @@ func TestSpawnRunConfigMintsRunIDForDirectCaller(t *testing.T) {
 }
 
 func TestSpawnAdapterStepCommitSharesLifecycleAndInstallsInterrupt(t *testing.T) {
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newCommittingSpawnAdapter()
 	var captured *contextfrag.LifecycleHolder
 	adapter.SetStepCommitFactory(func(
 		_ context.Context,
@@ -53,15 +53,16 @@ func TestSpawnAdapterStepCommitSharesLifecycleAndInstallsInterrupt(t *testing.T)
 	) (
 		func(context.Context, int, *step.Record) error,
 		func(context.Context, int, *step.Record) error,
+		error,
 	) {
 		captured = lifecycle
 		callback := func(context.Context, int, *step.Record) error { return nil }
-		return callback, callback
+		return callback, callback, nil
 	})
 	rc := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{})
 
-	if !adapter.installStepCommit(context.Background(), tools.SpawnRunConfig{}, &rc) {
-		t.Fatal("step persistence was not installed")
+	if err := adapter.installStepCommit(context.Background(), tools.SpawnRunConfig{}, &rc); err != nil {
+		t.Fatalf("step persistence was not installed: %v", err)
 	}
 	if captured == nil || captured != rc.ContextLifecycle {
 		t.Fatalf("captured lifecycle = %p, run lifecycle = %p", captured, rc.ContextLifecycle)
@@ -86,7 +87,7 @@ func TestSpawnAdapterGenerateWithWatchdogCarriesLifecycleSnapshot(t *testing.T) 
 			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
-	result, err := NewSpawnAdapter(newTestAgent()).GenerateWithWatchdog(
+	result, err := newCommittingSpawnAdapter().GenerateWithWatchdog(
 		context.Background(),
 		tools.SpawnRunConfig{
 			Model: &sdk.Model{
@@ -139,7 +140,7 @@ func TestSpawnAdapterGenerateWithWatchdogClearsRecoveredStreamError(t *testing.T
 		},
 	}
 
-	result, err := NewSpawnAdapter(newTestAgent()).GenerateWithWatchdog(
+	result, err := newCommittingSpawnAdapter().GenerateWithWatchdog(
 		context.Background(),
 		tools.SpawnRunConfig{
 			Model: &sdk.Model{
@@ -219,7 +220,7 @@ func TestSpawnAdapterGenerateWithWatchdogRejectsTextLoopAbort(t *testing.T) {
 		},
 	}
 	outerCtx := context.Background()
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newCommittingSpawnAdapter()
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
@@ -281,7 +282,7 @@ func TestSpawnAdapterGenerateWithWatchdogPreservesOwningCancellationCause(t *tes
 		},
 	}
 
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newCommittingSpawnAdapter()
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
@@ -324,7 +325,7 @@ func TestSpawnAdapterGenerateWithWatchdogTreatsOtherContextCausesAsFailures(t *t
 		},
 	}
 
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newCommittingSpawnAdapter()
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
@@ -355,7 +356,7 @@ func TestSpawnAdapterGenerateFailureCarriesLifecycleSnapshot(t *testing.T) {
 			return sdk.ModelResult{}, providerErr
 		},
 	}
-	result, err := NewSpawnAdapter(newTestAgent()).Generate(
+	result, err := newCommittingSpawnAdapter().Generate(
 		context.Background(),
 		tools.SpawnRunConfig{
 			Model: &sdk.Model{

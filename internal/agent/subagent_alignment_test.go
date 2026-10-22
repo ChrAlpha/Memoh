@@ -58,6 +58,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetStepCommitFactory(service.SubagentStepCommit)
 	adapter.SetRunObserverFactory(func(ctx context.Context) native.SpawnRunObserver {
 		publish := service.SubagentRunObserver(ctx)
 		return func(event native.StreamEvent) native.SpawnRunObservation {
@@ -84,7 +85,8 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 	})
 	terminalOutcome := tools.SpawnAttemptCompleted
 	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
-		RunID: admission.RunID,
+		RunID:                admission.RunID,
+		TurnRequestMessageID: "task-request-row",
 		Model: &sdk.Model{
 			ID:       "clean-end-abort-model",
 			Provider: abortAlignmentProvider{complete: true},
@@ -232,9 +234,11 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetStepCommitFactory(service.SubagentStepCommit)
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
-		RunID: admission.RunID,
+		RunID:                admission.RunID,
+		TurnRequestMessageID: "task-request-row",
 		Model: &sdk.Model{
 			ID:       "abort-alignment-model",
 			Provider: abortAlignmentProvider{},
@@ -320,12 +324,14 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetStepCommitFactory(service.SubagentStepCommit)
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	adapter.SetFailureTranslator(service.SubagentFailure)
 	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
-		RunID: admission.RunID,
-		Model: &sdk.Model{ID: "rejecting-model", Provider: rejectingSpawnProvider{}, Type: sdk.ModelTypeChat},
-		Query: "fail on the provider",
+		RunID:                admission.RunID,
+		TurnRequestMessageID: "task-request-row",
+		Model:                &sdk.Model{ID: "rejecting-model", Provider: rejectingSpawnProvider{}, Type: sdk.ModelTypeChat},
+		Query:                "fail on the provider",
 		Identity: tools.SpawnIdentity{
 			BotID:      agenttest.LifecycleBotID,
 			SessionID:  agenttest.LifecycleSessionID,
@@ -386,11 +392,13 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetStepCommitFactory(service.SubagentStepCommit)
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	attemptCtx, cancelAttempt := context.WithCancelCause(runCtx)
 	cancelAttempt(tools.ErrWatchdogTimedOut)
 	first, firstErr := adapter.GenerateWithWatchdog(attemptCtx, tools.SpawnRunConfig{
-		RunID: admission.RunID,
+		RunID:                admission.RunID,
+		TurnRequestMessageID: "task-request-row",
 		Model: &sdk.Model{
 			ID:       "watchdog-attempt-model",
 			Provider: abortAlignmentProvider{},
@@ -433,7 +441,8 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	}
 
 	final, finalErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
-		RunID: admission.RunID,
+		RunID:                admission.RunID,
+		TurnRequestMessageID: "task-request-row",
 		Model: &sdk.Model{
 			ID:       "watchdog-attempt-model",
 			Provider: abortAlignmentProvider{complete: true},

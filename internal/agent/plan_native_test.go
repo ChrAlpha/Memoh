@@ -489,28 +489,6 @@ func TestPlanNativeContinuationWithLostRunReportsOwnershipLost(t *testing.T) {
 	}
 }
 
-func TestPlanNativeContinuationWithoutStepPersisterFailsAtSetup(t *testing.T) {
-	t.Parallel()
-	for _, kind := range decisionKinds {
-		t.Run(string(kind), func(t *testing.T) {
-			t.Parallel()
-			manager := newPlanManager(t)
-			// A message store that cannot write steps leaves no committer.
-			service, _, _ := newContinuationPlanService(t, false, withSessionManager(manager),
-				withDeps(func(d *Deps) { d.Messages = struct{ messagepkg.Service }{&agenttest.RecordingMessages{}} }))
-			handle := startPlanRun(t, manager, -1)
-			req := continuationSessionRequest()
-			req.RunHandle = handle
-			ctx := fencedContext(context.Background(), handle.FencingToken)
-			_, err := adaptContinueResume(ctx, service, kind, req, true)
-			const want = "live queue step committer is unavailable for decision continuation"
-			if err == nil || err.Error() != want {
-				t.Fatalf("continuation error = %v, want %q", err, want)
-			}
-		})
-	}
-}
-
 const planWorkspaceTargetID = "plan-workspace-target"
 
 // planTargets resolves the workspace target named by the argument or pinned on the context to a container target, so a

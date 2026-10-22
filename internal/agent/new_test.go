@@ -53,7 +53,12 @@ func (stubQueries) ListUserInputsByRun(context.Context, pgtype.UUID) ([]sqlc.Use
 }
 
 type (
-	stubMessages struct{ messagepkg.Service }
+	// stubMessages is a message store that also writes steps, as the service
+	// requires; no test reaches either.
+	stubMessages struct {
+		messagepkg.Service
+		messagepkg.AgentStepPersister
+	}
 	stubSessions struct{ runreq.SessionService }
 )
 

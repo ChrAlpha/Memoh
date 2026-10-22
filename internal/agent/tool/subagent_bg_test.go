@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
@@ -30,6 +30,9 @@ type fakeSpawnAgent struct {
 	failureResult    *SpawnResult
 	failureErr       error
 	contextLifecycle *contextfrag.LifecycleSnapshot
+	// steps stands in for the step committer of a spawned run, which writes the
+	// run's output to history as it completes; nil writes nothing.
+	steps *fakeAgentMessageService
 
 	mu    sync.Mutex
 	calls []SpawnRunConfig
@@ -57,14 +60,20 @@ func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunC
 	if msg, ok := f.failFor[cfg.Query]; ok {
 		return nil, errors.New(msg)
 	}
-	return &SpawnResult{
+	result := &SpawnResult{
 		Text: "report for " + cfg.Query,
 		Messages: []sdk.Message{{
 			Role:    sdk.MessageRoleAssistant,
 			Content: []sdk.MessagePart{sdk.TextPart{Text: "report for " + cfg.Query}},
 		}},
 		ContextLifecycle: f.contextLifecycle,
-	}, nil
+	}
+	if f.steps != nil {
+		if err := f.steps.commitSteps(ctx, cfg, result.Messages); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 func (f *fakeSpawnAgent) queries() []string {
@@ -200,6 +209,8 @@ type fakeAgentMessageService struct {
 	mu       sync.Mutex
 	messages map[string][]messagepkg.Message
 	inputs   []messagepkg.PersistInput
+	// persistErr, when set, refuses every Persist.
+	persistErr error
 }
 
 func newFakeAgentMessageService() *fakeAgentMessageService {
@@ -209,6 +220,9 @@ func newFakeAgentMessageService() *fakeAgentMessageService {
 func (s *fakeAgentMessageService) Persist(_ context.Context, input messagepkg.PersistInput) (messagepkg.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.persistErr != nil {
+		return messagepkg.Message{}, s.persistErr
+	}
 	s.inputs = append(s.inputs, input)
 	msg := messagepkg.Message{
 		ID:        "msg_" + strconv.Itoa(len(s.messages[input.SessionID])+1),
@@ -224,46 +238,36 @@ func (s *fakeAgentMessageService) Persist(_ context.Context, input messagepkg.Pe
 	return msg, nil
 }
 
+// commitSteps writes the run's non-user messages the way the step committer
+// does: bound to the task's request row and the run, one row each.
+func (s *fakeAgentMessageService) commitSteps(ctx context.Context, cfg SpawnRunConfig, messages []sdk.Message) error {
+	for _, message := range messages {
+		if message.Role == sdk.MessageRoleUser {
+			continue
+		}
+		content, err := historyfrag.MarshalStoredSDKMessage(message)
+		if err != nil {
+			return err
+		}
+		if _, err := s.Persist(ctx, messagepkg.PersistInput{
+			BotID:                cfg.Identity.BotID,
+			SessionID:            cfg.Identity.SessionID,
+			Role:                 string(message.Role),
+			Content:              content,
+			ModelID:              cfg.ModelUUID,
+			RunID:                cfg.RunID,
+			TurnRequestMessageID: cfg.TurnRequestMessageID,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *fakeAgentMessageService) persistInputs() []messagepkg.PersistInput {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]messagepkg.PersistInput(nil), s.inputs...)
-}
-
-// A tool call whose arguments cannot be encoded is typed as invalid argument
-// text, so the message persists with that text instead of being dropped.
-func TestPersistSubagentMessagesKeepsUnencodableInputAsText(t *testing.T) {
-	messages := newFakeAgentMessageService()
-	provider := &SpawnProvider{
-		messageService: messages,
-		logger:         slog.New(slog.DiscardHandler),
-	}
-	req := &agentRequest{
-		agentSessionID:   "subagent-session",
-		parentSession:    SessionContext{BotID: "bot-1"},
-		requestMessageID: "request-1",
-		runtime:          resolvedSubagentModel{UUID: "model-1"},
-	}
-	result := &SpawnResult{Messages: []sdk.Message{
-		{
-			Role: sdk.MessageRoleAssistant,
-			Content: []sdk.MessagePart{sdk.ToolCallPart{
-				ToolCallID: "bad-call", ToolName: "bad", Input: toolexec.ArgumentsFromValue(func() {}),
-			}},
-		},
-		sdk.AssistantMessage("durable report"),
-	}}
-
-	if err := provider.persistMessages(context.Background(), req, result, false); err != nil {
-		t.Fatalf("persistMessages() error = %v", err)
-	}
-	inputs := messages.persistInputs()
-	if len(inputs) != 2 || inputs[0].Role != string(sdk.MessageRoleAssistant) || inputs[1].Role != string(sdk.MessageRoleAssistant) {
-		t.Fatalf("persisted inputs = %#v, want both assistant messages", inputs)
-	}
-	if !strings.Contains(string(inputs[0].Content), `"input":"0x`) {
-		t.Fatalf("unencodable input = %s, want the printed value as invalid argument text", inputs[0].Content)
-	}
 }
 
 func (s *fakeAgentMessageService) ListBySession(_ context.Context, sessionID string) ([]messagepkg.Message, error) {
@@ -399,6 +403,7 @@ func newAgentControlProviderWithAdmitter(t *testing.T, agent *fakeSpawnAgent, ad
 	messageSvc := newFakeAgentMessageService()
 	p := NewSpawnProvider(nil, nil, nil, nil, nil, mgr)
 	p.sessionService = sessionSvc
+	agent.steps = messageSvc
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
 	p.SetSubagentAdmitter(admitter)
@@ -735,46 +740,6 @@ func TestNonForkedSubagentDoesNotInheritAvailableParentSnapshot(t *testing.T) {
 	call, ok := agent.callAt(0)
 	if !ok || len(call.Messages) != 0 {
 		t.Fatalf("fork=false should not inherit parent context, got %+v", call.Messages)
-	}
-}
-
-func TestSpawnAgentPersistsLifecycleOnFinalAssistantAndAssociatesItsID(t *testing.T) {
-	snapshot := &contextfrag.LifecycleSnapshot{
-		Version: 1,
-		Counts:  contextfrag.ManifestCounts{Fragments: 3, Messages: 2},
-	}
-	admitter := &fakeSubagentAdmitter{}
-	p, _, sessions, messages := newAgentControlProviderWithAdmitter(
-		t,
-		&fakeSpawnAgent{contextLifecycle: snapshot},
-		admitter,
-	)
-
-	mustExecuteAgentTool(t, p, SessionContext{BotID: "bot1", SessionID: "parent1"}, "spawn_agent", map[string]any{
-		"id":   "worker",
-		"task": "audit context",
-	})
-	child, ok := sessions.byAgent("parent1", "worker")
-	if !ok {
-		t.Fatal("expected child session")
-	}
-	stored, err := messages.ListBySession(context.Background(), child.ID)
-	if err != nil {
-		t.Fatalf("ListBySession error: %v", err)
-	}
-	if len(stored) != 2 {
-		t.Fatalf("persisted messages = %d, want user and assistant", len(stored))
-	}
-	metadataSnapshot, ok := stored[1].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
-	if !ok || metadataSnapshot.Counts.Fragments != snapshot.Counts.Fragments {
-		t.Fatalf("assistant metadata lifecycle = %#v, want content-light snapshot", stored[1].Metadata)
-	}
-	terminals := admitter.terminals()
-	if len(terminals) != 1 || terminals[0].contextLifecycle == nil {
-		t.Fatalf("terminal records = %#v, want one lifecycle snapshot", terminals)
-	}
-	if got := terminals[0].contextLifecycle.AssistantMessageID; got != stored[1].ID {
-		t.Fatalf("assistant message association = %q, want %q", got, stored[1].ID)
 	}
 }
 

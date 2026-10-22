@@ -218,8 +218,8 @@ func TestSpawnedTurnReusesAdmittedRunIDAcrossRetries(t *testing.T) {
 	if len(terminals) != 1 {
 		t.Fatalf("terminal calls = %d, want 1", len(terminals))
 	}
-	if got := terminals[0].contextLifecycle; got == nil || got.Counts.Fragments != 2 || got.AssistantMessageID != "msg_2" {
-		t.Fatalf("terminal snapshot = %#v, want final retry snapshot associated with msg_2", got)
+	if got := terminals[0].contextLifecycle; got == nil || got.Counts.Fragments != 2 {
+		t.Fatalf("terminal snapshot = %#v, want the final retry snapshot", got)
 	}
 }
 

@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -246,19 +247,20 @@ func TestSpawnAdapterInstallsACompactorOnlyForCommittedRuns(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		committed bool
-	}{{"committed steps", true}, {"terminal snapshot only", false}} {
+	}{{"committed steps", true}, {"commit refused", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			adapter := NewSpawnAdapter(newTestAgent())
+			adapter := newCommittingSpawnAdapter()
 			adapter.SetStepCommitFactory(func(context.Context, string, string, string, string, *contextfrag.LifecycleHolder, func()) (
 				func(context.Context, int, *step.Record) error,
 				func(context.Context, int, *step.Record) error,
+				error,
 			) {
 				if !tc.committed {
-					return nil, nil
+					return nil, nil, errors.New("commit refused")
 				}
-				return commit, commit
+				return commit, commit, nil
 			})
 			var got SpawnCompaction
 			adapter.SetCompactorFactory(func(_ context.Context, run SpawnCompaction) StepContextCompactor {
@@ -266,7 +268,9 @@ func TestSpawnAdapterInstallsACompactorOnlyForCommittedRuns(t *testing.T) {
 				return func(context.Context, StepContextInput) []sdk.Message { return nil }
 			})
 			rc := runConfigFromSpawnRunConfig(cfg)
-			adapter.installStepCommit(context.Background(), cfg, &rc)
+			if err := adapter.installStepCommit(context.Background(), cfg, &rc); (err == nil) != tc.committed {
+				t.Fatalf("installStepCommit error = %v, committed = %v", err, tc.committed)
+			}
 
 			if installed := rc.StepContextCompactor != nil; installed != tc.committed {
 				t.Fatalf("compactor installed = %v, want %v", installed, tc.committed)

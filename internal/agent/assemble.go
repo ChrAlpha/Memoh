@@ -56,7 +56,7 @@ func adjusted[D any](d D, change func(*D)) D {
 	return d
 }
 
-func assemble(d Deps, w wiring) *Service {
+func assemble(d Deps, w wiring) (*Service, error) {
 	teamScopes := d.TeamScopes
 	if teamScopes == nil {
 		teamScopes = runreq.SingleTeam(d.AllowedTeam)
@@ -177,13 +177,11 @@ func assemble(d Deps, w wiring) *Service {
 		OutputMedia:  d.OutputMedia,
 		OutputSpeech: d.OutputSpeech,
 	}, w.drive))
-	// A message store that cannot write fenced steps leaves a spawned run to its
-	// terminal snapshot.
-	var steps messagepkg.AgentStepPersister
-	if persister, ok := d.Messages.(messagepkg.AgentStepPersister); ok {
-		steps = persister
-	}
-	service.subagent = subagent.New(subagent.Deps{
+	// The message store is the only writer of a spawned run's history; Deps
+	// validation has already required it to write fenced steps.
+	steps, _ := d.Messages.(messagepkg.AgentStepPersister)
+	var err error
+	service.subagent, err = subagent.New(subagent.Deps{
 		Logger:      log("subagent"),
 		Admit:       service.admit,
 		Driver:      service.driver,
@@ -193,6 +191,9 @@ func assemble(d Deps, w wiring) *Service {
 		Events:      d.SessionRuntime,
 		Steps:       steps,
 	})
+	if err != nil {
+		return nil, err
+	}
 	service.externalrun = externalrun.New(adjusted(externalrun.Deps{
 		Logger:         log("externalrun"),
 		Store:          d.Queries,
@@ -308,7 +309,7 @@ func assemble(d Deps, w wiring) *Service {
 		Continuer:  service.plan,
 	}, w.answer))
 	bindSessionRuntime(d.SessionRuntime, d.Logger.With(slog.String("service", "agent")), service)
-	return service
+	return service, nil
 }
 
 // bindSessionRuntime registers the callbacks the runtime invokes into the

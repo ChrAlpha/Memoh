@@ -84,7 +84,10 @@ func (stubAgentQueries) ListUserInputsByRun(context.Context, pgtype.UUID) ([]dbs
 }
 
 type (
-	stubAgentMessages  struct{ messagepkg.Service }
+	stubAgentMessages struct {
+		messagepkg.Service
+		messagepkg.AgentStepPersister
+	}
 	stubAgentSessions  struct{ runreq.SessionService }
 	denyAllPermissions struct{}
 )

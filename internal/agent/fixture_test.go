@@ -276,7 +276,11 @@ func newTestService(t *testing.T, d Deps, opts ...testOption) *Service {
 	w.drive = chained(w.drive, build.wiring.drive)
 	w.persist, w.externalrun, w.plan = build.wiring.persist, build.wiring.externalrun, build.wiring.plan
 	w.pending, w.answer = build.wiring.pending, build.wiring.answer
-	return assemble(d, w)
+	service, err := assemble(d, w)
+	if err != nil {
+		t.Fatalf("assemble: %v", err)
+	}
+	return service
 }
 
 // webAdmitter admits every invocation as the run webTestAdmission names for the
