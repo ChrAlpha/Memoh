@@ -70,7 +70,7 @@ func TestDoCompactionAbsorbsOnlyTheActiveArtifactFrontier(t *testing.T) {
 	}
 
 	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if !strings.Contains(stub.prompt, "active-frontier-summary") || strings.Contains(stub.prompt, "stale-parent-summary") {
 		t.Fatalf("absorbed context did not use the active frontier:\n%s", stub.prompt)
@@ -107,7 +107,7 @@ func TestCompactDoesNotAbsorbUnrenderedSummary(t *testing.T) {
 		t.Fatalf("passes=%d want one", len(passes))
 	}
 	if strings.Contains(stub.prompt, "UNRENDERED_SUMMARY_MUST_NOT_ENTER_REQUEST") || len(passes[0].Absorbed) != 0 {
-		t.Fatalf("I1 violated: summarizer saw unrendered summary=%v; absorbed=%v; view contains only %d history IDs", strings.Contains(stub.prompt, "UNRENDERED_SUMMARY_MUST_NOT_ENTER_REQUEST"), passes[0].Absorbed, len(cfg.View))
+		t.Fatalf("summarizer saw unrendered summary=%v; absorbed=%v; view contains only %d history IDs", strings.Contains(stub.prompt, "UNRENDERED_SUMMARY_MUST_NOT_ENTER_REQUEST"), passes[0].Absorbed, len(cfg.View))
 	}
 }
 

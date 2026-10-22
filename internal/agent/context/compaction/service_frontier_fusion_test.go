@@ -39,7 +39,7 @@ func TestDoCompactionFusionIneffectiveGateCountsAllReplacedParentSummaries(t *te
 	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
 	res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if res.Status != passOK || len(q.rollupCalls) != 1 {
 		t.Fatalf("fusion result = %#v rollup_calls=%d, want ok with one rollup completion", res, len(q.rollupCalls))
@@ -70,7 +70,7 @@ func TestDoCompactionFoldsEveryParentSummaryWhole(t *testing.T) {
 	q := &fakeQueries{uncompacted: fusionQualityRows(t, cfg), priorLogs: parents}
 	res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if res.Status != passOK || len(q.rollupCalls) != 1 {
 		t.Fatalf("whole-frontier fusion result = %#v rollup_calls=%d, want ok with one rollup", res, len(q.rollupCalls))
@@ -148,7 +148,7 @@ func TestDoCompactionFoldsTheActiveSummaryIntoOneArtifact(t *testing.T) {
 
 			res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 			if err != nil {
-				t.Fatalf("RunCompactionSync: %v", err)
+				t.Fatalf("compact: %v", err)
 			}
 			if !tc.wantFold {
 				if res.Status != passNoop || stub.calls != 0 || q.created {
@@ -284,7 +284,7 @@ func TestDoCompactionFusionRejectsSummaryNotSmallerThanEverythingReplaced(t *tes
 	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
 	_, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if !errors.Is(err, errIneffectiveSummary) {
-		t.Fatalf("RunCompactionSync error = %v, want errIneffectiveSummary", err)
+		t.Fatalf("compact error = %v, want errIneffectiveSummary", err)
 	}
 	if stub.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1", stub.calls)
@@ -331,7 +331,7 @@ func TestDoCompactionFusionRollupCASFailureKeepsParentsActiveAndClaimsReclaimabl
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if !errors.Is(err, pgx.ErrNoRows) {
-		t.Fatalf("RunCompactionSync error = %v, want pgx.ErrNoRows", err)
+		t.Fatalf("compact error = %v, want pgx.ErrNoRows", err)
 	}
 	if stub.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1 before finalize CAS failure", stub.calls)
@@ -367,7 +367,7 @@ func TestDoCompactionFusionFinalOverflowFailsBeforeClaimsAndProvider(t *testing.
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if !errors.Is(err, errCompactionInputOverflow) {
-		t.Fatalf("RunCompactionSync error = %v, want errCompactionInputOverflow", err)
+		t.Fatalf("compact error = %v, want errCompactionInputOverflow", err)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", stub.calls)
@@ -398,7 +398,7 @@ func TestDoCompactionFusionUnreadableEarlierSummariesFailBeforeClaimsAndProvider
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if !errors.Is(err, errCompactionInputOverflow) {
-		t.Fatalf("RunCompactionSync error = %v, want errCompactionInputOverflow", err)
+		t.Fatalf("compact error = %v, want errCompactionInputOverflow", err)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("provider calls = %d, want 0", stub.calls)

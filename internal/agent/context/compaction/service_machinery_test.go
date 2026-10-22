@@ -444,7 +444,7 @@ func TestDoCompactionMarksToolAwareWindowAndRendersCleanPrompt(t *testing.T) {
 	cfg := machineryConfig(stub, 450)
 	cfg.ProtectedSources = historySources(rows[7])
 	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 
 	if stub.calls != 1 {
@@ -513,7 +513,7 @@ func TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget(t *testing.T) {
 
 	_, err := svc.compactOnce(context.Background(), cfg)
 	if !errors.Is(err, errCompactionInputOverflow) {
-		t.Fatalf("RunCompactionSync error = %v, want errCompactionInputOverflow", err)
+		t.Fatalf("compact error = %v, want errCompactionInputOverflow", err)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("summarizer calls = %d, want 0: an oversized selection must not reach the provider", stub.calls)
@@ -539,7 +539,7 @@ func TestDoCompactionAllEmptyWindowSkipsModelAndMarking(t *testing.T) {
 	cfg := machineryConfig(stub, 150)
 	cfg.ProtectedSources = historySources(rows[2])
 	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("summarizer should not be called for an all-empty window (calls=%d)", stub.calls)
@@ -565,7 +565,7 @@ func TestDoCompactionCoversToolExchangeWhoseResultRendersEmpty(t *testing.T) {
 	cfg := machineryConfig(stub, 150)
 	cfg.ProtectedSources = historySources(rows[2])
 	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if stub.calls != 1 || len(q.markedIDs) != 2 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID {
 		t.Fatalf("calls=%d marked=%d, want the call and its empty result covered together", stub.calls, len(q.markedIDs))
@@ -590,7 +590,7 @@ func TestDoCompactionCoversEmptyMiddleRowWithItsNeighbours(t *testing.T) {
 	cfg := machineryConfig(stub, 250)
 	cfg.ProtectedSources = historySources(rows[3])
 	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if len(q.markedIDs) != 3 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID || q.markedIDs[2] != rows[2].ID {
 		t.Fatalf("marked = %d ids, want rows 0-2 as one contiguous run", len(q.markedIDs))
@@ -606,7 +606,7 @@ func TestDoCompactionEmptyHistoryNoOp(t *testing.T) {
 	svc := newMachineryService(q)
 
 	if _, err := svc.compactOnce(context.Background(), machineryConfig(stub, 100)); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if stub.calls != 0 || len(q.markedIDs) != 0 {
 		t.Fatalf("empty history must be a no-op (calls=%d marked=%d)", stub.calls, len(q.markedIDs))
@@ -661,7 +661,7 @@ func TestDoCompactionRetriesRateLimitedSummarizerCall(t *testing.T) {
 
 	res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if transport.calls != 2 || res.Status != passOK || res.Summary != "SUMMARY-RETRIED" {
 		t.Fatalf("result = %+v after %d calls, want the retried summary after 2", res, transport.calls)

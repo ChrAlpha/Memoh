@@ -97,7 +97,7 @@ func TestTimelineRollupKeepsAnEditItsParentNeverCovered(t *testing.T) {
 			child := Artifact{ID: "child", Summary: "refolded original content only", StartedAt: time.UnixMilli(6000), AnchorEndMs: meta.AnchorEndMs, Coverage: merged, ParentIDs: []string{"parent"}}
 			after := timeline.ComposeContextWithArtifacts(rc, nil, TimelineArtifacts([]Artifact{child}))
 			if !hasEdit(after) {
-				t.Fatalf("I1/I5 violated: merely refolding a summary hid its uncovered edit on next-turn pipeline replay; parent as-of=%d child as-of=%d edit=%d", TimelineArtifacts([]Artifact{parent})[0].CoverageAsOfMs, TimelineArtifacts([]Artifact{child})[0].CoverageAsOfMs, rc[0].EditedAtMs)
+				t.Fatalf("merely refolding a summary hid its uncovered edit on next-turn pipeline replay; parent as-of=%d child as-of=%d edit=%d", TimelineArtifacts([]Artifact{parent})[0].CoverageAsOfMs, TimelineArtifacts([]Artifact{child})[0].CoverageAsOfMs, rc[0].EditedAtMs)
 			}
 		})
 	}

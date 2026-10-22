@@ -34,7 +34,7 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 
 	res, err := svc.compactOnce(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if res.Status != passOK {
 		t.Fatalf("status = %q, want %q: a leading row that renders nothing must not starve the history behind it", res.Status, passOK)
@@ -66,7 +66,7 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 
 	res, err := svc.compactOnce(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if res.Status != passNoop {
 		t.Fatalf("status = %q, want %q", res.Status, passNoop)
@@ -100,7 +100,7 @@ func TestDoCompactionCoversOversizedRenderEmptyHead(t *testing.T) {
 	cfg.ProtectedSources = historySources(rows[4])
 	res, err := svc.compactOnce(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if res.Status != passOK {
 		t.Fatalf("status = %q, want %q: a render-empty head must not eat the trim budget", res.Status, passOK)
@@ -128,7 +128,7 @@ func TestDoCompactionCostsAnExchangeByWhatItRenders(t *testing.T) {
 	cfg.ProtectedSources = historySources(rows[4])
 	res, err := svc.compactOnce(context.Background(), cfg)
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if res.Status != passOK {
 		t.Fatalf("status = %q, want %q: an exchange's raw usage estimate must not eat the trim budget", res.Status, passOK)

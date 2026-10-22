@@ -18,11 +18,12 @@ type Pass struct {
 	// folds.
 	Covered  []turn.ContextMessageSource
 	Absorbed []string
-	// More reports candidates the pass left for a later one.
+	// More reports candidates left that the pass could not read; the event
+	// folds them in a later pass.
 	More bool
 }
 
-// Reason names why a compaction event ended without a request that fits.
+// Reason names why a compaction event failed.
 type Reason string
 
 const (

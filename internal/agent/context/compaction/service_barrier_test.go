@@ -39,7 +39,7 @@ func TestDoCompactionDoesNotSplitToolExchangeAtUnparseableBarrier(t *testing.T) 
 			stub := &stubModel{summary: "SUMMARY"}
 
 			if _, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 200, rows[4])); err != nil {
-				t.Fatalf("RunCompactionSync: %v", err)
+				t.Fatalf("compact: %v", err)
 			}
 
 			if len(q.markedIDs) != 2 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID {

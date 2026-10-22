@@ -31,7 +31,7 @@ func TestRunCompactionRecordsModelRecordProvenance(t *testing.T) {
 	cfg.ModelRecordID = recordID.String()
 
 	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if q.completed.ModelID != recordID {
 		t.Fatalf("artifact model provenance = %v, want the models row UUID %v: the runtime slug must not be parsed as a database id", q.completed.ModelID, recordID)
@@ -47,7 +47,7 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	cfg.SummaryWindowTokens = 20000
 
 	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if stub.maxTokens != 5000 {
 		t.Fatalf("summary max tokens = %d, want the model's output allowance in a 20000 window", stub.maxTokens)
@@ -57,7 +57,7 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	cfgWide := machineryConfig(wide, 200)
 	cfgWide.SummaryWindowTokens = 200000
 	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfgWide); err != nil {
-		t.Fatalf("RunCompactionSync wide: %v", err)
+		t.Fatalf("compact wide: %v", err)
 	}
 	if wide.maxTokens != models.DefaultOutputReserveTokens {
 		t.Fatalf("summary max tokens = %d, want the model's output allowance %d", wide.maxTokens, models.DefaultOutputReserveTokens)
@@ -68,7 +68,7 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	cfgDeclared.SummaryWindowTokens = 200000
 	cfgDeclared.MaxOutputTokens = 64000
 	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfgDeclared); err != nil {
-		t.Fatalf("RunCompactionSync declared: %v", err)
+		t.Fatalf("compact declared: %v", err)
 	}
 	if declared.maxTokens != 64000 {
 		t.Fatalf("summary max tokens = %d, want the model's declared output cap 64000", declared.maxTokens)
@@ -83,7 +83,7 @@ func TestRunCompactionRejectsTruncatedSummary(t *testing.T) {
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(stub, 200))
 	if !errors.Is(err, errIncompleteSummary) {
-		t.Fatalf("RunCompactionSync error = %v, want errIncompleteSummary: a truncated summary must never be published", err)
+		t.Fatalf("compact error = %v, want errIncompleteSummary: a truncated summary must never be published", err)
 	}
 	if q.completed.Status != "error" {
 		t.Fatalf("attempt status = %q, want error so the claimed rows stay reclaimable", q.completed.Status)
@@ -98,7 +98,7 @@ func TestRunCompactionRejectsIneffectiveSummary(t *testing.T) {
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(stub, 200))
 	if !errors.Is(err, errIneffectiveSummary) {
-		t.Fatalf("RunCompactionSync error = %v, want errIneffectiveSummary: a summary must shrink what it replaces", err)
+		t.Fatalf("compact error = %v, want errIneffectiveSummary: a summary must shrink what it replaces", err)
 	}
 	if q.completed.Status != "error" {
 		t.Fatalf("attempt status = %q, want error", q.completed.Status)
@@ -115,7 +115,7 @@ func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if !errors.Is(err, ErrSummaryWindowTooSmall) {
-		t.Fatalf("RunCompactionSync error = %v, want ErrSummaryWindowTooSmall", err)
+		t.Fatalf("compact error = %v, want ErrSummaryWindowTooSmall", err)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("summarizer calls = %d, want 0: a hopeless window must not burn an LLM call", stub.calls)
@@ -151,7 +151,7 @@ func TestRunCompactionShowsAnUnsavedRequestAsTheGoal(t *testing.T) {
 	cfg := machineryConfig(stub, 200)
 	cfg.CurrentRequest = "deploy the staging build"
 	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if !strings.Contains(stub.prompt, "<current_request>\nuser: deploy the staging build") {
 		t.Fatalf("summarizer prompt lacks the unsaved request:\n%s", stub.prompt)

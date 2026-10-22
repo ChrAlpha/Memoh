@@ -16,7 +16,7 @@ import (
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
-func TestRunCompactionSyncReportsScopedNoop(t *testing.T) {
+func TestCompactionReportsScopedNoop(t *testing.T) {
 	// An already-compact/fresh session compacts nothing. The result must be a
 	// scoped no-op, so a caller (the HTTP endpoint) never has to fall back to an
 	// unscoped bot-wide log that could belong to another session.
@@ -36,21 +36,21 @@ func TestRunCompactionSyncReportsScopedNoop(t *testing.T) {
 	}
 }
 
-func TestRunCompactionSyncReportsScopedSummaryOnSuccess(t *testing.T) {
+func TestCompactionReportsScopedSummaryOnSuccess(t *testing.T) {
 	q := &fakeQueries{uncompacted: machineryCorpus(t)}
 	stub := &stubModel{summary: "SUMMARY-OK"}
 	svc := newMachineryService(q)
 
 	res, err := svc.compactOnce(context.Background(), machineryConfig(stub, 450))
 	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 	if res.Status != passOK || res.Summary != "SUMMARY-OK" || res.MessageCount != len(q.markedIDs) {
 		t.Fatalf("success result = %+v, want ok/SUMMARY-OK/%d", res, len(q.markedIDs))
 	}
 }
 
-func TestRunCompactionSyncFailureSurfacesError(t *testing.T) {
+func TestCompactionFailureSurfacesError(t *testing.T) {
 	q := &fakeQueries{uncompacted: machineryCorpus(t)}
 	svc := newMachineryService(q)
 	cfg := machineryConfig(&stubModel{}, 450)
@@ -88,7 +88,7 @@ func TestRunCompactionRetriesImmediatelyAfterFailure(t *testing.T) {
 	}
 }
 
-func TestRunCompactionSyncSurfacesCompletionPersistenceFailure(t *testing.T) {
+func TestCompactionSurfacesCompletionPersistenceFailure(t *testing.T) {
 	t.Parallel()
 
 	q := &fakeQueries{uncompacted: machineryCorpus(t), completeErr: errors.New("db down")}
@@ -136,7 +136,7 @@ func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) 
 		q := &fakeQueries{uncompacted: rows, priorLogs: priorLogs}
 		res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 		if err != nil {
-			t.Fatalf("RunCompactionSync: %v", err)
+			t.Fatalf("compact: %v", err)
 		}
 		if res.Status != passProgress {
 			t.Fatalf("status = %q, want %q: the rows past the summarizer input wait for the next pass", res.Status, passProgress)

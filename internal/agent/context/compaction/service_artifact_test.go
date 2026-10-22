@@ -53,7 +53,7 @@ func TestDoCompactionPersistsDurableCoverageAndAnchor(t *testing.T) {
 	stub := &stubModel{summary: "SUMMARY"}
 
 	if _, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 
 	coverage, err := DecodeArtifactCoverage(q.completed.Coverage)
@@ -87,7 +87,7 @@ func TestDoCompactionOrdersDurableCoverageBySourceTime(t *testing.T) {
 	q := &fakeQueries{uncompacted: rows}
 
 	if _, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2])); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 
 	coverage, err := DecodeArtifactCoverage(q.completed.Coverage)
@@ -128,7 +128,7 @@ func TestDoCompactionCoverageHashIncludesMessageAssets(t *testing.T) {
 	stub := &stubModel{summary: "SUMMARY"}
 
 	if _, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+		t.Fatalf("compact: %v", err)
 	}
 
 	coverage, err := DecodeArtifactCoverage(q.completed.Coverage)
@@ -189,7 +189,7 @@ func TestDoCompactionStopsWhenAssetsCannotBeLoaded(t *testing.T) {
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if !errors.Is(err, assetErr) {
-		t.Fatalf("RunCompactionSync error = %v, want %v", err, assetErr)
+		t.Fatalf("compact error = %v, want %v", err, assetErr)
 	}
 	if !q.created || len(q.markedIDs) == 0 || q.completed.Status != "error" {
 		t.Fatalf("asset failure must leave reclaimable error claims: created=%v marked=%v status=%q", q.created, q.markedIDs, q.completed.Status)
@@ -213,7 +213,7 @@ func TestDoCompactionReturnsSuccessfulArtifactFinalizationError(t *testing.T) {
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if !errors.Is(err, completeErr) {
-		t.Fatalf("RunCompactionSync error = %v, want %v", err, completeErr)
+		t.Fatalf("compact error = %v, want %v", err, completeErr)
 	}
 	if len(q.markedIDs) != 2 {
 		t.Fatalf("marked ids = %v, want generated artifact rows marked before finalization", q.markedIDs)
@@ -234,7 +234,7 @@ func TestDoCompactionRejectsPartialSourceMarking(t *testing.T) {
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if err == nil || !strings.Contains(err.Error(), "marked 1 of 2") {
-		t.Fatalf("RunCompactionSync error = %v, want partial-mark failure", err)
+		t.Fatalf("compact error = %v, want partial-mark failure", err)
 	}
 	if q.completed.Status != "error" || q.completed.Summary != "" {
 		t.Fatalf("partial mark published an artifact: %#v", q.completed)

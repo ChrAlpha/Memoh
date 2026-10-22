@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestRunCompactionSyncReportsNoopWhileSessionIsBusy(t *testing.T) {
+func TestCompactRunsNothingWhileSessionIsBusy(t *testing.T) {
 	t.Parallel()
 
 	q := &fakeQueries{uncompacted: machineryCorpus(t)}
