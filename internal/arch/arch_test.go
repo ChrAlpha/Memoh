@@ -720,3 +720,35 @@ func TestRunTerminalStateHasOneWriter(t *testing.T) {
 		})
 	}
 }
+
+// TestAgentStepsHaveOneCommitter keeps a run's steps written by the step
+// committer in internal/agent/persist: no other package of the agent calls the
+// message store's step write, so no entry (a spawned agent included) can grow a
+// committer of its own.
+func TestAgentStepsHaveOneCommitter(t *testing.T) {
+	root := repoRoot(t)
+	files := goFiles(t, root, "internal/agent")
+	requireFiles(t, "internal/agent", files)
+	if !slices.Contains(files, "internal/agent/persist/step_commit.go") {
+		t.Error("internal/agent/persist/step_commit.go is missing: the step committer moved, update this rule")
+	}
+	for _, file := range files {
+		if strings.HasPrefix(file, "internal/agent/persist/") || strings.HasPrefix(file, "internal/agent/agenttest/") {
+			continue
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", file, err)
+		}
+		ast.Inspect(parsed, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "PersistAgentStep" {
+				t.Errorf("%s calls PersistAgentStep: a run's steps are written by persist.StepCommitter only", file)
+			}
+			return true
+		})
+	}
+}

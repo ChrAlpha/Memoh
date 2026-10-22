@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/apperror"
 )
 
 // Failure is the error a spawned attempt that ended with event reports
@@ -31,17 +32,32 @@ func Failure(event native.StreamEvent) error {
 // the ones a subscriber must see); and a lost ownership stops publishing
 // outright because every later event would fail identically.
 func (h *Host) Observer(ctx context.Context) native.SpawnRunObserver {
-	handle, ok := HandleFromContext(ctx)
-	if !ok || strings.TrimSpace(handle.RunID) == "" || handle.FencingToken <= 0 {
+	run, ok := runFromContext(ctx)
+	if !ok || strings.TrimSpace(run.handle.RunID) == "" || run.handle.FencingToken <= 0 {
 		return nil
 	}
+	handle := run.handle
 	publishCtx := context.WithoutCancel(ctx)
 	var lost atomic.Bool
+	// declared is the failure the last error event published names, which is
+	// the failure the session runtime records for the run when it ends.
+	var declared *outcome.RunFailure
 	return func(event native.StreamEvent) native.SpawnRunObservation {
 		if lost.Load() {
 			return native.SpawnRunObservation{}
 		}
-		_, status, err := h.events.HandleAgentEventWithStatus(publishCtx, handle, outcome.PublicAgentStreamEvent(event))
+		public := outcome.PublicAgentStreamEvent(event)
+		switch event.Type {
+		case native.EventError:
+			declared = declaredFailure(public, event.Cause)
+		case native.EventAgentEnd, native.EventAgentAbort:
+			// History comes before the terminal event, as it does for a driven
+			// run: the failure is named on the checkpoint the run wrote, and the
+			// committer closes, before the terminal is published. After it the
+			// run is finishing and its rows are no longer writable.
+			run.endHistory(publishCtx, declared, h.logger)
+		}
+		_, status, err := h.events.HandleAgentEventWithStatus(publishCtx, handle, public)
 		if err != nil {
 			if errors.Is(err, sessionruntime.ErrRunOwnershipLost) {
 				lost.Store(true)
@@ -70,4 +86,15 @@ func (h *Host) Observer(ctx context.Context) native.SpawnRunObserver {
 		}
 		return observation
 	}
+}
+
+// declaredFailure is the failure an error event names, in the terms the
+// session runtime records it: the event's code, or the unnamed failure.
+func declaredFailure(public native.StreamEvent, cause error) *outcome.RunFailure {
+	code := apperror.Code(strings.TrimSpace(public.Code))
+	args := public.Args
+	if code == "" {
+		code, args = apperror.CodeRuntimeRunFailed, nil
+	}
+	return &outcome.RunFailure{Code: code, Args: args, Cause: cause, Phase: outcome.PhaseExecution}
 }

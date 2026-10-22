@@ -20,7 +20,8 @@ import (
 
 func checkpointCommitter(owner context.Context, store *agenttest.RecordingStepPersister) *StepCommitter {
 	return &StepCommitter{
-		writer: newTestWriter(Deps{}), persister: store, ownerContext: owner,
+		onPersisted: func() {},
+		writer:      newTestWriter(Deps{}), persister: store, ownerContext: owner,
 		req: runreq.ChatRequest{BotID: "bot", ThreadID: "session", RunID: "run", UserMessagePersisted: true},
 		rc:  runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}},
 	}
@@ -126,5 +127,19 @@ func TestNamingTheCheckpointFailsWhenTheWriteIsRefused(t *testing.T) {
 	}
 	if len(store.InterruptedFailures) != 0 {
 		t.Fatalf("a revoked owner named a failure: %#v", store.InterruptedFailures)
+	}
+}
+
+// A run that wrote no checkpoint has nothing to name: NameCheckpoint writes no
+// row, which is what lets a run without a failure row of its own call it.
+func TestNameCheckpointWithoutCheckpointWritesNothing(t *testing.T) {
+	store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
+	committer := checkpointCommitter(context.Background(), store)
+	failure := outcome.RunFailure{Code: apperror.CodeAgentProviderAuthFailed, Phase: outcome.PhaseExecution}
+	if err := committer.NameCheckpoint(context.Background(), failure); err != nil {
+		t.Fatalf("NameCheckpoint: %v", err)
+	}
+	if len(store.Steps) != 0 {
+		t.Fatalf("a row was written: %#v", store.Steps)
 	}
 }

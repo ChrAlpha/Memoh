@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -12,10 +13,12 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/persist"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
@@ -35,17 +38,15 @@ func runContext(botID, sessionID string, token int64) context.Context {
 
 func newHost(t *testing.T, store *agenttest.RecordingStepPersister) *Host {
 	t.Helper()
-	host, err := New(Deps{Steps: store})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	return host
-}
-
-func TestSubagentHostRequiresStepPersister(t *testing.T) {
-	if _, err := New(Deps{}); err == nil {
-		t.Fatal("a host without a step persister was built")
-	}
+	logger := slog.New(slog.DiscardHandler)
+	return New(Deps{Persist: persist.New(persist.Deps{
+		Logger:   logger,
+		Messages: store,
+		Sessions: &agenttest.Sessions{GetFn: func(context.Context, string) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{}, errors.New("session not found")
+		}},
+		Bot: agenttest.BotEnv(logger),
+	})})
 }
 
 // The run's history has no other writer, so a run that cannot commit steps is an
@@ -92,7 +93,6 @@ func TestSubagentStepCommitPersistsStepsInOrder(t *testing.T) {
 	}
 
 	if err := commit(ctx, 0, &step.Record{Messages: []sdk.Message{
-		{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{sdk.TextPart{Text: "task"}}},
 		sdk.AssistantMessage("step one"),
 	}}); err != nil {
 		t.Fatalf("commit step 0: %v", err)
@@ -176,13 +176,11 @@ func TestSubagentStepCommitSkipsEmptyStepWithoutPersisting(t *testing.T) {
 		t.Fatalf("StepCommit: %v", err)
 	}
 
-	if err := commit(ctx, 0, &step.Record{Messages: []sdk.Message{
-		{Role: sdk.MessageRoleUser, Content: []sdk.MessagePart{sdk.TextPart{Text: "only user"}}},
-	}}); err != nil {
-		t.Fatalf("commit user-only step: %v", err)
+	if err := commit(ctx, 0, &step.Record{}); err != nil {
+		t.Fatalf("commit empty step: %v", err)
 	}
 	if len(store.Steps) != 0 || persistedSteps != 0 {
-		t.Fatalf("user-only step persisted: steps=%d fired=%d", len(store.Steps), persistedSteps)
+		t.Fatalf("empty step persisted: steps=%d fired=%d", len(store.Steps), persistedSteps)
 	}
 	// The empty step still advanced the cursor: the next step index is 1.
 	if err := commit(ctx, 1, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("real output")}}); err != nil {

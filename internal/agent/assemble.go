@@ -27,7 +27,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/title"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/agent/web"
-	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/providers"
 )
 
@@ -177,11 +176,7 @@ func assemble(d Deps, w wiring) (*Service, error) {
 		OutputMedia:  d.OutputMedia,
 		OutputSpeech: d.OutputSpeech,
 	}, w.drive))
-	// The message store is the only writer of a spawned run's history; Deps
-	// validation has already required it to write fenced steps.
-	steps, _ := d.Messages.(messagepkg.AgentStepPersister)
-	var err error
-	service.subagent, err = subagent.New(subagent.Deps{
+	service.subagent = subagent.New(subagent.Deps{
 		Logger:      log("subagent"),
 		Admit:       service.admit,
 		Driver:      service.driver,
@@ -189,11 +184,8 @@ func assemble(d Deps, w wiring) (*Service, error) {
 		Compact:     service.compact,
 		ActiveTurns: service.activeTurns,
 		Events:      d.SessionRuntime,
-		Steps:       steps,
+		Persist:     service.persist,
 	})
-	if err != nil {
-		return nil, err
-	}
 	service.externalrun = externalrun.New(adjusted(externalrun.Deps{
 		Logger:         log("externalrun"),
 		Store:          d.Queries,

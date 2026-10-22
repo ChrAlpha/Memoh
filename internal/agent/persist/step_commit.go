@@ -35,6 +35,8 @@ type StepCommitter struct {
 	persister       messagepkg.AgentStepPersister
 	reasoningTiming *ReasoningTimingTracker
 	queueStep       *queueStepCoordinator
+	// onPersisted is told after each durable step write, complete or interrupted.
+	onPersisted func()
 
 	mu                   sync.Mutex
 	turnRequestMessageID string
@@ -52,10 +54,24 @@ type StepCommitter struct {
 	failure error
 }
 
+// StepOption adjusts a committer at construction.
+type StepOption func(*StepCommitter)
+
+// OnStepPersisted calls f after every step or checkpoint the committer has made
+// durable. A run whose output is already history uses it to stop replaying
+// itself.
+func OnStepPersisted(f func()) StepOption {
+	return func(c *StepCommitter) {
+		if f != nil {
+			c.onPersisted = f
+		}
+	}
+}
+
 // NewStepCommitter is the committer of an admitted, fenced run, or nil when the
 // request does not call for one: no run identity, no fence, a message store that
 // cannot write steps, or an input whose turn is not named.
-func (w *Writer) NewStepCommitter(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext) *StepCommitter {
+func (w *Writer) NewStepCommitter(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, opts ...StepOption) *StepCommitter {
 	if strings.TrimSpace(req.RunID) == "" ||
 		strings.TrimSpace(req.BotID) == "" || strings.TrimSpace(req.ThreadID) == "" {
 		return nil
@@ -86,14 +102,30 @@ func (w *Writer) NewStepCommitter(ctx context.Context, req runreq.ChatRequest, r
 	case strings.TrimSpace(req.TurnID) == "" || req.TurnPosition == nil:
 		return nil
 	}
-	return &StepCommitter{
+	c := &StepCommitter{
 		writer: w, req: req, rc: rc, persister: persister, ownerContext: ctx,
 		queueStep:            queueStep,
 		turnRequestMessageID: requestMessageID,
 		// A continuation resumes a run whose earlier steps are already
 		// persisted; the loop numbers its commits from the same offset.
-		nextStep: req.StepIndexOffset,
+		nextStep:    req.StepIndexOffset,
+		onPersisted: func() {},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
+}
+
+// Hooks are the committer's step hooks for a run that binds no steering: the
+// directive a commit returns is always empty there, so the commit reports only
+// its error.
+func (c *StepCommitter) Hooks() (commit, interrupt func(context.Context, int, *step.Record) error) {
+	return func(ctx context.Context, index int, record *step.Record) error {
+			_, err := c.commit(ctx, index, record)
+			return err
+		},
+		c.interrupt
 }
 
 // BindContinuation wires the steer hooks of a continuation's run configuration
@@ -290,6 +322,9 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 		c.rc.RunConfig.ContextLifecycle.SetAssistantMessageID(runreq.LastPersistedAssistantMessageID(persisted))
 	}
 	c.nextStep++
+	if len(inputs) > 0 {
+		c.onPersisted()
+	}
 	for _, message := range persisted {
 		if strings.EqualFold(strings.TrimSpace(message.Role), "user") && !messagepkg.IsInternalFeedback(message.Metadata) {
 			c.turnRequestMessageID = message.ID
@@ -448,16 +483,24 @@ func (c *StepCommitter) RecordFailure(ctx context.Context, partialText string, f
 		return nil, nil
 	}
 	if checkpointed {
-		return nil, c.nameCheckpoint(ctx, f)
+		return nil, c.NameCheckpoint(ctx, f)
 	}
 	record := &step.Record{Messages: toolexec.BuildStepMessages(partialText, nil, nil, nil, nil, nil)}
 	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, f)
 	return nil, err
 }
 
-// nameCheckpoint merges f into the metadata of the checkpoint rows this run
+// NameCheckpoint merges f into the metadata of the checkpoint rows this run
 // wrote, under the run's fence, and into the in-memory copies the run reports.
-func (c *StepCommitter) nameCheckpoint(ctx context.Context, f outcome.RunFailure) error {
+// A run with no checkpoint has nothing to name and writes nothing: this is the
+// call for a run whose failure leaves no failure row of its own.
+func (c *StepCommitter) NameCheckpoint(ctx context.Context, f outcome.RunFailure) error {
+	c.mu.Lock()
+	checkpointed := c.checkpointed
+	c.mu.Unlock()
+	if !checkpointed {
+		return nil
+	}
 	ctx, err := StepContext(ctx, c.ownerContext)
 	if err != nil {
 		return err

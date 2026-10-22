@@ -20,7 +20,7 @@ func TestCheckpointDistinguishesUserAbortFromRevokedOwner(t *testing.T) {
 		t.Run(cause.Error(), func(t *testing.T) {
 			store := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 			owner, cancel := context.WithCancelCause(context.Background())
-			committer := &StepCommitter{writer: newTestWriter(Deps{}), persister: store, ownerContext: owner, req: runreq.ChatRequest{BotID: "bot", ThreadID: "session", RunID: "run", UserMessagePersisted: true}, rc: runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}}}
+			committer := &StepCommitter{onPersisted: func() {}, writer: newTestWriter(Deps{}), persister: store, ownerContext: owner, req: runreq.ChatRequest{BotID: "bot", ThreadID: "session", RunID: "run", UserMessagePersisted: true}, rc: runreq.ResolvedContext{RunConfig: native.RunConfig{ContextLifecycle: contextfrag.NewLifecycleHolder()}}}
 			cancel(cause)
 			err := committer.interrupt(context.WithoutCancel(owner), 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("partial")}})
 			if errors.Is(cause, sessionruntime.ErrRunOwnershipLost) {

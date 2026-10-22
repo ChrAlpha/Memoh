@@ -6,18 +6,17 @@ package subagent
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 
 	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	chatview "github.com/felinics/memoh/internal/agent/view"
-	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 // Events is the session runtime's intake of agent events. It answers with the
@@ -43,9 +42,9 @@ type Deps struct {
 	ActiveTurns *runreq.ActiveTurnTracker
 	// Events receives the run's events.
 	Events Events
-	// Steps persists one fenced step at a time. It is the only writer of a
-	// spawned run's history.
-	Steps messagepkg.AgentStepPersister
+	// Persist writes a spawned run's history: its steps are committed through
+	// the same step committer every run uses.
+	Persist *persist.Writer
 }
 
 // Host is the run host of spawned agents.
@@ -57,15 +56,11 @@ type Host struct {
 	compact     *compact.Compactor
 	activeTurns *runreq.ActiveTurnTracker
 	events      Events
-	steps       messagepkg.AgentStepPersister
+	persist     *persist.Writer
 }
 
-// New returns a Host. A host without a step persister could not write the
-// history of the runs it hosts, so that is an error.
-func New(d Deps) (*Host, error) {
-	if d.Steps == nil {
-		return nil, errors.New("subagent: Deps.Steps is required")
-	}
+// New returns a Host.
+func New(d Deps) *Host {
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -78,6 +73,6 @@ func New(d Deps) (*Host, error) {
 		compact:     d.Compact,
 		activeTurns: d.ActiveTurns,
 		events:      d.Events,
-		steps:       d.Steps,
-	}, nil
+		persist:     d.Persist,
+	}
 }
