@@ -196,7 +196,7 @@ func TestDiscussInlinesImagesOnTheirOwnMessages(t *testing.T) {
 
 	hw2 := env.writeAll(t,
 		passiveInput{from: alice, externalID: "m1", text: "m1 two pictures", assets: []messagepkg.AssetRef{store.put(t, "h-m1a"), store.put(t, "h-m1b")}},
-		passiveInput{from: bob, externalID: "refused", text: "refused", refused: messagepkg.Admission("refused"), assets: []messagepkg.AssetRef{store.put(t, "h-refused")}},
+		passiveInput{from: bob, externalID: "refused", text: "refused", refused: messagepkg.AdmissionRejectedACL, assets: []messagepkg.AssetRef{store.put(t, "h-refused")}},
 		passiveInput{from: bob, externalID: "m2", text: "m2 text only"},
 		passiveInput{from: bob, externalID: "m3", text: "m3 newest", assets: []messagepkg.AssetRef{store.put(t, "h-m3")}},
 	)[3]

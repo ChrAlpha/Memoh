@@ -84,7 +84,8 @@ SELECT
   m.model_id,
   m.event_id,
   m.display_text,
-  m.created_at
+  m.created_at,
+  m.admission
 FROM bot_history_messages m
 WHERE m.turn_visible = true
   AND m.turn_id IS NOT NULL

@@ -291,6 +291,7 @@ type BotHistoryMessage struct {
 	TurnSupersededByTurnID  pgtype.UUID        `json:"turn_superseded_by_turn_id"`
 	TurnSupersededAt        pgtype.Timestamptz `json:"turn_superseded_at"`
 	TurnSupersededReason    pgtype.Text        `json:"turn_superseded_reason"`
+	Admission               string             `json:"admission"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	TeamID                  pgtype.UUID        `json:"team_id"`
 	RunID                   pgtype.UUID        `json:"run_id"`
@@ -463,6 +464,7 @@ type BotVisibleHistoryMessage struct {
 	EventID                 pgtype.UUID        `json:"event_id"`
 	DisplayText             pgtype.Text        `json:"display_text"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	Admission               string             `json:"admission"`
 }
 
 type BotWorkdir struct {

@@ -1,19 +1,22 @@
 package message
 
-// Admission records why a channel row was kept out of the model context at
-// the door. Rows carry it in metadata under the key SetAdmission writes. The
-// SQL readers that serve a model match that key by name.
+// Admission records whether a history row may reach a model. The channel
+// gates decide it when the row is written and the bot_history_messages
+// admission column holds it; its CHECK lists exactly the values below, so a new
+// value needs a migration that changes the CHECK. The SQL readers that serve a
+// model keep only AdmissionAdmitted rows.
 type Admission string
 
 const (
+	// AdmissionAdmitted is a row that may reach a model. It is the column's
+	// default and the meaning of an unset Admission on a PersistInput.
+	AdmissionAdmitted Admission = "admitted"
 	// AdmissionRejectedACL marks a row from a sender the access list refused.
 	AdmissionRejectedACL Admission = "rejected_acl"
 	// AdmissionRejectedRuntimeDriver marks a row refused by the external runtime
 	// driver gate (owner-only or participant rules).
 	AdmissionRejectedRuntimeDriver Admission = "rejected_runtime_driver"
 )
-
-const metadataKeyAdmission = "admission"
 
 // ContextIncludesUnadmittedPassive decides whether rows refused at admission
 // (sender not allowed by ACL, or refused by the external runtime driver gate)
@@ -25,8 +28,10 @@ const metadataKeyAdmission = "admission"
 // a result; the readers receive it as the include_unadmitted argument.
 const ContextIncludesUnadmittedPassive = false
 
-// SetAdmission stores the admission outcome in a metadata map for a row being
-// written.
-func SetAdmission(metadata map[string]any, admission Admission) {
-	metadata[metadataKeyAdmission] = string(admission)
+// orAdmitted is the admission a row is written with: an unset one is admitted.
+func (a Admission) orAdmitted() string {
+	if a == "" {
+		return string(AdmissionAdmitted)
+	}
+	return string(a)
 }

@@ -39,6 +39,7 @@ func TestPostgresHistoryAppendAndAssetLinkShareSessionLockOrder(t *testing.T) {
 				BotID:            mustTestUUID(t, fixture.botID),
 				Content:          []byte(`{"role":"assistant","content":"concurrent"}`),
 				Metadata:         []byte("{}"),
+				Admission:        "admitted",
 				Usage:            []byte("{}"),
 				SessionMode:      "chat",
 				RuntimeType:      "model",

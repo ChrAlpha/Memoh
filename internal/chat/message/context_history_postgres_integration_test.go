@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
@@ -237,12 +238,10 @@ func TestPostgresListRecentUserBySession(t *testing.T) {
 
 func persistRefusedContextHistoryRow(t *testing.T, ctx context.Context, svc *DBService, sessionID, role, text string) string {
 	t.Helper()
-	metadata := map[string]any{}
-	SetAdmission(metadata, AdmissionRejectedACL)
 	msg, err := svc.Persist(ctx, PersistInput{
 		BotID: postgresMessageTestBotID, SessionID: sessionID, Role: role,
-		Content:  []byte(`{"role":"` + role + `","content":"` + text + `"}`),
-		Metadata: metadata,
+		Content:   []byte(`{"role":"` + role + `","content":"` + text + `"}`),
+		Admission: AdmissionRejectedACL,
 	})
 	if err != nil {
 		t.Fatalf("persist refused %s row: %v", text, err)
@@ -451,4 +450,59 @@ func TestPostgresForModelReadersLeaveOutRefusedRows(t *testing.T) {
 		}
 		assertSet(t, "for model from the refused row", ids(fromRefused), a1)
 	})
+}
+
+// A row written without naming an admission, which is every row that existed
+// before the column, is admitted.
+func TestPostgresRowWithoutAdmissionReadsAsAdmitted(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	sid := postgresMessageTestSessionID
+
+	var legacyID string
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO bot_history_messages (bot_id, session_id, role, content, turn_id, turn_position, turn_message_seq, turn_visible)
+		VALUES ($1, $2, 'user', '{"role":"user","content":"legacy"}'::jsonb, gen_random_uuid(), 0, 1, true)
+		RETURNING id::text`, postgresMessageTestBotID, sid).Scan(&legacyID); err != nil {
+		t.Fatalf("insert row without admission: %v", err)
+	}
+	var stored string
+	if err := tx.QueryRow(ctx, `SELECT admission FROM bot_history_messages WHERE id = $1`, legacyID).Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != string(AdmissionAdmitted) {
+		t.Fatalf("stored admission = %q, want %q", stored, AdmissionAdmitted)
+	}
+	persistRefusedContextHistoryRow(t, ctx, svc, sid, "user", "refused")
+
+	msgs, err := svc.ListRecentUserBySession(ctx, sid, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		got = append(got, m.ID)
+	}
+	assertContextHistoryIDs(t, got, legacyID)
+}
+
+// The column refuses a value the gates do not write, so a mistyped admission
+// fails the write instead of reading as admitted or as refused by accident.
+func TestPostgresUnknownAdmissionIsRefusedAtWrite(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+
+	_, err := svc.Persist(ctx, PersistInput{
+		BotID: postgresMessageTestBotID, SessionID: postgresMessageTestSessionID, Role: "user",
+		Content:   []byte(`{"role":"user","content":"x"}`),
+		Admission: Admission("refused"),
+	})
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.ConstraintName != "bot_history_messages_admission_check" {
+		t.Fatalf("persist with unknown admission = %v, want the admission CHECK violation", err)
+	}
 }

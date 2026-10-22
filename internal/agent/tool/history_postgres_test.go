@@ -94,12 +94,12 @@ func TestPostgresHistoryToolsLeaveRefusedRowsOut(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		metadata := map[string]any{}
+		var admission messagepkg.Admission
 		if refused {
-			messagepkg.SetAdmission(metadata, messagepkg.AdmissionRejectedACL)
+			admission = messagepkg.AdmissionRejectedACL
 		}
 		row, err := messages.Persist(ctx, messagepkg.PersistInput{
-			BotID: botID, SessionID: sessionID, Role: role, Content: content, Metadata: metadata,
+			BotID: botID, SessionID: sessionID, Role: role, Content: content, Admission: admission,
 		})
 		if err != nil {
 			t.Fatalf("persist %q: %v", text, err)

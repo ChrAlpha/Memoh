@@ -1931,10 +1931,6 @@ func (p *ChannelInboundProcessor) buildPassiveRow(
 	if forward := messageForwardMetadata(msg.Message.Forward); forward != nil {
 		meta["forward"] = forward
 	}
-	if admission != "" {
-		messagepkg.SetAdmission(meta, admission)
-	}
-
 	var assets []messagepkg.AssetRef
 	for i, att := range attachments {
 		ch := strings.TrimSpace(att.ContentHash)
@@ -1968,6 +1964,7 @@ func (p *ChannelInboundProcessor) buildPassiveRow(
 		Role:                    "user",
 		Content:                 serialized,
 		Metadata:                meta,
+		Admission:               admission,
 		Assets:                  assets,
 		DisplayText:             trimmedText,
 	}, true

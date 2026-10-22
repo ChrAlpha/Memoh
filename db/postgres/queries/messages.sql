@@ -12,6 +12,7 @@ INSERT INTO bot_history_messages (
   usage,
   session_mode,
   runtime_type,
+  admission,
   model_id,
   event_id,
   display_text,
@@ -30,6 +31,7 @@ VALUES (
   sqlc.arg(usage),
   sqlc.arg(session_mode),
   sqlc.arg(runtime_type),
+  sqlc.arg(admission)::text,
   sqlc.narg(model_id)::uuid,
   sqlc.narg(event_id)::uuid,
   sqlc.narg(display_text)::text,
@@ -174,6 +176,7 @@ inserted_message AS (
     usage,
     session_mode,
     runtime_type,
+    admission,
     model_id,
     event_id,
     display_text,
@@ -197,6 +200,7 @@ inserted_message AS (
     sqlc.arg(usage),
     sqlc.arg(session_mode),
     sqlc.arg(runtime_type),
+    sqlc.arg(admission)::text,
     sqlc.narg(model_id)::uuid,
     sqlc.narg(event_id)::uuid,
     sqlc.narg(display_text)::text,
@@ -397,6 +401,7 @@ inserted AS (
     usage,
     session_mode,
     runtime_type,
+    admission,
     model_id,
     event_id,
     display_text,
@@ -419,6 +424,7 @@ inserted AS (
     sqlc.arg(usage),
     sqlc.arg(session_mode),
     sqlc.arg(runtime_type),
+    sqlc.arg(admission)::text,
     sqlc.narg(model_id)::uuid,
     sqlc.narg(event_id)::uuid,
     sqlc.narg(display_text)::text,
@@ -1678,6 +1684,7 @@ SELECT
   m.usage,
   m.session_mode,
   m.runtime_type,
+  m.admission,
   m.event_id,
   m.display_text,
   m.created_at,
@@ -1985,7 +1992,7 @@ FROM (
         AND c.status = 'ok'
         AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
     ))
-    AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+    AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
@@ -2049,7 +2056,7 @@ FROM (
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.role = 'user'
-    AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+    AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
   ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
   LIMIT sqlc.arg(row_limit)::INT
 ) recent
@@ -2119,7 +2126,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(ses
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.created_at < sqlc.arg(created_at)
-  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
@@ -2228,7 +2235,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(ses
   AND m.turn_id IS NOT NULL
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
-  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
@@ -2293,7 +2300,7 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(session_id)
   AND m.turn_visible = true
   AND m.id = sqlc.arg(message_id)
-  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
 LIMIT 1;
 
 -- name: GetMessageByExternalIDBySession :one
@@ -2683,7 +2690,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(ses
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.turn_position >= cursor.turn_position
-  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
 -- name: CountMessagesByBot :one
@@ -3049,7 +3056,7 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = sqlc.arg(bot_id)
   AND m.session_id = ANY(sqlc.arg(session_ids)::uuid[])
-  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
   AND (sqlc.narg(session_id)::uuid IS NULL OR m.session_id = sqlc.narg(session_id)::uuid)
   AND (sqlc.narg(contact_id)::uuid IS NULL OR m.sender_channel_identity_id = sqlc.narg(contact_id)::uuid)
   AND (sqlc.narg(start_time)::timestamptz IS NULL OR m.created_at >= sqlc.narg(start_time)::timestamptz)
@@ -3290,7 +3297,7 @@ WITH candidate_rows AS MATERIALIZED (
           OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
         )
     ))
-    AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+    AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
     candidate_rows.*,
@@ -3386,7 +3393,7 @@ WHERE m.team_id = public.memoh_current_team_id()
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
-  AND (sqlc.arg(include_unadmitted)::boolean OR COALESCE(m.metadata->>'admission', '') = '');
+  AND (sqlc.arg(include_unadmitted)::boolean OR m.admission = 'admitted');
 
 -- name: ListUncompactedMessagesBySession :many
 -- Compatibility query retained for diagnostics and integration tests. Runtime

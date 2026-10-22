@@ -119,6 +119,7 @@ func (s *DBService) persistUserRow(ctx context.Context, row UserRow) (Message, b
 		Role:                    createArg.Role,
 		Content:                 createArg.Content,
 		Metadata:                createArg.Metadata,
+		Admission:               createArg.Admission,
 		Usage:                   createArg.Usage,
 		SessionMode:             createArg.SessionMode,
 		RuntimeType:             createArg.RuntimeType,

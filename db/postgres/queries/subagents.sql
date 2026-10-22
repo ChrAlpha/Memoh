@@ -60,6 +60,7 @@ prepared_messages AS MATERIALIZED (
         ELSE jsonb_build_object('source_message_id', source.id::text)
       END AS metadata,
     COALESCE(source.runtime_type, 'model') AS runtime_type,
+    COALESCE(source.admission, 'admitted') AS admission,
     source.model_id,
     source.display_text,
     COALESCE(source.created_at, now()) AS created_at
@@ -94,6 +95,7 @@ inserted_messages AS (
     usage,
     session_mode,
     runtime_type,
+    admission,
     model_id,
     display_text,
     turn_id,
@@ -116,6 +118,7 @@ inserted_messages AS (
     NULL,
     'subagent',
     prepared.runtime_type,
+    prepared.admission,
     prepared.model_id,
     prepared.display_text,
     prepared.turn_id,

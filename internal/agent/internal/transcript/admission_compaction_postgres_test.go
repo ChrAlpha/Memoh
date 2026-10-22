@@ -17,7 +17,7 @@ func (s *stage4Session) refusedClaims() int {
 	var claimed int
 	if err := s.Pool.QueryRow(s.Ctx, `
 		SELECT count(*) FROM bot_history_messages
-		WHERE session_id = $1 AND metadata->>'admission' IS NOT NULL AND compact_id IS NOT NULL`,
+		WHERE session_id = $1 AND admission <> 'admitted' AND compact_id IS NOT NULL`,
 		s.SessionID).Scan(&claimed); err != nil {
 		s.T.Fatal(err)
 	}

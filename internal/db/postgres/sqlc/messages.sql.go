@@ -933,6 +933,7 @@ INSERT INTO bot_history_messages (
   usage,
   session_mode,
   runtime_type,
+  admission,
   model_id,
   event_id,
   display_text,
@@ -951,10 +952,11 @@ VALUES (
   $10,
   $11,
   $12,
-  $13::uuid,
+  $13::text,
   $14::uuid,
-  $15::text,
-  $16::uuid
+  $15::uuid,
+  $16::text,
+  $17::uuid
 )
 RETURNING
   id,
@@ -988,6 +990,7 @@ type CreateMessageParams struct {
 	Usage                   []byte      `json:"usage"`
 	SessionMode             string      `json:"session_mode"`
 	RuntimeType             string      `json:"runtime_type"`
+	Admission               string      `json:"admission"`
 	ModelID                 pgtype.UUID `json:"model_id"`
 	EventID                 pgtype.UUID `json:"event_id"`
 	DisplayText             pgtype.Text `json:"display_text"`
@@ -1027,6 +1030,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (C
 		arg.Usage,
 		arg.SessionMode,
 		arg.RuntimeType,
+		arg.Admission,
 		arg.ModelID,
 		arg.EventID,
 		arg.DisplayText,
@@ -1314,6 +1318,7 @@ inserted AS (
     usage,
     session_mode,
     runtime_type,
+    admission,
     model_id,
     event_id,
     display_text,
@@ -1336,10 +1341,11 @@ inserted AS (
     $11,
     $12,
     $13,
-    $14::uuid,
+    $14::text,
     $15::uuid,
-    $16::text,
-    $17::uuid,
+    $16::uuid,
+    $17::text,
+    $18::uuid,
     target.turn_id,
     target.turn_position,
     target.turn_message_seq,
@@ -1375,6 +1381,7 @@ type CreateMessageInHistoryTurnByRequestAndBindParams struct {
 	Usage                   []byte      `json:"usage"`
 	SessionMode             string      `json:"session_mode"`
 	RuntimeType             string      `json:"runtime_type"`
+	Admission               string      `json:"admission"`
 	ModelID                 pgtype.UUID `json:"model_id"`
 	EventID                 pgtype.UUID `json:"event_id"`
 	DisplayText             pgtype.Text `json:"display_text"`
@@ -1403,6 +1410,7 @@ func (q *Queries) CreateMessageInHistoryTurnByRequestAndBind(ctx context.Context
 		arg.Usage,
 		arg.SessionMode,
 		arg.RuntimeType,
+		arg.Admission,
 		arg.ModelID,
 		arg.EventID,
 		arg.DisplayText,
@@ -1448,6 +1456,7 @@ inserted_message AS (
     usage,
     session_mode,
     runtime_type,
+    admission,
     model_id,
     event_id,
     display_text,
@@ -1471,13 +1480,14 @@ inserted_message AS (
     $12,
     $13,
     $14,
-    $15::uuid,
+    $15::text,
     $16::uuid,
-    $17::text,
-    $18::uuid,
-    $19,
-    turn_slot.position,
+    $17::uuid,
+    $18::text,
+    $19::uuid,
     $20,
+    turn_slot.position,
+    $21,
     true
   FROM turn_slot
   RETURNING
@@ -1509,6 +1519,7 @@ type CreateMessageWithHistoryTurnParams struct {
 	Usage                   []byte      `json:"usage"`
 	SessionMode             string      `json:"session_mode"`
 	RuntimeType             string      `json:"runtime_type"`
+	Admission               string      `json:"admission"`
 	ModelID                 pgtype.UUID `json:"model_id"`
 	EventID                 pgtype.UUID `json:"event_id"`
 	DisplayText             pgtype.Text `json:"display_text"`
@@ -1548,6 +1559,7 @@ func (q *Queries) CreateMessageWithHistoryTurn(ctx context.Context, arg CreateMe
 		arg.Usage,
 		arg.SessionMode,
 		arg.RuntimeType,
+		arg.Admission,
 		arg.ModelID,
 		arg.EventID,
 		arg.DisplayText,
@@ -2440,7 +2452,7 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_visible = true
   AND m.id = $2
-  AND ($3::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND ($3::boolean OR m.admission = 'admitted')
 LIMIT 1
 `
 
@@ -2927,7 +2939,7 @@ FROM (
         AND c.status = 'ok'
         AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
     ))
-    AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+    AND ($2::boolean OR m.admission = 'admitted')
 ) ranked
 WHERE ranked.preceding_bytes < $3::BIGINT
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC
@@ -3227,6 +3239,7 @@ SELECT
   m.usage,
   m.session_mode,
   m.runtime_type,
+  m.admission,
   m.event_id,
   m.display_text,
   m.created_at,
@@ -3261,6 +3274,7 @@ type ListAllMessagesForBackupRow struct {
 	Usage                   []byte             `json:"usage"`
 	SessionMode             string             `json:"session_mode"`
 	RuntimeType             string             `json:"runtime_type"`
+	Admission               string             `json:"admission"`
 	EventID                 pgtype.UUID        `json:"event_id"`
 	DisplayText             pgtype.Text        `json:"display_text"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
@@ -3299,6 +3313,7 @@ func (q *Queries) ListAllMessagesForBackup(ctx context.Context, botID pgtype.UUI
 			&i.Usage,
 			&i.SessionMode,
 			&i.RuntimeType,
+			&i.Admission,
 			&i.EventID,
 			&i.DisplayText,
 			&i.CreatedAt,
@@ -3989,7 +4004,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.created_at < $2
-  AND ($3::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND ($3::boolean OR m.admission = 'admitted')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
 LIMIT $4
 `
@@ -4641,7 +4656,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_id IS NOT NULL
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
-  AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND ($2::boolean OR m.admission = 'admitted')
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
 LIMIT $3
 `
@@ -5236,7 +5251,7 @@ FROM (
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
     AND m.role = 'user'
-    AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+    AND ($2::boolean OR m.admission = 'admitted')
   ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
   LIMIT $3::INT
 ) recent
@@ -5550,7 +5565,7 @@ WITH candidate_rows AS MATERIALIZED (
           OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
         )
     ))
-    AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+    AND ($2::boolean OR m.admission = 'admitted')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
     candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.payload_bytes,
@@ -5742,7 +5757,7 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL
   AND m.turn_position >= cursor.turn_position
-  AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND ($2::boolean OR m.admission = 'admitted')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
@@ -6290,7 +6305,7 @@ WHERE m.team_id = public.memoh_current_team_id()
         OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
       )
   ))
-  AND ($2::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND ($2::boolean OR m.admission = 'admitted')
 `
 
 type MeasureUncompactedMessagesBySessionParams struct {
@@ -6683,7 +6698,7 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.bot_id = $1
   AND m.session_id = ANY($2::uuid[])
-  AND ($3::boolean OR COALESCE(m.metadata->>'admission', '') = '')
+  AND ($3::boolean OR m.admission = 'admitted')
   AND ($4::uuid IS NULL OR m.session_id = $4::uuid)
   AND ($5::uuid IS NULL OR m.sender_channel_identity_id = $5::uuid)
   AND ($6::timestamptz IS NULL OR m.created_at >= $6::timestamptz)

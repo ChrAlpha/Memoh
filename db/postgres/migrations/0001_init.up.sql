@@ -644,6 +644,10 @@ CREATE TABLE IF NOT EXISTS bot_history_messages (
   turn_superseded_by_turn_id UUID,
   turn_superseded_at TIMESTAMPTZ,
   turn_superseded_reason TEXT,
+  -- Whether the row may reach a model; the ACL and the runtime driver gate
+  -- refuse some channel rows at the door.
+  admission TEXT NOT NULL DEFAULT 'admitted'
+    CHECK (admission IN ('admitted', 'rejected_acl', 'rejected_runtime_driver')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -1767,7 +1771,8 @@ SELECT
   m.model_id,
   m.event_id,
   m.display_text,
-  m.created_at
+  m.created_at,
+  m.admission
 FROM bot_history_messages m
 WHERE m.turn_visible = true
   AND m.turn_id IS NOT NULL

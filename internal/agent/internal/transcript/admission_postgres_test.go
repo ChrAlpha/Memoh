@@ -16,7 +16,7 @@ import (
 )
 
 // persistRefused writes a user row the way channel inbound writes one refused
-// at admission: an ordinary passive row carrying the admission metadata.
+// at admission: an ordinary passive row with its admission column set.
 func (s *stage4Session) persistRefused(admission messagepkg.Admission, label string) string {
 	s.T.Helper()
 	return s.persistRefusedPadded(admission, label, 0)
@@ -26,15 +26,13 @@ func (s *stage4Session) persistRefused(admission messagepkg.Admission, label str
 // label, for a refused row that takes a noticeable share of a read budget.
 func (s *stage4Session) persistRefusedPadded(admission messagepkg.Admission, label string, words int) string {
 	s.T.Helper()
-	metadata := map[string]any{}
-	messagepkg.SetAdmission(metadata, admission)
 	text := label + " " + strings.Repeat("padding ", words)
 	content, err := json.Marshal(runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.UserMessage(text)})[0])
 	if err != nil {
 		s.T.Fatal(err)
 	}
 	row, err := s.Messages.Persist(s.Ctx, messagepkg.PersistInput{
-		BotID: s.BotID, SessionID: s.SessionID, Role: "user", Content: content, DisplayText: label, Metadata: metadata,
+		BotID: s.BotID, SessionID: s.SessionID, Role: "user", Content: content, DisplayText: label, Admission: admission,
 	})
 	if err != nil {
 		s.T.Fatalf("persist %s: %v", label, err)

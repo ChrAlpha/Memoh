@@ -441,13 +441,10 @@ func (e discussEnv) writeAll(t *testing.T, inputs ...passiveInput) []int64 {
 			t.Fatal(err)
 		}
 		meta := map[string]any{"route_id": e.routeID, "platform": discussTestPlatform}
-		if in.refused != "" {
-			messagepkg.SetAdmission(meta, in.refused)
-		}
 		row, err := svc.Persist(ctx, messagepkg.PersistInput{
 			BotID: e.botID, SessionID: e.sessionID, Role: "user", Content: raw,
 			SenderChannelIdentityID: in.from.identityID, ExternalMessageID: in.externalID,
-			DisplayText: in.text, Metadata: meta, Assets: in.assets,
+			DisplayText: in.text, Metadata: meta, Admission: in.refused, Assets: in.assets,
 		})
 		if err != nil {
 			t.Fatalf("persist %s: %v", in.externalID, err)

@@ -25,6 +25,7 @@ import (
 	"github.com/felinics/memoh/internal/botbackup/secure"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/channel"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -1443,6 +1444,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 			Role:                   item.Role,
 			Content:                item.Content,
 			Metadata:               metadata,
+			Admission:              restoredAdmission(item.Admission),
 			Usage:                  item.Usage,
 			SessionMode:            sessionMode,
 			RuntimeType:            runtimeType,
@@ -1502,6 +1504,15 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		}
 	}
 	return nil
+}
+
+// restoredAdmission keeps the admission a backup recorded. A backup written
+// before the column existed carries none, and its rows were all admitted.
+func restoredAdmission(admission string) string {
+	if admission == "" {
+		return string(messagepkg.AdmissionAdmitted)
+	}
+	return admission
 }
 
 type restoredHistoryMessage struct {

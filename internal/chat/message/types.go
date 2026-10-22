@@ -105,15 +105,17 @@ type PersistInput struct {
 	Role                    string
 	Content                 json.RawMessage
 	Metadata                map[string]any
-	Usage                   json.RawMessage
-	SessionMode             string
-	RuntimeType             string
-	Assets                  []AssetRef
-	ModelID                 string
-	EventID                 string
-	DisplayText             string
-	TurnRequestMessageID    string
-	SkipHistoryTurn         bool
+	// Admission is why the row stays out of model context; unset is admitted.
+	Admission            Admission
+	Usage                json.RawMessage
+	SessionMode          string
+	RuntimeType          string
+	Assets               []AssetRef
+	ModelID              string
+	EventID              string
+	DisplayText          string
+	TurnRequestMessageID string
+	SkipHistoryTurn      bool
 	// RunID links this row to the admitted run that produced it. It is
 	// traceability only: history is read by turn, never by run.
 	RunID string
