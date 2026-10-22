@@ -10,6 +10,8 @@ package turn
 // The in-run splice, the record-path history loader and the pipeline
 // composer all place a summary by this rule, so a summary renders at the
 // same relative place in the request that wrote it and in every later one.
+// A later request that does not load the last item a summary covers places
+// it where that item was, by the summary's durable end anchor.
 func PlaceSummary[T any](items []T, summary T, covered func(T) bool) ([]T, bool) {
 	last := -1
 	for i, item := range items {

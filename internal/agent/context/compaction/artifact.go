@@ -59,8 +59,8 @@ func (a Artifact) HistoryRecord(scope contextfrag.Scope) historyfrag.HistoryReco
 	record.BotID = a.BotID
 	record.SessionID = a.SessionID
 	record.SessionIDKnown = true
-	if a.AnchorStartMs > 0 {
-		record.CreatedAt = time.UnixMilli(a.AnchorStartMs).UTC()
+	if a.AnchorEndMs > 0 {
+		record.CreatedAt = time.UnixMilli(a.AnchorEndMs).UTC()
 	}
 	return record
 }

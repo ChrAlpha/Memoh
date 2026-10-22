@@ -54,9 +54,9 @@ func TestComposeContextWithArtifactsReplacesCoveredSlot(t *testing.T) {
 	}
 	trs := []TurnResponseEntry{assistantTR(2500, "reply")}
 	artifacts := []CompactionArtifact{{
-		ID:            "a1",
-		Summary:       "summarized old",
-		AnchorStartMs: 1000,
+		ID:          "a1",
+		Summary:     "summarized old",
+		AnchorEndMs: 2000,
 		Sources: []CompactionSource{
 			{ExternalMessageID: "m1", CreatedAtMs: 1000},
 			{ExternalMessageID: "m2", CreatedAtMs: 2000},
@@ -91,10 +91,10 @@ func TestComposeContextWithArtifactsReplacesCoveredSlot(t *testing.T) {
 func TestComposeContextWithArtifactsAnchorFallback(t *testing.T) {
 	rc := RenderedContext{textSegment("m3", 3000, "new")}
 	artifacts := []CompactionArtifact{{
-		ID:            "a1",
-		Summary:       "aged out coverage",
-		AnchorStartMs: 1500,
-		Sources:       []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
+		ID:          "a1",
+		Summary:     "aged out coverage",
+		AnchorEndMs: 1000,
+		Sources:     []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
 	}}
 
 	composed := ComposeContextWithArtifacts(rc, nil, artifacts)
@@ -109,6 +109,44 @@ func TestComposeContextWithArtifactsAnchorFallback(t *testing.T) {
 	composed = ComposeContextWithArtifacts(rc, nil, noAnchor)
 	if composed == nil || len(composed.Messages) != 2 || composed.Messages[0].CompactionArtifactID != "a2" {
 		t.Fatalf("expected anchorless summary first, got %+v", composed)
+	}
+}
+
+// A summary that folds work on both sides of an input it keeps renders right
+// after the last source it covers, whichever of its sources the next request
+// loads: the input stays before it, the uncovered tail after it.
+func TestComposeContextWithArtifactsPlacesSummaryAfterItsLastSource(t *testing.T) {
+	old, input := textSegment("m-old", 1000, "old history"), textSegment("m-input", 2000, "kept input")
+	work := assistantTR(3000, "covered work")
+	work.SourceMessageID = "h-work"
+	tail := assistantTR(4000, "uncovered tail")
+	tail.SourceMessageID = "h-tail"
+	artifacts := []CompactionArtifact{{
+		ID:          "a1",
+		Summary:     "old history and the work after the input",
+		AnchorEndMs: 3000,
+		Sources: []CompactionSource{
+			{ExternalMessageID: "m-old", HistoryMessageID: "h-old", CreatedAtMs: 1000},
+			{HistoryMessageID: "h-work", CreatedAtMs: 3000},
+		},
+	}}
+	want := []string{"user:kept input", "user:<summary>\nold history and the work after the input\n</summary>", "assistant:uncovered tail"}
+	for _, loaded := range []struct {
+		name string
+		rc   RenderedContext
+		trs  []TurnResponseEntry
+	}{
+		{name: "every source", rc: RenderedContext{old, input}, trs: []TurnResponseEntry{work, tail}},
+		{name: "the last source", rc: RenderedContext{input}, trs: []TurnResponseEntry{work, tail}},
+		{name: "an earlier source", rc: RenderedContext{old, input}, trs: []TurnResponseEntry{tail}},
+		{name: "no source", rc: RenderedContext{input}, trs: []TurnResponseEntry{tail}},
+	} {
+		t.Run(loaded.name, func(t *testing.T) {
+			composed := ComposeContextWithArtifacts(loaded.rc, loaded.trs, artifacts)
+			if composed == nil || !reflect.DeepEqual(messageTexts(composed.Messages), want) {
+				t.Fatalf("got %q, want %q", messageTexts(composed.Messages), want)
+			}
+		})
 	}
 }
 
@@ -144,7 +182,7 @@ func TestComposeContextWithArtifactsKeepsSegmentsEditedAfterCompletion(t *testin
 	artifacts := []CompactionArtifact{{
 		ID:             "a1",
 		Summary:        "stale coverage",
-		AnchorStartMs:  1000,
+		AnchorEndMs:    1000,
 		CoverageAsOfMs: 4000,
 		Sources:        []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
 	}}
@@ -173,7 +211,7 @@ func TestComposeContextWithArtifactsDropsSegmentsEditedBeforeCompletion(t *testi
 	artifacts := []CompactionArtifact{{
 		ID:             "a1",
 		Summary:        "covers the edit",
-		AnchorStartMs:  1000,
+		AnchorEndMs:    1000,
 		CoverageAsOfMs: 4000,
 		Sources:        []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
 	}}
@@ -234,8 +272,8 @@ func TestComposeContextWithArtifactsIgnoresBlankSummary(t *testing.T) {
 func TestComposeContextWithArtifactsOrdersMultipleArtifacts(t *testing.T) {
 	rc := RenderedContext{textSegment("m5", 5000, "current")}
 	artifacts := []CompactionArtifact{
-		{ID: "a2", Summary: "second window", AnchorStartMs: 3000},
-		{ID: "a1", Summary: "first window", AnchorStartMs: 1000},
+		{ID: "a2", Summary: "second window", AnchorEndMs: 3000},
+		{ID: "a1", Summary: "first window", AnchorEndMs: 1000},
 	}
 
 	composed := ComposeContextWithArtifacts(rc, nil, artifacts)
@@ -273,10 +311,10 @@ func TestComposeContextWithArtifactsKeepsSlotOrderWithinSameMs(t *testing.T) {
 		textSegment("m2", 1000, "uncovered second"),
 	}
 	artifacts := []CompactionArtifact{{
-		ID:            "a1",
-		Summary:       "first slot",
-		AnchorStartMs: 1000,
-		Sources:       []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
+		ID:          "a1",
+		Summary:     "first slot",
+		AnchorEndMs: 1000,
+		Sources:     []CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 1000}},
 	}}
 
 	composed := ComposeContextWithArtifacts(rc, nil, artifacts)
@@ -301,7 +339,7 @@ func TestComposeContextWithArtifactsPlacesSummaryOfAnEditedSlotAtItsAnchor(t *te
 	artifacts := []CompactionArtifact{{
 		ID:             "a1",
 		Summary:        "covers the edited slot",
-		AnchorStartMs:  1000,
+		AnchorEndMs:    1000,
 		CoverageAsOfMs: 4000,
 		Sources:        []CompactionSource{{ExternalMessageID: "m2", CreatedAtMs: 1000}},
 	}}
@@ -327,10 +365,10 @@ func TestComposeContextWithArtifactsKeepsTurnResponseSlotOrderWithinSameMs(t *te
 	covered := assistantTR(1000, "covered later reply")
 	covered.SourceMessageID = "h2"
 	artifacts := []CompactionArtifact{{
-		ID:            "a1",
-		Summary:       "covers the later reply",
-		AnchorStartMs: 1000,
-		Sources:       []CompactionSource{{HistoryMessageID: "h2", CreatedAtMs: 1000}},
+		ID:          "a1",
+		Summary:     "covers the later reply",
+		AnchorEndMs: 1000,
+		Sources:     []CompactionSource{{HistoryMessageID: "h2", CreatedAtMs: 1000}},
 	}}
 
 	composed := ComposeContextWithArtifacts(nil, []TurnResponseEntry{early, covered}, artifacts)

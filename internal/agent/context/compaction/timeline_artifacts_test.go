@@ -13,10 +13,10 @@ import (
 func TestTimelineArtifactsProjectsFrontier(t *testing.T) {
 	started := time.UnixMilli(4000).UTC()
 	artifacts := []Artifact{{
-		ID:            "a1",
-		Summary:       "window summary",
-		AnchorStartMs: 1000,
-		StartedAt:     started,
+		ID:          "a1",
+		Summary:     "window summary",
+		AnchorEndMs: 2000,
+		StartedAt:   started,
 		Coverage: []CoveredSource{
 			{Ref: contextfrag.ContextRef{ID: "h1"}, ExternalMessageID: "m1", CreatedAtMs: 1000},
 			{Ref: contextfrag.ContextRef{ID: "h2"}, CreatedAtMs: 2000},
@@ -28,7 +28,7 @@ func TestTimelineArtifactsProjectsFrontier(t *testing.T) {
 		t.Fatalf("expected 1 artifact, got %d", len(projected))
 	}
 	artifact := projected[0]
-	if artifact.ID != "a1" || artifact.Summary != "window summary" || artifact.AnchorStartMs != 1000 {
+	if artifact.ID != "a1" || artifact.Summary != "window summary" || artifact.AnchorEndMs != 2000 {
 		t.Fatalf("unexpected artifact projection %+v", artifact)
 	}
 	if artifact.CoverageAsOfMs != 4000 {
@@ -68,7 +68,7 @@ func TestTimelineRollupKeepsAnEditItsParentNeverCovered(t *testing.T) {
 			coverage := testCoverage("old-row")
 			coverage[0].ExternalMessageID = "rc-1"
 			coverage[0].CreatedAtMs = 1000
-			parent := Artifact{ID: "parent", Summary: "original content only", StartedAt: time.UnixMilli(4000), AnchorStartMs: 1000, Coverage: coverage}
+			parent := Artifact{ID: "parent", Summary: "original content only", StartedAt: time.UnixMilli(4000), AnchorEndMs: 1000, Coverage: coverage}
 			rc := timeline.RenderedContext{{MessageID: "rc-1", ReceivedAtMs: 1000, EditedAtMs: 5000, Content: []timeline.RenderedContentPiece{{Type: "text", Text: "EDIT_UNCOVERED_BY_PARENT"}}}}
 			if versioned {
 				parent.Coverage[0].EventCursor = 10
@@ -94,7 +94,7 @@ func TestTimelineRollupKeepsAnEditItsParentNeverCovered(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			child := Artifact{ID: "child", Summary: "refolded original content only", StartedAt: time.UnixMilli(6000), AnchorStartMs: meta.AnchorStartMs, Coverage: merged, ParentIDs: []string{"parent"}}
+			child := Artifact{ID: "child", Summary: "refolded original content only", StartedAt: time.UnixMilli(6000), AnchorEndMs: meta.AnchorEndMs, Coverage: merged, ParentIDs: []string{"parent"}}
 			after := timeline.ComposeContextWithArtifacts(rc, nil, TimelineArtifacts([]Artifact{child}))
 			if !hasEdit(after) {
 				t.Fatalf("I1/I5 violated: merely refolding a summary hid its uncovered edit on next-turn pipeline replay; parent as-of=%d child as-of=%d edit=%d", TimelineArtifacts([]Artifact{parent})[0].CoverageAsOfMs, TimelineArtifacts([]Artifact{child})[0].CoverageAsOfMs, rc[0].EditedAtMs)

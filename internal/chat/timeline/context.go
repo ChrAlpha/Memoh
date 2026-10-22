@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 
@@ -48,10 +49,12 @@ type CompactionSource struct {
 // CompactionArtifact is the timeline-facing projection of one active compaction
 // artifact. Callers preserve frontier order; composition keeps each artifact
 // separate so later restacks can supersede only the ranges they actually cover.
+// AnchorEndMs is when the last source it covers was created: the summary
+// renders right after that source, whether or not the source is loaded.
 type CompactionArtifact struct {
 	ID             string             `json:"id"`
 	Summary        string             `json:"summary"`
-	AnchorStartMs  int64              `json:"anchor_start_ms,omitempty"`
+	AnchorEndMs    int64              `json:"anchor_end_ms,omitempty"`
 	CoverageAsOfMs int64              `json:"coverage_as_of_ms,omitempty"`
 	Sources        []CompactionSource `json:"sources,omitempty"`
 }
@@ -258,30 +261,43 @@ func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, artifacts 
 	for i, tr := range trs {
 		entries[len(rc)+i].artifact = byHistory[strings.TrimSpace(tr.SourceMessageID)]
 	}
-	placed := make([]bool, len(artifacts))
-	for _, entry := range entries {
-		if entry.artifact > 0 {
-			placed[entry.artifact-1] = true
-		}
-	}
+	// A summary renders right after the last source it covers. When that
+	// source is not loaded, its durable anchor holds the place.
 	for i, artifact := range artifacts {
-		if artifact.usable() && !placed[i] {
-			entries = append(entries, summaryMergeEntry(artifact, i))
+		if artifact.usable() && !anchorSourceLoaded(entries, artifact, i) {
+			anchor := summaryMergeEntry(artifact, i)
+			anchor.artifact = i + 1
+			entries = append(entries, anchor)
 		}
 	}
 	sortMergeEntries(entries)
 	for i, artifact := range artifacts {
-		if placed[i] {
+		if artifact.usable() {
 			entries, _ = turn.PlaceSummary(entries, summaryMergeEntry(artifact, i), func(entry mergeEntry) bool { return entry.artifact == i+1 })
 		}
 	}
 	return entries
 }
 
-// summaryMergeEntry renders artifact at its durable anchor, the place it
-// takes when none of the sources it covers is loaded.
+// anchorSourceLoaded reports whether the last source artifact covers is
+// among the entries it replaces.
+func anchorSourceLoaded(entries []mergeEntry, artifact CompactionArtifact, index int) bool {
+	if len(artifact.Sources) == 0 {
+		return false
+	}
+	last := artifact.Sources[len(artifact.Sources)-1]
+	return slices.ContainsFunc(entries, func(entry mergeEntry) bool {
+		if entry.artifact != index+1 || entry.source == nil {
+			return false
+		}
+		return entry.kind == "rc" && entry.source.ID == strings.TrimSpace(last.ExternalMessageID) ||
+			entry.kind == "tr" && entry.source.ID == strings.TrimSpace(last.HistoryMessageID)
+	})
+}
+
+// summaryMergeEntry renders artifact at its durable anchor.
 func summaryMergeEntry(artifact CompactionArtifact, index int) mergeEntry {
-	at := artifact.AnchorStartMs
+	at := artifact.AnchorEndMs
 	if at <= 0 {
 		at = earliestMergeTime
 	}

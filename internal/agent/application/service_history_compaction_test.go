@@ -368,6 +368,7 @@ func anchoredSummaryRecord(id, summary string, anchor time.Time, scope contextfr
 		SessionID:     scope.SessionID,
 		Summary:       summary,
 		AnchorStartMs: anchor.UnixMilli(),
+		AnchorEndMs:   anchor.UnixMilli(),
 	}
 	return artifact.HistoryRecord(scope)
 }
@@ -404,6 +405,34 @@ func TestPrependMissingCompactionSummariesMergesAtAnchorPositions(t *testing.T) 
 	want := []string{"artifact-early", "m-1", "m-2", "artifact-mid", "m-3"}
 	if !reflect.DeepEqual(recordSequenceIDs(got), want) {
 		t.Fatalf("aged-out summaries not merged at anchor positions:\n got %v\nwant %v", recordSequenceIDs(got), want)
+	}
+}
+
+// A summary none of whose rows is loaded renders after the place of the last
+// row it covers, not the first: an input it kept between them stays before it.
+func TestPrependMissingCompactionSummariesAnchorsAtTheLastCoveredRow(t *testing.T) {
+	t.Parallel()
+
+	scope := contextfrag.Scope{BotID: "bot-1", SessionID: "session-1"}
+	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	timed := func(record historyfrag.HistoryRecord, at time.Time) historyfrag.HistoryRecord {
+		record.CreatedAt = at
+		return record
+	}
+	messages := []historyfrag.HistoryRecord{
+		timed(historyRecord("m-input", ModelMessage{Role: "user", Content: newTextContent("kept input")}, nil), base.Add(20*time.Minute)),
+		timed(historyRecord("m-tail", ModelMessage{Role: "assistant", Content: newTextContent("tail")}, nil), base.Add(40*time.Minute)),
+	}
+	artifact := compaction.Artifact{
+		ID: "artifact-around-input", BotID: scope.BotID, SessionID: scope.SessionID, Summary: "work around the input",
+		AnchorStartMs: base.Add(10 * time.Minute).UnixMilli(), AnchorEndMs: base.Add(30 * time.Minute).UnixMilli(),
+	}
+
+	got := mergeMissingCompactionSummaries(messages, []historyfrag.HistoryRecord{artifact.HistoryRecord(scope)})
+
+	want := []string{"m-input", "artifact-around-input", "m-tail"}
+	if !reflect.DeepEqual(recordSequenceIDs(got), want) {
+		t.Fatalf("got %v, want %v", recordSequenceIDs(got), want)
 	}
 }
 

@@ -57,7 +57,7 @@ func TimelineArtifacts(artifacts []Artifact) []timeline.CompactionArtifact {
 		projected = append(projected, timeline.CompactionArtifact{
 			ID:             artifact.ID,
 			Summary:        artifact.Summary,
-			AnchorStartMs:  artifact.AnchorStartMs,
+			AnchorEndMs:    artifact.AnchorEndMs,
 			CoverageAsOfMs: coverageAsOfMs,
 			Sources:        sources,
 		})
