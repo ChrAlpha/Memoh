@@ -223,7 +223,7 @@ func (in *Inputs) startQueuedBatch(ctx context.Context, batch sessionruntime.Que
 		return batchRejected
 	}
 	cmd := merged.Command
-	cmd.NoDefer = true
+	cmd.Origin = turn.OriginPending
 	cmd.IdempotencyKey = batch.InvocationID()
 	if err := in.workspaceReady(ctx, cmd.BotID, cmd.WorkspaceTargetID); err != nil {
 		// Not a failure of the input: it goes back to the queue and is tried

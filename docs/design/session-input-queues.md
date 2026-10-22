@@ -152,7 +152,7 @@ Two producers share the queue:
 Consumption:
 
 - The terminal observer claims the oldest accepted follow-up for the finished
-  run and starts it through normal turn admission with `NoDefer` set and the
+  run and starts it through normal turn admission with its origin set to the queue and the
   retry identity `follow-up:<item_id>`. Admission remains the only owner and
   fencing authority; the queue only selects payload.
 - One starter runs per session at a time. A successful start applies the

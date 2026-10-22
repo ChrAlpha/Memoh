@@ -56,7 +56,7 @@ func (p *ChannelInboundProcessor) startBusyBatch(ctx context.Context, batch Busy
 		return true
 	}
 	cmd := merged.Command
-	cmd.NoDefer = true
+	cmd.Origin = turn.OriginPlatformQueue
 	cmd.IdempotencyKey = "queued:" + batch.ID
 	channelType := channel.ChannelType(cmd.CurrentChannel)
 	var desc channel.Descriptor

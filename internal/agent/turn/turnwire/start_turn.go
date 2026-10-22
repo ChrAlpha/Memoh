@@ -29,10 +29,10 @@ var ErrUnsupportedVersion = errors.New("turnwire: unsupported start turn schema 
 // ThreadID is omitted when empty so the turn RPC can send the thread under
 // its legacy SessionID key instead.
 type StartTurn struct {
-	SchemaVersion int       `json:"SchemaVersion"`
-	NoDefer       bool      `json:"NoDefer"`
-	TeamID        string    `json:"TeamID"`
-	Mode          turn.Mode `json:"Mode"`
+	SchemaVersion int              `json:"SchemaVersion"`
+	Origin        turn.StartOrigin `json:"Origin,omitempty"`
+	TeamID        string           `json:"TeamID"`
+	Mode          turn.Mode        `json:"Mode"`
 
 	BotID                   string `json:"BotID"`
 	ChatID                  string `json:"ChatID"`
@@ -104,7 +104,7 @@ type RequestedSkill struct {
 func FromStartTurn(cmd turn.StartTurnCommand) StartTurn {
 	return StartTurn{
 		SchemaVersion:             cmd.SchemaVersion,
-		NoDefer:                   cmd.NoDefer,
+		Origin:                    cmd.Origin,
 		TeamID:                    cmd.TeamID,
 		Mode:                      cmd.Mode,
 		BotID:                     cmd.BotID,
@@ -161,7 +161,7 @@ func (w StartTurn) Command() (turn.StartTurnCommand, error) {
 	}
 	return turn.StartTurnCommand{
 		SchemaVersion:             w.SchemaVersion,
-		NoDefer:                   w.NoDefer,
+		Origin:                    w.Origin,
 		TeamID:                    w.TeamID,
 		Mode:                      w.Mode,
 		BotID:                     w.BotID,

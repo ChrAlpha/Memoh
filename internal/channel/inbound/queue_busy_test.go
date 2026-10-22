@@ -292,7 +292,7 @@ func (g *busyGateway) attempts() []turn.StartTurnCommand {
 func (g *busyGateway) started() []turn.StartTurnCommand {
 	var out []turn.StartTurnCommand
 	for _, cmd := range g.attempts() {
-		if cmd.NoDefer {
+		if cmd.Origin == turn.OriginPlatformQueue {
 			out = append(out, cmd)
 		}
 	}

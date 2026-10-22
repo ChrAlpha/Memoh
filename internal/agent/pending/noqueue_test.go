@@ -53,7 +53,7 @@ func TestWithAQueueTheGateIsTheQueuesVerdict(t *testing.T) {
 	require.ErrorIs(t, inputs.GateTurn(t.Context(), turn.StartTurnCommand{BotID: "bot-1", ThreadID: "session-1", IdempotencyKey: "again"}), turn.ErrDuplicateTurn)
 
 	// The queue's own admission is the one command that neither waits nor is counted.
-	require.NoError(t, inputs.GateTurn(t.Context(), turn.StartTurnCommand{BotID: "bot-1", ThreadID: "session-1", IdempotencyKey: "queued", NoDefer: true}))
+	require.NoError(t, inputs.GateTurn(t.Context(), turn.StartTurnCommand{BotID: "bot-1", ThreadID: "session-1", IdempotencyKey: "queued", Origin: turn.OriginPending}))
 }
 
 type gated struct {

@@ -38,6 +38,30 @@ type Mode string
 
 const ModeChat Mode = "chat"
 
+// StartOrigin says where a start comes from, which decides what admission asks
+// of it before the run exists.
+type StartOrigin string
+
+const (
+	// OriginDirect is a turn someone started by acting: a message, a retry, an
+	// edit. It is admitted at once, behind input already queued for the
+	// session, and it takes the session over from an interrupted run.
+	OriginDirect StartOrigin = ""
+	// OriginPending is a batch pending itself starts from the queue it holds,
+	// once it has put what the session is owed in order. It neither waits
+	// behind the queued input it is starting nor is counted as new input, and
+	// when it races another admission it surfaces ErrSessionBusy instead of
+	// queueing again.
+	OriginPending StartOrigin = "pending"
+	// OriginPlatformQueue is a platform message the channel process takes out
+	// of the queue, because it delivers the reply. It is owed to the session
+	// as work pending holds, so admission puts it in the same order before it
+	// starts: behind the continuation of an interrupted run, and not before the
+	// workspace is ready. A session that cannot take it yet answers
+	// ErrSessionBusy, and the message waits in the queue.
+	OriginPlatformQueue StartOrigin = "platform_queue"
+)
+
 // StartTurnCommand is a pure-data command. Field set mirrors exactly what
 // the channel inbound processor supplies today; function- and channel-typed fields are
 // intentionally excluded — injection goes through RunHandle.Inject and
@@ -49,12 +73,11 @@ type StartTurnCommand struct {
 	// command is sent or stored declares it; the reader refuses a version it
 	// does not know (turnwire.StartTurnVersion).
 	SchemaVersion int
-	// NoDefer marks the queue's own admission of a batch of queued input. It
-	// does not wait behind the queued input it is starting, and when it races
-	// another admission it surfaces ErrSessionBusy instead of queueing again.
-	NoDefer bool
-	TeamID  string // required; the service fails closed when empty
-	Mode    Mode
+	// Origin says where the start comes from; the zero value is a start
+	// someone made by acting.
+	Origin StartOrigin
+	TeamID string // required; the service fails closed when empty
+	Mode   Mode
 
 	BotID                   string
 	ChatID                  string
