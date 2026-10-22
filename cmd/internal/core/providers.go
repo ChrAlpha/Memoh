@@ -30,13 +30,12 @@ import (
 	channelidentityadapter "github.com/felinics/memoh/internal/agent/adapter/channelidentity"
 	channelmessagingadapter "github.com/felinics/memoh/internal/agent/adapter/channelmessaging"
 	channelthreadadapter "github.com/felinics/memoh/internal/agent/adapter/channelthread"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	agentpayload "github.com/felinics/memoh/internal/agent/event/payload"
-	"github.com/felinics/memoh/internal/agent/notify"
-	"github.com/felinics/memoh/internal/agent/runconfig"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	claudecoderuntime "github.com/felinics/memoh/internal/agent/runtime/claudecode"
@@ -900,7 +899,7 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 func injectBackgroundTaskEvents(log *slog.Logger, bgManager *background.Manager, msgService *message.DBService, sessionService *sessionpkg.Service, routeService *route.DBService, channelRuntime channel.Runtime, channelRegistry *channel.Registry, eventHub *event.Hub) {
 	if bgManager != nil {
 		sender := channelmessagingadapter.New(channelRuntime, channelRegistry, nil)
-		notifications := notify.New(msgService, sessionService, func(ctx context.Context, sess sessionpkg.Thread, text string) error {
+		notifications := agent.NewBackgroundNotifier(msgService, sessionService, func(ctx context.Context, sess sessionpkg.Thread, text string) error {
 			if strings.TrimSpace(sess.RouteID) == "" || sess.ChannelType == "local" {
 				return nil
 			}
@@ -1557,18 +1556,18 @@ type skillLoaderAdapter struct {
 	handler *handlers.ContainerdHandler
 }
 
-func (a *skillLoaderAdapter) LoadSkills(ctx context.Context, botID string) ([]runconfig.SkillEntry, error) {
+func (a *skillLoaderAdapter) LoadSkills(ctx context.Context, botID string) ([]ports.SkillEntry, error) {
 	items, err := a.handler.LoadSkills(ctx, botID)
 	if err != nil {
 		return nil, err
 	}
-	entries := make([]runconfig.SkillEntry, len(items))
+	entries := make([]ports.SkillEntry, len(items))
 	for i, item := range items {
 		skillPath := ""
 		if item.SourcePath != "" {
 			skillPath = stdpath.Dir(item.SourcePath)
 		}
-		entries[i] = runconfig.SkillEntry{
+		entries[i] = ports.SkillEntry{
 			Name:        item.Name,
 			Description: item.Description,
 			Content:     item.Content,

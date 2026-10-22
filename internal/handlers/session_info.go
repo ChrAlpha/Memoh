@@ -11,7 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/compact"
+	"github.com/felinics/memoh/internal/agent"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
@@ -261,7 +261,7 @@ func contextCompactionInfo(enabled bool, threshold int, plan *contextfrag.Contex
 	if plan == nil || plan.Window <= 0 {
 		return info
 	}
-	info.AutoTokens = int64(compact.AutoThreshold(threshold, plan.Window))
+	info.AutoTokens = int64(agent.AutoCompactionThreshold(threshold, plan.Window))
 	return info
 }
 
