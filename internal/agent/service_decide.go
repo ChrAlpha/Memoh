@@ -8,7 +8,8 @@ import (
 )
 
 // CanDecideToolApproval is the single authorization for answering a tool
-// approval; see decide.Decider.CanDecideToolApproval.
+// approval: the initiator holding the operation's own grant, or a manager of
+// the bot. ViewerCanDecideToolApproval answers the same question for display.
 func (s *Service) CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal agentapi.ToolApprovalPrincipal) (bool, error) {
 	return s.decider.CanDecideToolApproval(ctx, approval, principal)
 }
