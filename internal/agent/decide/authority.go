@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
@@ -28,9 +29,9 @@ import (
 // group chat that member is neither the requester nor the bot's manager (D
 // acting for another D). A run with no recorded initiator, admitted before the
 // ledger kept one or started by a schedule, is decided by a manager only.
-func (d *Decider) CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal ToolApprovalPrincipal) (bool, error) {
+func (d *Decider) CanDecideToolApproval(ctx context.Context, approval toolapproval.Request, principal agentapi.ToolApprovalPrincipal) (bool, error) {
 	botID := strings.TrimSpace(approval.BotID)
-	actorID := principal.subject()
+	actorID := principalSubject(principal)
 	if botID == "" || actorID == "" {
 		return false, nil
 	}
@@ -38,7 +39,7 @@ func (d *Decider) CanDecideToolApproval(ctx context.Context, approval toolapprov
 	if err != nil {
 		return false, err
 	}
-	if principal.is(initiatorID) {
+	if principalIs(principal, initiatorID) {
 		if permission, ok := toolApprovalPermission(approval); ok && permission != bots.PermissionManage {
 			allowed, err := d.botPermissions.HasBotPermission(ctx, botID, actorID, permission)
 			if err != nil || allowed {
@@ -51,7 +52,7 @@ func (d *Decider) CanDecideToolApproval(ctx context.Context, approval toolapprov
 
 // ViewerCanDecideToolApproval answers CanDecideToolApproval for an approval a
 // live frame names only by id.
-func (d *Decider) ViewerCanDecideToolApproval(ctx context.Context, approvalID string, principal ToolApprovalPrincipal) (bool, error) {
+func (d *Decider) ViewerCanDecideToolApproval(ctx context.Context, approvalID string, principal agentapi.ToolApprovalPrincipal) (bool, error) {
 	approval, err := d.toolApproval.Get(ctx, approvalID)
 	if err != nil {
 		return false, err
@@ -107,19 +108,11 @@ func toolApprovalPermission(target toolapproval.Request) (string, bool) {
 	}
 }
 
-// ToolApprovalPrincipal is who decides an approval, or for whom an approval is
-// rendered. Channel deciders without a bound account carry only their channel
-// identity; grants are keyed on that identity, so it stays a valid subject.
-type ToolApprovalPrincipal struct {
-	UserID            string
-	ChannelIdentityID string
-}
-
-func (p ToolApprovalPrincipal) subject() string {
+func principalSubject(p agentapi.ToolApprovalPrincipal) string {
 	return runreq.FirstNonEmpty(p.UserID, p.ChannelIdentityID)
 }
 
-func (p ToolApprovalPrincipal) is(id string) bool {
+func principalIs(p agentapi.ToolApprovalPrincipal, id string) bool {
 	id = strings.TrimSpace(id)
 	return id != "" && (id == strings.TrimSpace(p.UserID) || id == strings.TrimSpace(p.ChannelIdentityID))
 }

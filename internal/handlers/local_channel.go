@@ -26,9 +26,7 @@ import (
 	"github.com/felinics/memoh/internal/agent"
 	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
-	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -1523,7 +1521,7 @@ func (h *LocalChannelHandler) admitWSRun(ctx context.Context, writer *wsWriter, 
 // session's queue: what the server would start had the session been idle, and
 // the identities the turn's credentials are issued for when it starts. The queue
 // stores neither token.
-func (h *LocalChannelHandler) webQueueTurn(ctx context.Context, botID, sessionID, identityID, invocationID, text string, runtime externalrun.SessionExecutionInfo) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
+func (h *LocalChannelHandler) webQueueTurn(ctx context.Context, botID, sessionID, identityID, invocationID, text string, runtime agentapi.SessionExecutionInfo) (turn.StartTurnCommand, *auth.RouteCredentials, error) {
 	if h.sessionService == nil {
 		return turn.StartTurnCommand{}, nil, apperror.New(apperror.CodeQueueAdmissionUnavailable, nil)
 	}
@@ -1723,7 +1721,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				failWSControl(streamBaseCtx, h.logger, writer, botID, ref, "ws.control.tool_approval", msg.Type, controlID, string(apperror.CodeToolApprovalOperationFailed), apperror.New(apperror.CodeToolApprovalOperationFailed, nil))
 				continue
 			}
-			payload, err := json.Marshal(decide.ToolApprovalResponseInput{
+			payload, err := json.Marshal(agentapi.ToolApprovalResponseInput{
 				ControlID:                  controlID,
 				BotID:                      botID,
 				ThreadID:                   sessionID,
@@ -1783,7 +1781,7 @@ func (h *LocalChannelHandler) HandleWebSocket(c echo.Context) error {
 				failWSControl(streamBaseCtx, h.logger, writer, botID, ref, "ws.control.user_input", msg.Type, controlID, string(apperror.CodeUserInputOperationFailed), apperror.New(apperror.CodeUserInputOperationFailed, nil))
 				continue
 			}
-			payload, err := json.Marshal(decide.UserInputResponseInput{
+			payload, err := json.Marshal(agentapi.UserInputResponseInput{
 				ControlID:                  controlID,
 				BotID:                      botID,
 				ThreadID:                   sessionID,
@@ -2446,9 +2444,9 @@ func (h *LocalChannelHandler) wsSessionSupportsRequestedSkills(ctx context.Conte
 	return sessionpkg.SupportsSkillActivation(sess.SessionMode, sess.Type, sess.RuntimeType), nil
 }
 
-func (h *LocalChannelHandler) authorizeWSRuntimeExecution(ctx context.Context, channelIdentityID, botID, sessionID string) (externalrun.SessionExecutionInfo, error) {
+func (h *LocalChannelHandler) authorizeWSRuntimeExecution(ctx context.Context, channelIdentityID, botID, sessionID string) (agentapi.SessionExecutionInfo, error) {
 	if h == nil {
-		return externalrun.SessionExecutionInfo{}, nil
+		return agentapi.SessionExecutionInfo{}, nil
 	}
 	info, err := h.runtimeOps.RuntimeSessionExecutionInfo(ctx, sessionID)
 	if err != nil || !info.RequiresWorkspaceExec {
@@ -2508,7 +2506,7 @@ func (h *LocalChannelHandler) authorizeWSChatAccess(ctx context.Context, channel
 // connection. A failed check renders the approval read-only; the decision is
 // authorized again when it is submitted.
 func (h *LocalChannelHandler) runtimeViewerDecider(channelIdentityID string) runtimeViewerDecider {
-	viewer := decide.ToolApprovalPrincipal{UserID: channelIdentityID, ChannelIdentityID: channelIdentityID}
+	viewer := agentapi.ToolApprovalPrincipal{UserID: channelIdentityID, ChannelIdentityID: channelIdentityID}
 	return func(ctx context.Context, approvalID string) bool {
 		allowed, err := h.decisions.ViewerCanDecideToolApproval(ctx, approvalID, viewer)
 		if err != nil {

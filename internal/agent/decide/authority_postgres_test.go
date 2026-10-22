@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -170,7 +171,7 @@ func TestPostgresToolApprovalAuthority(t *testing.T) {
 	}
 	viewerCanDecide := func(approvalID, actor string) bool {
 		t.Helper()
-		ok, err := svc.ViewerCanDecideToolApproval(ctx, approvalID, ToolApprovalPrincipal{UserID: actor, ChannelIdentityID: actor})
+		ok, err := svc.ViewerCanDecideToolApproval(ctx, approvalID, agentapi.ToolApprovalPrincipal{UserID: actor, ChannelIdentityID: actor})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -178,7 +179,7 @@ func TestPostgresToolApprovalAuthority(t *testing.T) {
 	}
 	submit := func(ownerCtx context.Context, sessionID, approvalID, actor string) error {
 		t.Helper()
-		_, err := svc.CommitToolApprovalResponse(ownerCtx, ToolApprovalResponseInput{
+		_, err := svc.CommitToolApprovalResponse(ownerCtx, agentapi.ToolApprovalResponseInput{
 			BotID: fx.botID, ThreadID: sessionID, ApprovalID: approvalID, Decision: "approve",
 			ActorUserID: actor, ActorChannelIdentityID: actor,
 		})

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -72,8 +73,8 @@ func newStarterPromptService(t *testing.T, titleModelID string) (*Generator, *st
 	return svc, queries
 }
 
-func starterRequest(knownHash string) StarterPromptsRequest {
-	return StarterPromptsRequest{BotID: starterBotID, UserID: starterUserID, Locale: "zh-CN", KnownHash: knownHash}
+func starterRequest(knownHash string) agentapi.StarterPromptsRequest {
+	return agentapi.StarterPromptsRequest{BotID: starterBotID, UserID: starterUserID, Locale: "zh-CN", KnownHash: knownHash}
 }
 
 func TestStarterPromptsReportsUnchangedForKnownHash(t *testing.T) {
@@ -134,7 +135,7 @@ func TestStarterPromptMaterialReadsOnlyTheUsersRecentSessions(t *testing.T) {
 
 func TestStarterPromptsHashFollowsMaterial(t *testing.T) {
 	t.Parallel()
-	hashOf := func(mutate func(*starterPromptQueries, *StarterPromptsRequest)) string {
+	hashOf := func(mutate func(*starterPromptQueries, *agentapi.StarterPromptsRequest)) string {
 		svc, queries := newStarterPromptService(t, "")
 		req := starterRequest("")
 		mutate(queries, &req)
@@ -149,19 +150,19 @@ func TestStarterPromptsHashFollowsMaterial(t *testing.T) {
 		return starterPromptsHash(prompt)
 	}
 
-	base := hashOf(func(*starterPromptQueries, *StarterPromptsRequest) {})
-	if again := hashOf(func(*starterPromptQueries, *StarterPromptsRequest) {}); again != base {
+	base := hashOf(func(*starterPromptQueries, *agentapi.StarterPromptsRequest) {})
+	if again := hashOf(func(*starterPromptQueries, *agentapi.StarterPromptsRequest) {}); again != base {
 		t.Fatalf("hash is not stable: %q then %q", base, again)
 	}
-	changes := map[string]func(*starterPromptQueries, *StarterPromptsRequest){
-		"new session title": func(q *starterPromptQueries, _ *StarterPromptsRequest) {
+	changes := map[string]func(*starterPromptQueries, *agentapi.StarterPromptsRequest){
+		"new session title": func(q *starterPromptQueries, _ *agentapi.StarterPromptsRequest) {
 			q.sessions = []sqlc.ListSessionsByBotAndCreatedByUserPagedRow{{Title: "新游戏发售"}}
 		},
-		"installed app": func(q *starterPromptQueries, _ *StarterPromptsRequest) {
+		"installed app": func(q *starterPromptQueries, _ *agentapi.StarterPromptsRequest) {
 			q.installations = []sqlc.BotAppInstallation{{AppID: "web-search", Status: "installed"}}
 		},
-		"locale": func(_ *starterPromptQueries, r *StarterPromptsRequest) { r.Locale = "en" },
-		"display name": func(q *starterPromptQueries, _ *StarterPromptsRequest) {
+		"locale": func(_ *starterPromptQueries, r *agentapi.StarterPromptsRequest) { r.Locale = "en" },
+		"display name": func(q *starterPromptQueries, _ *agentapi.StarterPromptsRequest) {
 			q.bot.DisplayName = pgtype.Text{String: "攻略助手", Valid: true}
 		},
 	}
@@ -170,7 +171,7 @@ func TestStarterPromptsHashFollowsMaterial(t *testing.T) {
 			t.Errorf("%s: hash unchanged, want a new hash", name)
 		}
 	}
-	if got := hashOf(func(q *starterPromptQueries, _ *StarterPromptsRequest) {
+	if got := hashOf(func(q *starterPromptQueries, _ *agentapi.StarterPromptsRequest) {
 		q.installations = []sqlc.BotAppInstallation{{AppID: "web-search", Status: "failed"}}
 	}); got != base {
 		t.Errorf("a failed installation changed the hash; only usable Apps are material")

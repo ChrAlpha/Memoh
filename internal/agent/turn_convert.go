@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"github.com/felinics/memoh/internal/agent/decide"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -73,8 +73,8 @@ func questionAnswersToUserInput(in []turn.QuestionAnswer) []userinput.QuestionAn
 	return out
 }
 
-func toolApprovalInputFromResponse(in turn.ToolApprovalResponse) decide.ToolApprovalResponseInput {
-	return decide.ToolApprovalResponseInput{
+func toolApprovalInputFromResponse(in turn.ToolApprovalResponse) agentapi.ToolApprovalResponseInput {
+	return agentapi.ToolApprovalResponseInput{
 		ControlID:                  in.ControlID,
 		BotID:                      in.BotID,
 		ThreadID:                   in.ThreadID,
@@ -91,8 +91,8 @@ func toolApprovalInputFromResponse(in turn.ToolApprovalResponse) decide.ToolAppr
 	}
 }
 
-func userInputInputFromResponse(in turn.UserInputResponse) decide.UserInputResponseInput {
-	return decide.UserInputResponseInput{
+func userInputInputFromResponse(in turn.UserInputResponse) agentapi.UserInputResponseInput {
+	return agentapi.UserInputResponseInput{
 		ControlID:                  in.ControlID,
 		BotID:                      in.BotID,
 		ThreadID:                   in.ThreadID,

@@ -3,12 +3,13 @@ package answer
 import (
 	"context"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 // RespondToolApproval commits an approval answer the runtime did not route and continues what it parked.
-func (r *Responder) RespondToolApproval(ctx context.Context, input decide.ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) error {
+func (r *Responder) RespondToolApproval(ctx context.Context, input agentapi.ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) error {
 	committed, err := r.decider.CommitToolApprovalResponse(ctx, input)
 	if err != nil {
 		return err

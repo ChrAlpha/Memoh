@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -147,31 +148,31 @@ func TestACPDecisionAuthorityRequiresLiveWorkspaceExec(t *testing.T) {
 	svc.queries = runInitiatorQueries{initiators: map[string]string{approvalTestRunID: ownerID}}
 	approvalTarget := toolapproval.Request{BotID: "bot-1", SessionID: "session-1", RunID: approvalTestRunID, Operation: toolapproval.OperationExec}
 
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: ownerID}); err != nil {
+	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, agentapi.UserInputResponseInput{ActorUserID: ownerID}); err != nil {
 		t.Fatalf("owner user-input authorization error = %v", err)
 	}
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: ownerID}); err != nil {
+	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, agentapi.ToolApprovalResponseInput{ActorUserID: ownerID}); err != nil {
 		t.Fatalf("owner approval authorization error = %v", err)
 	}
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: memberID}); err != nil {
+	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, agentapi.UserInputResponseInput{ActorUserID: memberID}); err != nil {
 		t.Fatalf("workspace_exec member user-input authorization error = %v", err)
 	}
 	// The member's grant does not reach a run the owner started.
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: memberID}); !errors.Is(err, toolapproval.ErrForbidden) {
+	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, agentapi.ToolApprovalResponseInput{ActorUserID: memberID}); !errors.Is(err, toolapproval.ErrForbidden) {
 		t.Fatalf("workspace_exec member approval authorization error = %v, want forbidden", err)
 	}
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, userinput.ErrForbidden) {
+	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, agentapi.UserInputResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, userinput.ErrForbidden) {
 		t.Fatalf("chat-only user-input authorization error = %v, want forbidden", err)
 	}
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, toolapproval.ErrForbidden) {
+	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, agentapi.ToolApprovalResponseInput{ActorUserID: chatOnlyID}); !errors.Is(err, toolapproval.ErrForbidden) {
 		t.Fatalf("chat-only approval authorization error = %v, want forbidden", err)
 	}
 
 	delete(perms.Values, "bot-1:"+ownerID+":"+bots.PermissionWorkspaceExec)
-	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, UserInputResponseInput{ActorUserID: ownerID}); !errors.Is(err, userinput.ErrForbidden) {
+	if err := svc.authorizeExternalAgentUserInputResponse(context.Background(), inputTarget, agentapi.UserInputResponseInput{ActorUserID: ownerID}); !errors.Is(err, userinput.ErrForbidden) {
 		t.Fatalf("revoked owner user-input authorization error = %v, want forbidden", err)
 	}
-	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, ToolApprovalResponseInput{ActorUserID: ownerID}); !errors.Is(err, toolapproval.ErrForbidden) {
+	if err := svc.authorizeExternalAgentToolApprovalResponse(context.Background(), approvalTarget, agentapi.ToolApprovalResponseInput{ActorUserID: ownerID}); !errors.Is(err, toolapproval.ErrForbidden) {
 		t.Fatalf("revoked owner approval authorization error = %v, want forbidden", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -15,32 +16,14 @@ import (
 	"github.com/felinics/memoh/internal/workspace"
 )
 
-type ToolApprovalResponseInput struct {
-	ControlID              string
-	BotID                  string
-	ThreadID               string
-	ActorChannelIdentityID string
-	ActorUserID            string
-	ApprovalID             string
-	ExplicitID             string
-	ReplyExternalMessageID string
-	Decision               string
-	// OptionID names the agent-provided permission option the decider picked;
-	// empty means the plain binary decision.
-	OptionID                   string
-	Reason                     string
-	ChatToken                  string
-	SuppressActivePromptAttach bool
-}
-
 // NewCommittedToolApproval is the committed response of an approval decided
 // elsewhere: request as it stands after the decision, input as the decider
 // sent it.
-func NewCommittedToolApproval(request toolapproval.Request, input ToolApprovalResponseInput, usesDecisionWaiter bool) CommittedToolApprovalResponse {
+func NewCommittedToolApproval(request toolapproval.Request, input agentapi.ToolApprovalResponseInput, usesDecisionWaiter bool) CommittedToolApprovalResponse {
 	return CommittedToolApprovalResponse{request: request, input: input, usesDecisionWaiter: usesDecisionWaiter}
 }
 
-func (d *Decider) CommitToolApprovalResponse(ctx context.Context, input ToolApprovalResponseInput) (CommittedToolApprovalResponse, error) {
+func (d *Decider) CommitToolApprovalResponse(ctx context.Context, input agentapi.ToolApprovalResponseInput) (CommittedToolApprovalResponse, error) {
 	target, err := d.toolApproval.ResolveTarget(ctx, toolapproval.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.ThreadID,
@@ -191,7 +174,7 @@ func (d *Decider) isExternalAgentToolApprovalSession(ctx context.Context, sessio
 	return sessionpkg.UsesDecisionWaiter(sess), nil
 }
 
-func (d *Decider) authorizeExternalAgentToolApprovalResponse(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput) error {
+func (d *Decider) authorizeExternalAgentToolApprovalResponse(ctx context.Context, target toolapproval.Request, input agentapi.ToolApprovalResponseInput) error {
 	sessionID := runreq.FirstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := d.sessions.Get(ctx, sessionID)
 	if err != nil {
@@ -222,9 +205,9 @@ func (d *Decider) authorizeExternalAgentToolApprovalResponse(ctx context.Context
 	return d.authorizeToolApprovalResponse(ctx, target, input)
 }
 
-func (d *Decider) authorizeToolApprovalResponse(ctx context.Context, target toolapproval.Request, input ToolApprovalResponseInput) error {
+func (d *Decider) authorizeToolApprovalResponse(ctx context.Context, target toolapproval.Request, input agentapi.ToolApprovalResponseInput) error {
 	target.BotID = runreq.FirstNonEmpty(target.BotID, input.BotID)
-	allowed, err := d.CanDecideToolApproval(ctx, target, ToolApprovalPrincipal{
+	allowed, err := d.CanDecideToolApproval(ctx, target, agentapi.ToolApprovalPrincipal{
 		UserID:            input.ActorUserID,
 		ChannelIdentityID: input.ActorChannelIdentityID,
 	})
@@ -254,7 +237,7 @@ func RejectedToolResultText(reason string) string {
 
 type CommittedToolApprovalResponse struct {
 	request            toolapproval.Request
-	input              ToolApprovalResponseInput
+	input              agentapi.ToolApprovalResponseInput
 	runID              string
 	runHandle          sessionruntime.RunHandle
 	usesDecisionWaiter bool
@@ -266,7 +249,7 @@ type CommittedToolApprovalResponse struct {
 func (c CommittedToolApprovalResponse) Request() toolapproval.Request { return c.request }
 
 // Input is the response the decider sent.
-func (c CommittedToolApprovalResponse) Input() ToolApprovalResponseInput { return c.input }
+func (c CommittedToolApprovalResponse) Input() agentapi.ToolApprovalResponseInput { return c.input }
 
 // RunID names the run the decision parked, when the decision arrived as a
 // command routed to its owner.

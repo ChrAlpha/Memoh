@@ -14,7 +14,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/decide"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -54,7 +54,7 @@ type verdictDecisionRuntime struct {
 }
 
 func (*verdictDecisionRuntime) RouteDecisionResponse(_ context.Context, response sessionruntime.DecisionResponse) (sessionruntime.DecisionResponseResult, error) {
-	var input decide.ToolApprovalResponseInput
+	var input agentapi.ToolApprovalResponseInput
 	if err := json.Unmarshal(response.Payload, &input); err != nil {
 		return sessionruntime.DecisionResponseResult{}, err
 	}
@@ -222,13 +222,13 @@ func TestRuntimeSubscriptionAnswersViewerCanDecidePerConnection(t *testing.T) {
 }
 
 type recordingApprovalDecider struct {
-	principal decide.ToolApprovalPrincipal
+	principal agentapi.ToolApprovalPrincipal
 	approval  toolapproval.Request
 	allow     bool
 	err       error
 }
 
-func (d *recordingApprovalDecider) CanDecideToolApproval(_ context.Context, approval toolapproval.Request, principal decide.ToolApprovalPrincipal) (bool, error) {
+func (d *recordingApprovalDecider) CanDecideToolApproval(_ context.Context, approval toolapproval.Request, principal agentapi.ToolApprovalPrincipal) (bool, error) {
 	d.approval, d.principal = approval, principal
 	return d.allow, d.err
 }

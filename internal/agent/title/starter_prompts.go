@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -50,35 +51,6 @@ Material:
 
 var starterPromptLocalePattern = regexp.MustCompile(`^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$`)
 
-// StarterPrompt is one suggested message for the new-chat screen.
-type StarterPrompt struct {
-	Title  string `json:"title"`
-	Prompt string `json:"prompt"`
-}
-
-// StarterPromptsRequest identifies whose suggestions to produce. KnownHash is
-// the hash of the set the client already holds, empty when it holds none.
-// Refresh asks for a different set even when the held one is current; Avoid
-// lists the prompts already on screen, which the new set must not repeat.
-type StarterPromptsRequest struct {
-	BotID     string
-	UserID    string
-	Locale    string
-	KnownHash string
-	Refresh   bool
-	Avoid     []string
-}
-
-// StarterPromptsResult is either Unchanged (the client's set still matches
-// the material) or a fresh set with its Hash. A set the model could not
-// produce comes back with an empty Hash and no Items; the client shows its
-// generic examples and asks again next time.
-type StarterPromptsResult struct {
-	Unchanged bool
-	Hash      string
-	Items     []StarterPrompt
-}
-
 type starterPromptMaterial struct {
 	Locale       string             `json:"locale"`
 	Name         string             `json:"assistant_name"`
@@ -106,18 +78,18 @@ type starterPromptApp struct {
 // share one generation, which outlives a caller that goes away.
 //
 // The caller must have authorized req.UserID to chat with the bot.
-func (g *Generator) StarterPrompts(ctx context.Context, req StarterPromptsRequest) (StarterPromptsResult, error) {
+func (g *Generator) StarterPrompts(ctx context.Context, req agentapi.StarterPromptsRequest) (agentapi.StarterPromptsResult, error) {
 	material, ownerUserID, err := g.collectStarterPromptMaterial(ctx, req)
 	if err != nil {
-		return StarterPromptsResult{}, err
+		return agentapi.StarterPromptsResult{}, err
 	}
 	prompt, err := buildStarterPromptsPrompt(material)
 	if err != nil {
-		return StarterPromptsResult{}, err
+		return agentapi.StarterPromptsResult{}, err
 	}
 	hash := starterPromptsHash(prompt)
 	if !req.Refresh && hash == strings.TrimSpace(req.KnownHash) {
-		return StarterPromptsResult{Unchanged: true, Hash: hash, Items: []StarterPrompt{}}, nil
+		return agentapi.StarterPromptsResult{Unchanged: true, Hash: hash, Items: []agentapi.StarterPrompt{}}, nil
 	}
 
 	key := req.BotID + "\x00" + req.UserID + "\x00" + hash
@@ -129,17 +101,17 @@ func (g *Generator) StarterPrompts(ctx context.Context, req StarterPromptsReques
 	value, _, _ := g.starterFlights.Do(key, func() (any, error) {
 		return g.generateStarterPrompts(context.WithoutCancel(ctx), req.BotID, ownerUserID, prompt), nil
 	})
-	items, _ := value.([]StarterPrompt)
+	items, _ := value.([]agentapi.StarterPrompt)
 	if len(items) == 0 {
-		return StarterPromptsResult{Items: []StarterPrompt{}}, nil
+		return agentapi.StarterPromptsResult{Items: []agentapi.StarterPrompt{}}, nil
 	}
-	return StarterPromptsResult{Hash: hash, Items: items}, nil
+	return agentapi.StarterPromptsResult{Hash: hash, Items: items}, nil
 }
 
 // generateStarterPrompts runs the title model on prompt. Every failure, from
 // a missing title model to unparsable output, yields nil: the caller treats
 // that as "no suggestions this time".
-func (g *Generator) generateStarterPrompts(ctx context.Context, botID, ownerUserID, prompt string) []StarterPrompt {
+func (g *Generator) generateStarterPrompts(ctx context.Context, botID, ownerUserID, prompt string) []agentapi.StarterPrompt {
 	logger := g.logger.With(slog.String("bot_id", botID))
 	account, err := g.accounts.Get(ctx, ownerUserID)
 	if err != nil {
@@ -159,7 +131,7 @@ func (g *Generator) generateStarterPrompts(ctx context.Context, botID, ownerUser
 	return g.completeStarterPrompts(ctx, logger, ownerUserID, model, provider, prompt)
 }
 
-func (g *Generator) completeStarterPrompts(ctx context.Context, logger *slog.Logger, ownerUserID string, model models.GetResponse, provider sqlc.Provider, prompt string) []StarterPrompt {
+func (g *Generator) completeStarterPrompts(ctx context.Context, logger *slog.Logger, ownerUserID string, model models.GetResponse, provider sqlc.Provider, prompt string) []agentapi.StarterPrompt {
 	text, err := g.generateWithTitleModel(ctx, "agent.starter_prompts", ownerUserID, model, provider, prompt)
 	if err != nil {
 		logger.WarnContext(ctx, "starter prompts: generation failed", slog.Any("error", err))
@@ -175,7 +147,7 @@ func (g *Generator) completeStarterPrompts(ctx context.Context, logger *slog.Log
 // collectStarterPromptMaterial reads everything the suggestions depend on.
 // Memory is best-effort: a memory read that fails is treated as no memory,
 // which changes the hash, so the set is regenerated once memory reads again.
-func (g *Generator) collectStarterPromptMaterial(ctx context.Context, req StarterPromptsRequest) (starterPromptMaterial, string, error) {
+func (g *Generator) collectStarterPromptMaterial(ctx context.Context, req agentapi.StarterPromptsRequest) (starterPromptMaterial, string, error) {
 	botUUID, err := db.ParseUUID(req.BotID)
 	if err != nil {
 		return starterPromptMaterial{}, "", errs.Wrap(err, "parse bot id")
@@ -325,24 +297,24 @@ func starterPromptsHash(prompt string) string {
 // parseStarterPrompts reads the model's JSON array, tolerating a code fence
 // or prose around it. Items missing a title or prompt are dropped, and at
 // most starterPromptCount are kept.
-func parseStarterPrompts(text string) []StarterPrompt {
+func parseStarterPrompts(text string) []agentapi.StarterPrompt {
 	start := strings.Index(text, "[")
 	end := strings.LastIndex(text, "]")
 	if start < 0 || end <= start {
 		return nil
 	}
-	var raw []StarterPrompt
+	var raw []agentapi.StarterPrompt
 	if err := json.Unmarshal([]byte(text[start:end+1]), &raw); err != nil {
 		return nil
 	}
-	items := make([]StarterPrompt, 0, starterPromptCount)
+	items := make([]agentapi.StarterPrompt, 0, starterPromptCount)
 	for _, item := range raw {
 		title := truncate(strings.TrimSpace(item.Title), starterPromptTitleMaxRunes)
 		prompt := truncate(strings.TrimSpace(item.Prompt), starterPromptTextMaxRunes)
 		if title == "" || prompt == "" {
 			continue
 		}
-		items = append(items, StarterPrompt{Title: title, Prompt: prompt})
+		items = append(items, agentapi.StarterPrompt{Title: title, Prompt: prompt})
 		if len(items) == starterPromptCount {
 			break
 		}

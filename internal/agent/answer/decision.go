@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
@@ -22,7 +23,7 @@ import (
 )
 
 // RouteToolApproval sends an approval answer to the session runtime that owns the run it answers. It reports whether the runtime took it.
-func (r *Responder) RouteToolApproval(ctx context.Context, input decide.ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
+func (r *Responder) RouteToolApproval(ctx context.Context, input agentapi.ToolApprovalResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
 	if input.ControlID == "" {
 		input.ControlID = implicitDecisionControlID(sessionruntime.CommandToolApprovalResponse, runreq.FirstNonEmpty(input.ExplicitID, input.ApprovalID))
 	}
@@ -61,7 +62,7 @@ func (r *Responder) RouteToolApproval(ctx context.Context, input decide.ToolAppr
 }
 
 // RouteUserInput sends a user-input answer to the session runtime that owns the run it answers. It reports whether the runtime took it.
-func (r *Responder) RouteUserInput(ctx context.Context, input decide.UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
+func (r *Responder) RouteUserInput(ctx context.Context, input agentapi.UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) (bool, error) {
 	if input.ControlID == "" {
 		input.ControlID = implicitDecisionControlID(sessionruntime.CommandUserInputResponse, runreq.FirstNonEmpty(input.ExplicitID, input.UserInputID))
 	}
@@ -115,7 +116,7 @@ func (r *Responder) HandleCommand(ctx context.Context, command sessionruntime.Co
 	}
 	switch command.Type {
 	case sessionruntime.CommandUserInputResponse:
-		var input decide.UserInputResponseInput
+		var input agentapi.UserInputResponseInput
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			runCancel()
 			return err
@@ -159,7 +160,7 @@ func (r *Responder) HandleCommand(ctx context.Context, command sessionruntime.Co
 		}()
 		return nil
 	case sessionruntime.CommandToolApprovalResponse:
-		var input decide.ToolApprovalResponseInput
+		var input agentapi.ToolApprovalResponseInput
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			runCancel()
 			return err

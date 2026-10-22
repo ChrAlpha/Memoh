@@ -14,6 +14,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/decide"
@@ -527,7 +528,7 @@ func newDecisionHarness(t *testing.T, toolName string) decisionHarness {
 	return decisionHarness{service: service, history: history, capture: capture, tool: tool, queries: queries, handle: handle}
 }
 
-func planApproval(status string) (toolapproval.Request, decide.ToolApprovalResponseInput) {
+func planApproval(status string) (toolapproval.Request, agentapi.ToolApprovalResponseInput) {
 	approval := toolapproval.Request{
 		ID: "tool-approval", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 		ToolCallID: driveToolCallID, ToolName: planApprovalToolName, Status: status,
@@ -535,11 +536,11 @@ func planApproval(status string) (toolapproval.Request, decide.ToolApprovalRespo
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 		WorkspaceTargetID: planWorkspaceTargetID,
 	}
-	input := decide.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
+	input := agentapi.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	return approval, input
 }
 
-func approvalContinuation(ctx context.Context, h decisionHarness, approval toolapproval.Request, input decide.ToolApprovalResponseInput, live bool) answer.Continuation {
+func approvalContinuation(ctx context.Context, h decisionHarness, approval toolapproval.Request, input agentapi.ToolApprovalResponseInput, live bool) answer.Continuation {
 	committed := decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, h.handle)
 	return adaptApprovalContinuation(ctx, h.service, committed, live)
 }
@@ -555,7 +556,7 @@ func planAnswer(platform, replyTarget string) userinput.Request {
 }
 
 func userInputContinuation(ctx context.Context, h decisionHarness, answered userinput.Request, live bool) answer.Continuation {
-	input := decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
+	input := agentapi.UserInputResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	committed := decide.NewCommittedUserInput(answered, input).ForRun(agenttest.LifecycleRunID, h.handle)
 	return adaptUserInputContinuation(ctx, h.service, committed, live)
 }
@@ -658,7 +659,7 @@ func TestDriveUnroutedNativeContinuationExpires(t *testing.T) {
 			return adaptApprovalContinuation(context.Background(), h.service, committed, true)
 		}},
 		{"user input", apperror.CodeUserInputExpired, func(h decisionHarness) answer.Continuation {
-			committed := decide.NewCommittedUserInput(answered, decide.UserInputResponseInput{
+			committed := decide.NewCommittedUserInput(answered, agentapi.UserInputResponseInput{
 				BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 			})
 			return adaptUserInputContinuation(context.Background(), h.service, committed, true)

@@ -9,6 +9,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
@@ -267,7 +268,7 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 		ToolCallID: driveToolCallID, ToolName: "container_exec",
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 	}
-	input := decide.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
+	input := agentapi.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	result := sdk.ToolResultPart{
 		ToolCallID: approval.ToolCallID, ToolName: approval.ToolName,
 		Result: sdk.TextOutput("command finished"),
@@ -300,7 +301,7 @@ func driveAskUserContinuation(t *testing.T) []sdk.Request {
 	fixture, recorder := newDriveRequestFixture(t,
 		withFixtureMessages(driveDecisionHistory(t, "ask_user", sdk.TextOutput(`{"answers":[{"text":"blue"}]}`))),
 		withFixtureOptions(withSessionManager(manager), withDecide(func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{Target: answered, Resolved: answered} })))
-	committed, err := fixture.service.decider.CommitUserInputResponse(ctx, decide.UserInputResponseInput{
+	committed, err := fixture.service.decider.CommitUserInputResponse(ctx, agentapi.UserInputResponseInput{
 		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, UserInputID: answered.ID,
 	})
 	if err != nil {
@@ -308,7 +309,7 @@ func driveAskUserContinuation(t *testing.T) []sdk.Request {
 	}
 	committed = committed.ForRun(handle.RunID, handle)
 	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
-		return fixture.service.ContinueCommittedUserInputResponse(ctx, committed, eventCh)
+		return fixture.service.continueCommittedUserInputResponse(ctx, committed, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
 }

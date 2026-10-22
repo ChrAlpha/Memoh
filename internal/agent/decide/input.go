@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/decision"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -34,32 +35,14 @@ func (d *Decider) AdvancePlainTextUserInput(ctx context.Context, input userinput
 	return d.userInput.AdvanceText(ctx, input)
 }
 
-type UserInputResponseInput struct {
-	ControlID                  string
-	BotID                      string
-	ThreadID                   string
-	ActorChannelIdentityID     string
-	ActorUserID                string
-	UserInputID                string
-	ExplicitID                 string
-	ReplyExternalMessageID     string
-	Answers                    []userinput.QuestionAnswer
-	UILanguage                 string
-	TextAnswer                 string
-	Canceled                   bool
-	Reason                     string
-	ChatToken                  string
-	SuppressActivePromptAttach bool
-}
-
 // NewCommittedUserInput is the committed response of a question answered
 // elsewhere: request as it stands after the answer, input as the responder sent
 // it.
-func NewCommittedUserInput(request userinput.Request, input UserInputResponseInput) CommittedUserInputResponse {
+func NewCommittedUserInput(request userinput.Request, input agentapi.UserInputResponseInput) CommittedUserInputResponse {
 	return CommittedUserInputResponse{request: request, input: input}
 }
 
-func (d *Decider) CommitUserInputResponse(ctx context.Context, input UserInputResponseInput) (CommittedUserInputResponse, error) {
+func (d *Decider) CommitUserInputResponse(ctx context.Context, input agentapi.UserInputResponseInput) (CommittedUserInputResponse, error) {
 	target, err := d.userInput.ResolveTarget(ctx, userinput.ResolveInput{
 		BotID:                  input.BotID,
 		SessionID:              input.ThreadID,
@@ -156,7 +139,7 @@ func (d *Decider) isExternalAgentUserInputSession(ctx context.Context, sessionID
 	return sessionpkg.UsesDecisionWaiter(sess), nil
 }
 
-func (d *Decider) authorizeExternalAgentUserInputResponse(ctx context.Context, target userinput.Request, input UserInputResponseInput) error {
+func (d *Decider) authorizeExternalAgentUserInputResponse(ctx context.Context, target userinput.Request, input agentapi.UserInputResponseInput) error {
 	sessionID := runreq.FirstNonEmpty(target.SessionID, input.ThreadID)
 	sess, err := d.sessions.Get(ctx, sessionID)
 	if err != nil {
@@ -279,7 +262,7 @@ func WithLocalWebUserInputReplyTarget(req userinput.Request) userinput.Request {
 // acknowledgement deadline on the following model call.
 type CommittedUserInputResponse struct {
 	request         userinput.Request
-	input           UserInputResponseInput
+	input           agentapi.UserInputResponseInput
 	runID           string
 	runHandle       sessionruntime.RunHandle
 	activePrompt    *activeprompt.Subscription
@@ -291,7 +274,7 @@ type CommittedUserInputResponse struct {
 func (c CommittedUserInputResponse) Request() userinput.Request { return c.request }
 
 // Input is the response the responder sent.
-func (c CommittedUserInputResponse) Input() UserInputResponseInput { return c.input }
+func (c CommittedUserInputResponse) Input() agentapi.UserInputResponseInput { return c.input }
 
 // RunID names the run the question parked, when the answer arrived as a
 // command routed to its owner.

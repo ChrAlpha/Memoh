@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/bots"
@@ -86,13 +87,13 @@ func TestCanDecideToolApprovalAdmitsInitiatorAndManagerOnly(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := svc.CanDecideToolApproval(context.Background(), tc.approval, ToolApprovalPrincipal{UserID: tc.actor})
+			got, err := svc.CanDecideToolApproval(context.Background(), tc.approval, agentapi.ToolApprovalPrincipal{UserID: tc.actor})
 			if err != nil || got != tc.want {
 				t.Fatalf("CanDecideToolApproval(%s) = %t, %v; want %t", tc.actor, got, err, tc.want)
 			}
 			// The write path is the same function: a submission is refused
 			// exactly when the viewer is not offered the decision.
-			err = svc.authorizeToolApprovalResponse(context.Background(), tc.approval, ToolApprovalResponseInput{ActorUserID: tc.actor})
+			err = svc.authorizeToolApprovalResponse(context.Background(), tc.approval, agentapi.ToolApprovalResponseInput{ActorUserID: tc.actor})
 			if tc.want && err != nil {
 				t.Fatalf("authorize(%s) error = %v, want allowed", tc.actor, err)
 			}
@@ -121,7 +122,7 @@ func TestCanDecideToolApprovalInitiatorNeedsOperationGrant(t *testing.T) {
 		t.Run(tc.operation, func(t *testing.T) {
 			t.Parallel()
 			approval := toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID, Operation: tc.operation}
-			principal := ToolApprovalPrincipal{UserID: approvalTestInitiator}
+			principal := agentapi.ToolApprovalPrincipal{UserID: approvalTestInitiator}
 			granted := approvalAuthorityService(map[string][]string{approvalTestInitiator: {tc.permission}})
 			if ok, err := granted.CanDecideToolApproval(context.Background(), approval, principal); err != nil || !ok {
 				t.Fatalf("initiator holding %s = %t, %v; want allowed", tc.permission, ok, err)
@@ -141,7 +142,7 @@ func TestCanDecideToolApprovalMatchesInitiatorByChannelIdentity(t *testing.T) {
 	// identity, and its grants are keyed on that identity too.
 	svc := approvalAuthorityService(map[string][]string{approvalTestInitiator: {bots.PermissionWorkspaceExec}})
 	approval := toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID, Operation: toolapproval.OperationExec}
-	if ok, err := svc.CanDecideToolApproval(context.Background(), approval, ToolApprovalPrincipal{ChannelIdentityID: approvalTestInitiator}); err != nil || !ok {
+	if ok, err := svc.CanDecideToolApproval(context.Background(), approval, agentapi.ToolApprovalPrincipal{ChannelIdentityID: approvalTestInitiator}); err != nil || !ok {
 		t.Fatalf("channel-identity initiator = %t, %v; want allowed", ok, err)
 	}
 }
@@ -153,10 +154,10 @@ func TestCanDecideToolApprovalFailsClosed(t *testing.T) {
 	resolver := newTestDecider(Deps{BotPermissions: checker})
 	for _, tc := range []struct {
 		approval  toolapproval.Request
-		principal ToolApprovalPrincipal
+		principal agentapi.ToolApprovalPrincipal
 	}{
-		{toolapproval.Request{Operation: toolapproval.OperationRead}, ToolApprovalPrincipal{UserID: "user-1"}},
-		{toolapproval.Request{BotID: "bot-1", Operation: toolapproval.OperationRead}, ToolApprovalPrincipal{}},
+		{toolapproval.Request{Operation: toolapproval.OperationRead}, agentapi.ToolApprovalPrincipal{UserID: "user-1"}},
+		{toolapproval.Request{BotID: "bot-1", Operation: toolapproval.OperationRead}, agentapi.ToolApprovalPrincipal{}},
 	} {
 		if ok, err := resolver.CanDecideToolApproval(context.Background(), tc.approval, tc.principal); ok || err != nil {
 			t.Fatalf("CanDecideToolApproval(%+v, %+v) = %t, %v; want refused", tc.approval, tc.principal, ok, err)
@@ -164,7 +165,7 @@ func TestCanDecideToolApprovalFailsClosed(t *testing.T) {
 	}
 	// A run id cannot be resolved while the run store fails.
 	resolver = newTestDecider(Deps{BotPermissions: checker, Queries: &failingRunQueries{}})
-	if _, err := resolver.CanDecideToolApproval(context.Background(), toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID}, ToolApprovalPrincipal{UserID: "user-1"}); err == nil {
+	if _, err := resolver.CanDecideToolApproval(context.Background(), toolapproval.Request{BotID: "bot-1", RunID: approvalTestRunID}, agentapi.ToolApprovalPrincipal{UserID: "user-1"}); err == nil {
 		t.Fatal("unresolvable initiator was treated as absent")
 	}
 }
@@ -183,7 +184,7 @@ func TestCapabilityApprovalRequiresManage(t *testing.T) {
 			checker := &agenttest.RecordingPermissionChecker{Allow: false}
 			d := newTestDecider(Deps{BotPermissions: checker})
 			target := toolapproval.Request{ID: "approval-1", BotID: "bot-1", ToolName: name, Operation: toolapproval.OperationPermission, Status: toolapproval.StatusApproved}
-			input := ToolApprovalResponseInput{ActorUserID: "user-1"}
+			input := agentapi.ToolApprovalResponseInput{ActorUserID: "user-1"}
 			if err := d.authorizeToolApprovalResponse(context.Background(), target, input); !errors.Is(err, toolapproval.ErrForbidden) || checker.Permission != bots.PermissionManage {
 				t.Fatalf("management approval permission = %q, error = %v", checker.Permission, err)
 			}

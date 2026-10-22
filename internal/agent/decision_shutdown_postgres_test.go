@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
@@ -99,7 +100,7 @@ func TestPostgresRedisDecisionSurvivesGracefulShutdown(t *testing.T) {
 		if err := next.WaitDecisionContinuationReady(runCtx, command); err != nil {
 			return err
 		}
-		var input decide.UserInputResponseInput
+		var input agentapi.UserInputResponseInput
 		if err := json.Unmarshal(command.Payload, &input); err != nil {
 			return err
 		}
@@ -140,7 +141,7 @@ func TestPostgresRedisDecisionSurvivesGracefulShutdown(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
-	payload, err := json.Marshal(decide.UserInputResponseInput{ControlID: "answer", BotID: botID, ThreadID: sessionID, UserInputID: request.ID, TextAnswer: "yes"})
+	payload, err := json.Marshal(agentapi.UserInputResponseInput{ControlID: "answer", BotID: botID, ThreadID: sessionID, UserInputID: request.ID, TextAnswer: "yes"})
 	if err != nil {
 		t.Fatal(err)
 	}

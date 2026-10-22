@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -35,33 +36,25 @@ type runtimePreparedAttachments struct {
 	CanFallbackImagesToFiles bool
 }
 
-// SessionExecutionInfo says whether a session executes in the workspace and who
-// owns its runtime.
-type SessionExecutionInfo struct {
-	RequiresWorkspaceExec bool
-	BotID                 string
-	RuntimeOwnerAccountID string
-}
-
 // SessionExecutionInfo reads the execution facts of a session; one that is not on an
 // external runtime reports none.
-func (h *Host) SessionExecutionInfo(ctx context.Context, sessionID string) (SessionExecutionInfo, error) {
+func (h *Host) SessionExecutionInfo(ctx context.Context, sessionID string) (agentapi.SessionExecutionInfo, error) {
 	if strings.TrimSpace(sessionID) == "" {
-		return SessionExecutionInfo{}, nil
+		return agentapi.SessionExecutionInfo{}, nil
 	}
 	sess, err := h.sessions.Get(ctx, sessionID)
 	if err != nil {
-		return SessionExecutionInfo{}, err
+		return agentapi.SessionExecutionInfo{}, err
 	}
 	// Direct external runtimes execute in the workspace exactly like ACP
 	// agents; the WS execution gate must cover both, or a
 	// session reached by other means (a fork, a shared session) executes
 	// with only the inherited runtime owner ever checked.
 	if !session.IsACPRuntime(sess) && !session.IsDirectRuntime(sess) {
-		return SessionExecutionInfo{}, nil
+		return agentapi.SessionExecutionInfo{}, nil
 	}
 	runtimeMeta := runreq.RuntimeSessionMeta(sess)
-	return SessionExecutionInfo{
+	return agentapi.SessionExecutionInfo{
 		RequiresWorkspaceExec: true,
 		BotID:                 sess.BotID,
 		RuntimeOwnerAccountID: runreq.MetadataString(runtimeMeta, "runtime_owner_account_id"),

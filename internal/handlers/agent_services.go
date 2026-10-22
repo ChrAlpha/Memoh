@@ -4,13 +4,10 @@ import (
 	"context"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	"github.com/felinics/memoh/internal/agent/title"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/agent/web"
@@ -63,15 +60,15 @@ type runtimeControlService interface {
 	SetRuntimeMode(ctx context.Context, request turn.RuntimeControlRequest) (external.ModeState, error)
 	ExecuteRuntimeCommand(ctx context.Context, request turn.RuntimeControlRequest) (turn.RuntimeCommandResult, error)
 	AbortRuntimeRun(ctx context.Context, botID, sessionID, runID, controlID string) (bool, error)
-	RuntimeSessionExecutionInfo(ctx context.Context, sessionID string) (externalrun.SessionExecutionInfo, error)
+	RuntimeSessionExecutionInfo(ctx context.Context, sessionID string) (agentapi.SessionExecutionInfo, error)
 }
 
 // decisionService answers whether a viewer may decide a tool approval.
 type decisionService interface {
-	ViewerCanDecideToolApproval(ctx context.Context, approvalID string, principal decide.ToolApprovalPrincipal) (bool, error)
+	ViewerCanDecideToolApproval(ctx context.Context, approvalID string, principal agentapi.ToolApprovalPrincipal) (bool, error)
 }
 
 // starterPromptService produces the new-chat suggestions.
 type starterPromptService interface {
-	StarterPrompts(ctx context.Context, req title.StarterPromptsRequest) (title.StarterPromptsResult, error)
+	StarterPrompts(ctx context.Context, req agentapi.StarterPromptsRequest) (agentapi.StarterPromptsResult, error)
 }

@@ -3,12 +3,13 @@ package answer
 import (
 	"context"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
 // RespondUserInput commits a user-input answer the runtime did not route and continues what it parked.
-func (r *Responder) RespondUserInput(ctx context.Context, input decide.UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) error {
+func (r *Responder) RespondUserInput(ctx context.Context, input agentapi.UserInputResponseInput, eventCh chan<- runreq.WSStreamEvent) error {
 	committed, err := r.decider.CommitUserInputResponse(ctx, input)
 	if err != nil {
 		return err

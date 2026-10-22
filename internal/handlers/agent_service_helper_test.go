@@ -11,11 +11,9 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent"
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/externalrun"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -281,12 +279,12 @@ func (a inertAgent) AbortRuntimeRun(context.Context, string, string, string, str
 	return false, nil
 }
 
-func (a inertAgent) RuntimeSessionExecutionInfo(context.Context, string) (externalrun.SessionExecutionInfo, error) {
+func (a inertAgent) RuntimeSessionExecutionInfo(context.Context, string) (agentapi.SessionExecutionInfo, error) {
 	a.fail()
-	return externalrun.SessionExecutionInfo{}, nil
+	return agentapi.SessionExecutionInfo{}, nil
 }
 
-func (a inertAgent) ViewerCanDecideToolApproval(context.Context, string, decide.ToolApprovalPrincipal) (bool, error) {
+func (a inertAgent) ViewerCanDecideToolApproval(context.Context, string, agentapi.ToolApprovalPrincipal) (bool, error) {
 	a.fail()
 	return false, nil
 }

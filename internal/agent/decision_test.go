@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/decide"
@@ -146,7 +147,7 @@ func TestInlineRuntimeDecisionClosesOutputWithoutFinishingProducer(t *testing.T)
 						}, nil
 					}},
 				}, withDecide(func(d *decide.Deps) { d.UserInput = inputs }))
-				payload, err := json.Marshal(decide.UserInputResponseInput{
+				payload, err := json.Marshal(agentapi.UserInputResponseInput{
 					ActorUserID: testACPUserInputOwnerID, Canceled: canceled,
 					Answers: []userinput.QuestionAnswer{{QuestionID: "q", Text: "answer"}},
 				})
@@ -517,8 +518,8 @@ func TestDecisionContinuationsResumeAsTheParkedTurn(t *testing.T) {
 	handle := sessionruntime.RunHandle{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID, RunID: agenttest.LifecycleRunID, TurnID: "turn-id"}
 	ctx := context.Background()
 	for name, cont := range map[string]answer.Continuation{
-		"tool approval": service.answer.ToolApprovalContinuation(ctx, decide.NewCommittedToolApproval(toolapproval.Request{ID: "approval", SessionID: agenttest.LifecycleSessionID}, decide.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID}, false).ForRun(handle.RunID, handle), true),
-		"user input":    service.answer.UserInputContinuation(ctx, decide.NewCommittedUserInput(userinput.Request{ID: "input", SessionID: agenttest.LifecycleSessionID}, decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID}).ForRun(handle.RunID, handle), true),
+		"tool approval": service.answer.ToolApprovalContinuation(ctx, decide.NewCommittedToolApproval(toolapproval.Request{ID: "approval", SessionID: agenttest.LifecycleSessionID}, agentapi.ToolApprovalResponseInput{BotID: agenttest.LifecycleBotID}, false).ForRun(handle.RunID, handle), true),
+		"user input":    service.answer.UserInputContinuation(ctx, decide.NewCommittedUserInput(userinput.Request{ID: "input", SessionID: agenttest.LifecycleSessionID}, agentapi.UserInputResponseInput{BotID: agenttest.LifecycleBotID}).ForRun(handle.RunID, handle), true),
 	} {
 		req := cont.Req
 		if !req.UserMessagePersisted || req.PersistedUserMessageID != "request-message-id" {
@@ -596,8 +597,8 @@ func TestCapabilityApprovalDoesNotReplay(t *testing.T) {
 			target := toolapproval.Request{ID: "approval-1", BotID: "bot-1", ToolName: name, Operation: toolapproval.OperationPermission, Status: toolapproval.StatusApproved}
 			// No agent is configured: a replay would fail instead of acknowledging
 			// the decision consumed by the already-running prepared operation.
-			committed := decide.NewCommittedToolApproval(target, decide.ToolApprovalResponseInput{}, true)
-			if err := service.ContinueCommittedToolApprovalResponse(context.Background(), committed, nil); err != nil {
+			committed := decide.NewCommittedToolApproval(target, agentapi.ToolApprovalResponseInput{}, true)
+			if err := service.continueCommittedToolApprovalResponse(context.Background(), committed, nil); err != nil {
 				t.Fatalf("live management approval must not replay: %v", err)
 			}
 		})

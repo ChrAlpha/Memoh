@@ -3,6 +3,7 @@ package decide
 import (
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -16,7 +17,7 @@ func approvalCall(t *testing.T, status, reason string) DecidedCall {
 		ToolInput: map[string]any{"command": "ls"}, Status: status, ChannelIdentityID: "identity-1",
 		SourcePlatform: "web", ConversationType: "private", WorkspaceTargetID: "target-1",
 	}
-	input := ToolApprovalResponseInput{BotID: "bot-1", ChatToken: "token", ActorChannelIdentityID: "actor-1", Reason: reason}
+	input := agentapi.ToolApprovalResponseInput{BotID: "bot-1", ChatToken: "token", ActorChannelIdentityID: "actor-1", Reason: reason}
 	handle := sessionruntime.RunHandle{RunID: "run-1", TurnID: "turn-1"}
 	return newTestDecider(Deps{}).ToolApprovalCall(NewCommittedToolApproval(request, input, false).ForRun("run-1", handle))
 }
@@ -69,7 +70,7 @@ func TestToolApprovalCallFallsBackToTheActorWhenTheRowNamesNoIdentity(t *testing
 	t.Parallel()
 
 	request := toolapproval.Request{ID: "approval-1", Status: toolapproval.StatusApproved}
-	input := ToolApprovalResponseInput{BotID: "bot-1", ActorChannelIdentityID: "actor-1"}
+	input := agentapi.ToolApprovalResponseInput{BotID: "bot-1", ActorChannelIdentityID: "actor-1"}
 	call := newTestDecider(Deps{}).ToolApprovalCall(NewCommittedToolApproval(request, input, false))
 	if call.ChannelIdentityID != "actor-1" || call.ScopeBotID != "bot-1" {
 		t.Fatalf("call = identity:%q scope bot:%q, want the actor and the response's bot", call.ChannelIdentityID, call.ScopeBotID)
@@ -80,12 +81,12 @@ func TestToolApprovalCallScopesTheSummaryToTheDecisionRowsBot(t *testing.T) {
 	t.Parallel()
 
 	request := toolapproval.Request{ID: "approval-1", BotID: "row-bot", Status: toolapproval.StatusApproved}
-	call := newTestDecider(Deps{}).ToolApprovalCall(NewCommittedToolApproval(request, ToolApprovalResponseInput{BotID: "input-bot"}, false))
+	call := newTestDecider(Deps{}).ToolApprovalCall(NewCommittedToolApproval(request, agentapi.ToolApprovalResponseInput{BotID: "input-bot"}, false))
 	if call.ScopeBotID != "row-bot" || call.BotID != "input-bot" {
 		t.Fatalf("bots = scope:%q response:%q, want the row's scope and the response's bot", call.ScopeBotID, call.BotID)
 	}
 	answer := userinput.Request{ID: "input-1", BotID: "row-bot"}
-	got := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(answer, UserInputResponseInput{BotID: "input-bot"}))
+	got := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(answer, agentapi.UserInputResponseInput{BotID: "input-bot"}))
 	if got.ScopeBotID != "row-bot" || got.BotID != "input-bot" {
 		t.Fatalf("bots = scope:%q response:%q, want the row's scope and the response's bot", got.ScopeBotID, got.BotID)
 	}
@@ -97,11 +98,11 @@ func TestDecidedCallValidateNamesWhatIsWrong(t *testing.T) {
 	if got := approvalCall(t, "expired", "").Validate(); got == nil || got.Error() != `committed tool approval has unexpected status "expired"` {
 		t.Fatalf("Validate() = %v, want the unexpected status", got)
 	}
-	approval := newTestDecider(Deps{}).ToolApprovalCall(NewCommittedToolApproval(toolapproval.Request{Status: toolapproval.StatusApproved}, ToolApprovalResponseInput{}, false))
+	approval := newTestDecider(Deps{}).ToolApprovalCall(NewCommittedToolApproval(toolapproval.Request{Status: toolapproval.StatusApproved}, agentapi.ToolApprovalResponseInput{}, false))
 	if got := approval.Validate(); got == nil || got.Error() != "committed tool approval response is missing its request" {
 		t.Fatalf("Validate() = %v, want the missing approval", got)
 	}
-	answer := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(userinput.Request{}, UserInputResponseInput{}))
+	answer := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(userinput.Request{}, agentapi.UserInputResponseInput{}))
 	if got := answer.Validate(); got == nil || got.Error() != "committed user input response is missing its request" {
 		t.Fatalf("Validate() = %v, want the missing question", got)
 	}
@@ -115,7 +116,7 @@ func TestUserInputCallIsAnAnswerThatSchedulesNoMemoryExtraction(t *testing.T) {
 		Status: userinput.StatusSubmitted, Result: map[string]any{"status": userinput.StatusSubmitted},
 		SourcePlatform: "web", WorkspaceTargetID: "target-1",
 	}
-	call := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(request, UserInputResponseInput{BotID: "bot-1", ChatToken: "token"}))
+	call := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(request, agentapi.UserInputResponseInput{BotID: "bot-1", ChatToken: "token"}))
 	if call.Kind != CallUserInput || call.Verdict != VerdictAnswered || !call.SkipMemoryExtraction {
 		t.Fatalf("call = %#v, want an answered question that skips memory extraction", call)
 	}
@@ -128,7 +129,7 @@ func TestUserInputCallIsAnAnswerThatSchedulesNoMemoryExtraction(t *testing.T) {
 		t.Fatalf("reply target = %q", call.ReplyTarget)
 	}
 	request.BotID = "bot-1"
-	web := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(request, UserInputResponseInput{BotID: "bot-1"}))
+	web := newTestDecider(Deps{}).UserInputCall(NewCommittedUserInput(request, agentapi.UserInputResponseInput{BotID: "bot-1"}))
 	if web.ReplyTarget != "bot-1" {
 		t.Fatalf("web reply target = %q, want the bot's", web.ReplyTarget)
 	}

@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/felinics/memoh/internal/agent/externalrun"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
@@ -13,7 +13,7 @@ import (
 
 // RuntimeSessionExecutionInfo reports whether a session executes in the
 // workspace and who owns its runtime.
-func (s *Service) RuntimeSessionExecutionInfo(ctx context.Context, sessionID string) (externalrun.SessionExecutionInfo, error) {
+func (s *Service) RuntimeSessionExecutionInfo(ctx context.Context, sessionID string) (agentapi.SessionExecutionInfo, error) {
 	return s.externalrun.SessionExecutionInfo(ctx, sessionID)
 }
 
