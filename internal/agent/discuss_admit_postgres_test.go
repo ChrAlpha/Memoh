@@ -9,11 +9,6 @@ import (
 	"github.com/felinics/memoh/internal/team"
 )
 
-// admitCommand is the check the channel side asks for, over the env's session.
-func (e discussEnv) admitCommand() turn.DiscussAdmitCommand {
-	return turn.DiscussAdmitCommand{TeamID: team.DefaultTeamID, BotID: e.botID, ThreadID: e.sessionID}
-}
-
 // The port gives each of the four answers of the admission its own outcome.
 func TestAdmitDiscussPortReportsEveryOutcome(t *testing.T) {
 	if testing.Short() {

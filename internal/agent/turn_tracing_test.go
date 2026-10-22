@@ -4,17 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/felinics/memoh/internal/agent/admit"
@@ -35,38 +32,29 @@ import (
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
-func recordTurnSpans(t *testing.T) *tracetest.SpanRecorder {
-	t.Helper()
-	recorder := tracetest.NewSpanRecorder()
-	previous := otel.GetTracerProvider()
-	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)))
-	t.Cleanup(func() { otel.SetTracerProvider(previous) })
-	return recorder
-}
+// A Web run that fails reports the failure on its turn span, the same failure
+// the run's result record reports.
+func TestTurnSpanReportsAFailureTheWebSocketStreamDelivered(t *testing.T) {
+	recorder := recordTurnSpans(t)
+	fixture, _ := newScriptedFailureFixture(t, nil, nil, http.StatusServiceUnavailable, http.StatusBadRequest)
 
-func turnSpan(t *testing.T, recorder *tracetest.SpanRecorder) sdktrace.ReadOnlySpan {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		for _, span := range recorder.Ended() {
-			if span.Name() == "agent.turn" {
-				return span
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("no agent.turn span ended within 5s")
-		}
-		time.Sleep(5 * time.Millisecond)
+	_, err := streamWebSend(context.Background(), t, fixture.service, runreq.ChatRequest{
+		BotID:                agenttest.LifecycleBotID,
+		ChatID:               agenttest.LifecycleBotID,
+		ThreadID:             agenttest.LifecycleSessionID,
+		Query:                directLifecyclePrompt,
+		UserMessagePersisted: true,
+	})
+	if err == nil {
+		t.Fatal("Web send succeeded, want a failed run")
 	}
-}
-
-func spanAttr(span sdktrace.ReadOnlySpan, key string) attribute.Value {
-	for _, kv := range span.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value
-		}
+	span := turnSpan(t, recorder)
+	if got := spanAttr(span, "agent.turn.outcome").AsString(); got != "errored" {
+		t.Errorf("outcome = %q, want errored", got)
 	}
-	return attribute.Value{}
+	if span.Status().Code != codes.Error {
+		t.Error("the turn span of a failed run is not an error")
+	}
 }
 
 // The span covers the turn, not the moment it is set up. A span closed
@@ -283,17 +271,6 @@ type spanTestEntry struct {
 	start   func(t *testing.T, service *Service, admitter *agenttest.LifecycleAdmitter) (stop func(), wait func())
 }
 
-// awaitEntryReturned waits for an entry that runs on its caller's goroutine to
-// return, which it does once its run has ended.
-func awaitEntryReturned(t *testing.T, done <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the entry did not return after its run")
-	}
-}
-
 func spanTestEntries() []spanTestEntry {
 	return []spanTestEntry{
 		{name: "web_send", start: func(t *testing.T, service *Service, _ *agenttest.LifecycleAdmitter) (func(), func()) {
@@ -322,7 +299,7 @@ func spanTestEntries() []spanTestEntry {
 			if err != nil {
 				t.Fatalf("StartTurn() error = %v", err)
 			}
-			return handle.Cancel, func() { drainDriveHandle(t, handle) }
+			return handle.Cancel, func() { drainTurn(t, handle) }
 		}},
 		{name: "schedule", start: func(t *testing.T, service *Service, admitter *agenttest.LifecycleAdmitter) (func(), func()) {
 			done := make(chan struct{})

@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,132 +10,11 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
-	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
-	"github.com/felinics/memoh/internal/contextview"
 )
-
-func newTurnTestService(t *testing.T, opts ...testOption) *Service {
-	t.Helper()
-	service, _ := newAdmittedTurnTestService(t, opts...)
-	return service
-}
-
-func newAdmittedTurnTestService(t *testing.T, opts ...testOption) (*Service, *agenttest.ScriptedAdmitter) {
-	t.Helper()
-	admitter := agenttest.NewScriptedAdmitter()
-	service := newTestService(t, Deps{}, append([]testOption{
-		withTurnAdmitter(admitter),
-		withDrive(func(d *drive.Deps) { d.Events = agenttest.EventFunc(admitter.PublishAgentEvent) }),
-	}, opts...)...)
-	return service, admitter
-}
-
-// chatTurnFixture is the chat entries' test service: a real application service
-// reaching a scripted model provider, with a scripted admission gate so a test
-// can read the run's terminal write and what was published to the projection.
-// Chat entries resolve through the whole application path, so a test that
-// asserts what a chat run did needs the real one.
-type chatTurnFixture struct {
-	fixture  directLifecycleFixture
-	admitter *agenttest.ScriptedAdmitter
-}
-
-func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode, options ...directLifecycleOption) chatTurnFixture {
-	t.Helper()
-	admitter := agenttest.NewScriptedAdmitter()
-	// The composition root compiles the run's context fragments into the
-	// provider-facing request there; without it the routing a run assembled
-	// never reaches the model, and a test could not tell a lost route from an
-	// absent one.
-	logger := slog.New(slog.DiscardHandler)
-	applier := contextview.ProviderRunConfigApplier(logger)
-	base := []directLifecycleOption{
-		withNoDecisionQueries(),
-		withFixtureOptions(
-			withTurnAdmitter(admitter),
-			withDrive(func(d *drive.Deps) { d.Events = agenttest.EventFunc(admitter.PublishAgentEvent) }),
-		),
-		withFixtureDeps(func(d *Deps) {
-			d.Agent = native.New(native.Deps{
-				Logger:             logger,
-				ContextViewApplier: applier,
-			})
-			// The chat path reads the session for the facts a run executes under,
-			// the same way a hosted service does.
-			d.Sessions = &agenttest.Sessions{
-				GetFn: func(_ context.Context, sessionID string) (sessionpkg.Thread, error) {
-					return sessionpkg.Thread{
-						ID: sessionID, BotID: agenttest.LifecycleBotID, Type: sessionpkg.TypeChat,
-						SessionMode: sessionpkg.TypeChat, RuntimeType: sessionpkg.RuntimeModel,
-					}, nil
-				},
-				UpdateMetadataFn: func(_ context.Context, sessionID string, _ map[string]any) (sessionpkg.Thread, error) {
-					return sessionpkg.Thread{ID: sessionID}, nil
-				},
-			}
-		}),
-	}
-	fixture := newDirectLifecycleFixture(t, mode, append(base, options...)...)
-	return chatTurnFixture{fixture: fixture, admitter: admitter}
-}
-
-// start runs one chat turn through the turn port and returns its handle.
-func (f chatTurnFixture) start(t *testing.T, cmd turn.StartTurnCommand) turn.RunHandle {
-	t.Helper()
-	if cmd.BotID == "" {
-		cmd.BotID = agenttest.LifecycleBotID
-	}
-	if cmd.ThreadID == "" {
-		cmd.ThreadID = agenttest.LifecycleSessionID
-	}
-	if cmd.ChatID == "" {
-		cmd.ChatID = agenttest.LifecycleBotID
-	}
-	if cmd.Query == "" {
-		cmd.Query = directLifecyclePrompt
-	}
-	handle, err := f.fixture.service.StartTurn(context.Background(), cmd)
-	if err != nil {
-		t.Fatalf("StartTurn() error = %v", err)
-	}
-	return handle
-}
-
-// releaseModel lets a held model call return. It is idempotent, so a test may
-// call it explicitly and the fixture's cleanup may call it again.
-func (f chatTurnFixture) releaseModel(t *testing.T) {
-	t.Helper()
-	f.fixture.releaseOnce.Do(func() { close(f.fixture.release) })
-}
-
-// awaitModelRequest waits for the fixture's model endpoint to receive its
-// first request, which is how a test reads a run that is still executing.
-func (f chatTurnFixture) awaitModelRequest(t *testing.T) {
-	t.Helper()
-	select {
-	case <-f.fixture.started:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the run never reached the model provider")
-	}
-}
-
-// stopRun cancels the run and waits for the cancellation to reach the model
-// request, so a test that asserts on the stopping window is not racing the
-// cancellation it just asked for.
-func (f chatTurnFixture) stopRun(t *testing.T, handle turn.RunHandle) {
-	t.Helper()
-	handle.Cancel()
-	select {
-	case <-f.fixture.cancelled:
-	case <-time.After(10 * time.Second):
-		t.Fatal("cancelling the run did not reach the model request")
-	}
-}
 
 func TestStartTurnRequiresTeamID(t *testing.T) {
 	a := newTurnTestService(t)
@@ -152,7 +30,7 @@ func TestStartTurnRequiresTeamID(t *testing.T) {
 func TestStartTurnStreamsEvents(t *testing.T) {
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
 	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "streams-events-1"})
-	events := collectEvents(t, handle)
+	events, _ := drainTurn(t, handle)
 
 	if len(events) == 0 {
 		t.Fatal("the run delivered no events")
@@ -181,7 +59,7 @@ func TestStartTurnStreamsEvents(t *testing.T) {
 func TestStartTurnPublishesNativeEventsBeforeCleanFinish(t *testing.T) {
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
 	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "native-events-1"})
-	collectEvents(t, handle)
+	drainTurn(t, handle)
 
 	published := fixture.admitter.PublishedEvents()
 	if len(published) == 0 {
@@ -262,7 +140,7 @@ func TestInjectAndAssets(t *testing.T) {
 	}
 	fixture.stopRun(t, handle)
 	fixture.releaseModel(t)
-	collectEvents(t, handle)
+	drainTurn(t, handle)
 	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "late"}); !errors.Is(err, errRunAlreadyFinished) {
 		t.Fatalf("Inject() after the run = %v, want %v", err, errRunAlreadyFinished)
 	}
@@ -301,7 +179,7 @@ func TestCancelWaitsForStreamCleanupBeforeFinalizingRun(t *testing.T) {
 	fixture.awaitModelRequest(t)
 	fixture.stopRun(t, handle)
 	fixture.releaseModel(t)
-	collectEvents(t, handle)
+	drainTurn(t, handle)
 	finish := fixture.admitter.AwaitFinish(t)
 	if finish.Status != sessionruntime.RunStatusAborted {
 		t.Fatalf("finish status = %q, want %q", finish.Status, sessionruntime.RunStatusAborted)
@@ -465,7 +343,7 @@ func TestStartTurnAdmitsUnderTheIdempotencyKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	drainHandle(h)
+	drainTurn(t, h)
 
 	admitted := admitter.Admitted()
 	if len(admitted) != 1 {
@@ -494,7 +372,7 @@ func TestStartTurnMintsInvocationIDWhenKeyIsAbsent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		drainHandle(h)
+		drainTurn(t, h)
 	}
 	admitted := admitter.Admitted()
 	if len(admitted) != 2 {
@@ -537,51 +415,13 @@ func TestStartTurnTranslatesAdmissionRejections(t *testing.T) {
 	}
 }
 
-func drainHandle(h turn.RunHandle) {
-	for range h.Events() {
-	}
-	for range h.Errs() {
-	}
-}
-
-// collectEvents reads a handle to its end and returns the events it delivered.
-// It is bounded, so a run that never ends fails the test instead of hanging the
-// suite: a hung test binary reports nothing about the tests behind it.
-func collectEvents(t *testing.T, h turn.RunHandle) []turn.Event {
-	t.Helper()
-	var (
-		events []turn.Event
-		errs   []error
-	)
-	deadline := time.After(10 * time.Second)
-	for eventCh, errCh := h.Events(), h.Errs(); eventCh != nil || errCh != nil; {
-		select {
-		case event, ok := <-eventCh:
-			if !ok {
-				eventCh = nil
-				continue
-			}
-			events = append(events, event)
-		case err, ok := <-errCh:
-			if !ok {
-				errCh = nil
-				continue
-			}
-			errs = append(errs, err)
-		case <-deadline:
-			t.Fatalf("turn did not end; events so far = %d, errors = %v", len(events), errs)
-		}
-	}
-	return events
-}
-
 // TestRunEndClosesInjectChannel pins the fix for the per-turn goroutine
 // leak: the application's inject-forwarding goroutine exits by ranging over
 // InjectCh, so the service must close it when the run ends.
 func TestRunEndClosesInjectChannel(t *testing.T) {
 	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
 	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "close-inject-1"})
-	collectEvents(t, handle)
+	drainTurn(t, handle)
 	// The run ended, so a steer for it is refused rather than left to rot in a
 	// channel nobody will read.
 	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "late"}); !errors.Is(err, errRunAlreadyFinished) {
@@ -596,7 +436,7 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 	t.Run("error", func(t *testing.T) {
 		fixture := newChatTurnFixture(t, directLifecycleModelFailure)
 		handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "records-error-1"})
-		collectEvents(t, handle)
+		drainTurn(t, handle)
 		if got := fixture.admitter.AwaitFinish(t); got.Status != sessionruntime.RunStatusErrored {
 			t.Fatalf("status = %q, want %q", got.Status, sessionruntime.RunStatusErrored)
 		}
@@ -608,7 +448,7 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 		fixture.awaitModelRequest(t)
 		fixture.stopRun(t, handle)
 		fixture.releaseModel(t)
-		collectEvents(t, handle)
+		drainTurn(t, handle)
 		// A cancelled run and a clean one both end with their channels closed;
 		// only the run's own context tells them apart, and the state written
 		// for the run is the driver's reading of it.
@@ -620,7 +460,7 @@ func TestRunEndRecordsTerminalState(t *testing.T) {
 	t.Run("completion", func(t *testing.T) {
 		fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
 		handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "records-complete-1"})
-		collectEvents(t, handle)
+		drainTurn(t, handle)
 		got := fixture.admitter.AwaitFinish(t)
 		if got.Status != sessionruntime.RunStatusCompleted {
 			t.Fatalf("status = %q, want %q", got.Status, sessionruntime.RunStatusCompleted)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,53 @@ import (
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
 
+// A run stops taking direct injections as soon as its execution ends, but its
+// terminal write still runs afterwards: the session runtime is still appending
+// to the run it is closing, and releasing the thread's slot in the same breath
+// as the last event would let the next run overlap it.
+//
+// The driver's order is fixed: delivery settles, the terminal write runs, and
+// only then does the run end for its caller.
+func TestRunEndStopsDirectInjectBeforeSessionFinishes(t *testing.T) {
+	fixture := newChatTurnFixture(t, directLifecycleModelSuccess)
+	fixture.admitter.FinishStarted = make(chan struct{})
+	fixture.admitter.FinishRelease = make(chan struct{})
+	var releaseOnce sync.Once
+	releaseFinish := func() {
+		releaseOnce.Do(func() { close(fixture.admitter.FinishRelease) })
+	}
+	t.Cleanup(releaseFinish)
+
+	handle := fixture.start(t, turn.StartTurnCommand{TeamID: "team-1", IdempotencyKey: "inject-ownership-1"})
+	select {
+	case <-fixture.admitter.FinishStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("durable finisher did not start")
+	}
+	// The run's execution is over, so a new steer is refused rather than left
+	// to rot in a channel nobody will read.
+	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "late"}); err == nil {
+		t.Error("direct inject succeeded after execution stopped")
+	}
+	// The run has not ended: its terminal write is still in flight, so its
+	// caller must not see the run close yet.
+	select {
+	case _, ok := <-handle.Events():
+		if !ok {
+			t.Fatal("run ended for its caller before the terminal write finished")
+		}
+	default:
+	}
+	releaseFinish()
+	drainTurn(t, handle)
+	if got := fixture.admitter.AwaitFinish(t).Status; got != sessionruntime.RunStatusCompleted {
+		t.Fatalf("finish status = %q, want completed", got)
+	}
+	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "too late"}); err == nil {
+		t.Error("direct inject succeeded after the run ended")
+	}
+}
+
 // collectTurn drains a turn handle and returns its event payloads, the
 // run_terminal events among them, and the turn errors.
 func collectTurn(t *testing.T, handle turn.RunHandle) ([]string, []turn.RunTerminal, []error) {
@@ -21,31 +69,15 @@ func collectTurn(t *testing.T, handle turn.RunHandle) ([]string, []turn.RunTermi
 	var (
 		payloads  []string
 		terminals []turn.RunTerminal
-		errs      []error
 	)
-	timeout := time.After(5 * time.Second)
-	for events, errCh := handle.Events(), handle.Errs(); events != nil || errCh != nil; {
-		select {
-		case event, ok := <-events:
-			if !ok {
-				events = nil
-				continue
+	events, errs := drainTurn(t, handle)
+	for _, event := range events {
+		payloads = append(payloads, string(event.Payload))
+		if terminal, ok := turn.RunTerminalFrom(event); ok {
+			terminals = append(terminals, terminal)
+			if i := len(payloads); i > 0 && event.Seq != int64(i) {
+				t.Fatalf("run_terminal seq = %d, want %d", event.Seq, i)
 			}
-			payloads = append(payloads, string(event.Payload))
-			if terminal, ok := turn.RunTerminalFrom(event); ok {
-				terminals = append(terminals, terminal)
-				if i := len(payloads); i > 0 && event.Seq != int64(i) {
-					t.Fatalf("run_terminal seq = %d, want %d", event.Seq, i)
-				}
-			}
-		case err, ok := <-errCh:
-			if !ok {
-				errCh = nil
-				continue
-			}
-			errs = append(errs, err)
-		case <-timeout:
-			t.Fatal("turn did not end")
 		}
 	}
 	return payloads, terminals, errs
@@ -82,7 +114,7 @@ func TestChatTurnEndsWithRunTerminalFromLedger(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			runs := sessionledger.New()
 			manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
-				OwnerID: "owner-run-terminal", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: abortAlignmentFence{},
+				OwnerID: "owner-run-terminal", OwnerLeaseTTL: time.Minute, Ledger: runs, Fence: agenttest.NoopFence{},
 			})
 			t.Cleanup(func() { _ = manager.Close() })
 			// The run is admitted against the real manager, so its ledger is

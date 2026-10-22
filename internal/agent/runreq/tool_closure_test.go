@@ -5,6 +5,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -228,5 +229,53 @@ func TestRepairPermissionDecisionKeepsExecutionOutcomeSeparate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The continuation path (prepareContinuationRunConfig) builds its outgoing
+// messages via RepairToolCallClosures(NonNilModelMessages(SanitizeMessages(...))).
+// This asserts that composition closes an orphaned older ask_user call while
+// preserving the current call's real result — the reason a process restart
+// mid-ask_user no longer breaks strict assistant-tool adjacency.
+func TestUserInputContinuationHistoryClosesOlderPendingCall(t *testing.T) {
+	t.Parallel()
+
+	oldCall := SDKMessagesToModelMessages([]sdk.Message{{
+		Role: sdk.MessageRoleAssistant,
+		Content: []sdk.MessagePart{sdk.ToolCallPart{
+			ToolCallID: "old-call",
+			ToolName:   userinput.ToolNameAskUser,
+		}},
+	}})[0]
+	currentCall := SDKMessagesToModelMessages([]sdk.Message{{
+		Role: sdk.MessageRoleAssistant,
+		Content: []sdk.MessagePart{sdk.ToolCallPart{
+			ToolCallID: "current-call",
+			ToolName:   userinput.ToolNameAskUser,
+		}},
+	}})[0]
+	currentResult := SDKMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
+		ToolCallID: "current-call",
+		ToolName:   userinput.ToolNameAskUser,
+		Result:     toolexec.OutputFromValue(map[string]any{"status": userinput.StatusSubmitted}),
+	})})[0]
+
+	input := NonNilModelMessages(SanitizeMessages([]ModelMessage{
+		oldCall,
+		{Role: "user", Content: NewTextContent("start another ask_user")},
+		currentCall,
+		currentResult,
+	}))
+	got := RepairToolCallClosures(input, SyntheticToolClosureError)
+	if len(got) != 5 {
+		t.Fatalf("history length = %d, want 5: %#v", len(got), got)
+	}
+	oldResults := ExtractToolResultParts(got[1])
+	if len(oldResults) != 1 || oldResults[0].ToolCallID != "old-call" || !oldResults[0].IsError {
+		t.Fatalf("old call closure = %#v", oldResults)
+	}
+	currentResults := ExtractToolResultParts(got[4])
+	if len(currentResults) != 1 || currentResults[0].ToolCallID != "current-call" || currentResults[0].IsError {
+		t.Fatalf("current result = %#v", currentResults)
 	}
 }

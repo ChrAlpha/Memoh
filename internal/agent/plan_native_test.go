@@ -13,7 +13,6 @@ import (
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
@@ -27,15 +26,14 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	tools "github.com/felinics/memoh/internal/agent/tool"
-	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
-	"github.com/felinics/memoh/internal/contextview"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/schedule"
 	sessiontest "github.com/felinics/memoh/internal/testutil/sessionruntime"
+	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -101,31 +99,6 @@ func adaptApprovalContinuation(ctx context.Context, s *Service, committed decide
 // (userInputContinuation).
 func adaptUserInputContinuation(ctx context.Context, s *Service, committed decide.CommittedUserInputResponse, live bool) answer.Continuation {
 	return s.answer.UserInputContinuation(ctx, committed, live)
-}
-
-// ---------------------------------------------------------------- END ADAPTER
-
-// planCapture records the RunConfig the agent receives at Stream time.
-type planCapture struct {
-	mu   sync.Mutex
-	cfgs []native.RunConfig
-}
-
-func (c *planCapture) apply(ctx context.Context, cfg native.RunConfig) native.RunConfig {
-	c.mu.Lock()
-	c.cfgs = append(c.cfgs, cfg)
-	c.mu.Unlock()
-	return contextview.ProviderRunConfigApplier(slog.New(slog.DiscardHandler))(ctx, cfg)
-}
-
-func (c *planCapture) first(t *testing.T) native.RunConfig {
-	t.Helper()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.cfgs) == 0 {
-		t.Fatal("agent.Stream was never reached; no RunConfig captured")
-	}
-	return c.cfgs[0]
 }
 
 // newCapturingAgent is an agent that records the RunConfig it streams, with the
@@ -567,105 +540,6 @@ func TestPlanNativeChatReplacementWritesTheNewTurnOnceWithoutCommitter(t *testin
 	}
 }
 
-// ---- E. continuation chain ------------------------------------------------
-
-const (
-	planApprovalToolName = "plan_edit"
-	planUIDiff           = "--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new\n"
-)
-
-// planTool is a tool whose output carries a UI-only payload next to its
-// model-visible result, and which records the arguments it was called with.
-type planTool struct {
-	mu     sync.Mutex
-	inputs []map[string]any
-}
-
-func (p *planTool) Tools(context.Context, tools.SessionContext) ([]toolexec.Tool, error) {
-	return []toolexec.Tool{{
-		Name: planApprovalToolName,
-		Execute: func(_ *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-			var args map[string]any
-			if err := input.Unmarshal(&args); err != nil {
-				return sdk.ToolOutput{}, err
-			}
-			p.mu.Lock()
-			p.inputs = append(p.inputs, args)
-			p.mu.Unlock()
-			return toolexec.OutputFromValue(map[string]any{
-				"status":                  "edited",
-				tools.UIOutputMetadataKey: map[string]any{"diff": planUIDiff},
-			}), nil
-		},
-	}}, nil
-}
-
-func (p *planTool) calls() []map[string]any {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]map[string]any(nil), p.inputs...)
-}
-
-// decisionQueries answers the fenced transaction an approved tool's execution
-// checkpoints in, and records the checkpoint.
-type decisionQueries struct {
-	dbstore.Queries
-	mu      sync.Mutex
-	params  []sqlc.MarkSessionRunDecisionExecutingParams
-	lineage []pgtype.UUID
-	count   int64
-}
-
-func (q *decisionQueries) InTx(_ context.Context, fn func(dbstore.Queries) error) error { return fn(q) }
-
-func (*decisionQueries) SupportsTransactions() bool { return true }
-
-func (*decisionQueries) LockBotForSessionWrite(_ context.Context, id pgtype.UUID) (pgtype.UUID, error) {
-	return id, nil
-}
-
-func (*decisionQueries) LockSessionRuntimeFence(context.Context, sqlc.LockSessionRuntimeFenceParams) (int64, error) {
-	return 1, nil
-}
-
-func (q *decisionQueries) MarkSessionRunDecisionExecuting(_ context.Context, arg sqlc.MarkSessionRunDecisionExecutingParams) (int64, error) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.params = append(q.params, arg)
-	return q.count, nil
-}
-
-func (q *decisionQueries) ListCompactionArtifactLineageBySession(ctx context.Context, sessionID pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
-	q.mu.Lock()
-	q.lineage = append(q.lineage, sessionID)
-	q.mu.Unlock()
-	return q.Queries.ListCompactionArtifactLineageBySession(ctx, sessionID)
-}
-
-func (q *decisionQueries) lineageSessions() []pgtype.UUID {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return append([]pgtype.UUID(nil), q.lineage...)
-}
-
-func (q *decisionQueries) recorded() []sqlc.MarkSessionRunDecisionExecutingParams {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return append([]sqlc.MarkSessionRunDecisionExecutingParams(nil), q.params...)
-}
-
-// decisionHistory is a session history that also names the request message of
-// the turn a decision parked, which is what a continuation resumes from.
-type decisionHistory struct {
-	*driveHistoryMessages
-	requestID string
-	err       error
-}
-
-func (m *decisionHistory) GetRunTurnRequest(context.Context, string, string, string) (messagepkg.RunTurnRequest, error) {
-	return messagepkg.RunTurnRequest{MessageID: m.requestID}, m.err
-}
-
 const planWorkspaceTargetID = "plan-workspace-target"
 
 // planTargets resolves the workspace target named by the argument or pinned on the context to a container target, so a
@@ -686,14 +560,6 @@ const planDecisionTurnID = "decision-turn"
 
 func planDecisionHandle() sessionruntime.RunHandle {
 	return sessionruntime.RunHandle{TurnID: planDecisionTurnID}
-}
-
-type decisionHarness struct {
-	service *Service
-	history *decisionHistory
-	capture *planCapture
-	tool    *planTool
-	queries *decisionQueries
 }
 
 // newDecisionHarness is a service whose latest turn called toolName and whose
@@ -742,16 +608,6 @@ func userInputContinuation(ctx context.Context, h decisionHarness, answered user
 	input := decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
 	committed := decide.NewCommittedUserInput(answered, input).ForRun(agenttest.LifecycleRunID, planDecisionHandle())
 	return adaptUserInputContinuation(ctx, h.service, committed, live)
-}
-
-func toolRows(h decisionHarness) []messagepkg.PersistInput {
-	var rows []messagepkg.PersistInput
-	for _, input := range h.history.Persisted {
-		if input.Role == "tool" {
-			rows = append(rows, input)
-		}
-	}
-	return rows
 }
 
 func TestPlanNativeApprovedApprovalExecutesToolAndStoresUIOnlyDataOnRowMetadata(t *testing.T) {
@@ -1221,4 +1077,38 @@ func TestPlanNativeContinuationKeepsDriverRunIDAndResolvedWorkspaceTarget(t *tes
 			}
 		})
 	}
+}
+
+// The native schedule entry resolves the workspace itself, ahead of resolve,
+// so a bound target that cannot be reached fails the fire instead of running
+// in the wrong place.
+func TestNativeScheduleSetupBindsWorkspaceBeforeResolve(t *testing.T) {
+	boom := errors.New("target unreachable")
+	service := workdirBoundService(t, agenttest.RemoteWorkdir(), agenttest.KindedTargetResolver{Err: boom}, nil)
+
+	setup := service.plan.ScheduleSetup(drive.RunSpec{}, schedule.TriggerPayload{OwnerUserID: "owner-1"}, "bot-1", "", externalrun.Dispatch{Kind: externalrun.DispatchNative})
+	_, err := setup(t.Context(), runreq.ChatRequest{BotID: "bot-1", ThreadID: "s1", UserID: "owner-1"})
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want the workspace resolution failure", err)
+	}
+}
+
+// fixedWorkdirResolver resolves every binding to the same workdir.
+type fixedWorkdirResolver struct{ resolved workdir.Resolved }
+
+func (f fixedWorkdirResolver) ResolveForSession(context.Context, string, string) (workdir.Resolved, error) {
+	return f.resolved, nil
+}
+
+// workdirBoundService is a Service whose session s1 is bound to the workdir.
+func workdirBoundService(t *testing.T, resolved workdir.Resolved, targets runconfig.WorkspaceTargetResolver, permissions runreq.BotPermissionChecker) *Service {
+	t.Helper()
+	return newTestService(t, Deps{
+		Sessions: &agenttest.Sessions{GetFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {
+			return sessionpkg.Thread{ID: id, BotID: "bot-1", WorkdirID: "p1"}, nil
+		}},
+		BotPermissions:   permissions,
+		WorkspaceTargets: targets,
+		Workdirs:         fixedWorkdirResolver{resolved: resolved},
+	})
 }

@@ -10,7 +10,7 @@ import (
 
 // fakeTurnAdmitter captures the Admit input so tests can drive the admission
 // hook exactly the way the runtime manager would at activation. Mirrors
-// fakeTriggeredAdmitter in service_trigger_test.go.
+// fakeTriggeredAdmitter in schedule_lifecycle_test.go.
 type fakeTurnAdmitter struct {
 	admitInput sessionruntime.AdmitInput
 }

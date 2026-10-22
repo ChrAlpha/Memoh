@@ -106,7 +106,7 @@ func TestStage4RetryCutoffKeepsSummaryAndDropsLaterRows(t *testing.T) {
 // A resume request that cannot name its persisted row (a record from before
 // the turn was tracked) keeps the saved user row in history; one that does
 // (ruling 14) has the row taken out, because the resume instruction supplies
-// the task. The provider-request count is in session_resume_dedup_test.go.
+// the task. The provider-request count is in resume_dedup_test.go.
 func TestStage4ResumedRequestHasTheOriginalUserRowOnce(t *testing.T) {
 	s := newStage4Session(t)
 	original := s.Persist("user", "original-task")
