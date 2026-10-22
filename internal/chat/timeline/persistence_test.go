@@ -122,3 +122,33 @@ func TestPersistEventReturnsOriginalEventOnDedup(t *testing.T) {
 		t.Fatalf("deduplicated delivery must project the original unstamped event, got %+v", projected)
 	}
 }
+
+// A message event that mentions the bot or replies to one of its messages is
+// stored with both facts as columns, which is what the discuss admission reads;
+// no other event addresses the bot.
+func TestPersistEventRecordsWhetherTheMessageAddressesTheBot(t *testing.T) {
+	const botID, sessionID = "77777777-7777-7777-7777-777777777777", "66666666-6666-6666-6666-666666666666"
+	for name, tc := range map[string]struct {
+		event       CanonicalEvent
+		wantMention bool
+		wantReply   bool
+	}{
+		"mention":         {MessageEvent{SessionID: sessionID, MessageID: "m1", MentionsMe: true}, true, false},
+		"reply":           {MessageEvent{SessionID: sessionID, MessageID: "m1", RepliesToMe: true}, false, true},
+		"both":            {MessageEvent{SessionID: sessionID, MessageID: "m1", MentionsMe: true, RepliesToMe: true}, true, true},
+		"neither":         {MessageEvent{SessionID: sessionID, MessageID: "m1"}, false, false},
+		"edit of mention": {EditEvent{SessionID: sessionID, MessageID: "m1"}, false, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			queries := &fakeEventQueries{nextCursor: 1}
+			store := NewEventStore(slog.New(slog.DiscardHandler), queries)
+			if _, _, err := store.PersistEvent(context.Background(), botID, sessionID, tc.event); err != nil {
+				t.Fatal(err)
+			}
+			if queries.created.MentionsMe != tc.wantMention || queries.created.RepliesToMe != tc.wantReply {
+				t.Fatalf("stored mentions_me=%v replies_to_me=%v, want %v %v",
+					queries.created.MentionsMe, queries.created.RepliesToMe, tc.wantMention, tc.wantReply)
+			}
+		})
+	}
+}

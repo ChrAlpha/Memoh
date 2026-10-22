@@ -64,8 +64,8 @@ func (p *discussProcess) chatTurn(t *testing.T, env discussEnv, from discussPart
 		t.Fatal(err)
 	}
 	if _, err := env.pool.Exec(context.Background(), `
-		INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms)
-		VALUES ($1, $2, $3, 'message', $4, $5, $6)
+		INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms, mentions_me)
+		VALUES ($1, $2, $3, 'message', $4, $5, $6, true)
 	`, eventID, env.botID, env.sessionID, eventData, externalID, time.Now().UnixMilli()); err != nil {
 		t.Fatalf("insert event %s: %v", externalID, err)
 	}
@@ -438,6 +438,8 @@ type passiveInput struct {
 	externalID string
 	text       string
 	mentionsMe bool
+	// repliesToMe is a reply to one of the bot's own messages.
+	repliesToMe bool
 	// refused writes the row the way a refused sender's message is written:
 	// without an event, marked with the admission that refused it.
 	refused messagepkg.Admission
@@ -492,9 +494,9 @@ func (e discussEnv) writeAll(t *testing.T, inputs ...passiveInput) []int64 {
 		}
 		eventID := uuid.New()
 		if _, err := tx.Exec(ctx, `
-			INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms)
-			VALUES ($1, $2, $3, 'message', $4, $5, $6)
-		`, eventID, e.botID, e.sessionID, eventData, in.externalID, time.Now().UnixMilli()); err != nil {
+			INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms, mentions_me, replies_to_me)
+			VALUES ($1, $2, $3, 'message', $4, $5, $6, $7, $8)
+		`, eventID, e.botID, e.sessionID, eventData, in.externalID, time.Now().UnixMilli(), in.mentionsMe, in.repliesToMe); err != nil {
 			t.Fatalf("insert event %s: %v", in.externalID, err)
 		}
 		if _, err := tx.Exec(ctx, `UPDATE bot_history_messages SET event_id = $2 WHERE id = $1`, rowIDs[i], eventID); err != nil {
@@ -919,9 +921,9 @@ func (e discussEnv) writeHeaded(t *testing.T, from discussParticipant, externalI
 	require.NoError(t, err)
 	eventID := uuid.New()
 	_, err = e.pool.Exec(ctx, `
-		INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms)
-		VALUES ($1, $2, $3, 'message', $4, $5, $6)
-	`, eventID, e.botID, e.sessionID, eventData, externalID, at.UnixMilli())
+		INSERT INTO bot_session_events (id, bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms, mentions_me)
+		VALUES ($1, $2, $3, 'message', $4, $5, $6, $7)
+	`, eventID, e.botID, e.sessionID, eventData, externalID, at.UnixMilli(), mentionsMe)
 	require.NoError(t, err)
 	_, err = e.pool.Exec(ctx, `UPDATE bot_history_messages SET event_id = $2 WHERE id = $1`, row.ID, eventID)
 	require.NoError(t, err)

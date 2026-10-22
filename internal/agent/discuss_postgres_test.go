@@ -296,28 +296,36 @@ func TestDiscussExternalRuntimeRunsOnlyWhenAddressed(t *testing.T) {
 	if testing.Short() {
 		t.Skip("PostgreSQL integration")
 	}
-	t.Run("group", func(t *testing.T) {
-		env := newDiscussEnv(t, "group")
-		alice := env.participant(t, false)
-		env.setRuntime(t, "codex")
-		proc := newDiscussProcess(t, env)
-		env.write(t, passiveInput{from: alice, externalID: "m1", text: "not for the bot"})
-		if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
-			t.Fatalf("unaddressed outcome = %v, want skipped", outcome)
-		}
-		if got := len(env.runs(t)); got != 0 {
-			t.Fatalf("runs for unaddressed input = %d, want 0", got)
-		}
-		hw := env.write(t, passiveInput{from: alice, externalID: "m2", text: "@bot over to you", mentionsMe: true})
-		outcome, done := proc.admit(t, env)
-		if outcome != pending.DiscussAdmitted {
-			t.Fatalf("addressed outcome = %v, want admitted", outcome)
-		}
-		waitDiscussRun(t, done)
-		if _, ok := env.runs(t)[env.invocation(hw)]; !ok {
-			t.Fatalf("runs = %v, want the addressed batch's run", env.runs(t))
-		}
-	})
+	// What addresses the bot is a mention of it or a reply to one of its
+	// messages; either wakes the runtime.
+	for name, addressed := range map[string]passiveInput{
+		"group mention": {externalID: "m2", text: "@bot over to you", mentionsMe: true},
+		"group reply":   {externalID: "m2", text: "yes, do that", repliesToMe: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := newDiscussEnv(t, "group")
+			alice := env.participant(t, false)
+			env.setRuntime(t, "codex")
+			proc := newDiscussProcess(t, env)
+			env.write(t, passiveInput{from: alice, externalID: "m1", text: "not for the bot"})
+			if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
+				t.Fatalf("unaddressed outcome = %v, want skipped", outcome)
+			}
+			if got := len(env.runs(t)); got != 0 {
+				t.Fatalf("runs for unaddressed input = %d, want 0", got)
+			}
+			addressed.from = alice
+			hw := env.write(t, addressed)
+			outcome, done := proc.admit(t, env)
+			if outcome != pending.DiscussAdmitted {
+				t.Fatalf("addressed outcome = %v, want admitted", outcome)
+			}
+			waitDiscussRun(t, done)
+			if _, ok := env.runs(t)[env.invocation(hw)]; !ok {
+				t.Fatalf("runs = %v, want the addressed batch's run", env.runs(t))
+			}
+		})
+	}
 	t.Run("private", func(t *testing.T) {
 		env := newDiscussEnv(t, "private")
 		alice := env.participant(t, false)

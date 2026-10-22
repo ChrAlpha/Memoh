@@ -507,8 +507,16 @@ func (c *StepCommitter) NameCheckpoint(ctx context.Context, f outcome.RunFailure
 		return err
 	}
 	keys := FailureRowMetadata(f, "", nil)
+	c.mu.Lock()
+	var checkpointIDs []string
+	for _, message := range c.persisted {
+		if message.Metadata[messagepkg.AgentStepInterruptedMetadataKey] == true {
+			checkpointIDs = append(checkpointIDs, message.ID)
+		}
+	}
+	c.mu.Unlock()
 	if err := c.persister.RecordInterruptedStepFailure(ctx, messagepkg.InterruptedStepFailure{
-		RunID: c.req.RunID, BotID: c.req.BotID, SessionID: c.req.ThreadID, Metadata: keys,
+		RunID: c.req.RunID, BotID: c.req.BotID, SessionID: c.req.ThreadID, MessageIDs: checkpointIDs, Metadata: keys,
 	}); err != nil {
 		c.noteFailure(err)
 		return err

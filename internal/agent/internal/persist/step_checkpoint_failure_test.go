@@ -3,6 +3,7 @@ package persist
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -65,6 +66,9 @@ func TestCheckpointRowTakesTheFailureTheRunWasNamedWith(t *testing.T) {
 	if got.RunID != "run" || got.BotID != "bot" || got.SessionID != "session" ||
 		got.Metadata[messagepkg.HistoryErrorCodeMetadataKey] != string(declared.Code) {
 		t.Fatalf("named failure = %#v, want the declared code %s", got, declared.Code)
+	}
+	if want := []string{"committed"}; !slices.Equal(got.MessageIDs, want) {
+		t.Fatalf("named rows = %v, want the checkpoint the run wrote %v", got.MessageIDs, want)
 	}
 	rows := committer.PersistedMessages()
 	if len(rows) != 1 || rows[0].Metadata[messagepkg.HistoryErrorCodeMetadataKey] != string(declared.Code) ||

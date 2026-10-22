@@ -274,13 +274,15 @@ func TestPostgresRuntimeFenceNamesTheFailureOnTheRunsInterruptedRow(t *testing.T
 	}
 	checkpoint := interruptedCheckpointInput(botID, sessionID, runID, persisted[0].ID, "cut short")
 	checkpoint.Metadata["kept"] = "yes"
-	if _, err := service.PersistAgentStep(owner, AgentStep{RunID: runID.String(), Interrupted: true, Messages: []PersistInput{checkpoint}}); err != nil {
-		t.Fatalf("interrupted commit: %v", err)
+	written, err := service.PersistAgentStep(owner, AgentStep{RunID: runID.String(), Interrupted: true, Messages: []PersistInput{checkpoint}})
+	if err != nil || len(written) != 1 {
+		t.Fatalf("interrupted commit = (%d, %v), want (1, nil)", len(written), err)
 	}
 
 	failure := InterruptedStepFailure{
 		RunID: runID.String(), BotID: botID.String(), SessionID: sessionID.String(),
-		Metadata: map[string]any{HistoryErrorCodeMetadataKey: "agent.response_timeout"},
+		MessageIDs: []string{written[0].ID},
+		Metadata:   map[string]any{HistoryErrorCodeMetadataKey: "agent.response_timeout"},
 	}
 	if err := service.RecordInterruptedStepFailure(owner, failure); err != nil {
 		t.Fatalf("record failure: %v", err)

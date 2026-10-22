@@ -89,8 +89,8 @@ SELECT
   m.turn_id,
   m.turn_position,
   m.sender_channel_identity_id,
-  COALESCE((e.event_data->>'mentions_me')::boolean, false)::boolean AS mentions_me,
-  COALESCE((e.event_data->>'replies_to_me')::boolean, false)::boolean AS replies_to_me
+  COALESCE(e.mentions_me, false)::boolean AS mentions_me,
+  COALESCE(e.replies_to_me, false)::boolean AS replies_to_me
 FROM bot_history_messages m
 LEFT JOIN bot_session_events e ON e.id = m.event_id
 WHERE m.team_id = public.memoh_current_team_id()

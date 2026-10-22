@@ -9,8 +9,10 @@ INSERT INTO bot_session_events (
   event_data,
   external_message_id,
   sender_channel_identity_id,
-  received_at_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+  received_at_ms,
+  mentions_me,
+  replies_to_me
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING
 RETURNING id;
 

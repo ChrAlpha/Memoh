@@ -612,6 +612,11 @@ CREATE TABLE IF NOT EXISTS bot_session_events (
   external_message_id TEXT,
   sender_channel_identity_id UUID,
   received_at_ms BIGINT NOT NULL,
+  -- Whether a message event mentions the bot or replies to one of its
+  -- messages; the discuss admission answers an External Agent runtime only
+  -- when a pending input does.
+  mentions_me BOOLEAN NOT NULL DEFAULT false,
+  replies_to_me BOOLEAN NOT NULL DEFAULT false,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

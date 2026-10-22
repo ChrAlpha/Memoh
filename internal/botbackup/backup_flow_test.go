@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	"github.com/felinics/memoh/internal/botbackup/secure"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -354,5 +356,16 @@ func TestRestoredExternalSessionActsForTheRestoringAccount(t *testing.T) {
 	metadata, _, owner := restoredRuntimeOwner("model", archived, archived, restoringUser)
 	if owner.Valid || string(metadata) != string(archived) {
 		t.Fatalf("model session restored with owner %v and metadata %s, want neither touched", owner, metadata)
+	}
+}
+
+// A restored message event keeps whether it addressed the bot, so a restored
+// session's pending input is answered as it was before the backup.
+func TestRestoredSessionEventKeepsWhetherItAddressedTheBot(t *testing.T) {
+	params := restoredSessionEventParams(pgtype.UUID{}, pgtype.UUID{}, sqlc.BotSessionEvent{
+		EventKind: "message", EventData: []byte(`{}`), MentionsMe: true, RepliesToMe: true,
+	})
+	if !params.MentionsMe || !params.RepliesToMe {
+		t.Fatalf("restored event mentions_me=%v replies_to_me=%v, want both kept", params.MentionsMe, params.RepliesToMe)
 	}
 }

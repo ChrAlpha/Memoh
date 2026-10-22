@@ -19,8 +19,10 @@ INSERT INTO bot_session_events (
   event_data,
   external_message_id,
   sender_channel_identity_id,
-  received_at_ms
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+  received_at_ms,
+  mentions_me,
+  replies_to_me
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING
 RETURNING id
 `
@@ -33,6 +35,8 @@ type CreateSessionEventParams struct {
 	ExternalMessageID       pgtype.Text `json:"external_message_id"`
 	SenderChannelIdentityID pgtype.UUID `json:"sender_channel_identity_id"`
 	ReceivedAtMs            int64       `json:"received_at_ms"`
+	MentionsMe              bool        `json:"mentions_me"`
+	RepliesToMe             bool        `json:"replies_to_me"`
 }
 
 func (q *Queries) CreateSessionEvent(ctx context.Context, arg CreateSessionEventParams) (pgtype.UUID, error) {
@@ -44,6 +48,8 @@ func (q *Queries) CreateSessionEvent(ctx context.Context, arg CreateSessionEvent
 		arg.ExternalMessageID,
 		arg.SenderChannelIdentityID,
 		arg.ReceivedAtMs,
+		arg.MentionsMe,
+		arg.RepliesToMe,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -61,7 +67,7 @@ func (q *Queries) DeleteSessionEventsByBot(ctx context.Context, botID pgtype.UUI
 }
 
 const listSessionEventsByBot = `-- name: ListSessionEventsByBot :many
-SELECT id, bot_id, session_id, event_kind, event_data, external_message_id, sender_channel_identity_id, received_at_ms, created_at, team_id FROM bot_session_events
+SELECT id, bot_id, session_id, event_kind, event_data, external_message_id, sender_channel_identity_id, received_at_ms, mentions_me, replies_to_me, created_at, team_id FROM bot_session_events
 WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
 ORDER BY received_at_ms ASC, id ASC
 `
@@ -84,6 +90,8 @@ func (q *Queries) ListSessionEventsByBot(ctx context.Context, botID pgtype.UUID)
 			&i.ExternalMessageID,
 			&i.SenderChannelIdentityID,
 			&i.ReceivedAtMs,
+			&i.MentionsMe,
+			&i.RepliesToMe,
 			&i.CreatedAt,
 			&i.TeamID,
 		); err != nil {
@@ -98,7 +106,7 @@ func (q *Queries) ListSessionEventsByBot(ctx context.Context, botID pgtype.UUID)
 }
 
 const listSessionEventsBySession = `-- name: ListSessionEventsBySession :many
-SELECT id, bot_id, session_id, event_kind, event_data, external_message_id, sender_channel_identity_id, received_at_ms, created_at, team_id FROM bot_session_events
+SELECT id, bot_id, session_id, event_kind, event_data, external_message_id, sender_channel_identity_id, received_at_ms, mentions_me, replies_to_me, created_at, team_id FROM bot_session_events
 WHERE team_id = public.memoh_current_team_id() AND session_id = $1
 ORDER BY received_at_ms ASC, created_at ASC, id ASC
 `
@@ -121,6 +129,8 @@ func (q *Queries) ListSessionEventsBySession(ctx context.Context, sessionID pgty
 			&i.ExternalMessageID,
 			&i.SenderChannelIdentityID,
 			&i.ReceivedAtMs,
+			&i.MentionsMe,
+			&i.RepliesToMe,
 			&i.CreatedAt,
 			&i.TeamID,
 		); err != nil {
@@ -135,7 +145,7 @@ func (q *Queries) ListSessionEventsBySession(ctx context.Context, sessionID pgty
 }
 
 const listSessionEventsBySessionAfter = `-- name: ListSessionEventsBySessionAfter :many
-SELECT id, bot_id, session_id, event_kind, event_data, external_message_id, sender_channel_identity_id, received_at_ms, created_at, team_id FROM bot_session_events
+SELECT id, bot_id, session_id, event_kind, event_data, external_message_id, sender_channel_identity_id, received_at_ms, mentions_me, replies_to_me, created_at, team_id FROM bot_session_events
 WHERE team_id = public.memoh_current_team_id() AND session_id = $1 AND received_at_ms >= $2
 ORDER BY received_at_ms ASC, created_at ASC, id ASC
 `
@@ -163,6 +173,8 @@ func (q *Queries) ListSessionEventsBySessionAfter(ctx context.Context, arg ListS
 			&i.ExternalMessageID,
 			&i.SenderChannelIdentityID,
 			&i.ReceivedAtMs,
+			&i.MentionsMe,
+			&i.RepliesToMe,
 			&i.CreatedAt,
 			&i.TeamID,
 		); err != nil {

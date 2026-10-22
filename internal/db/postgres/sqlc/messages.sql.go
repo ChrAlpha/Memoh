@@ -6337,25 +6337,29 @@ WHERE team_id = public.memoh_current_team_id()
   AND session_id = $3
   AND run_id = $4
   AND role = 'assistant'
-  AND metadata @> '{"agent_step_interrupted": true}'::jsonb
+  AND id = ANY($5::uuid[])
 `
 
 type MergeRunInterruptedRowMetadataParams struct {
-	FailureMetadata []byte      `json:"failure_metadata"`
-	BotID           pgtype.UUID `json:"bot_id"`
-	SessionID       pgtype.UUID `json:"session_id"`
-	RunID           pgtype.UUID `json:"run_id"`
+	FailureMetadata []byte        `json:"failure_metadata"`
+	BotID           pgtype.UUID   `json:"bot_id"`
+	SessionID       pgtype.UUID   `json:"session_id"`
+	RunID           pgtype.UUID   `json:"run_id"`
+	MessageIds      []pgtype.UUID `json:"message_ids"`
 }
 
 // Names the failure of the run on the interrupted checkpoint rows the run itself
-// wrote. Only those rows are touched, and only the failure keys are merged into
-// their metadata; everything else on the row stays as written.
+// wrote. The caller names the rows: they are the ones its step committer wrote
+// as checkpoints, so nothing here decides which rows are checkpoints. Only
+// those rows are touched, and only the failure keys are merged into their
+// metadata; everything else on the row stays as written.
 func (q *Queries) MergeRunInterruptedRowMetadata(ctx context.Context, arg MergeRunInterruptedRowMetadataParams) (int64, error) {
 	result, err := q.db.Exec(ctx, mergeRunInterruptedRowMetadata,
 		arg.FailureMetadata,
 		arg.BotID,
 		arg.SessionID,
 		arg.RunID,
+		arg.MessageIds,
 	)
 	if err != nil {
 		return 0, err

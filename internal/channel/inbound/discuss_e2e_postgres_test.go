@@ -823,7 +823,7 @@ func TestDiscussE2EGroupConversation(t *testing.T) {
 			if senders := e.count(`SELECT count(DISTINCT sender_channel_identity_id) FROM bot_history_messages WHERE session_id = $1 AND role = 'user'`); senders != 3 {
 				t.Fatalf("distinct senders in history = %d, want 3", senders)
 			}
-			if mentions := e.count(`SELECT count(*) FROM bot_session_events WHERE session_id = $1 AND (event_data->>'mentions_me')::boolean`); mentions != 1 {
+			if mentions := e.count(`SELECT count(*) FROM bot_session_events WHERE session_id = $1 AND mentions_me`); mentions != 1 {
 				t.Fatalf("events that mention the bot = %d, want 1", mentions)
 			}
 		})

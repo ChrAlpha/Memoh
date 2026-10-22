@@ -416,6 +416,8 @@ type BotSessionEvent struct {
 	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
 	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
 	ReceivedAtMs            int64              `json:"received_at_ms"`
+	MentionsMe              bool               `json:"mentions_me"`
+	RepliesToMe             bool               `json:"replies_to_me"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	TeamID                  pgtype.UUID        `json:"team_id"`
 }

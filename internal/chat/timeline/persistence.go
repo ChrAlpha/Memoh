@@ -63,6 +63,7 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 
 	externalMessageID := extractExternalMessageID(event)
 	senderID := extractSenderChannelIdentityID(event)
+	mentionsMe, repliesToMe := extractAttention(event)
 
 	pgExternalMsgID := pgtype.Text{}
 	if externalMessageID != "" {
@@ -84,6 +85,8 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 		ExternalMessageID:       pgExternalMsgID,
 		SenderChannelIdentityID: pgSenderID,
 		ReceivedAtMs:            event.GetReceivedAtMs(),
+		MentionsMe:              mentionsMe,
+		RepliesToMe:             repliesToMe,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -139,6 +142,15 @@ func extractExternalMessageID(event CanonicalEvent) string {
 	default:
 		return ""
 	}
+}
+
+// extractAttention reports whether a message event mentions the bot or replies
+// to one of its messages. No other kind of event addresses it.
+func extractAttention(event CanonicalEvent) (mentionsMe, repliesToMe bool) {
+	if message, ok := event.(MessageEvent); ok {
+		return message.MentionsMe, message.RepliesToMe
+	}
+	return false, false
 }
 
 func extractSenderChannelIdentityID(event CanonicalEvent) string {

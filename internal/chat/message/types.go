@@ -228,7 +228,10 @@ type InterruptedStepFailure struct {
 	RunID     string
 	BotID     string
 	SessionID string
-	Metadata  map[string]any
+	// MessageIDs are the checkpoint rows to name: the run's own, as its step
+	// committer wrote them.
+	MessageIDs []string
+	Metadata   map[string]any
 }
 
 type AgentStepPersister interface {

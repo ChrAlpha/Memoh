@@ -60,8 +60,8 @@ func (s *DBService) RecordInterruptedStepFailure(ctx context.Context, failure In
 		return errors.New("message service is not configured")
 	}
 	runID, botID, sessionID := strings.TrimSpace(failure.RunID), strings.TrimSpace(failure.BotID), strings.TrimSpace(failure.SessionID)
-	if runID == "" || botID == "" || sessionID == "" || len(failure.Metadata) == 0 {
-		return errors.New("interrupted step failure requires run, bot, session ids and metadata")
+	if runID == "" || botID == "" || sessionID == "" || len(failure.MessageIDs) == 0 || len(failure.Metadata) == 0 {
+		return errors.New("interrupted step failure requires run, bot, session, message ids and metadata")
 	}
 	fence, ok := runtimefence.FromContext(ctx)
 	if !ok {
@@ -83,6 +83,12 @@ func (s *DBService) RecordInterruptedStepFailure(ctx context.Context, failure In
 	if err != nil {
 		return fmt.Errorf("invalid session id: %w", err)
 	}
+	pgMessageIDs := make([]pgtype.UUID, len(failure.MessageIDs))
+	for i, id := range failure.MessageIDs {
+		if pgMessageIDs[i], err = dbpkg.ParseUUID(strings.TrimSpace(id)); err != nil {
+			return fmt.Errorf("invalid message id: %w", err)
+		}
+	}
 	return runtimefence.InTransaction(ctx, s.queries, botID, sessionID, func(queries dbstore.Queries) error {
 		writer, ok := queries.(agentStepQueries)
 		if !ok {
@@ -98,7 +104,7 @@ func (s *DBService) RecordInterruptedStepFailure(ctx context.Context, failure In
 			return fmt.Errorf("lock session run for agent step: %w", lockErr)
 		}
 		_, err := writer.MergeRunInterruptedRowMetadata(ctx, sqlc.MergeRunInterruptedRowMetadataParams{
-			FailureMetadata: payload, BotID: pgBotID, SessionID: pgSessionID, RunID: pgRunID,
+			FailureMetadata: payload, BotID: pgBotID, SessionID: pgSessionID, RunID: pgRunID, MessageIds: pgMessageIDs,
 		})
 		return err
 	})

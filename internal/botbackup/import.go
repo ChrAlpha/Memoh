@@ -2243,6 +2243,8 @@ func restoredSessionEventParams(botID, sessionID pgtype.UUID, item sqlc.BotSessi
 		ExternalMessageID:       item.ExternalMessageID,
 		SenderChannelIdentityID: pgtype.UUID{},
 		ReceivedAtMs:            item.ReceivedAtMs,
+		MentionsMe:              item.MentionsMe,
+		RepliesToMe:             item.RepliesToMe,
 	}
 }
 
