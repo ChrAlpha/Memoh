@@ -42,6 +42,8 @@ type Reply struct {
 	caps    channel.ChannelCapabilities
 	state   State
 	preview channel.Preview
+	// ended is the preview that last ended, which the next one carries on from.
+	ended channel.Preview
 }
 
 // Open starts a reply: it reads the channel's capabilities for the target and
@@ -322,6 +324,7 @@ func (r *Reply) endPreview(ctx context.Context, final *channel.StreamEvent) erro
 	if preview == nil {
 		return nil
 	}
+	r.ended = preview
 	return preview.Finish(ctx, final)
 }
 
@@ -342,10 +345,12 @@ func (r *Reply) reopen(ctx context.Context) error {
 		SourceMessageID: r.cfg.SourceMessageID,
 		Metadata:        r.cfg.Metadata,
 		Continuation:    true,
+		After:           r.ended,
 	})
 	if err != nil {
 		return err
 	}
+	r.ended = nil
 	r.preview = preview
 	return preview.Update(ctx, channel.StreamEvent{Type: channel.StreamEventStatus, Status: channel.StreamStatusStarted})
 }

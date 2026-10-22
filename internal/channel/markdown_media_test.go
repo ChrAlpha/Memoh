@@ -574,7 +574,7 @@ func TestMediaWithheldBeforeAToolCallIsPublishedByTheContinuingPreview(t *testin
 	if err := first.Finish(ctx, &StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{}}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := surface.OpenPreview(ctx, "target-1", StreamOptions{Continuation: true})
+	second, err := surface.OpenPreview(ctx, "target-1", StreamOptions{Continuation: true, After: first})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,7 +632,7 @@ func TestTextAfterWithheldMediaWaitsInTheContinuingPreview(t *testing.T) {
 	if err := first.Finish(ctx, &StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{}}); err != nil {
 		t.Fatal(err)
 	}
-	second, err := surface.OpenPreview(ctx, "target-1", StreamOptions{Continuation: true})
+	second, err := surface.OpenPreview(ctx, "target-1", StreamOptions{Continuation: true, After: first})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -679,5 +679,79 @@ func TestWithheldMediaDoesNotOutliveItsReply(t *testing.T) {
 	}
 	if streamed.String() != "Look Fresh reply" {
 		t.Fatalf("streamed=%q", streamed.String())
+	}
+}
+
+// Two replies one after the other on a surface, as a queued answer is followed
+// by the next reply, do not share what the first withheld: the second is not
+// opened as a continuation, so it starts with nothing held.
+func TestReplyDoesNotInheritMediaWithheldByThePreviousReply(t *testing.T) {
+	ctx := context.Background()
+	adapter := newPreviewAdapter("preview-fresh", 0)
+	surface := newPreviewSurface(t, adapter)
+	first, err := surface.OpenPreview(ctx, "target-1", StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Update(ctx, StreamEvent{Type: StreamEventDelta, Delta: "![c](/data/c.png)"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Finish(ctx, &StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{}}); err != nil {
+		t.Fatal(err)
+	}
+	next, err := surface.OpenPreview(ctx, "target-1", StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := next.Update(ctx, StreamEvent{Type: StreamEventDelta, Delta: "Fresh reply"}); err != nil {
+		t.Fatal(err)
+	}
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	var streamed strings.Builder
+	for _, update := range adapter.updates {
+		streamed.WriteString(update.LogicalEvent().Delta)
+	}
+	if streamed.String() != "Fresh reply" {
+		t.Fatalf("streamed=%q, want the new reply shown without waiting for the previous reply's media", streamed.String())
+	}
+}
+
+// A continuation takes the state from the preview it is given as the one it
+// carries on from, and from no other.
+func TestContinuationTakesTheStateOfThePreviewItCarriesOn(t *testing.T) {
+	ctx := context.Background()
+	adapter := newPreviewAdapter("preview-after", 0)
+	surface := newPreviewSurface(t, adapter)
+	held, err := surface.OpenPreview(ctx, "target-1", StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := held.Update(ctx, StreamEvent{Type: StreamEventDelta, Delta: "![c](/data/c.png)"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := held.Finish(ctx, &StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{}}); err != nil {
+		t.Fatal(err)
+	}
+	other, err := surface.OpenPreview(ctx, "target-1", StreamOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Finish(ctx, &StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{}}); err != nil {
+		t.Fatal(err)
+	}
+	carried, err := surface.OpenPreview(ctx, "target-1", StreamOptions{Continuation: true, After: held})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := carried.(*managerOutboundStream).carry; !got.holding || len(got.segments) == 0 {
+		t.Fatalf("carry=%+v, want the state of the preview it carries on from", got)
+	}
+	unrelated, err := surface.OpenPreview(ctx, "target-1", StreamOptions{Continuation: true, After: other})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := unrelated.(*managerOutboundStream).carry; got.holding || len(got.segments) != 0 {
+		t.Fatalf("carry=%+v, want nothing withheld", got)
 	}
 }

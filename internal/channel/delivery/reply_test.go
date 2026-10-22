@@ -23,6 +23,7 @@ type surfaceLog struct {
 	mu       sync.Mutex
 	calls    []string
 	opens    []channel.StreamOptions
+	previews []*previewLog
 	reacted  []channel.ReactRequest
 	attached []*channel.ReplyRef
 	// errorTexts is the text of each error event the preview received.
@@ -65,9 +66,11 @@ func (s *surfaceLog) React(_ context.Context, req channel.ReactRequest) error {
 func (s *surfaceLog) OpenPreview(_ context.Context, _ string, opts channel.StreamOptions) (channel.Preview, error) {
 	s.mu.Lock()
 	s.opens = append(s.opens, opts)
+	preview := &previewLog{s: s}
+	s.previews = append(s.previews, preview)
 	s.mu.Unlock()
 	s.record("open")
-	return &previewLog{s: s}, nil
+	return preview, nil
 }
 
 func (s *surfaceLog) snapshot() []string {
@@ -291,6 +294,9 @@ func TestReplySplitsThePreviewAroundAPlainPrompt(t *testing.T) {
 	}
 	if len(surface.opens) != 2 || surface.opens[0].Continuation || surface.opens[0].Reply != reply {
 		t.Fatalf("first preview opened with %+v", surface.opens)
+	}
+	if surface.opens[0].After != nil || surface.opens[1].After != channel.Preview(surface.previews[0]) {
+		t.Fatalf("continuing preview carries on from %v, want the one that ended", surface.opens[1].After)
 	}
 	if next := surface.opens[1]; !next.Continuation || next.Reply != nil || next.SourceMessageID != "m-1" || next.Metadata["route_id"] != "route-1" {
 		t.Fatalf("continuing preview opened with %+v", next)

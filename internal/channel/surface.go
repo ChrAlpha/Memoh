@@ -15,9 +15,6 @@ type managerSurface struct {
 	sender      Sender
 	channelType ChannelType
 	config      ChannelConfig
-	// carry is shared by the previews of the reply being shown: a preview a
-	// tool call ended hands the media it withheld to the one that continues it.
-	carry *mediaCarry
 }
 
 func (m *Manager) newSurface(cfg ChannelConfig, channelType ChannelType) *managerSurface {
@@ -158,11 +155,13 @@ func (s *managerSurface) newOutboundStream(target string, opts StreamOptions, pr
 		},
 		reopen: reopen,
 	}
-	if !opts.Continuation || s.carry == nil {
-		s.carry = &mediaCarry{}
-	}
-	stream.carry = s.carry
+	stream.carry = &mediaCarry{}
 	if opts.Continuation {
+		// A preview a tool call ended hands the media it withheld to the one
+		// that continues it.
+		if prev, ok := opts.After.(*managerOutboundStream); ok && prev.carry != nil {
+			stream.carry = prev.carry
+		}
 		stream.splitCount = 1
 		stream.segmentSplits = 1
 	}

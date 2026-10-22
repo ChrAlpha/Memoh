@@ -199,6 +199,10 @@ type StreamOptions struct {
 	// Continuation marks a stream that carries on a reply whose earlier text is
 	// already delivered in other messages. Its final does not repeat that text.
 	Continuation bool `json:"continuation,omitempty"`
+	// After is the preview this one carries on from, which has ended. What it
+	// withheld from its reply passes to this preview; without it the preview
+	// starts with nothing withheld.
+	After Preview `json:"-"`
 }
 
 // MessageFormat indicates how the message text should be rendered.
