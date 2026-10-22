@@ -24,11 +24,11 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/externalrun"
-	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -593,7 +593,7 @@ func (h *LocalChannelHandler) executeWSQueueCommand(ctx context.Context, writer 
 			err = apperror.New(apperror.CodeSessionNotFound, nil)
 			break
 		}
-		input := pending.QueueInput{
+		input := agentapi.QueueInput{
 			TeamID:                  sess.TeamID,
 			BotID:                   botID,
 			SessionID:               msg.SessionID,

@@ -9,6 +9,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -42,7 +43,7 @@ func (q *runtimeSteering) Next(ctx context.Context) (external.SteerInput, bool, 
 	q.mu.Lock()
 	q.pending[string(item.ID)] = runtimeSteerClaim{item, ref}
 	q.mu.Unlock()
-	return external.SteerInput{ID: string(item.ID), Text: runreq.QueuePayloadText(item.Payload)}, true, nil
+	return external.SteerInput{ID: string(item.ID), Text: turnwire.ParseQueuedInput(item.Payload).VisibleText()}, true, nil
 }
 
 func (q *runtimeSteering) Accepted(ctx context.Context, id string, step int) error {
@@ -55,7 +56,7 @@ func (q *runtimeSteering) Accepted(ctx context.Context, id string, step int) err
 	// The driver's sequencing marker makes the live user bubble appear after
 	// all earlier output, even when the WebSocket consumer is slower than Codex.
 	if err := q.manager.PublishQueueUserTurns(ctx, q.run, sessionruntime.QueueUserTurnUpdate{
-		ClaimedSteerItemID: id, ClaimedSteerText: runreq.QueuePayloadText(claim.item.Payload),
+		ClaimedSteerItemID: id, ClaimedSteerText: turnwire.ParseQueuedInput(claim.item.Payload).VisibleText(),
 		ClaimedSteerTimestamp: claim.item.CreatedAt, AfterStepIndex: &step,
 	}); err != nil {
 		return err

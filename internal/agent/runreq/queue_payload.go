@@ -39,9 +39,3 @@ func RewriteQueuePayloadText(payload []byte, editorUserID, text string) ([]byte,
 	body.Command.UserVisibleText = text
 	return body.Marshal()
 }
-
-// QueuePayloadText renders only user-visible text. Invalid/empty payloads never
-// fall back to the raw envelope.
-func QueuePayloadText(payload []byte) string {
-	return turnwire.ParseQueuedInput(payload).VisibleText()
-}

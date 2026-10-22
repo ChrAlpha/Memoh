@@ -3,10 +3,10 @@ package handlers
 import (
 	"context"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/externalrun"
-	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -39,14 +39,14 @@ type webRunService interface {
 
 // queueEnqueuer is what the chat socket needs to queue a text behind a run.
 type queueEnqueuer interface {
-	EnqueueSteer(ctx context.Context, input pending.QueueInput) (sessionruntime.SteerItem, error)
-	EnqueueFollowUp(ctx context.Context, input pending.QueueInput) (sessionruntime.FollowUpItem, error)
+	EnqueueSteer(ctx context.Context, input agentapi.QueueInput) (sessionruntime.SteerItem, error)
+	EnqueueFollowUp(ctx context.Context, input agentapi.QueueInput) (sessionruntime.FollowUpItem, error)
 }
 
 // queueService is the queue of a session as the REST handlers operate it.
 type queueService interface {
 	queueEnqueuer
-	ListSessionQueues(ctx context.Context, botID, sessionID string) (pending.SessionQueues, error)
+	ListSessionQueues(ctx context.Context, botID, sessionID string) (agentapi.SessionQueues, error)
 	ReorderSteer(ctx context.Context, botID, sessionID string, item, before sessionruntime.SteerPendingRef) ([]sessionruntime.SteerItem, error)
 	UpdateSteer(ctx context.Context, botID, sessionID, itemID, editorUserID, text string) (sessionruntime.SteerItem, error)
 	CancelSteer(ctx context.Context, botID, sessionID, itemID string) error

@@ -10,12 +10,12 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/externalrun"
-	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -211,19 +211,19 @@ func (a inertAgent) ReconcileSessionModelPreference(context.Context, string, str
 	return "", "", nil
 }
 
-func (a inertAgent) EnqueueSteer(context.Context, pending.QueueInput) (sessionruntime.SteerItem, error) {
+func (a inertAgent) EnqueueSteer(context.Context, agentapi.QueueInput) (sessionruntime.SteerItem, error) {
 	a.fail()
 	return sessionruntime.SteerItem{}, nil
 }
 
-func (a inertAgent) EnqueueFollowUp(context.Context, pending.QueueInput) (sessionruntime.FollowUpItem, error) {
+func (a inertAgent) EnqueueFollowUp(context.Context, agentapi.QueueInput) (sessionruntime.FollowUpItem, error) {
 	a.fail()
 	return sessionruntime.FollowUpItem{}, nil
 }
 
-func (a inertAgent) ListSessionQueues(context.Context, string, string) (pending.SessionQueues, error) {
+func (a inertAgent) ListSessionQueues(context.Context, string, string) (agentapi.SessionQueues, error) {
 	a.fail()
-	return pending.SessionQueues{}, nil
+	return agentapi.SessionQueues{}, nil
 }
 
 func (a inertAgent) ReorderSteer(context.Context, string, string, sessionruntime.SteerPendingRef, sessionruntime.SteerPendingRef) ([]sessionruntime.SteerItem, error) {

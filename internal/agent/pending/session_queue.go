@@ -12,37 +12,10 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
-// SessionQueues is the application surface for user-facing queue operations.
-// Steers are transient and live in the configured memory or Redis runtime;
-// follow-ups are rows of the session input queue.
-type SessionQueues struct {
-	SteerSupported bool
-	Steer          []sessionruntime.SteerItem
-	FollowUp       []sessionruntime.FollowUpItem
-}
-
-// QueueInput is one text input an ingress admits into a session queue. It
-// carries the identity the ingress authenticated, because the continuation
-// that eventually runs the input happens after the request is gone and, in a
-// hosted deployment, possibly on another instance: nothing at that point can
-// recover which team or user the text belonged to.
-type QueueInput struct {
-	TeamID       string
-	BotID        string
-	SessionID    string
-	InvocationID string
-	// UserID and SourceChannelIdentityID name the sender the way the
-	// ingress's ordinary turns do. Empty values are allowed for a channel
-	// that has no platform account for the sender.
-	UserID                  string
-	SourceChannelIdentityID string
-	Text                    string
-}
-
 // queueTurnCommand rebuilds the ordinary chat turn a queued text would have
 // started had the session been idle. Every queue item stores this shape, so
 // the continuation replays a command instead of inferring one.
-func queueTurnCommand(input QueueInput) (turn.StartTurnCommand, error) {
+func queueTurnCommand(input agentapi.QueueInput) (turn.StartTurnCommand, error) {
 	teamID, botID, sessionID := strings.TrimSpace(input.TeamID), strings.TrimSpace(input.BotID), strings.TrimSpace(input.SessionID)
 	if teamID == "" || botID == "" || sessionID == "" {
 		return turn.StartTurnCommand{}, agentapi.ErrQueueInputIncomplete
@@ -65,7 +38,7 @@ func queueTurnCommand(input QueueInput) (turn.StartTurnCommand, error) {
 	}, nil
 }
 
-func (in *Inputs) EnqueueSteer(ctx context.Context, input QueueInput) (sessionruntime.SteerItem, error) {
+func (in *Inputs) EnqueueSteer(ctx context.Context, input agentapi.QueueInput) (sessionruntime.SteerItem, error) {
 	cmd, err := queueTurnCommand(input)
 	if err != nil {
 		return sessionruntime.SteerItem{}, err
@@ -77,21 +50,21 @@ func (in *Inputs) EnqueueSteer(ctx context.Context, input QueueInput) (sessionru
 	return in.runtime.EnqueueSteer(ctx, sessionruntime.Key{BotID: cmd.BotID, SessionID: cmd.ThreadID}, uuid.NewString(), strings.TrimSpace(input.InvocationID), payload)
 }
 
-func (in *Inputs) ListSessionQueues(ctx context.Context, botID, sessionID string) (SessionQueues, error) {
+func (in *Inputs) ListSessionQueues(ctx context.Context, botID, sessionID string) (agentapi.SessionQueues, error) {
 	key := sessionruntime.Key{BotID: botID, SessionID: sessionID}
 	steers, err := in.runtime.PendingSteers(ctx, key, 0)
 	if err != nil {
-		return SessionQueues{}, err
+		return agentapi.SessionQueues{}, err
 	}
 	followUps, err := in.pendingFollowUps(ctx, key)
 	if err != nil {
-		return SessionQueues{}, err
+		return agentapi.SessionQueues{}, err
 	}
 	snapshot, err := in.runtime.Snapshot(ctx, botID, sessionID)
 	if err != nil {
-		return SessionQueues{}, err
+		return agentapi.SessionQueues{}, err
 	}
-	return SessionQueues{Steer: steers, FollowUp: followUps, SteerSupported: sessionruntime.SteerRunAvailable(snapshot.CurrentRunView)}, nil
+	return agentapi.SessionQueues{Steer: steers, FollowUp: followUps, SteerSupported: sessionruntime.SteerRunAvailable(snapshot.CurrentRunView)}, nil
 }
 
 func (in *Inputs) ReorderSteer(ctx context.Context, botID, sessionID string, item, before sessionruntime.SteerPendingRef) ([]sessionruntime.SteerItem, error) {

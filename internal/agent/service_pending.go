@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/felinics/memoh/internal/agent/pending"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
@@ -32,7 +32,7 @@ func (s *Service) StopQueueSweep() {
 }
 
 // EnqueueFollowUp puts a text the user queued behind the session's run.
-func (s *Service) EnqueueFollowUp(ctx context.Context, input pending.QueueInput) (sessionruntime.FollowUpItem, error) {
+func (s *Service) EnqueueFollowUp(ctx context.Context, input agentapi.QueueInput) (sessionruntime.FollowUpItem, error) {
 	return s.pending.EnqueueFollowUp(ctx, input)
 }
 
@@ -57,12 +57,12 @@ func (s *Service) PromoteFollowUpToSteer(ctx context.Context, botID, sessionID s
 }
 
 // EnqueueSteer puts a text the user steers into the run in flight.
-func (s *Service) EnqueueSteer(ctx context.Context, input pending.QueueInput) (sessionruntime.SteerItem, error) {
+func (s *Service) EnqueueSteer(ctx context.Context, input agentapi.QueueInput) (sessionruntime.SteerItem, error) {
 	return s.pending.EnqueueSteer(ctx, input)
 }
 
 // ListSessionQueues lists a session's steers and follow-ups.
-func (s *Service) ListSessionQueues(ctx context.Context, botID, sessionID string) (pending.SessionQueues, error) {
+func (s *Service) ListSessionQueues(ctx context.Context, botID, sessionID string) (agentapi.SessionQueues, error) {
 	return s.pending.ListSessionQueues(ctx, botID, sessionID)
 }
 

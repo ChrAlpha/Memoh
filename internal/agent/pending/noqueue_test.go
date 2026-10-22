@@ -7,6 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
@@ -30,7 +31,7 @@ func TestWithoutAQueueNothingWaitsAndQueueOperationsAreUnavailable(t *testing.T)
 	require.False(t, started)
 	require.False(t, deferred)
 
-	_, err = inputs.EnqueueFollowUp(ctx, QueueInput{TeamID: "team-1", BotID: "bot-1", SessionID: "session-1", InvocationID: "m1", Text: "hello"})
+	_, err = inputs.EnqueueFollowUp(ctx, agentapi.QueueInput{TeamID: "team-1", BotID: "bot-1", SessionID: "session-1", InvocationID: "m1", Text: "hello"})
 	require.ErrorIs(t, err, sessionruntime.ErrLiveQueueUnavailable)
 	_, err = inputs.ReorderFollowUp(ctx, "bot-1", "session-1", sessionruntime.FollowUpPendingRef{}, sessionruntime.FollowUpPendingRef{})
 	require.ErrorIs(t, err, sessionruntime.ErrLiveQueueUnavailable)

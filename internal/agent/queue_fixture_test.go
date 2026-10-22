@@ -10,8 +10,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/pending"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -173,8 +173,8 @@ func (e queueEnv) waitState(t *testing.T, invocation, want string) {
 	}
 }
 
-func (e queueEnv) input(invocation, text string) pending.QueueInput {
-	return pending.QueueInput{
+func (e queueEnv) input(invocation, text string) agentapi.QueueInput {
+	return agentapi.QueueInput{
 		TeamID: team.DefaultTeamID, BotID: e.botID, SessionID: e.sessionID, InvocationID: invocation,
 		UserID: "", SourceChannelIdentityID: "", Text: text,
 	}

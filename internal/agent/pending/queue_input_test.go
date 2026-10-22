@@ -15,8 +15,8 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 )
 
-func queueInputOf(text string) QueueInput {
-	return QueueInput{
+func queueInputOf(text string) agentapi.QueueInput {
+	return agentapi.QueueInput{
 		TeamID: "team-1", BotID: "bot-1", SessionID: "session-1", InvocationID: "invoke-1",
 		UserID: "user-1", SourceChannelIdentityID: "identity-1", Text: text,
 	}
@@ -29,10 +29,10 @@ func TestQueueInputRequiresRecordedTeam(t *testing.T) {
 	inputs := New(Deps{Logger: slog.New(slog.DiscardHandler), Queries: noDiscuss{}, Queue: &gated{}, Continuations: noContinuations{}})
 	ctx := t.Context()
 
-	for name, edit := range map[string]func(*QueueInput){
-		"team":    func(in *QueueInput) { in.TeamID = "" },
-		"bot":     func(in *QueueInput) { in.BotID = " " },
-		"session": func(in *QueueInput) { in.SessionID = "" },
+	for name, edit := range map[string]func(*agentapi.QueueInput){
+		"team":    func(in *agentapi.QueueInput) { in.TeamID = "" },
+		"bot":     func(in *agentapi.QueueInput) { in.BotID = " " },
+		"session": func(in *agentapi.QueueInput) { in.SessionID = "" },
 	} {
 		input := queueInputOf("hello")
 		edit(&input)

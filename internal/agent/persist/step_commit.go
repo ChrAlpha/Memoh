@@ -18,6 +18,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -301,7 +302,7 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 		if queueErr == nil {
 			c.publishQueueUserTurns(context.WithoutCancel(ctx), stepIndex, result)
 			if result.claimedSteer != nil {
-				if text := runreq.QueuePayloadText(result.claimedSteer.Payload); text != "" {
+				if text := turnwire.ParseQueuedInput(result.claimedSteer.Payload).VisibleText(); text != "" {
 					dir.NextInputs = []native.DirectiveInput{{
 						ID:   string(result.claimedSteer.ID),
 						Text: text,
@@ -443,7 +444,7 @@ func (c *StepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int
 	}
 	if result.claimedSteer != nil {
 		update.ClaimedSteerItemID = string(result.claimedSteer.ID)
-		update.ClaimedSteerText = runreq.QueuePayloadText(result.claimedSteer.Payload)
+		update.ClaimedSteerText = turnwire.ParseQueuedInput(result.claimedSteer.Payload).VisibleText()
 		update.ClaimedSteerTimestamp = result.claimedSteer.CreatedAt
 		if result.claimedSteerTurn != nil {
 			update.ClaimedSteerTurnID = result.claimedSteerTurn.TurnID

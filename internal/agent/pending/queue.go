@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
@@ -24,7 +25,7 @@ func (in *Inputs) queueStore() (Store, error) {
 //
 // The input stands alone: each queued text is answered by a run of its own, in
 // the order the panel shows.
-func (in *Inputs) EnqueueFollowUp(ctx context.Context, input QueueInput) (sessionruntime.FollowUpItem, error) {
+func (in *Inputs) EnqueueFollowUp(ctx context.Context, input agentapi.QueueInput) (sessionruntime.FollowUpItem, error) {
 	queue, err := in.queueStore()
 	if err != nil {
 		return sessionruntime.FollowUpItem{}, err

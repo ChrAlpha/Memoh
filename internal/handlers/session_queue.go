@@ -13,9 +13,9 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/pending"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/agentapi/queueerr"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/bots"
@@ -103,8 +103,8 @@ type queueScope struct {
 	IdentityID string
 }
 
-func (s queueScope) input(invocationID, text string) pending.QueueInput {
-	return pending.QueueInput{
+func (s queueScope) input(invocationID, text string) agentapi.QueueInput {
+	return agentapi.QueueInput{
 		TeamID:                  s.TeamID,
 		BotID:                   s.BotID,
 		SessionID:               s.SessionID,
@@ -200,18 +200,18 @@ func decodeQueueRequest(c echo.Context) (enqueueQueueRequest, error) {
 
 // queueAdmissionCodes renders queue admission refusals in the HTTP
 // vocabulary. The values are published and do not follow the channel codes.
-var queueAdmissionCodes = map[pending.QueueAdmissionFailure]apperror.Code{
-	pending.QueueAdmissionSteerUnsupported:   apperror.CodeQueueSteerUnsupported,
-	pending.QueueAdmissionNoActiveRun:        apperror.CodeQueueNoActiveRun,
-	pending.QueueAdmissionInvocationConflict: apperror.CodeSessionInvocationConflict,
-	pending.QueueAdmissionOverloaded:         apperror.CodeQueueAdmissionOverloaded,
-	pending.QueueAdmissionCapacityExceeded:   apperror.CodeQueueCapacityExceeded,
-	pending.QueueAdmissionInvalidReference:   apperror.CodeQueueRequestInvalid,
-	pending.QueueAdmissionUnavailable:        apperror.CodeQueueAdmissionUnavailable,
+var queueAdmissionCodes = map[queueerr.QueueAdmissionFailure]apperror.Code{
+	queueerr.QueueAdmissionSteerUnsupported:   apperror.CodeQueueSteerUnsupported,
+	queueerr.QueueAdmissionNoActiveRun:        apperror.CodeQueueNoActiveRun,
+	queueerr.QueueAdmissionInvocationConflict: apperror.CodeSessionInvocationConflict,
+	queueerr.QueueAdmissionOverloaded:         apperror.CodeQueueAdmissionOverloaded,
+	queueerr.QueueAdmissionCapacityExceeded:   apperror.CodeQueueCapacityExceeded,
+	queueerr.QueueAdmissionInvalidReference:   apperror.CodeQueueRequestInvalid,
+	queueerr.QueueAdmissionUnavailable:        apperror.CodeQueueAdmissionUnavailable,
 }
 
 func queueAdmissionError(err error) error {
-	code, ok := queueAdmissionCodes[pending.QueueAdmissionFailureOf(err)]
+	code, ok := queueAdmissionCodes[queueerr.QueueAdmissionFailureOf(err)]
 	if !ok {
 		return err
 	}
@@ -603,11 +603,11 @@ func (h *SessionQueueHandler) PromoteFollowUpToSteer(c echo.Context) error {
 }
 
 func steerQueueItemResponseFrom(item sessionruntime.SteerItem) steerQueueItemResponse {
-	return steerQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: runreq.QueuePayloadText(item.Payload), TargetRunID: item.TargetRunID}
+	return steerQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: turnwire.ParseQueuedInput(item.Payload).VisibleText(), TargetRunID: item.TargetRunID}
 }
 
 func followUpQueueItemResponseFrom(item sessionruntime.FollowUpItem) followUpQueueItemResponse {
-	return followUpQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: runreq.QueuePayloadText(item.Payload), EnqueuedDuringRunID: item.EnqueuedDuringRunID}
+	return followUpQueueItemResponse{ItemID: item.ID, Status: item.Status, Position: item.Position, Text: turnwire.ParseQueuedInput(item.Payload).VisibleText(), EnqueuedDuringRunID: item.EnqueuedDuringRunID}
 }
 
 func mapQueueItems[T any, R any](items []T, mapItem func(T) R) []R {

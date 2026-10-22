@@ -7,6 +7,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn/turnwire"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -65,7 +66,7 @@ func TestDeferredStepDoesNotClaimSteerAndContinuationDeliversIt(t *testing.T) {
 	if outcome.claimedSteer == nil || outcome.claimedSteer.ID != item.ID {
 		t.Fatalf("continuation did not claim the steer: %#v", outcome)
 	}
-	if got := runreq.QueuePayloadText(outcome.claimedSteer.Payload); got != "steer me" {
+	if got := turnwire.ParseQueuedInput(outcome.claimedSteer.Payload).VisibleText(); got != "steer me" {
 		t.Fatalf("claimed payload = %q", got)
 	}
 
@@ -113,7 +114,7 @@ func TestFinalStepClaimsSteerForLoopContinuation(t *testing.T) {
 	if outcome.claimedSteer == nil || outcome.claimedSteer.ID != item.ID {
 		t.Fatalf("final did not claim the steer: %#v", outcome)
 	}
-	if got := runreq.QueuePayloadText(outcome.claimedSteer.Payload); got != "change direction" {
+	if got := turnwire.ParseQueuedInput(outcome.claimedSteer.Payload).VisibleText(); got != "change direction" {
 		t.Fatalf("claimed payload = %q", got)
 	}
 	if _, err := fx.enqueueSteer(t, "invoke-2", "late"); err != nil {
