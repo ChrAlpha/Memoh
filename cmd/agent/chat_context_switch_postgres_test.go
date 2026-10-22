@@ -494,6 +494,7 @@ var inRunScenarios = []inRunScenario{
 	{name: "prefix-full", run: prefixFullScenario},
 	{name: "long-loop", run: longLoopScenario},
 	{name: "decision-after-progress", run: decisionAfterProgressScenario},
+	{name: "decision-full-summary", run: decisionFullSummaryScenario},
 }
 
 // TestPostgresInRunCompactionByEntry runs every headline scenario through
@@ -502,7 +503,7 @@ var inRunScenarios = []inRunScenario{
 func TestPostgresInRunCompactionByEntry(t *testing.T) {
 	for _, entry := range runEntries {
 		for _, scenario := range inRunScenarios {
-			if scenario.name == "decision-after-progress" && entry.name != "approval" && entry.name != "ask-user" {
+			if strings.HasPrefix(scenario.name, "decision-") && entry.name != "approval" && entry.name != "ask-user" {
 				continue
 			}
 			if !entry.folds && scenario.name != "long-loop" {
@@ -524,6 +525,14 @@ func decisionAfterProgressScenario(t *testing.T, entry runEntry, s *effectLoop) 
 	if s.f.summaries.Load() == 0 || strings.Count(requests[3], loopInput) != 1 || !strings.Contains(requests[3], "DECISION_RESULT_KEEP"+strings.Repeat("x", 9000)) {
 		t.Fatal("resumed request must compact earlier progress and retain its input and approved result")
 	}
+}
+
+// A resumed run whose summary takes all the room the summarizer is told it
+// has still fits: the input the run keeps beside the summary is priced
+// before that room is stated.
+func decisionFullSummaryScenario(t *testing.T, entry runEntry, s *effectLoop) {
+	s.f.longSummary.Store(true)
+	decisionAfterProgressScenario(t, entry, s)
 }
 
 // requestMessages is each message of a provider request body, as sent.

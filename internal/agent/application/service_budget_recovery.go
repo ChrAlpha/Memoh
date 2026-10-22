@@ -52,6 +52,9 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		if budget <= 0 {
 			return cfg, false, nil
 		}
+		// The summary shares the history budget with what compaction keeps
+		// raw in place, which it does not price.
+		budget -= anchoredTokens(cfg.ContextProvenance, req.compactionAnchors())
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
 		recovered, fits := cfg, false
@@ -97,6 +100,21 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		layout.pressureTokens = 0
 		return recovered, true, nil
 	}
+}
+
+// anchoredTokens is what the messages the request renders for anchors take.
+func anchoredTokens(provenance []native.MessageProvenance, anchors []turn.ContextMessageSource) int {
+	tokens := 0
+	for _, p := range provenance {
+		if slices.ContainsFunc(p.Sources, func(source turn.ContextMessageSource) bool {
+			return slices.ContainsFunc(anchors, func(anchor turn.ContextMessageSource) bool {
+				return anchor.Kind == source.Kind && anchor.ID == source.ID
+			})
+		}) {
+			tokens += contextfrag.ProviderEnvelopeTokens("", []sdk.Message{p.Message}, nil)
+		}
+	}
+	return tokens
 }
 
 func (l chatHistoryLayout) owns(frag contextfrag.ContextFrag) bool {

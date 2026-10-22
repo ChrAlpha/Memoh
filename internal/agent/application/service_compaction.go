@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 
@@ -40,9 +39,8 @@ func (s *Service) compactForBudgetWithAdmission(ctx context.Context, req ChatReq
 		return err
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
-	if len(req.continuationTail) > 0 {
-		cfg.Anchors = append(slices.Clone(cfg.ProtectedSources), req.continuationAnchors...)
-		cfg.ProtectedSources = req.continuationTail
+	if anchors := req.compactionAnchors(); len(anchors) > 0 {
+		cfg.Anchors, cfg.ProtectedSources = anchors, req.continuationTail
 	}
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
 	// The byte budget bounds what a request loads, not what its history is:
@@ -136,4 +134,15 @@ func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
 		}
 	}
 	return sources
+}
+
+// compactionAnchors are the sources a compaction keeps raw in place. A
+// continuation that resumes after a deferred call keeps its input and steers
+// where they are and folds the work around them; the caller prices them, the
+// way an in-run fold does, outside the history budget it gives.
+func (req ChatRequest) compactionAnchors() []turn.ContextMessageSource {
+	if len(req.continuationTail) == 0 {
+		return nil
+	}
+	return append(compactionProtectedSources(req), req.continuationAnchors...)
 }

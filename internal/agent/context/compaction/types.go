@@ -115,7 +115,8 @@ type TriggerConfig struct {
 	// when no protected source is a history row yet.
 	CurrentRequest string
 	// HistoryBudgetTokens is the room the caller's request has for the
-	// summary and the history it keeps raw.
+	// summary and the protected history it keeps raw. Anchors and current
+	// sources are not in it: the caller prices what it renders for them.
 	HistoryBudgetTokens int
 	PromptCacheTTL      string
 }
