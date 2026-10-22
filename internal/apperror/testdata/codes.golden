@@ -154,6 +154,7 @@ mcp.oauth_client_id_required	400
 mcp.oauth_discovery_failed	502
 mcp.oauth_not_discovered	409
 media.asset_not_found	404
+media.reference_unavailable	422
 memory.compact_unsupported	501
 message.not_found	404
 model.not_found	404

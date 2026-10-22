@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -826,6 +827,20 @@ func (h *MessageHandler) authorizeMessageSession(c echo.Context, channelIdentity
 	return bot, perms, sess, nil
 }
 
+// inlineSafeMedia lists the types a browser may display inline from the API
+// origin without running content: raster images, audio, video, PDF and text.
+func inlineSafeMedia(contentType string) bool {
+	base, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	switch base {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif", "image/bmp", "application/pdf", "text/plain":
+		return true
+	}
+	return strings.HasPrefix(base, "audio/") || strings.HasPrefix(base, "video/")
+}
+
 // ServeMedia streams a media asset by bot_id + content_hash with read-access authorization.
 func (h *MessageHandler) ServeMedia(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
@@ -860,6 +875,12 @@ func (h *MessageHandler) ServeMedia(c echo.Context) error {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	if !inlineSafeMedia(contentType) {
+		// Assets include model-referenced files and remote content. Active
+		// types such as HTML or SVG must never render on the app origin.
+		c.Response().Header().Set("Content-Disposition", "attachment")
+	}
+	c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 	c.Response().Header().Set("Content-Type", contentType)
 	c.Response().Header().Set("Cache-Control", "private, max-age=86400")
 	c.Response().WriteHeader(http.StatusOK)
