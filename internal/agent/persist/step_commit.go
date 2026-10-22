@@ -219,10 +219,7 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 		opts.MessageMetadataByIndex = make(map[int]map[string]any)
 		for i, message := range messages {
 			if strings.EqualFold(strings.TrimSpace(message.Role), "assistant") {
-				opts.MessageMetadataByIndex[i] = map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true}
-				if failure.Code != "" {
-					opts.MessageMetadataByIndex[i] = FailureRowMetadata(failure, "", opts.MessageMetadataByIndex[i])
-				}
+				opts.MessageMetadataByIndex[i] = interruptedRowMetadata(failure, "", nil)
 			}
 		}
 	}

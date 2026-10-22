@@ -8,9 +8,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
-	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -26,7 +26,10 @@ type TerminalSnapshot struct {
 	DeferredToolID          string
 	aborted                 bool
 	VisibleOutput           bool
-	FailureCode             apperror.Code
+	// Failure is the failure that ended the run after the snapshot's output, or
+	// the zero value when the run did not fail or a failure row already
+	// records it.
+	Failure outcome.RunFailure
 }
 
 // ExtractTerminalSnapshot decodes a terminal stream event payload into the
@@ -61,8 +64,8 @@ func ExtractTerminalSnapshot(data []byte) (TerminalSnapshot, bool) {
 
 func (w *Writer) TerminalSnapshotResult(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, snap TerminalSnapshot) ([]messagepkg.Message, error) {
 	outputMessages := runreq.SDKMessagesWithOrigins(snap.SDKMessages, snap.internalFeedbackIndexes)
-	if snap.FailureCode != "" && (!snap.VisibleOutput || !hasPersistableAssistantOutput(outputMessages)) {
-		return w.persistTurnFailure(ctx, req, rc, snap.FailureCode)
+	if snap.Failure.Code != "" && (!snap.VisibleOutput || !hasPersistableAssistantOutput(outputMessages)) {
+		return w.FailureRow(ctx, req, rc, snap.Failure, "")
 	}
 	if snap.aborted && !snap.VisibleOutput {
 		w.logger.InfoContext(ctx, "skip persisting aborted terminal snapshot before visible output",
@@ -96,6 +99,7 @@ func (w *Writer) TerminalSnapshotResult(ctx context.Context, req runreq.ChatRequ
 		RequireCompletePersist: true,
 		ContextLifecycle:       rc.RunConfig.ContextLifecycle,
 		ReasoningTiming:        snap.ReasoningTiming,
+		Failure:                snap.Failure,
 	})
 	if err != nil {
 		return nil, err
@@ -121,51 +125,6 @@ func hasPersistableAssistantOutput(messages []runreq.ModelMessage) bool {
 		}
 	}
 	return false
-}
-
-func (w *Writer) persistTurnFailure(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, code apperror.Code) ([]messagepkg.Message, error) {
-	if code == "" {
-		return nil, nil
-	}
-	storeReq := req
-	if req.ReusePersistedUserMessage {
-		storeReq.UserMessagePersisted = true
-	}
-	output := []runreq.ModelMessage{{
-		Role:    "assistant",
-		Content: runreq.NewTextContent(""),
-	}}
-	round := output
-	if !storeReq.UserMessagePersisted {
-		round = runreq.PrependTurnUserMessage(storeReq, output)
-	}
-	assistantIdx := lastAssistantMessageIndex(round)
-	if assistantIdx < 0 {
-		return nil, nil
-	}
-	modelID := ""
-	if rc.Model.ID != "" {
-		modelID = rc.Model.ID
-	}
-	persisted, err := w.StoreRoundResult(ctx, storeReq, round, modelID, RoundOptions{
-		AllowEmptyAssistantText: true,
-		MessageMetadataByIndex: map[int]map[string]any{
-			assistantIdx: {
-				messagepkg.AgentStepInterruptedMetadataKey: true,
-				messagepkg.HistoryErrorCodeMetadataKey:     string(code),
-			},
-		},
-		ContextLifecycle: rc.RunConfig.ContextLifecycle,
-	})
-	if err != nil {
-		return nil, err
-	}
-	w.logger.InfoContext(ctx, "persisted turn-level stream failure",
-		slog.String("bot_id", req.BotID),
-		slog.String("chat_id", req.ChatID),
-		slog.String("code", string(code)),
-	)
-	return persisted, nil
 }
 
 // interleaveInjectedMessages inserts injected user messages at their correct

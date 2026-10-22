@@ -14,13 +14,13 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-func TestPersistTurnFailureStartsRetryReplacementAtomically(t *testing.T) {
+func TestFailureRowStartsRetryReplacementAtomically(t *testing.T) {
 	t.Parallel()
 
 	messages := &agenttest.RecordingMessages{}
 	resolver := newTestWriter(Deps{Messages: messages})
 
-	persisted, err := resolver.persistTurnFailure(
+	persisted, err := resolver.FailureRow(
 		context.Background(),
 		runreq.ChatRequest{
 			BotID: "bot-1", ThreadID: "session-1", Query: "hello",
@@ -28,10 +28,11 @@ func TestPersistTurnFailureStartsRetryReplacementAtomically(t *testing.T) {
 			TurnReplacement: &messagepkg.TurnReplacement{OldTurnID: "old-turn", ReplacementTurnID: "new-turn", ReplacementTurnPosition: int64Pointer(2), RequestMessageID: "old-request"},
 		},
 		runreq.ResolvedContext{},
-		apperror.CodeAgentResponseTimeout,
+		outcome.RunFailure{Code: apperror.CodeAgentResponseTimeout},
+		"",
 	)
 	if err != nil {
-		t.Fatalf("persistTurnFailure returned error: %v", err)
+		t.Fatalf("FailureRow returned error: %v", err)
 	}
 	if len(persisted) != 2 || len(messages.Persisted) != 1 || len(messages.RoundOptions) != 1 || messages.RoundOptions[0].Replacement == nil {
 		t.Fatalf("retry failure was not persisted atomically with its cloned user: %#v %#v", persisted, messages.RoundOptions)
@@ -135,8 +136,8 @@ func TestPersistTerminalSnapshotStoresTimeoutBeforeVisibleOutput(t *testing.T) {
 		},
 		runreq.ResolvedContext{},
 		TerminalSnapshot{
-			aborted:     true,
-			FailureCode: apperror.CodeAgentResponseTimeout,
+			aborted: true,
+			Failure: outcome.RunFailure{Code: apperror.CodeAgentResponseTimeout},
 		},
 	); err != nil {
 		t.Fatalf("persistTerminalSnapshot returned error: %v", err)

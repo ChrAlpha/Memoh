@@ -138,12 +138,11 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 		return summary, nil
 	}
 	snap := *e.snapshot
-	snap.FailureCode = persist.FailureRowCode(f)
-	if !row || !snap.VisibleOutput {
-		// Without visible output the failure row is already written by
-		// recordFailure; the snapshot carrying the code too would write it a
-		// second time.
-		snap.FailureCode = ""
+	if row && f != nil && snap.VisibleOutput {
+		// With visible output the failure rides on the snapshot's answer.
+		// Without it, recordFailure already wrote the failure row, and the
+		// snapshot carrying the failure too would write it a second time.
+		snap.Failure = *f
 	}
 	persisted, err := e.persist.TerminalSnapshotResult(ctx, e.req, e.rc, snap)
 	if err != nil {
@@ -167,8 +166,7 @@ func (e *nativeExecutor) recordFailure(ctx context.Context, f outcome.RunFailure
 		return persisted, nil
 	}
 	if e.snapshot != nil && e.snapshot.VisibleOutput {
-		// A committed-ish snapshot carries the failure as its own row; the
-		// snapshot path writes it.
+		// The snapshot's answer carries the failure; the snapshot path writes it.
 		return nil, nil
 	}
 	return e.persist.FailureRow(ctx, e.req, e.rc, f, "")

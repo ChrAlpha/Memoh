@@ -770,6 +770,10 @@ type wsStepHistoryRun struct {
 	// turns is one line per turn the history endpoint returns: role and the
 	// messages it renders.
 	turns []string
+	// failureMeta is, for each assistant row a failure marked, the keys the
+	// failure left in its metadata, so two write paths can be compared field
+	// by field.
+	failureMeta []map[string]any
 }
 
 type wsStepHistoryHarness struct {
@@ -967,6 +971,23 @@ func (h wsStepHistoryHarness) read(t *testing.T, runID string) wsStepHistoryRun 
 			line += " error_code=" + code
 		}
 		out.history = append(out.history, line)
+		if row.Role == "assistant" {
+			meta := map[string]any{}
+			for _, key := range []string{
+				messagepkg.AgentStepInterruptedMetadataKey,
+				messagepkg.HistoryErrorCodeMetadataKey,
+				messagepkg.HistoryErrorArgsMetadataKey,
+				messagepkg.HistoryFailureOriginMetadataKey,
+				"error",
+			} {
+				if value, ok := row.Metadata[key]; ok {
+					meta[key] = value
+				}
+			}
+			if len(meta) > 0 {
+				out.failureMeta = append(out.failureMeta, meta)
+			}
+		}
 	}
 	uiRows, err := h.messages.ListLatestUIBySession(ctx, h.sessionID, 30)
 	if err != nil {

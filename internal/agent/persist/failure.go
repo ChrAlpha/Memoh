@@ -6,7 +6,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
-	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -29,6 +28,18 @@ func FailureRowMetadata(f outcome.RunFailure, origin string, metadata map[string
 	return metadata
 }
 
+// interruptedRowMetadata is the metadata of an assistant row a failure cut
+// short: the interrupted mark plus the failure's code and args. A native step,
+// the turn's failure row and the last answer of a terminal snapshot all record
+// a failure through it, so they read the same in history.
+func interruptedRowMetadata(f outcome.RunFailure, origin string, metadata map[string]any) map[string]any {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadata[messagepkg.AgentStepInterruptedMetadataKey] = true
+	return FailureRowMetadata(f, origin, metadata)
+}
+
 // FailureRow writes the user message and the empty assistant row that
 // record a run whose failure left no assistant output. It is the only writer
 // of a failure row for a turn without step commits: a run that had already
@@ -49,10 +60,7 @@ func (w *Writer) FailureRow(ctx context.Context, req runreq.ChatRequest, rc runr
 	if assistantIdx < 0 {
 		return nil, nil
 	}
-	metadata := FailureRowMetadata(f, origin, map[string]any{
-		messagepkg.AgentStepInterruptedMetadataKey: true,
-	})
-	messageMetadata := map[int]map[string]any{assistantIdx: metadata}
+	messageMetadata := map[int]map[string]any{assistantIdx: interruptedRowMetadata(f, origin, nil)}
 	if origin != "" && !storeReq.UserMessagePersisted && len(round) > 1 {
 		// The user row carries the same origin so history preparation can drop
 		// the refused pair together.
@@ -84,13 +92,4 @@ func (w *Writer) FailureRow(ctx context.Context, req runreq.ChatRequest, rc runr
 		slog.String("origin", origin),
 	)
 	return persisted, nil
-}
-
-// FailureRowCode is the code a failure row records, or empty when the failure
-// leaves no row at all.
-func FailureRowCode(f *outcome.RunFailure) apperror.Code {
-	if f == nil {
-		return ""
-	}
-	return f.Code
 }

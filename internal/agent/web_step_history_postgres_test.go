@@ -2,12 +2,14 @@ package agent
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/drive"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 // wsUnfenced runs the stream without a runtime fence, so its steps are not
@@ -70,7 +72,7 @@ func TestPostgresWSStepHistoryStop(t *testing.T) {
 
 // A run that fails before any step commits still records the send: the user
 // message and an empty assistant row carrying the run's failure code, the
-// rows persistTurnFailure writes for a turn without step commits. The row's
+// rows Writer.FailureRow writes for a turn without step commits. The row's
 // code is the one session_runs records.
 func TestPostgresWSStepHistoryFailureWithoutSteps(t *testing.T) {
 	h := newWSStepHistoryHarness(t, wsStepHistoryAuthFailure)
@@ -197,6 +199,92 @@ func TestPostgresWSStepHistoryFailureAfterPartialOutput(t *testing.T) {
 		[]string{
 			`user "` + directLifecyclePrompt + `"`,
 			`assistant [text "` + wsStepHistoryPartialText + `"] [error agent.response_interrupted]`,
+		},
+	)
+}
+
+// snapshotOnlyMessages is the message store of a run that commits no steps: it
+// writes whole rounds atomically but is not an AgentStepPersister, so the run's
+// history is written from its terminal snapshot.
+type snapshotOnlyMessages struct {
+	messagepkg.Service
+	rounds messagepkg.AtomicRoundPersister
+}
+
+func (m snapshotOnlyMessages) PersistRound(ctx context.Context, inputs []messagepkg.PersistInput, options messagepkg.RoundPersistenceOptions) ([]messagepkg.Message, bool, error) {
+	return m.rounds.PersistRound(ctx, inputs, options)
+}
+
+func wsSnapshotOnly() wsStepHistoryOption {
+	return wsStepHistoryMessages(func(db *messagepkg.DBService) messagepkg.Service {
+		return snapshotOnlyMessages{Service: db, rounds: db}
+	})
+}
+
+// A run that commits no steps writes its turn from the terminal snapshot when
+// it ends. A failure after output stores that output with the run's code on
+// the interrupted row, and the row's failure metadata is the one the step path
+// writes for the same failure. No separate failure row is added.
+func TestPostgresWSSnapshotFailureAfterOutputKeepsTheFailureCode(t *testing.T) {
+	const code = "agent.response_interrupted"
+	steps := newWSStepHistoryHarness(t, wsStepHistoryToolThenBrokenStream).run(t, nil)
+	got := newWSStepHistoryHarness(t, wsStepHistoryToolThenBrokenStream, wsSnapshotOnly()).run(t, nil)
+	assertWSStepHistory(t, got,
+		[3]string{"failed", code, ""},
+		[]string{
+			`user`,
+			`assistant "" interrupted error_code=` + code,
+			`tool ""`,
+		},
+		[]string{
+			`user "` + directLifecyclePrompt + `"`,
+			`assistant [tool] [error ` + code + `]`,
+		},
+	)
+	want := []map[string]any{{
+		messagepkg.AgentStepInterruptedMetadataKey: true,
+		messagepkg.HistoryErrorCodeMetadataKey:     code,
+	}}
+	if !reflect.DeepEqual(got.failureMeta, want) {
+		t.Errorf("snapshot path failure metadata = %#v, want %#v", got.failureMeta, want)
+	}
+	if !reflect.DeepEqual(got.failureMeta, steps.failureMeta) {
+		t.Errorf("snapshot path failure metadata = %#v, step path = %#v, want the same", got.failureMeta, steps.failureMeta)
+	}
+}
+
+// A stop after partial output is not a failure: a run that commits no steps
+// writes no failure row and no code.
+func TestPostgresWSSnapshotStopAfterPartialOutputRecordsNoFailure(t *testing.T) {
+	h := newWSStepHistoryHarness(t, wsStepHistoryBlock, wsSnapshotOnly())
+	got := h.run(t, func(ctx context.Context, runID string) {
+		if _, err := h.manager.AbortControl(ctx, h.botID, h.sessionID, runID, "stop-1"); err != nil {
+			t.Errorf("AbortControl() error = %v", err)
+		}
+	})
+	assertWSStepHistory(t, got, [3]string{"aborted", "", ""}, nil, nil)
+	if len(got.failureMeta) != 0 {
+		t.Errorf("failure metadata = %#v, want none", got.failureMeta)
+	}
+}
+
+// The answer a run was streaming when its model call timed out is stored with
+// the timeout's code when the run commits no steps.
+func TestPostgresWSSnapshotTimeoutAfterPartialOutputKeepsTheAnswerAndCode(t *testing.T) {
+	h := newWSStepHistoryHarness(t, wsStepHistoryBlock, wsSnapshotOnly(), wsStepHistoryFixtureOptions(withFixtureOptions(withDrive(func(d *drive.Deps) {
+		d.StreamIdleTimeout = 300 * time.Millisecond
+		d.StreamIdleTimeoutMax = 300 * time.Millisecond
+	}))))
+	got := h.run(t, nil)
+	assertWSStepHistory(t, got,
+		[3]string{"failed", "agent.response_timeout", ""},
+		[]string{
+			`user`,
+			`assistant "` + wsStepHistoryPartialText + `" interrupted error_code=agent.response_timeout`,
+		},
+		[]string{
+			`user "` + directLifecyclePrompt + `"`,
+			`assistant [text "` + wsStepHistoryPartialText + `"] [error agent.response_timeout]`,
 		},
 	)
 }
