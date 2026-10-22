@@ -51,6 +51,7 @@ type Queries interface {
 	GetBotWorkspace(ctx context.Context, botID pgtype.UUID) (dbsqlc.BotWorkspace, error)
 	ListBotWorkspacesByObservedState(ctx context.Context, arg dbsqlc.ListBotWorkspacesByObservedStateParams) ([]dbsqlc.BotWorkspace, error)
 	ReleaseBotWorkspaceLease(ctx context.Context, arg dbsqlc.ReleaseBotWorkspaceLeaseParams) (int64, error)
+	ReleasePendingCompactionClaimsBySession(ctx context.Context, arg dbsqlc.ReleasePendingCompactionClaimsBySessionParams) error
 	RenewBotWorkspaceLease(ctx context.Context, arg dbsqlc.RenewBotWorkspaceLeaseParams) (int64, error)
 	UpdateBotWorkspaceObserved(ctx context.Context, arg dbsqlc.UpdateBotWorkspaceObservedParams) (dbsqlc.BotWorkspace, error)
 	UpsertBotWorkspaceIntent(ctx context.Context, arg dbsqlc.UpsertBotWorkspaceIntentParams) (dbsqlc.BotWorkspace, error)

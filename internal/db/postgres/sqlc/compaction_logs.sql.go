@@ -682,3 +682,27 @@ func (q *Queries) ListCompactionLogsByBot(ctx context.Context, arg ListCompactio
 	}
 	return items, nil
 }
+
+const releasePendingCompactionClaimsBySession = `-- name: ReleasePendingCompactionClaimsBySession :exec
+UPDATE bot_history_message_compacts
+SET status = 'error',
+    error_message = 'claimant lost runtime ownership',
+    completed_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
+  AND session_id = $2
+  AND status = 'pending'
+`
+
+type ReleasePendingCompactionClaimsBySessionParams struct {
+	BotID     pgtype.UUID `json:"bot_id"`
+	SessionID pgtype.UUID `json:"session_id"`
+}
+
+// A new runtime owner releases the compaction claims its predecessors left
+// pending: their writes are fenced out, so those claims can never commit, and
+// the rows they hold are compaction candidates again.
+func (q *Queries) ReleasePendingCompactionClaimsBySession(ctx context.Context, arg ReleasePendingCompactionClaimsBySessionParams) error {
+	_, err := q.db.Exec(ctx, releasePendingCompactionClaimsBySession, arg.BotID, arg.SessionID)
+	return err
+}

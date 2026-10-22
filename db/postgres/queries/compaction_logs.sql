@@ -340,3 +340,16 @@ DELETE FROM bot_history_message_compacts AS compacts
 USING target_compaction_logs target
 WHERE compacts.team_id = public.memoh_current_team_id()
   AND compacts.id = target.id;
+
+-- name: ReleasePendingCompactionClaimsBySession :exec
+-- A new runtime owner releases the compaction claims its predecessors left
+-- pending: their writes are fenced out, so those claims can never commit, and
+-- the rows they hold are compaction candidates again.
+UPDATE bot_history_message_compacts
+SET status = 'error',
+    error_message = 'claimant lost runtime ownership',
+    completed_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND status = 'pending';
