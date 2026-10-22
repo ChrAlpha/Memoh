@@ -681,9 +681,10 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		}
 	}
 
-	// ACL gate: evaluate before events enter the pipeline. If denied, the
-	// message is not persisted in the event store and not pushed into the
-	// in-memory pipeline. This applies uniformly to chat and discuss modes.
+	// ACL gate: evaluate before the message is recorded as an event. A denied
+	// message gets no event in the event store, so discuss admission never sees
+	// it; it is kept only as a passive row marked as rejected. This applies
+	// uniformly to chat and discuss modes.
 	aclAllowed := true
 	if p.acl != nil {
 		allowed, aclErr := p.acl.Evaluate(ctx, acl.EvaluateRequest{
@@ -929,8 +930,10 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	}
 
 	if discussRoute {
-		// Without the event pipeline there is nowhere to record the input, and a
-		// turn started here would bypass the admission.
+		// A discuss session answers the events it has not covered, and discuss
+		// admission reads them from the event store. An input with no stored
+		// event is one admission would never answer, and a turn started here
+		// would bypass it.
 		if !eventPersisted {
 			return errors.New("discuss input needs the event pipeline")
 		}
