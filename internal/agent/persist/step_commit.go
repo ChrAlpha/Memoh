@@ -164,9 +164,23 @@ func (c *StepCommitter) commit(ctx context.Context, stepIndex int, record *step.
 	return c.persist(ctx, stepIndex, record, stepCompleted, outcome.RunFailure{})
 }
 
+// interrupt writes the checkpoint of the model call a cancellation cut short.
+// The cancellation's cause is the failure the run ends with, named by the same
+// policy the driver applies to it, so the row carries the code session_runs
+// records; a stop or a lost ownership names no failure and leaves the row
+// without one.
 func (c *StepCommitter) interrupt(ctx context.Context, stepIndex int, record *step.Record) error {
-	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, outcome.RunFailure{})
+	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, cancellationFailure(ctx))
 	return err
+}
+
+func cancellationFailure(ctx context.Context) outcome.RunFailure {
+	cause := context.Cause(ctx)
+	if cause == nil || outcome.RunStopped(ctx) || errors.Is(cause, context.Canceled) || outcome.OwnershipLost(cause) {
+		return outcome.RunFailure{}
+	}
+	code, args := outcome.RunFailureCode(cause, outcome.PhaseExecution, false)
+	return outcome.RunFailure{Code: code, Args: args, Cause: cause, Phase: outcome.PhaseExecution}
 }
 
 // persist writes one step. failure, when it names a code, is the failure that

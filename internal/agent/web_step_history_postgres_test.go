@@ -180,7 +180,7 @@ func TestPostgresWSStepHistoryFailureAfterCommittedStepWithoutText(t *testing.T)
 
 // An idle timeout cancels the model call, so the runtime checkpoints its text
 // itself before the run ends; that checkpoint is the run's only row for the
-// call and no second one is written.
+// call, carries the code session_runs records, and shows as one error block.
 func TestPostgresWSStepHistoryIdleTimeout(t *testing.T) {
 	h := newWSStepHistoryHarness(t, wsStepHistoryBlock, wsStepHistoryFixtureOptions(withFixtureOptions(withDrive(func(d *drive.Deps) {
 		d.StreamIdleTimeout = 300 * time.Millisecond
@@ -191,13 +191,20 @@ func TestPostgresWSStepHistoryIdleTimeout(t *testing.T) {
 		[3]string{"failed", "agent.response_timeout", ""},
 		[]string{
 			`user`,
-			`assistant "` + wsStepHistoryPartialText + `" interrupted`,
+			`assistant "` + wsStepHistoryPartialText + `" interrupted error_code=agent.response_timeout`,
 		},
 		[]string{
 			`user "` + directLifecyclePrompt + `"`,
-			`assistant [text "` + wsStepHistoryPartialText + `"]`,
+			`assistant [text "` + wsStepHistoryPartialText + `"] [error agent.response_timeout]`,
 		},
 	)
+	want := []map[string]any{{
+		messagepkg.AgentStepInterruptedMetadataKey: true,
+		messagepkg.HistoryErrorCodeMetadataKey:     "agent.response_timeout",
+	}}
+	if !reflect.DeepEqual(got.failureMeta, want) {
+		t.Errorf("failure metadata = %#v, want %#v", got.failureMeta, want)
+	}
 }
 
 // A message injected into a running turn is written by the step that carries
