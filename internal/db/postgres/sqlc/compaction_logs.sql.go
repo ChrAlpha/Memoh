@@ -455,6 +455,66 @@ func (q *Queries) DeleteCompactionLogsByBot(ctx context.Context, targetBotID pgt
 	return err
 }
 
+const getActiveCompactionArtifactWithinBytes = `-- name: GetActiveCompactionArtifactWithinBytes :one
+SELECT compact.id, compact.bot_id, compact.session_id, compact.status, compact.summary, compact.message_count, compact.error_message, compact.usage, compact.model_id, compact.artifact_version, compact.coverage, compact.anchor_start_ms, compact.anchor_end_ms, compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at, compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id
+FROM bot_history_message_compacts compact
+JOIN bot_sessions owner_session
+  ON owner_session.id = compact.session_id
+ AND owner_session.bot_id = compact.bot_id
+ AND owner_session.team_id = compact.team_id
+ AND owner_session.compaction_epoch = compact.compaction_epoch
+WHERE compact.team_id = public.memoh_current_team_id()
+  AND compact.id = $1
+  AND compact.bot_id = $2
+  AND compact.session_id = $3
+  AND compact.status = 'ok'
+  AND compact.superseded_by IS NULL
+  AND compact.superseded_at IS NULL
+  AND octet_length(row_to_json(compact)::text) <= $4::bigint
+`
+
+type GetActiveCompactionArtifactWithinBytesParams struct {
+	ID        pgtype.UUID `json:"id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+	SessionID pgtype.UUID `json:"session_id"`
+	MaxBytes  int64       `json:"max_bytes"`
+}
+
+// In-run compaction reads only an artifact already rendered by its request.
+func (q *Queries) GetActiveCompactionArtifactWithinBytes(ctx context.Context, arg GetActiveCompactionArtifactWithinBytesParams) (BotHistoryMessageCompact, error) {
+	row := q.db.QueryRow(ctx, getActiveCompactionArtifactWithinBytes,
+		arg.ID,
+		arg.BotID,
+		arg.SessionID,
+		arg.MaxBytes,
+	)
+	var i BotHistoryMessageCompact
+	err := row.Scan(
+		&i.ID,
+		&i.BotID,
+		&i.SessionID,
+		&i.Status,
+		&i.Summary,
+		&i.MessageCount,
+		&i.ErrorMessage,
+		&i.Usage,
+		&i.ModelID,
+		&i.ArtifactVersion,
+		&i.Coverage,
+		&i.AnchorStartMs,
+		&i.AnchorEndMs,
+		&i.ArtifactLevel,
+		&i.ParentIds,
+		&i.SupersededBy,
+		&i.SupersededAt,
+		&i.CompactionEpoch,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.TeamID,
+	)
+	return i, err
+}
+
 const getCompactionLogByID = `-- name: GetCompactionLogByID :one
 SELECT id, bot_id, session_id, status, summary, message_count, error_message, usage, model_id,
        artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, parent_ids,

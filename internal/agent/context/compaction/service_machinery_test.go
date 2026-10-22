@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -125,6 +126,10 @@ type fakeQueries struct {
 	backfills       []sqlc.BackfillCompactionArtifactCoverageParams
 }
 
+func (*fakeQueries) ListSessionEventCursors(context.Context, sqlc.ListSessionEventCursorsParams) ([]sqlc.ListSessionEventCursorsRow, error) {
+	return nil, nil
+}
+
 func (f *fakeQueries) BackfillCompactionArtifactCoverage(_ context.Context, arg sqlc.BackfillCompactionArtifactCoverageParams) error {
 	f.backfills = append(f.backfills, arg)
 	return nil
@@ -205,6 +210,30 @@ func (f *fakeQueries) ListMessageAssetsBatch(_ context.Context, _ []pgtype.UUID)
 
 func (f *fakeQueries) ListCompactionArtifactLineageBySession(_ context.Context, _ pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
 	return f.priorLogs, nil
+}
+
+func (f *fakeQueries) GetActiveCompactionArtifactWithinBytes(_ context.Context, arg sqlc.GetActiveCompactionArtifactWithinBytesParams) (sqlc.BotHistoryMessageCompact, error) {
+	for _, row := range f.priorLogs {
+		encoded, _ := json.Marshal(row)
+		if row.ID == arg.ID && !row.SupersededBy.Valid && int64(len(encoded)) <= arg.MaxBytes {
+			return row, nil
+		}
+	}
+	return sqlc.BotHistoryMessageCompact{}, pgx.ErrNoRows
+}
+
+func (f *fakeQueries) ListMessagesByCompactIDWithinBytes(ctx context.Context, arg sqlc.ListMessagesByCompactIDWithinBytesParams) ([]sqlc.ListMessagesByCompactIDWithinBytesRow, error) {
+	rows, err := f.ListMessagesByCompactID(ctx, arg.CompactID)
+	var bounded []sqlc.ListMessagesByCompactIDWithinBytesRow
+	for _, row := range rows {
+		encoded, _ := json.Marshal(row)
+		arg.MaxBytes -= int64(len(encoded))
+		if arg.MaxBytes < 0 {
+			break
+		}
+		bounded = append(bounded, sqlc.ListMessagesByCompactIDWithinBytesRow(row))
+	}
+	return bounded, err
 }
 
 func (f *fakeQueries) ListMessagesByCompactID(_ context.Context, compactID pgtype.UUID) ([]sqlc.ListMessagesByCompactIDRow, error) {

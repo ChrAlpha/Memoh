@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 // switchContext is the compaction event an armed run asks for when the
@@ -54,18 +55,21 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 			err = fmt.Errorf("%s: request_tokens=%d allowance=%d", reason, tokens, sw.AllowanceTokens)
 		}
 		detail := fmt.Sprintf("trigger=in_run passes=%d request_tokens=%d->%d allowance=%d", len(passes), sw.UsageTokens, tokens, sw.AllowanceTokens)
-		attrs := []any{
+		attrs := []slog.Attr{
 			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID), slog.String("run_id", req.RunID),
 			slog.String("trigger", "in_run"), slog.Int("passes", len(passes)),
 			slog.Int("request_tokens_before", sw.UsageTokens), slog.Int("request_tokens_after", tokens),
-			slog.Int("allowance_tokens", sw.AllowanceTokens), slog.Int64("duration_ms", time.Since(start).Milliseconds()),
+			slog.Int("allowance_tokens", sw.AllowanceTokens), slog.Duration("duration", time.Since(start)),
 		}
 		if err == nil {
-			s.logger.InfoContext(ctx, "context compacted", attrs...)
+			s.logger.LogAttrs(ctx, slog.LevelInfo, "context compacted", attrs...)
 			return detail, nil
 		}
 		detail += " reason=" + cmp.Or(string(reason), "error")
-		s.logger.WarnContext(ctx, "context compaction failed", append(attrs, slog.String("reason", string(reason)), slog.Any("error", err))...)
+		if ctx.Err() != nil {
+			return detail, ctx.Err()
+		}
+		err = errs.Wrap(err, "context compaction failed", append(attrs, slog.String("reason", string(reason)))...)
 		if reason == compaction.ReasonProtectedOverflow {
 			return detail, fmt.Errorf("%w: %w", contextfrag.ErrProtectedContextOverflow, err)
 		}

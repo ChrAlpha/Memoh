@@ -2,18 +2,66 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
+
+func TestContextProvenanceKeepsStoredVersionThroughReasoningProjection(t *testing.T) {
+	raw, err := historyfrag.MarshalStoredSDKMessage(sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ReasoningPart{Text: "unfinished reasoning"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := historyfrag.FromDBMessage(messagepkg.Message{ID: "checkpoint", Role: "assistant", Content: raw, Metadata: map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true}}, historyfrag.ScopeFallback{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := projectInterruptedHistoryReasoning([]historyfrag.HistoryRecord{record})
+	got := contextProvenance([]ModelMessage{records[0].ModelMessage}, records, nil)
+	if len(got) != 1 || got[0].Sources[0].ContentHash != historyfrag.MessageContentHash(record.ModelMessage) || records[0].ModelMessage.TextContent() == record.ModelMessage.TextContent() {
+		t.Fatalf("projected checkpoint lost stored identity: %+v", got)
+	}
+}
+
+func TestBudgetRecoveryRetainsContinuationAnchors(t *testing.T) {
+	messages := []ModelMessage{{Role: "user", Content: turn.NewTextContent("root request")}, {Role: "user", Content: turn.NewTextContent("later steer")}}
+	records := []historyfrag.HistoryRecord{{DBMessageID: "root", ModelMessage: messages[0]}, {DBMessageID: "steer", ModelMessage: messages[1]}}
+	req := ChatRequest{PersistedUserMessageID: "steer", inputInHistory: true, continuationAnchors: []turn.ContextMessageSource{{Kind: "history", ID: "root"}, {Kind: "history", ID: "steer"}}}
+	got, err := (chatHistoryLayout{historyCount: 2}).replaceHistory(t.Context(), native.RunConfig{Messages: modelMessagesToSDKMessages(messages)}, req, messages, records)
+	if err != nil || len(got.ContextProvenance) != 2 || !got.ContextProvenance[0].Anchor || !got.ContextProvenance[1].Anchor {
+		t.Fatalf("continued inputs lost after recovery: %+v err=%v", got.ContextProvenance, err)
+	}
+}
+
+func TestContextProvenanceSurvivesToolResultNormalization(t *testing.T) {
+	t.Parallel()
+
+	call := sdkMessagesToModelMessages([]sdk.Message{{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+		ToolCallID: "call-1", ToolName: "exec", Input: toolexec.ArgumentsFromValue(map[string]any{}),
+	}}}})[0]
+	result := ModelMessage{Role: "tool", ToolCallID: "call-1", Name: "exec", Content: json.RawMessage(`{"ok":true}`)}
+	records := []historyfrag.HistoryRecord{
+		{DBMessageID: "call-row", ModelMessage: call},
+		{DBMessageID: "result-row", ModelMessage: result},
+	}
+	messages, _, _ := normalizeContextMessages([]ModelMessage{call, result}, nil, nil)
+	got := contextProvenance(messages, records, nil)
+	if len(got) != 2 || len(got[1].Sources) != 1 || got[1].Sources[0].ID != "result-row" || got[1].Sources[0].ContentHash == "" {
+		t.Fatalf("normalized tool exchange lost its result source: %+v", got)
+	}
+}
 
 // A continuation renders everything as history: the turn before, the run's
 // request row, its deferred call and the approved result. Each message names
@@ -65,13 +113,13 @@ func TestContextProvenanceNamesWhatEachMessageRenders(t *testing.T) {
 	}
 	for i, w := range want {
 		source := turn.ContextMessageSource{Kind: w.kind, ID: w.id}
-		if !reflect.DeepEqual(got[i].Sources, []turn.ContextMessageSource{source}) || got[i].Anchor != w.anchor {
+		if len(got[i].Sources) != 1 || got[i].Sources[0].Kind != source.Kind || got[i].Sources[0].ID != source.ID || got[i].Anchor != w.anchor {
 			t.Fatalf("message %d renders %v anchor=%v, want %v anchor=%v", i, got[i].Sources, got[i].Anchor, source, w.anchor)
 		}
 	}
 	if !reflect.DeepEqual(stepProvenance([]messagepkg.Message{
 		{ID: "steer", Role: "user"}, {ID: "feedback", Role: "user", Metadata: map[string]any{messagepkg.MessageSourceMetadataKey: messagepkg.MessageSourceInternalFeedback}}, {ID: "call", Role: "assistant"},
-	}), []native.MessageProvenance{
+	}, []string{"steer"}), []native.MessageProvenance{
 		{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "steer"}}, Anchor: true},
 		{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "feedback"}}},
 		{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "call"}}},
@@ -134,7 +182,7 @@ func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 				runner.passes = nil
 			}
 			service.compactionService = runner
-			committer := &agentStepCommitter{persisted: []messagepkg.Message{{ID: "input", Role: "user"}, {ID: "call", Role: "assistant"}}}
+			committer := &agentStepCommitter{inputSourceIDs: []string{"input"}}
 			var folds []native.ContextFold
 			sw := native.ContextSwitch{
 				View: rows("old-user", "request", "call", "steer", "latest"), Anchors: rows("request", "steer"), Tail: rows("latest"),

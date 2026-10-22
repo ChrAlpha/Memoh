@@ -31,6 +31,7 @@ type CompactionCandidate struct {
 	Record       historyfrag.HistoryRecord
 	Policies     []CompactPolicy
 	IsToolResult bool
+	EventCursor  int64
 }
 
 func (c CompactionCandidate) HasPolicy(policy CompactPolicy) bool {

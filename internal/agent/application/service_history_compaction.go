@@ -87,6 +87,9 @@ func contextProvenance(messages []ModelMessage, records []historyfrag.HistoryRec
 		default:
 			continue
 		}
+		if source.Kind == "history" && source.ContentHash == "" && matched[i] >= 0 {
+			source.ContentHash = historyfrag.MessageContentHash(records[matched[i]].ModelMessage)
+		}
 		sent := modelMessagesToSDKMessages([]ModelMessage{message})
 		if len(sent) != 1 {
 			continue
@@ -141,6 +144,9 @@ func matchHistoryRecords(messages []ModelMessage, records []historyfrag.HistoryR
 }
 
 func modelMessageSourceKey(message ModelMessage) string {
+	if hash := historyfrag.MessageContentHash(message); hash != "" {
+		return hash
+	}
 	return strings.ToLower(strings.TrimSpace(message.Role)) + "\x00" + string(message.Content)
 }
 

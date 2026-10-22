@@ -3,15 +3,67 @@ package compaction
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/chat/timeline"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
+
+func TestCompactRejectsUnrenderedPipelineVersion(t *testing.T) {
+	for _, stream := range []string{"turn response", "rendered input"} {
+		t.Run(stream, func(t *testing.T) {
+			row := mkRow(t, "assistant", `{"role":"assistant","content":"`+strings.Repeat("visible text ", 200)+`"}`, 100)
+			trs := timeline.DecodeTurnResponseEntries([]messagepkg.Message{{ID: formatUUID(row.ID), Role: "assistant", Content: row.Content, CreatedAt: time.UnixMilli(100)}})
+			rc := timeline.RenderedContext{{MessageID: "current-input", ReceivedAtMs: 200, Content: []timeline.RenderedContentPiece{{Type: "text", Text: "current input"}}}}
+			if stream == "rendered input" {
+				row.ExternalMessageID = pgtype.Text{String: "old-input", Valid: true}
+				trs = nil
+				rc = append(timeline.RenderedContext{{MessageID: "old-input", ReceivedAtMs: 100, LastEventCursor: 20, Content: []timeline.RenderedContentPiece{{Type: "text", Text: "edited input"}}}}, rc...)
+			} else {
+				row.Content = []byte(`{"role":"assistant","content":"` + strings.Repeat("unrendered edit ", 200) + `"}`)
+			}
+			stub := &stubModel{summary: "SUMMARY"}
+			cfg := machineryConfig(stub, 450)
+			for _, message := range timeline.ComposeContext(rc, trs).Messages {
+				cfg.View = append(cfg.View, *message.Source)
+			}
+			q := &fakeQueries{uncompacted: []sqlc.ListUncompactedMessagesBySessionRow{row}}
+			passes, err := newMachineryService(q).Compact(t.Context(), cfg, nil)
+			if ReasonOf(err) != ReasonStaleSource || len(passes) != 0 || stub.calls != 0 || q.completed.Status == "ok" {
+				t.Fatalf("unseen source version committed: passes=%d calls=%d status=%s err=%v", len(passes), stub.calls, q.completed.Status, err)
+			}
+		})
+	}
+}
+
+func TestCompactRejectsSourceEditedAfterRendering(t *testing.T) {
+	rows := machineryCorpus(t)
+	items, _ := candidatesFromRows(rows)
+	stub := &stubModel{summary: "SUMMARY"}
+	cfg := machineryConfig(stub, 450)
+	for _, item := range items {
+		cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "history", ID: formatUUID(item.ID), ContentHash: historyfrag.MessageContentHash(item.Record.ModelMessage)})
+	}
+	rows[0].Content = []byte(`{"role":"user","content":[{"type":"text","text":"edited after request assembly"}]}`)
+	q := &fakeQueries{uncompacted: rows}
+	passes, err := newMachineryService(q).Compact(t.Context(), cfg, nil)
+	if ReasonOf(err) != ReasonStaleSource || stub.calls != 0 || len(passes) != 0 {
+		t.Fatalf("passes=%d calls=%d err=%v, want stale_source without summarizing a different version", len(passes), stub.calls, err)
+	}
+}
 
 // statusSequence answers each summarizer call with the next status, and with
 // the stub once the sequence is used up.
@@ -161,5 +213,29 @@ func TestCompactNamesWhyAPassFailed(t *testing.T) {
 				t.Fatalf("passes=%d err=%v, want %s", len(passes), err, tc.reason)
 			}
 		})
+	}
+}
+
+type cancelOnSummary struct {
+	stub   *stubModel
+	cancel context.CancelFunc
+}
+
+func (r cancelOnSummary) RoundTrip(req *http.Request) (*http.Response, error) {
+	response, err := r.stub.RoundTrip(req)
+	r.cancel()
+	return response, err
+}
+
+func TestCompactCancellationBeforeCommitPublishesNothing(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stub := &stubModel{summary: "short-summary"}
+	cfg := machineryConfig(stub, 450)
+	cfg.HTTPClient = &http.Client{Transport: cancelOnSummary{stub: stub, cancel: cancel}}
+	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	passes, err := newMachineryService(q).Compact(ctx, cfg, func(context.Context, Pass) (bool, error) { return true, nil })
+	if !errors.Is(err, context.Canceled) || len(passes) > 0 || q.completed.Status == "ok" || len(q.rollupCalls) > 0 {
+		t.Fatalf("canceled pass published a summary: ctx=%v err=%v passes=%d completed=%q rollups=%d", ctx.Err(), err, len(passes), q.completed.Status, len(q.rollupCalls))
 	}
 }

@@ -32,7 +32,7 @@ const minSummaryTokens = 32
 // nothing to fold.
 func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, sessionUUID pgtype.UUID, cfg TriggerConfig) (Pass, bool, error) {
 	if cfg.HistoryBudgetTokens <= 0 || cfg.SummaryWindowTokens <= 0 {
-		return Pass{}, false, fmt.Errorf("%w: history_budget=%d window=%d", errCompactionUnsized, cfg.HistoryBudgetTokens, cfg.SummaryWindowTokens)
+		return Pass{}, false, failed(ReasonProtectedOverflow, fmt.Errorf("%w: history_budget=%d window=%d", errCompactionUnsized, cfg.HistoryBudgetTokens, cfg.SummaryWindowTokens))
 	}
 	// The summarizer may write as much as the model declares it can answer;
 	// a model that declares nothing gets the output its runs get.
@@ -45,14 +45,11 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Pass{}, false, failed(ReasonInputOverflow, fmt.Errorf("%w: window=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens))
 	}
 
-	frontier, err := NewArtifactProjection(s.queries).LoadActiveSession(ctx, ArtifactOwner{BotID: cfg.BotID, SessionID: cfg.SessionID, SessionIDKnown: true})
+	readMaxBytes := compactionReadMaxBytes(promptWindow)
+	parents, err := s.compactionParents(ctx, cfg, readMaxBytes)
 	if err != nil {
 		return Pass{}, false, err
 	}
-	for _, issue := range frontier.Issues {
-		s.logger.WarnContext(ctx, "compaction: ignored invalid artifact lineage", slog.String("issue", issue.Error()))
-	}
-	parents := frontier.Artifacts
 	createdFrom := pgtype.Timestamptz{Time: cfg.CandidatesFrom, Valid: !cfg.CandidatesFrom.IsZero()}
 	createdBefore := pgtype.Timestamptz{Time: cfg.CandidatesBefore, Valid: !cfg.CandidatesBefore.IsZero()}
 	viewIDs, viewExternalIDs := viewFilter(cfg)
@@ -69,7 +66,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if measure.CandidateCount == 0 && len(parents) == 0 {
 		return Pass{}, false, nil
 	}
-	readMaxBytes := compactionReadMaxBytes(promptWindow)
 	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
 		SessionID:          sessionUUID,
 		CreatedFrom:        createdFrom,
@@ -218,6 +214,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			return fail(err)
 		}
 	}
+	if err := s.captureSourceVersions(ctx, cfg, claimed); err != nil {
+		return fail(err)
+	}
 	artifact, err := artifactMetadataFor(claimed, compactedMessageIDs)
 	if err != nil {
 		return fail(err)
@@ -256,6 +255,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	if err != nil {
 		return fail(failed(ReasonSummarizerFailed, err))
 	}
+	if err := ctx.Err(); err != nil {
+		return fail(err)
+	}
 
 	summary := strings.TrimSpace(result.Text)
 	if summary == "" {
@@ -274,19 +276,22 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 
 	usageJSON, _ := json.Marshal(result.Usage)
 	modelUUID := db.ParseUUIDOrEmpty(cfg.ModelRecordID)
-	if _, err := s.inSession(persistCtx, cfg, func(q dbstore.Queries) error {
-		if err := verifyClaimedCoverage(persistCtx, q, logID, claimed, compactedMessageIDs); err != nil {
+	if _, err := s.inSession(ctx, cfg, func(q dbstore.Queries) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := verifyClaimedCoverage(ctx, q, logID, claimed, compactedMessageIDs, readMaxBytes); err != nil {
 			return err
 		}
 		for _, backfill := range backfills {
-			if err := q.BackfillCompactionArtifactCoverage(persistCtx, backfill); err != nil {
+			if err := q.BackfillCompactionArtifactCoverage(ctx, backfill); err != nil {
 				return err
 			}
 		}
 		if len(parents) > 0 {
-			return s.completeRollupLog(persistCtx, q, logID, summary, len(compactedMessageIDs), usageJSON, modelUUID, artifact, parents)
+			return s.completeRollupLog(ctx, q, logID, summary, len(compactedMessageIDs), usageJSON, modelUUID, artifact, parents)
 		}
-		return s.completeLog(persistCtx, q, logID, "ok", summary, "", len(compactedMessageIDs), usageJSON, modelUUID, &artifact)
+		return s.completeLog(ctx, q, logID, "ok", summary, "", len(compactedMessageIDs), usageJSON, modelUUID, &artifact)
 	}); err != nil {
 		// The rows are already marked, but the log never reached status=ok, so
 		// the reclaim SQL keeps them eligible for a later pass. Reporting ok
@@ -312,7 +317,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 // viewFilter restricts the candidate read to the rows the caller's request
 // renders, or leaves it open when the caller names no view.
 func viewFilter(cfg TriggerConfig) ([]pgtype.UUID, []string) {
-	if len(cfg.View) == 0 {
+	if cfg.View == nil {
 		return nil, nil
 	}
 	ids, externalIDs := []pgtype.UUID{}, []string{}
@@ -391,8 +396,8 @@ func (s *Service) inSession(ctx context.Context, cfg TriggerConfig, fn func(dbst
 
 // verifyClaimedCoverage checks, at commit, that exactly the rows the attempt
 // claimed still carry its claim and the content its summary was written from.
-func verifyClaimedCoverage(ctx context.Context, q dbstore.Queries, logID pgtype.UUID, claimed []CompactionCandidate, ids []pgtype.UUID) error {
-	current, err := q.ListMessagesByCompactID(ctx, logID)
+func verifyClaimedCoverage(ctx context.Context, q dbstore.Queries, logID pgtype.UUID, claimed []CompactionCandidate, ids []pgtype.UUID, maxBytes int64) error {
+	current, err := q.ListMessagesByCompactIDWithinBytes(ctx, sqlc.ListMessagesByCompactIDWithinBytesParams{CompactID: logID, MaxBytes: maxBytes})
 	if err != nil {
 		return err
 	}

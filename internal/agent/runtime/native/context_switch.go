@@ -171,6 +171,9 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		cfg.ContextMutations.Record(contextfrag.MutationContextSwitch, detail)
 	}
 	if err != nil {
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 		if errors.Is(err, contextfrag.ErrProtectedContextOverflow) || errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
 			return false, err
 		}

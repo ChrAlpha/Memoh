@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/turn"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -195,6 +197,12 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig, admit func(con
 			return passes, nil
 		}
 		passes = append(passes, pass)
+		if cfg.View != nil {
+			cfg.View = slices.DeleteFunc(slices.Clone(cfg.View), func(source turn.ContextMessageSource) bool {
+				return source.Kind == "summary" && slices.Contains(pass.Absorbed, source.ID)
+			})
+			cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "summary", ID: pass.ArtifactID})
+		}
 		if admit != nil {
 			fits, err := admit(ctx, pass)
 			if err != nil {

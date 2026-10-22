@@ -74,6 +74,15 @@ func (f *pairingQueries) CreateCompactionLog(context.Context, sqlc.CreateCompact
 	return sqlc.BotHistoryMessageCompact{ID: f.logID}, nil
 }
 
+func (f *pairingQueries) ListMessagesByCompactIDWithinBytes(ctx context.Context, arg sqlc.ListMessagesByCompactIDWithinBytesParams) ([]sqlc.ListMessagesByCompactIDWithinBytesRow, error) {
+	rows, err := f.ListMessagesByCompactID(ctx, arg.CompactID)
+	bounded := make([]sqlc.ListMessagesByCompactIDWithinBytesRow, len(rows))
+	for i, row := range rows {
+		bounded[i] = sqlc.ListMessagesByCompactIDWithinBytesRow(row)
+	}
+	return bounded, err
+}
+
 func (f *pairingQueries) ListMessagesByCompactID(_ context.Context, compactID pgtype.UUID) ([]sqlc.ListMessagesByCompactIDRow, error) {
 	var rows []sqlc.ListMessagesByCompactIDRow
 	for _, row := range f.uncompacted {

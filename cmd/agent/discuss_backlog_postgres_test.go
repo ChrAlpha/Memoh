@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -75,10 +76,18 @@ type backlogFixture struct {
 	images      *backlogImageLoader
 	summaries   atomic.Int32
 	failSummary atomic.Bool
+	// failStatus is the status a failing summarizer answers with; zero is a
+	// rejected request, which is not retried.
+	failStatus  atomic.Int32
 	longSummary atomic.Bool
 	onSummary   func(body []byte)
 	modelCalls  atomic.Int32
 	lastRequest atomic.Value
+	// stream answers chat requests when set; the default answers at once.
+	stream      func(http.ResponseWriter, []byte)
+	agent       *native.Agent
+	manager     *sessionruntime.Manager
+	ownerUserID string
 }
 
 func newBacklogFixture(t *testing.T) *backlogFixture {
@@ -90,7 +99,7 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	f.botID, f.sessionID = createDiscussRecoveryFixture(t, ctx, f.pool)
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
 	var teamID string
-	if err := f.pool.QueryRow(ctx, `SELECT team_id FROM bots WHERE id=$1`, f.botID).Scan(&teamID); err != nil {
+	if err := f.pool.QueryRow(ctx, `SELECT team_id, owner_user_id FROM bots WHERE id=$1`, f.botID).Scan(&teamID, &f.ownerUserID); err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +118,10 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 		if request.Stream {
 			f.modelCalls.Add(1)
 			f.lastRequest.Store(string(body))
+			if f.stream != nil {
+				f.stream(w, body)
+				return
+			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = fmt.Fprint(w, "data: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"BACKLOG_OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 			return
@@ -118,7 +131,7 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 			f.onSummary(body)
 		}
 		if f.failSummary.Load() {
-			http.Error(w, "summarizer down", http.StatusBadRequest)
+			http.Error(w, "summarizer down", cmp.Or(int(f.failStatus.Load()), http.StatusBadRequest))
 			return
 		}
 		summary := "Earlier backlog summarized."
@@ -151,7 +164,9 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	f.base = time.Now().Add(time.Minute).Truncate(time.Millisecond)
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{OwnerID: uuid.NewString(), Ledger: ledger.NewPostgres(sqlc.New(f.pool), f.pool), Fence: runtimefence.NewActivator(queries)})
 	t.Cleanup(func() { _ = manager.Close() })
-	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)}), time.UTC, time.Minute)
+	f.manager = manager
+	f.agent = native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)})
+	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, f.agent, time.UTC, time.Minute)
 	service.SetSessionRuntime(manager)
 	service.SetCompactionService(compaction.NewService(logger, queries))
 	service.SetContextAbsoluteMaxTokens(16000)
@@ -167,15 +182,19 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 func (f *backlogFixture) appendMessage(id, text string) {
 	f.t.Helper()
 	created := f.base.Add(time.Duration(len(f.rc)+1) * time.Second)
+	eventID, event, err := f.cursor.PersistEvent(f.ctx, f.botID, f.sessionID, timeline.MessageEvent{SessionID: f.sessionID, MessageID: id, ReceivedAtMs: created.UnixMilli(), Content: []timeline.ContentNode{{Type: "text", Text: text}}})
+	if err != nil {
+		f.t.Fatal(err)
+	}
 	content, _ := json.Marshal(text)
-	msg, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: id, Role: "user", Content: content, SessionMode: "discuss"})
+	msg, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: id, EventID: eventID, Role: "user", Content: content, SessionMode: "discuss"})
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET created_at=$2 WHERE id=$1`, msg.ID, created); err != nil {
 		f.t.Fatal(err)
 	}
-	f.rc = append(f.rc, timeline.RenderedSegment{MessageID: id, ReceivedAtMs: created.UnixMilli(), Content: []timeline.RenderedContentPiece{{Type: "text", Text: text}}})
+	f.rc = append(f.rc, timeline.RenderedSegment{MessageID: id, LastEventCursor: event.(timeline.MessageEvent).EventCursor, ReceivedAtMs: created.UnixMilli(), Content: []timeline.RenderedContentPiece{{Type: "text", Text: text}}})
 }
 
 // trigger notifies the driver and reports the failure code, or "" when the

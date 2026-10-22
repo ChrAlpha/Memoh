@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -37,6 +39,7 @@ type agentStepCommitter struct {
 	mu                   sync.Mutex
 	turnRequestMessageID string
 	persisted            []messagepkg.Message
+	inputSourceIDs       []string
 	memoryPersisted      []messagepkg.Message
 	memoryExpectedRows   int
 	nextStep             int // In-process ordering guard, not a durable replay cursor.
@@ -82,7 +85,7 @@ func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc
 	case strings.TrimSpace(req.TurnID) == "" || req.TurnPosition == nil:
 		return nil
 	}
-	return &agentStepCommitter{
+	committer := &agentStepCommitter{
 		service: s, req: req, rc: rc, persister: persister, ownerContext: ctx,
 		queueStep:            queueStep,
 		turnRequestMessageID: requestMessageID,
@@ -90,6 +93,10 @@ func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc
 		// persisted; the loop numbers its commits from the same offset.
 		nextStep: req.StepIndexOffset,
 	}
+	if requestMessageID != "" {
+		committer.inputSourceIDs = []string{requestMessageID}
+	}
+	return committer
 }
 
 // bindNativeRun arms one native run: step persistence when the turn is
@@ -108,7 +115,7 @@ func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolve
 	// A run that persists its steps compacts in place when a step's request
 	// no longer fits, and is never trimmed by step reselection. A retry or an
 	// edit replays history before its cutoff, which no fold matches.
-	if committer != nil && s.compactionService != nil && s.settingsService != nil && len(cfg.ContextProvenance) > 0 &&
+	if committer != nil && s.compactionService != nil && s.settingsService != nil &&
 		req.TurnReplacement == nil && strings.TrimSpace(req.HistoryCutoffBeforeMessageID) == "" {
 		cfg.SwitchContext = s.switchContext(req, committer, cfg.CurrentModelUUID)
 		cfg.ContextStepReselector = nil
@@ -269,7 +276,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	for i := range inputs {
 		inputs[i].TurnRequestMessageID = c.turnRequestMessageID
 	}
-	c.stampSteerTurn(inputs)
+	steerIndex := c.stampSteerTurn(inputs)
 	agentStep := messagepkg.AgentStep{RunID: c.req.RunID, Messages: inputs, Interrupted: interrupted}
 	if !c.replacementStarted && len(inputs) > 0 {
 		agentStep.Replacement = c.req.TurnReplacement
@@ -323,8 +330,16 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		}
 	}
 	c.persisted = append(c.persisted, persisted...)
+	if len(persisted) == len(inputs) {
+		if len(messages) > stepMessages {
+			c.inputSourceIDs = append(c.inputSourceIDs, persisted[0].ID)
+		}
+		if steerIndex >= 0 {
+			c.inputSourceIDs = append(c.inputSourceIDs, persisted[steerIndex].ID)
+		}
+	}
 	if len(persisted) == len(messages) && stepMessages == len(record.Messages) {
-		dir.Provenance = stepProvenance(persisted[len(messages)-stepMessages:])
+		dir.Provenance = stepProvenance(persisted[len(messages)-stepMessages:], c.inputSourceIDs)
 	}
 	if mode == stepInterrupted && len(persisted) > 0 {
 		c.checkpointed = true
@@ -354,22 +369,20 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 	return dir, nil
 }
 
-// stepProvenance names the row each message of a step became. A user row
-// that is not runtime feedback is the run's input or a steer, which the run
-// keeps where it is when it compacts.
-func stepProvenance(rows []messagepkg.Message) []native.MessageProvenance {
+// stepProvenance carries the request and queue claim's explicit input IDs.
+func stepProvenance(rows []messagepkg.Message, inputs []string) []native.MessageProvenance {
 	provenance := make([]native.MessageProvenance, len(rows))
 	for i, row := range rows {
+		source := turn.ContextMessageSource{Kind: "history", ID: row.ID}
+		if len(row.Content) > 0 {
+			source.ContentHash = historyfrag.MessageContentHash(historyfrag.DecodeStoredModelMessage(nil, row.ID, row.Role, row.Content))
+		}
 		provenance[i] = native.MessageProvenance{
-			Sources: []turn.ContextMessageSource{{Kind: "history", ID: row.ID}},
-			Anchor:  isRunInputRow(row),
+			Sources: []turn.ContextMessageSource{source},
+			Anchor:  slices.Contains(inputs, row.ID),
 		}
 	}
 	return provenance
-}
-
-func isRunInputRow(row messagepkg.Message) bool {
-	return strings.EqualFold(strings.TrimSpace(row.Role), "user") && !messagepkg.IsInternalFeedback(row.Metadata)
 }
 
 // inputSources names the run's input and the steers its steps persisted.
@@ -380,10 +393,8 @@ func (c *agentStepCommitter) inputSources() []turn.ContextMessageSource {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var sources []turn.ContextMessageSource
-	for _, row := range c.persisted {
-		if isRunInputRow(row) {
-			sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: row.ID})
-		}
+	for _, id := range c.inputSourceIDs {
+		sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: id})
 	}
 	return sources
 }
@@ -399,13 +410,13 @@ func (c *agentStepCommitter) inputSources() []turn.ContextMessageSource {
 // take the last user row nobody named.
 // native.TestQueuedSteerIsAppendedAfterEveryOtherPreparedMessage pins the
 // ordering this depends on.
-func (c *agentStepCommitter) stampSteerTurn(inputs []messagepkg.PersistInput) {
+func (c *agentStepCommitter) stampSteerTurn(inputs []messagepkg.PersistInput) int {
 	if c == nil || c.queueStep == nil {
-		return
+		return -1
 	}
 	slot := c.queueStep.steerTurnForStep()
 	if slot == nil || strings.TrimSpace(slot.TurnID) == "" {
-		return
+		return -1
 	}
 	for i := len(inputs) - 1; i >= 0; i-- {
 		if !strings.EqualFold(strings.TrimSpace(inputs[i].Role), "user") || messagepkg.IsInternalFeedback(inputs[i].Metadata) {
@@ -417,8 +428,9 @@ func (c *agentStepCommitter) stampSteerTurn(inputs []messagepkg.PersistInput) {
 		position := slot.Position
 		inputs[i].TurnID = slot.TurnID
 		inputs[i].TurnPosition = &position
-		return
+		return i
 	}
+	return -1
 }
 
 func (c *agentStepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int, outcome queueStepOutcome) {

@@ -1,7 +1,6 @@
 package application
 
 import (
-	"reflect"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -83,9 +82,7 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 		assistantToolCall,
 		toolResult,
 	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("history pipeline payload mismatch:\ngot  %#v\nwant %#v", got, want)
-	}
+	assertSameJSON(t, got, want)
 
 	repaired := repairToolCallClosures(sanitizeMessages(got), syntheticToolClosureError)
 	assertSameJSON(t, modelMessagesToSDKMessages(nonNilModelMessages(repaired)), []sdk.Message{

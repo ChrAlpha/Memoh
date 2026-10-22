@@ -2,12 +2,19 @@ package application
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
+
+	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 type continuationTurnRequestMessageResolver interface {
@@ -50,6 +57,30 @@ func (s *Service) prepareContinuationRunConfig(
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	messages, retained := historyMessagesFromRecords(loaded)
+	if req.continuationToolCallID != "" && req.RunHandle.RunID != "" {
+		start := slices.IndexFunc(retained, func(record historyfrag.HistoryRecord) bool {
+			return slices.ContainsFunc(extractAssistantToolCallParts(record.ModelMessage), func(call sdk.ToolCallPart) bool {
+				return call.ToolCallID == req.continuationToolCallID
+			})
+		})
+		if start < 0 {
+			return native.RunConfig{}, fmt.Errorf("%w: deferred call missing from continuation", contextfrag.ErrBudgetUnsatisfied)
+		}
+		for _, record := range retained[start:] {
+			if record.DBMessageID != "" {
+				req.continuationTail = append(req.continuationTail, turn.ContextMessageSource{Kind: "history", ID: record.DBMessageID})
+			}
+		}
+		ids, err := s.queries.ListRunHistoryTurnRequestMessageIDs(ctx, sqlc.ListRunHistoryTurnRequestMessageIDsParams{
+			SessionID: db.ParseUUIDOrEmpty(req.ThreadID), RunID: db.ParseUUIDOrEmpty(req.RunHandle.RunID), RootTurnID: db.ParseUUIDOrEmpty(req.RunHandle.TurnID),
+		})
+		if err != nil {
+			return native.RunConfig{}, err
+		}
+		for _, id := range ids {
+			req.continuationAnchors = append(req.continuationAnchors, turn.ContextMessageSource{Kind: "history", ID: id.String()})
+		}
+	}
 	messages = sanitizeMessages(messages)
 	historyEstimates := make([]int, len(messages))
 	pressure := 0
@@ -61,7 +92,7 @@ func (s *Service) prepareContinuationRunConfig(
 	base.ContextTrimmableMessages = len(messages)
 
 	base.ContextFrags = historyContextFragsForMessages(messages, retained)
-	base.ContextProvenance = contextProvenance(messages, retained, compactionProtectedSources(req))
+	base.ContextProvenance = contextProvenance(messages, retained, append(compactionProtectedSources(req), req.continuationAnchors...))
 	// Close any tool call left open by an interrupted turn before the transcript
 	// reaches providers that enforce strict assistant-tool adjacency. A process
 	// restart can orphan a deferred ask_user / tool-approval call while a later

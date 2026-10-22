@@ -229,27 +229,43 @@ MUST NOT disagree about the size of the same content. Divergent callers
 
 ### CM-CMP-001: Synchronous compaction when a request does not fit
 
-On every provider-bound path, when the request does not fit its budget, the run MUST
-compact synchronously before the model call: compact → reload artifacts → rebuild →
-recheck (CM-ADM-001/002) → call the provider. Compaction is one operation per pending
-request:
+Before a native provider request, an over-budget request enters one synchronous
+compaction event. Durable native runs can also enter that event after a tool batch
+has committed and before the next provider call. This is a trigger point, not a
+run-scoped candidate boundary: the event can fold the rendered active summary,
+pre-run history, and earlier committed steps of the current run.
 
-- The summarizer is the model the run resolved. Its output limit comes from that
-  model's capability and the room the request leaves. The prompt states the capacity
-  facts — the content being replaced, what stays verbatim, the room available, the
-  summary's upper bound, and the current goal — and the model decides what to keep
-  and how long the summary is. There is no fixed target, ratio, or watermark.
-- Content is never truncated before the summarizer reads it. When the history to
-  replace does not fit one summarizer call, the operation folds the oldest prefix
-  that fits, in as many passes as reading it takes. A single item the summarizer
-  cannot read fails the operation.
-- Afterwards the request is only rechecked, never compacted again to reach a lower
-  mark. A Discuss batch gets one recovery; the recomposed attempt only rechecks.
-- On success the summary is committed and the run continues. Summarizer failure or
-  exhausted retries, an empty, truncated, or invalid summary, a summary that does not
-  reduce, a context that still does not fit, a stale snapshot, or a failed commit all
-  end the run with `context.budget_unsatisfied` (CM-ADM-002). A failed summary never
-  replaces context or advances coverage.
+- Each pass folds the oldest eligible material into one rolling summary, commits
+  exact coverage, and checks the complete next request. The event stops as soon as
+  that request fits. It does not drain an already-fitting history or aim at a fixed
+  ratio, watermark, or summary length.
+- The summarizer uses the resolved model and its actual input/output limits. Its
+  stated output bound prices the summary wrapper and provider envelope. Below the
+  minimum useful summary room, the event fails before a model call.
+- The current request and applied steers stay verbatim as anchors, outside summary
+  coverage. The latest tool/reasoning closure stays raw; a decision continuation
+  protects its deferred call and approved/answered result while allowing earlier
+  completed steps to fold. Anchors do not create separate summary segments.
+- In-run candidates come from the request's source identities and rendered message
+  versions. A pass removes a message only if all of its sources are covered.
+  Uncovered messages remain byte-identical. One placement rule inserts the summary
+  after the last retained message inside the covered span, or at the first removed
+  position if there is no retained message inside it. Record and pipeline replay
+  use the same rule, including the original per-source coverage time after rollup.
+- In-run recovery splices the request in memory. It reads rendered active artifacts
+  and selected rows under a byte cap, without reloading raw history or ancestor
+  summary payloads. A legacy artifact without exact coverage fails explicitly in
+  this path. Claim and commit retain ownership fencing and source-hash checks;
+  cancellation prevents a successful publication. Earlier successful passes remain.
+- The run identity, step limit, loop guard and committed effects survive recovery.
+  Idle detection pauses during compaction; cancellation and execution budgets still
+  apply. Between events, the provider request only appends.
+- Armed runs return `context.budget_unsatisfied` or `context.protected_overflow`
+  with a structured reason when recovery cannot progress. They never fall back to
+  step dropping or 512-byte result placeholders. Web, IM, trigger, follow-up and
+  decision continuations are armed through shared native binding when they have
+  durable ownership. Retry/edit, Discuss, subagent and external runtime execution
+  retain their separate capability boundaries and are not covered by this contract.
 
 ### CM-CMP-002: Oversized sessions recover on their next request
 
@@ -262,8 +278,11 @@ HTTP compaction endpoint were removed with the compaction policy revision.
 A synchronous compaction adds summarizer calls to the latency of the run that needs
 it. It fires only when the request does not fit: there are no soft/hard thresholds,
 background compaction, cooldown, mode switches, or shadow mode. Each compaction MUST
-record its outcome, pass count, and duration under stable log keys
-(`compaction finished` / `compaction failed`) — see CM-OBS-001.
+record its outcome, pass count, request tokens before and after, allowance, and
+duration. Successful in-run events use `context compacted`; failures return their
+cause to the run's result-record boundary. `MutationContextSwitch` retains the
+trigger, pass count and failure reason in the run's context lifecycle. Pre-turn
+compaction keeps its existing result keys — see CM-OBS-001.
 
 ### CM-RPL-001: Bounded replay
 
@@ -510,7 +529,7 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
 - [x] Compaction logs outcome, passes, and duration — CM-CMP-003, CM-OBS-001
 - [x] Rows inside the time window stay candidates when a byte-bounded view
       slides past them — CM-ADM-002
-- [ ] In-run compaction for long tool loops under the same rule — CM-CMP-001
+- [x] In-run compaction for durable native tool loops under the same rule — CM-CMP-001
 - [ ] Candidate view beyond the 24-hour pipeline window — CM-ADM-002
 
 ### PR 3 (P1) — Bounded replay + pipeline cache eviction

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
@@ -76,5 +77,75 @@ func TestDoCompactionAbsorbsOnlyTheActiveArtifactFrontier(t *testing.T) {
 	}
 	if parents := q.rollupCalls[0].Parents; len(parents) != 1 || parents[0] != activeID {
 		t.Fatalf("rollup parents = %v, want only the active artifact", parents)
+	}
+}
+
+func TestCompactDoesNotAbsorbUnrenderedSummary(t *testing.T) {
+	rows := machineryCorpus(t)
+	stub := &stubModel{summary: "new-summary"}
+	cfg := machineryConfig(stub, 450)
+	for _, row := range rows {
+		cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "history", ID: formatUUID(row.ID)})
+	}
+	hiddenID := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	q := &fakeQueries{
+		uncompacted: rows,
+		priorLogs: []sqlc.BotHistoryMessageCompact{{
+			ID:        hiddenID,
+			BotID:     pgtype.UUID{Bytes: uuid.MustParse(cfg.BotID), Valid: true},
+			SessionID: pgtype.UUID{Bytes: uuid.MustParse(cfg.SessionID), Valid: true},
+			Status:    "ok",
+			Summary:   "UNRENDERED_SUMMARY_MUST_NOT_ENTER_REQUEST",
+			Coverage:  testCoverageJSON(t, "hidden-row"),
+		}},
+	}
+	passes, err := newMachineryService(q).Compact(context.Background(), cfg, func(context.Context, Pass) (bool, error) { return true, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(passes) != 1 {
+		t.Fatalf("passes=%d want one", len(passes))
+	}
+	if strings.Contains(stub.prompt, "UNRENDERED_SUMMARY_MUST_NOT_ENTER_REQUEST") || len(passes[0].Absorbed) != 0 {
+		t.Fatalf("I1 violated: summarizer saw unrendered summary=%v; absorbed=%v; view contains only %d history IDs", strings.Contains(stub.prompt, "UNRENDERED_SUMMARY_MUST_NOT_ENTER_REQUEST"), passes[0].Absorbed, len(cfg.View))
+	}
+}
+
+type legacyReadQueries struct {
+	*fakeQueries
+	loaded int64
+	parent pgtype.UUID
+}
+
+func (q *legacyReadQueries) ListMessagesByCompactID(ctx context.Context, id pgtype.UUID) ([]sqlc.ListMessagesByCompactIDRow, error) {
+	rows, err := q.fakeQueries.ListMessagesByCompactID(ctx, id)
+	if id == q.parent {
+		for _, row := range rows {
+			q.loaded += int64(len(row.Content))
+		}
+	}
+	return rows, err
+}
+
+func TestCompactLegacySummaryDoesNotReadUnboundedRawRows(t *testing.T) {
+	rows := machineryCorpus(t)
+	stub := &stubModel{summary: "new"}
+	cfg := machineryConfig(stub, 450)
+	cfg.SummaryWindowTokens = 4000
+	parentID := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "summary", ID: formatUUID(parentID)})
+	for _, row := range rows {
+		cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "history", ID: formatUUID(row.ID)})
+	}
+	old := mkRow(t, "assistant", `[{"type":"text","text":"`+strings.Repeat("r", 1<<20)+`"}]`, 100)
+	q := &legacyReadQueries{parent: parentID, fakeQueries: &fakeQueries{
+		uncompacted:  rows,
+		priorLogs:    []sqlc.BotHistoryMessageCompact{{ID: parentID, BotID: pgtype.UUID{Bytes: uuid.MustParse(cfg.BotID), Valid: true}, SessionID: pgtype.UUID{Bytes: uuid.MustParse(cfg.SessionID), Valid: true}, Status: "ok", Summary: "legacy summary", Coverage: []byte("[]")}},
+		absorbedRows: map[pgtype.UUID][]sqlc.ListMessagesByCompactIDRow{parentID: {sqlc.ListMessagesByCompactIDRow(old)}},
+	}}
+	passes, err := newMachineryService(q).Compact(context.Background(), cfg, func(context.Context, Pass) (bool, error) { return true, nil })
+	readCap := compactionReadMaxBytes(cfg.SummaryWindowTokens - estimateBytesAsTokens(systemPrompt) - compactionPromptFramingTokens)
+	if q.loaded > readCap || ReasonOf(err) != ReasonInputOverflow || len(passes) != 0 || stub.calls != 0 || q.completed.Status == "ok" {
+		t.Fatalf("legacy coverage: loaded=%d cap=%d passes=%d calls=%d status=%s err=%v", q.loaded, readCap, len(passes), stub.calls, q.completed.Status, err)
 	}
 }

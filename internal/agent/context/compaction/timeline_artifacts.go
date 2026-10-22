@@ -46,6 +46,8 @@ func TimelineArtifacts(artifacts []Artifact) []timeline.CompactionArtifact {
 				HistoryMessageID:  source.Ref.ID,
 				ExternalMessageID: source.ExternalMessageID,
 				CreatedAtMs:       source.CreatedAtMs,
+				CoverageAsOfMs:    source.CoverageAsOfMs,
+				EventCursor:       source.EventCursor,
 			})
 		}
 		coverageAsOfMs := int64(0)

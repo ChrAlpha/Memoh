@@ -22,6 +22,44 @@
 - Loop detection (text and tool loops) is built into the agent with configurable thresholds.
 - Tag extraction system processes inline tags in streaming output (attachments, reactions, speech/TTS).
 
+## Native context recovery
+
+All durable native entries bind step persistence and continuation through
+`bindNativeRun`. Web, pipeline IM, trigger, follow-up and decision continuations
+can recover context at a committed step boundary and continue the same run. An
+empty initial history does not disable recovery. Retry/edit, Discuss, subagent
+and external runtimes have separate ownership and remain outside this capability.
+
+`compaction.Service.Compact` executes one event with admission after each committed
+pass. Each pass absorbs the rendered active summary and the oldest eligible
+sources into one rolling summary. The current request and steers are verbatim
+anchors, not independent summary segments. The latest tool/reasoning closure is
+protected. At approval or ask_user resume, the deferred call/result is the tail;
+earlier committed work remains eligible. The summarizer sees anchors inline but
+never claims their coverage.
+
+The native runtime applies each committed replacement to its own request snapshot.
+Uncovered messages retain their bytes. `turn.PlaceSummary` also governs record and
+pipeline replay: retained entries inside the covered span precede the summary.
+Per-source coverage times and event cursors survive rollup, so refolding a summary
+cannot hide an edit it never read. Stored message hashes survive replay projections;
+RC versions are checked against their persisted event cursors. Restart replay keeps
+the complete event chain for newer edits, including edits received before compaction
+started. Artifact commit additionally verifies the full durable source hash.
+
+Rendered artifacts, candidate payloads and claim verification use bounded reads.
+In-run recovery does not load the raw history span or reread ancestor summaries;
+legacy artifacts without exact coverage fail explicitly. Owner fencing, claim
+reclamation and cancellation remain authoritative. Failed passes publish nothing;
+successful earlier passes and tool effects stay committed.
+
+The next complete request determines when the event stops. Summary bounds include
+rendering and envelope costs, and insufficient room fails before a summarizer
+call. Armed runs fail visibly instead of using step reselection or result stubs.
+Successful events log `context compacted`; the run result records failures, and
+`MutationContextSwitch` records the structured reason. The Compaction Logs page
+shows committed attempts. Automated UI verification and Human QA are separate.
+
 ## External runtime notices
 
 `runtime_notice` carries a public conversation fact, not temporary activity
@@ -149,7 +187,7 @@ continuations use the same phase-aware application watchdog:
   remain supervised; explicit cancellation and runtime ownership loss still win.
 - Managed subagents have a ten-minute progress watchdog, with no implicit total
   duration. Detachment preserves an explicit ancestor execution deadline.
-- Context budget recovery before the first native model call pauses the model
+- Context budget recovery before and during a native run pauses the model
   watchdog while its synchronous compaction runs; the model window restarts
   when recovery returns. Cancellation and execution budgets still apply.
 

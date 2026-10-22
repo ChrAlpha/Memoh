@@ -174,6 +174,10 @@ func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
 	for _, id := range []string{"old-0", "old-1", "input", "step-0", "outside", "step-1", "tail"} {
 		f.appendMessage(id, id+" "+strings.Repeat("x", 200))
 	}
+	external := make(map[string]turn.ContextMessageSource)
+	for _, segment := range f.rc {
+		external[segment.MessageID] = turn.ContextMessageSource{Kind: "external", ID: segment.MessageID, EventCursor: segment.LastEventCursor}
+	}
 	var read strings.Builder
 	f.onSummary = func(body []byte) {
 		var request struct {
@@ -193,7 +197,7 @@ func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
 	}
 	cfg := compaction.TriggerConfig{
 		View: []turn.ContextMessageSource{
-			history("old-0"), {Kind: "external", ID: "old-1"}, history("step-0"), {Kind: "external", ID: "step-1"}, history("tail"),
+			history("old-0"), external["old-1"], history("step-0"), external["step-1"], history("tail"),
 		},
 		Anchors:          []turn.ContextMessageSource{history("input")},
 		ProtectedSources: []turn.ContextMessageSource{history("tail")},

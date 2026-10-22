@@ -16,6 +16,7 @@ type TurnResponseEntry struct {
 	Content         string          `json:"content"`
 	RawContent      json.RawMessage `json:"raw_content,omitempty"`
 	SourceMessageID string          `json:"source_message_id,omitempty"`
+	ContentHash     string          `json:"-"`
 }
 
 // ContextMessage is a unified message for LLM context, produced by MergeContext.
@@ -40,6 +41,8 @@ type CompactionSource struct {
 	HistoryMessageID  string `json:"history_message_id,omitempty"`
 	ExternalMessageID string `json:"external_message_id,omitempty"`
 	CreatedAtMs       int64  `json:"created_at_ms,omitempty"`
+	CoverageAsOfMs    *int64 `json:"coverage_as_of_ms,omitempty"`
+	EventCursor       int64  `json:"event_cursor,omitempty"`
 }
 
 // CompactionArtifact is the timeline-facing projection of one active compaction
@@ -127,7 +130,7 @@ func appendTurnResponseEntries(entries []mergeEntry, trs []TurnResponseEntry) []
 			time:         tr.RequestedAtMs,
 			step:         2 * i,
 			trRole:       tr.Role,
-			source:       &turn.ContextMessageSource{Kind: "history", ID: tr.SourceMessageID},
+			source:       &turn.ContextMessageSource{Kind: "history", ID: tr.SourceMessageID, ContentHash: tr.ContentHash},
 			trContent:    tr.Content,
 			trRawContent: tr.RawContent,
 		})
@@ -228,6 +231,7 @@ func ComposeContextWithArtifacts(rc RenderedContext, trs []TurnResponseEntry, ar
 // large is materialized here, so admission can measure before it selects.
 func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, artifacts []CompactionArtifact) []mergeEntry {
 	byExternal, byHistory := map[string]int{}, map[string]int{}
+	externalCoverage := make(map[string]externalMessageCoverage)
 	for i, artifact := range artifacts {
 		if !artifact.usable() {
 			continue
@@ -235,6 +239,7 @@ func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, artifacts 
 		for _, source := range artifact.Sources {
 			if id := strings.TrimSpace(source.ExternalMessageID); id != "" && source.CreatedAtMs > 0 && byExternal[id] == 0 {
 				byExternal[id] = i + 1
+				externalCoverage[id] = sourceCoverage(source, artifact)
 			}
 			if id := strings.TrimSpace(source.HistoryMessageID); id != "" && byHistory[id] == 0 {
 				byHistory[id] = i + 1
@@ -245,7 +250,7 @@ func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, artifacts 
 	entries = appendRenderedContextEntries(entries, rc)
 	for i, segment := range rc {
 		if a := byExternal[strings.TrimSpace(segment.MessageID)]; a > 0 &&
-			renderedSegmentCovered(segment, externalMessageCoverage{coverageAsOfMs: artifacts[a-1].CoverageAsOfMs}) {
+			renderedSegmentCovered(segment, externalCoverage[strings.TrimSpace(segment.MessageID)]) {
 			entries[i].artifact = a
 		}
 	}
@@ -427,6 +432,15 @@ func filterCoveredRenderedContext(
 
 type externalMessageCoverage struct {
 	coverageAsOfMs int64
+	eventCursor    int64
+}
+
+func sourceCoverage(source CompactionSource, artifact CompactionArtifact) externalMessageCoverage {
+	asOf := artifact.CoverageAsOfMs
+	if source.CoverageAsOfMs != nil {
+		asOf = *source.CoverageAsOfMs
+	}
+	return externalMessageCoverage{coverageAsOfMs: asOf, eventCursor: source.EventCursor}
 }
 
 func coveredExternalMessages(artifacts []CompactionArtifact) map[string]externalMessageCoverage {
@@ -441,8 +455,8 @@ func coveredExternalMessages(artifacts []CompactionArtifact) map[string]external
 				continue
 			}
 			coverage := covered[id]
-			if artifact.CoverageAsOfMs > coverage.coverageAsOfMs {
-				coverage.coverageAsOfMs = artifact.CoverageAsOfMs
+			if candidate := sourceCoverage(source, artifact); candidate.eventCursor > coverage.eventCursor || candidate.eventCursor == coverage.eventCursor && candidate.coverageAsOfMs > coverage.coverageAsOfMs {
+				coverage = candidate
 			}
 			covered[id] = coverage
 		}
@@ -454,6 +468,9 @@ func coveredExternalMessages(artifacts []CompactionArtifact) map[string]external
 // segment edited after the artifact completed carries content the summary has
 // never seen and must stay visible.
 func renderedSegmentCovered(segment RenderedSegment, coverage externalMessageCoverage) bool {
+	if coverage.eventCursor > 0 {
+		return segment.LastEventCursor > 0 && segment.LastEventCursor <= coverage.eventCursor
+	}
 	if segment.EditedAtMs <= 0 {
 		return true
 	}

@@ -6,6 +6,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/messageconv"
@@ -74,6 +75,7 @@ func decodeTurnResponseEntry(msg messagepkg.Message, liveCheckpoint bool) (TurnR
 		Content:         debugContent(rawContent),
 		RawContent:      rawContent,
 		SourceMessageID: msg.ID,
+		ContentHash:     historyfrag.MessageContentHash(historyfrag.DecodeStoredModelMessage(nil, msg.ID, msg.Role, msg.Content)),
 	}, true
 }
 
@@ -122,6 +124,7 @@ func ProjectInterruptedReasoning(modelMsg turn.ModelMessage) turn.ModelMessage {
 	projected.ToolCalls = modelMsg.ToolCalls
 	projected.ToolCallID = modelMsg.ToolCallID
 	projected.Name = modelMsg.Name
+	projected.ContextSource = modelMsg.ContextSource
 	return projected
 }
 

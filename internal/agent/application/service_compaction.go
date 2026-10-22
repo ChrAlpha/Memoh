@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,6 +24,10 @@ import (
 // the event folds all there is. It reports why when the history could not be
 // folded; a failed pass leaves the history it did not commit as it was.
 func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) error {
+	return s.compactForBudgetWithAdmission(ctx, req, inputTokens, historyBudget, turnModelID, nil)
+}
+
+func (s *Service) compactForBudgetWithAdmission(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string, admit func(context.Context, compaction.Pass) (bool, error)) error {
 	if s.compactionService == nil || s.settingsService == nil {
 		return errors.New("compaction service unavailable")
 	}
@@ -35,6 +40,10 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		return err
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
+	if len(req.continuationTail) > 0 {
+		cfg.Anchors = append(slices.Clone(cfg.ProtectedSources), req.continuationAnchors...)
+		cfg.ProtectedSources = req.continuationTail
+	}
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
 	// The byte budget bounds what a request loads, not what its history is:
 	// rows inside the time window stay candidates after the view slides past.
@@ -52,7 +61,7 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 	cfg.HistoryBudgetTokens = historyBudget
 
 	start := time.Now()
-	passes, err := s.compactionService.Compact(ctx, cfg, nil)
+	passes, err := s.compactionService.Compact(ctx, cfg, admit)
 	if err != nil {
 		s.logger.WarnContext(ctx, "compaction failed",
 			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),

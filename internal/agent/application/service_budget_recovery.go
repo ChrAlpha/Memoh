@@ -10,6 +10,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -25,6 +26,13 @@ type chatHistoryLayout struct {
 }
 
 func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) native.RunConfig {
+	if switchContext := cfg.SwitchContext; switchContext != nil {
+		cfg.SwitchContext = func(ctx context.Context, sw native.ContextSwitch) (string, error) {
+			idle.Pause()
+			defer idle.Resume()
+			return switchContext(ctx, sw)
+		}
+	}
 	if recoverBudget := cfg.RecoverContextBudget; recoverBudget != nil {
 		cfg.RecoverContextBudget = func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
 			idle.Pause()
@@ -46,26 +54,41 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		}
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
-		if err := s.compactForBudget(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); err != nil {
-			return cfg, false, fmt.Errorf("%w: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
-		}
-		var messages []ModelMessage
-		var records []historyfrag.HistoryRecord
-		if layout.usePipeline {
+		recovered, fits := cfg, false
+		admit := func(ctx context.Context, _ compaction.Pass) (bool, error) {
+			var messages []ModelMessage
+			var records []historyfrag.HistoryRecord
+			var pressure int
+			if layout.usePipeline {
+				var err error
+				if messages, pressure, _, err = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens); err != nil {
+					return false, err
+				}
+			} else {
+				prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
+				if err != nil {
+					return false, err
+				}
+				messages, records, pressure = prepared.messages, prepared.records, prepared.pressureTokens
+			}
 			var err error
-			if messages, _, _, err = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens); err != nil {
-				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
-			}
-		} else {
-			prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
+			recovered, err = layout.replaceHistory(ctx, cfg, req, messages, records)
 			if err != nil {
-				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
+				return false, err
 			}
-			messages, records = prepared.messages, prepared.records
+			nextLayout := layout
+			nextLayout.historyCount, nextLayout.pressureTokens = recovered.ContextTrimmableMessages, pressure
+			remaining, _ := nextLayout.availableHistoryBudget(recovered)
+			plan := recovered.ContextManifest.BudgetPlan
+			tokens := contextfrag.ProviderEnvelopeTokens(recovered.System, recovered.Messages, nil) + plan.ToolDefsCost
+			fits = remaining == 0 && tokens <= plan.Window-plan.OutputReserve
+			return fits, nil
 		}
-		recovered, err := layout.replaceHistory(ctx, cfg, req, messages, records)
-		if err != nil {
-			return cfg, false, err
+		if err := s.compactForBudgetWithAdmission(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID, admit); err != nil {
+			return cfg, false, fmt.Errorf("%w: %w", contextfrag.ErrBudgetUnsatisfied, err)
+		}
+		if !fits {
+			return cfg, false, fmt.Errorf("%w: compacted request is still over budget", contextfrag.ErrBudgetUnsatisfied)
 		}
 		if reflect.DeepEqual(recovered.Messages, cfg.Messages) {
 			return cfg, false, fmt.Errorf("%w: compaction left the history unchanged", contextfrag.ErrBudgetUnsatisfied)
@@ -126,7 +149,7 @@ func (l chatHistoryLayout) replaceHistory(ctx context.Context, cfg native.RunCon
 	cfg.ContextMemoryMessageIndex = shiftRecoveryIndex(cfg.ContextMemoryMessageIndex, l.historyCount, delta)
 	cfg.ContextCurrentUserMessageIndex = shiftRecoveryIndex(cfg.ContextCurrentUserMessageIndex, l.historyCount, delta)
 	cfg.ContextFrags = historyContextFragsForMessages(messages, records)
-	cfg.ContextProvenance = contextProvenance(history, records, compactionProtectedSources(req))
+	cfg.ContextProvenance = contextProvenance(history, records, append(compactionProtectedSources(req), req.continuationAnchors...))
 	cfg.ForkContextSourceMessageIDs = make([]string, l.forkCount, len(cfg.Messages))
 	cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, historySourceMessageIDsForMessages(history, records)...)
 	copy(cfg.ForkContextSourceMessageIDs[:l.forkCount], old.ForkContextSourceMessageIDs[:min(l.forkCount, len(old.ForkContextSourceMessageIDs))])

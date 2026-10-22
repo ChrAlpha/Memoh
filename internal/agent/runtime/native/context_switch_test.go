@@ -9,8 +9,11 @@ import (
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
+	"github.com/google/jsonschema-go/jsonschema"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/step"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
@@ -177,6 +180,78 @@ func TestArmedRunFailsClosedWhenTheEventDoesNotFit(t *testing.T) {
 			details := switchDetails(cfg)
 			if !errors.Is(*failure, tc.want) || len(details) != 1 || !strings.HasPrefix(details[0], tc.detail) {
 				t.Fatalf("failure=%v details=%q, want %v recorded as %q", *failure, details, tc.want, tc.detail)
+			}
+		})
+	}
+}
+
+// An armed run whose next step does not fit goes on from the request the
+// event spliced, in both loops: the summary replaces the steps before the
+// latest one, the input stays where it was, and the steps after the event
+// are appended to the spliced request.
+func TestArmedRunContinuesOnItsSplicedRequest(t *testing.T) {
+	t.Parallel()
+
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			t.Parallel()
+			var requests []sdk.Request
+			provider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
+				requests = append(requests, params)
+				if call <= 4 {
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{
+						ToolCallID: fmt.Sprintf("c%d", call), ToolName: "effect", Input: toolexec.ArgumentsFromValue(map[string]any{"n": call}),
+					}}}, nil
+				}
+				return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+			}}
+			a := New(Deps{})
+			a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
+				Name: "effect", Parameters: &jsonschema.Schema{Type: "object"},
+				Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+					return toolexec.OutputFromValue(strings.Repeat(" r", 2000)), nil
+				},
+			}}}})
+			input := sdk.UserMessage("INPUT")
+			summary := sdk.UserMessage("<summary>\nsteps\n")
+			var events []ContextSwitch
+			cfg := RunConfig{
+				Model: &sdk.Model{ID: "mock-model", Provider: provider}, Messages: []sdk.Message{input}, SupportsToolCall: true,
+				Identity: SessionContext{BotID: "bot-1", SessionID: "sess-1"}, ContextMutations: contextfrag.NewMutationLedger(),
+				ContextManifest:   contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 2600}},
+				ContextProvenance: []MessageProvenance{{Message: input, Sources: rowSources("input"), Anchor: true}},
+				OnStepCommitted: func(_ context.Context, index int, record *step.Record) (StepDirective, error) {
+					provenance := make([]MessageProvenance, len(record.Messages))
+					for i := range provenance {
+						provenance[i].Sources = rowSources(fmt.Sprintf("s%d.%d", index, i))
+					}
+					return StepDirective{Provenance: provenance}, nil
+				},
+				SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
+					events = append(events, sw)
+					sw.Fold(ContextFold{Artifact: "a1", Summary: summary, Covered: rowSources("s0.0", "s0.1", "s1.0", "s1.1")})
+					return "trigger=in_run passes=1", nil
+				},
+			}
+			if stream {
+				for event := range a.Stream(context.Background(), cfg) {
+					if event.Type == EventError {
+						t.Fatalf("stream failed: %v", event.Cause)
+					}
+				}
+			} else if _, err := a.Generate(context.Background(), cfg); err != nil {
+				t.Fatal(err)
+			}
+			if len(requests) != 5 || len(events) != 1 || !reflect.DeepEqual(events[0].Tail, rowSources("s2.0", "s2.1")) {
+				t.Fatalf("provider calls=%d events=%d, want one event before the fourth call with the third step as its tail", len(requests), len(events))
+			}
+			spliced, next := requests[3].Messages, requests[4].Messages
+			call, _ := spliced[min(2, len(spliced)-1)].Content[0].(sdk.ToolCallPart)
+			if len(spliced) != 4 || !reflect.DeepEqual(spliced[0], input) || !reflect.DeepEqual(spliced[1], summary) || call.ToolCallID != "c3" || spliced[3].Role != sdk.MessageRoleTool {
+				t.Fatalf("fourth call sent %d messages, want the input, the summary and the latest step", len(spliced))
+			}
+			if len(next) != 6 || !reflect.DeepEqual(next[:4], spliced) {
+				t.Fatalf("fifth call sent %d messages, want the spliced request with the fourth step appended", len(next))
 			}
 		})
 	}
