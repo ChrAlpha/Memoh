@@ -68,7 +68,7 @@ The Discuss native chain:
    fully materializes `[]ContextMessage` with **no admission check of any kind**. The
    `EstimatedTokens` it computes is consumed by exactly one call site repo-wide: a
    `slog.Int` in `worker.go`. It is never compared against anything.
-3. `internal/agent/pending/discuss.go` converts to SDK messages and collects
+3. `internal/agent/internal/pending/discuss.go` converts to SDK messages and collects
    source fragments; only then does `internal/contextview/provider_run_config.go`
    apply the `ContextBudgetPlan` (from PR #1039) at the provider stage — after the
    entire context has been materialized and copied several times.
@@ -79,7 +79,7 @@ The Discuss native chain:
 Three aggravating facts:
 
 - **No synchronous pre-turn compaction exists on the Discuss or pipeline-chat paths.**
-  `runSync` (`internal/agent/compact/sync.go`, hard
+  `runSync` (`internal/agent/internal/compact/sync.go`, hard
   backstop at 75% of the context budget) has exactly one non-test caller
   (`service.go`, inside the legacy non-pipeline `prepareHistoryContext` branch). The
   `usePipeline` branch and all Discuss paths reach the model with zero synchronous
@@ -91,7 +91,7 @@ Three aggravating facts:
   performs no budget drops and the full context goes to the provider (warn + audit
   ledger entry only). The same zero also disables compaction entirely:
   `autoCompactionThreshold` / `hardCompactionThreshold` return 0 and `maybeCompact`
-  skips (`internal/agent/compact/`).
+  skips (`internal/agent/internal/compact/`).
 - **Artifact-load failure silently degrades to uncompacted composition.**
   `loadArtifacts` (`internal/channel/discuss/worker.go`) logs a warning and returns
   nil on error; `ComposeContextWithArtifacts` then re-materializes the entire raw
@@ -163,7 +163,7 @@ so compaction persistently triggers later than budget pressure implies.
   `compaction_threshold` (DB default 0 since migration `0123`),
   `compaction_target_percent`, `compaction_model_id`
   (`internal/settings/types.go`). Derived thresholds are hardcoded constants
-  (soft 50% / hard 75% / target 40%, `internal/agent/compact/policy.go`).
+  (soft 50% / hard 75% / target 40%, `internal/agent/internal/compact/policy.go`).
 - `[agent]` TOML: `tool_output_max_bytes`, `tool_output_max_lines`,
   `system_files_max_bytes` (`internal/config/config.go`).
   There is **no server-side context-size or admission knob today**.

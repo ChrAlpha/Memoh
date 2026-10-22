@@ -19,7 +19,7 @@ import (
 // history codec. The files listed here decode stream envelopes or in-memory
 // snapshots that are SDK JSON by construction.
 var sdkMessageDecodeAllowlist = map[string]string{
-	"internal/agent/plan/executor.go":                "terminal stream event Messages",
+	"internal/agent/internal/plan/executor.go":       "terminal stream event Messages",
 	"internal/agent/runtime/native/spawn_adapter.go": "terminal stream event Messages",
 	"internal/agent/tool/types.go":                   "in-memory context snapshot",
 	"internal/messageconv/messageconv.go":            "the codec itself",

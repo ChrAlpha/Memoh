@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/pending"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/pending"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"

@@ -18,9 +18,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/felinics/memoh/internal/agent/agentapi/ports"
-	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/pending"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/pending"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"

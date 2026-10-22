@@ -158,11 +158,16 @@ func TestChatStorageDomainsDoNotDependOnUpperLayers(t *testing.T) {
 // the parent alone must compare the path exactly, never with isPackageOrChild.
 const agentParent = "internal/agent"
 
+// orchestrationRoot is where the orchestration packages live. Go's internal
+// rule keeps everything outside internal/agent from importing them; the root
+// package and internal/agent/agentapi are the only way in.
+const orchestrationRoot = agentParent + "/internal"
+
 // orchestrationDirs are the agentLayers packages as repo-relative directories.
 func orchestrationDirs() []string {
 	dirs := make([]string, 0, len(agentLayers))
 	for name := range agentLayers {
-		dirs = append(dirs, agentParent+"/"+name)
+		dirs = append(dirs, orchestrationRoot+"/"+name)
 	}
 	slices.Sort(dirs)
 	return dirs
@@ -171,8 +176,8 @@ func orchestrationDirs() []string {
 // testSupportDirs are the packages of doubles that only tests import. They are
 // part of the file set the orchestration rules cover.
 var testSupportDirs = []string{
-	agentParent + "/agenttest",
-	agentParent + "/drive/drivetest",
+	orchestrationRoot + "/agenttest",
+	orchestrationRoot + "/drive/drivetest",
 }
 
 // parentFiles lists the Go files directly in internal/agent.
@@ -222,7 +227,7 @@ func isAboveFoundation(imp string) bool {
 		return true
 	}
 	for name := range agentLayers {
-		if isPackageOrChild(imp, modulePrefix+agentParent+"/"+name) {
+		if isPackageOrChild(imp, modulePrefix+orchestrationRoot+"/"+name) {
 			return true
 		}
 	}
@@ -560,7 +565,7 @@ var agentLayers = map[string]int{
 
 // agentSubpackage names the agentLayers package imp belongs to, if any.
 func agentSubpackage(imp string) (string, bool) {
-	rest, ok := strings.CutPrefix(imp, modulePrefix+agentParent+"/")
+	rest, ok := strings.CutPrefix(imp, modulePrefix+orchestrationRoot+"/")
 	if !ok {
 		return "", false
 	}
@@ -575,8 +580,8 @@ func agentSubpackage(imp string) (string, bool) {
 func TestAgentSubpackagesImportDownward(t *testing.T) {
 	root := repoRoot(t)
 	for name, layer := range agentLayers {
-		files := allGoFiles(t, root, agentParent+"/"+name)
-		requireFiles(t, agentParent+"/"+name, files)
+		files := allGoFiles(t, root, orchestrationRoot+"/"+name)
+		requireFiles(t, orchestrationRoot+"/"+name, files)
 		for _, file := range files {
 			for _, imp := range imports(t, root, file) {
 				if imp == modulePrefix+agentParent {
@@ -690,13 +695,13 @@ func TestRunTerminalStateHasOneWriter(t *testing.T) {
 	root := repoRoot(t)
 	files := goFiles(t, root, "internal/agent")
 	requireFiles(t, "internal/agent", files)
-	if !slices.Contains(files, "internal/agent/drive/finish.go") {
-		t.Error("internal/agent/drive/finish.go is missing: the one writer of a run's terminal state moved, update this rule")
+	if !slices.Contains(files, "internal/agent/internal/drive/finish.go") {
+		t.Error("internal/agent/internal/drive/finish.go is missing: the one writer of a run's terminal state moved, update this rule")
 	}
 	for _, file := range files {
-		if file == "internal/agent/drive/finish.go" ||
+		if file == "internal/agent/internal/drive/finish.go" ||
 			strings.HasPrefix(file, "internal/agent/runtime/session/") ||
-			strings.HasPrefix(file, "internal/agent/agenttest/") {
+			strings.HasPrefix(file, "internal/agent/internal/agenttest/") {
 			continue
 		}
 		parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
@@ -714,7 +719,7 @@ func TestRunTerminalStateHasOneWriter(t *testing.T) {
 			}
 			switch sel.Sel.Name {
 			case "FinishRun", "FinishRunWithErrorCode", "FinishRunWithFailure":
-				t.Errorf("%s calls %s: a run's terminal state is written in internal/agent/drive/finish.go only; end a run through drive.Driver.Finish", file, sel.Sel.Name)
+				t.Errorf("%s calls %s: a run's terminal state is written in internal/agent/internal/drive/finish.go only; end a run through drive.Driver.Finish", file, sel.Sel.Name)
 			}
 			return true
 		})
@@ -722,18 +727,18 @@ func TestRunTerminalStateHasOneWriter(t *testing.T) {
 }
 
 // TestAgentStepsHaveOneCommitter keeps a run's steps written by the step
-// committer in internal/agent/persist: no other package of the agent calls the
+// committer in internal/agent/internal/persist: no other package of the agent calls the
 // message store's step write, so no entry (a spawned agent included) can grow a
 // committer of its own.
 func TestAgentStepsHaveOneCommitter(t *testing.T) {
 	root := repoRoot(t)
 	files := goFiles(t, root, "internal/agent")
 	requireFiles(t, "internal/agent", files)
-	if !slices.Contains(files, "internal/agent/persist/step_commit.go") {
-		t.Error("internal/agent/persist/step_commit.go is missing: the step committer moved, update this rule")
+	if !slices.Contains(files, "internal/agent/internal/persist/step_commit.go") {
+		t.Error("internal/agent/internal/persist/step_commit.go is missing: the step committer moved, update this rule")
 	}
 	for _, file := range files {
-		if strings.HasPrefix(file, "internal/agent/persist/") || strings.HasPrefix(file, "internal/agent/agenttest/") {
+		if strings.HasPrefix(file, "internal/agent/internal/persist/") || strings.HasPrefix(file, "internal/agent/internal/agenttest/") {
 			continue
 		}
 		parsed, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, file), nil, 0)
@@ -750,5 +755,21 @@ func TestAgentStepsHaveOneCommitter(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// TestAgentAPIImportsNoOrchestration keeps the contract package a leaf: the
+// root package and the orchestration packages depend on it, so one import the
+// other way would turn the contract into a second copy of the implementation.
+func TestAgentAPIImportsNoOrchestration(t *testing.T) {
+	root := repoRoot(t)
+	files := allGoFiles(t, root, agentParent+"/agentapi")
+	requireFiles(t, agentParent+"/agentapi", files)
+	for _, file := range files {
+		for _, imp := range imports(t, root, file) {
+			if imp == modulePrefix+agentParent || isPackageOrChild(imp, modulePrefix+orchestrationRoot) {
+				t.Errorf("%s imports %s: agentapi must not import the root package or an orchestration package", file, imp)
+			}
+		}
 	}
 }

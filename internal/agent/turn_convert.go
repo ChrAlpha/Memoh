@@ -3,7 +3,7 @@ package agent
 import (
 	"github.com/felinics/memoh/internal/agent/agentapi"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 

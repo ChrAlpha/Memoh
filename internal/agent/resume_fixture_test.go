@@ -9,8 +9,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/pending"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/pending"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"

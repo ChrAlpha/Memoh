@@ -5,7 +5,7 @@
 ## Agent Development
 
 - The AI agent runs **in-process** within the Go server — there is no separate agent gateway service.
-- `internal/agent/` (package `agent`) is the facade over the agent's components: `Service` is what handlers, the scheduler and the channel adapters call, and it implements the `turn` port; `New(Deps)` builds the components, wires them to one another and registers the session runtime's callbacks. The orchestration itself lives in the packages below, lowest layer first. A package imports only packages of a lower layer, none imports `internal/agent`, and the entry packages do not import one another (`internal/arch` enforces both).
+- `internal/agent/` (package `agent`) is the root package of the agent: `Service` is what handlers, the scheduler and the channel adapters call, and it implements the `turn` port; `New(Deps)` builds the components, wires them to one another and registers the session runtime's callbacks. It is the only entry into the orchestration: the packages that do the work live in `internal/agent/internal/` and cannot be imported from outside `internal/agent`, and what crosses the boundary (errors, queue and decision inputs, the delivery port, the Web entry inputs, the `Deps` ports) is defined once in `internal/agent/agentapi`. Orchestration packages are layered, lowest layer first: a package imports only packages of a lower layer, none imports `internal/agent`, and the entry packages do not import one another (`internal/arch` enforces both). `agentapi` imports no orchestration package.
   - `runreq/`: shared request types, ports and message helpers.
   - `outcome/`: how a run ended (failure codes, stream failure events, the run result record).
   - `activeprompt/`: the live output hub of an external runtime prompt.

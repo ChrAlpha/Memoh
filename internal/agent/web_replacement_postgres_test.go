@@ -11,8 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/persist"
-	"github.com/felinics/memoh/internal/agent/web"
+	"github.com/felinics/memoh/internal/agent/internal/persist"
+	"github.com/felinics/memoh/internal/agent/internal/web"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 

@@ -12,9 +12,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/lifecycle"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/lifecycle"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	"github.com/felinics/memoh/internal/agent/runtime/external"

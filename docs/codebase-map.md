@@ -21,32 +21,37 @@ Memoh/
 │   ├── accounts/               #   User account management (CRUD, password hashing)
 │   ├── acl/                    #   Access control list (source-aware chat trigger ACL)
 │   ├── arch/                   #   Architecture guard tests (channel-boundary import rules, spec §8)
-│   ├── agent/                  #   Agent facade (`Service`, `New(Deps)`, the turn port) and its component packages
-│   │   ├── activeprompt/       #     In-process output hub of the running external runtime prompt of a session
+│   ├── agent/                  #   Agent root package (`Service`, `New(Deps)`, the turn port) and its component packages
+│   │   ├── agentapi/           #     The root package's contract: errors, queue and decision inputs, delivery port, Web entry inputs (`runtimeerr/`, `queueerr/`, `ports/` hold the parts that need heavier imports)
+│   │   ├── internal/           #     Orchestration packages, importable only from inside `internal/agent` (lowest layer first; `internal/arch` enforces the layering)
+│   │   │   ├── activeprompt/       #     In-process output hub of the running external runtime prompt of a session
+│   │   │   ├── admit/              #     Admission of runs, the resume record of a run, signing of server-issued run credentials
+│   │   │   ├── answer/             #     Answers to parked tool approvals and questions: routing, commit, resuming the parked run
+│   │   │   ├── botenv/             #     Bot settings, time zone, display names, and workspace lifecycle hooks
+│   │   │   ├── compact/            #     Compaction policy and runs: before a turn, between model calls, after a run, session barrier
+│   │   │   ├── decide/             #     Tool approval and ask_user decisions: authority, recording answers, closing a run's decisions
+│   │   │   ├── drive/              #     Run driver: consumes, publishes and delivers a run's events, writes its terminal state
+│   │   │   ├── externalrun/        #     Turns on out-of-process runtimes: driver dispatch, executor, runtime controls, fork, abort
+│   │   │   ├── outcome/            #     How a run ended: failure codes, stream failure events, the run result record
+│   │   │   ├── plan/               #     The plan the driver executes: native tail, chat and schedule setups, resuming after a decision
+│   │   │   ├── runconfig/          #     What a model request runs with: model, credentials, prompt, context messages, workspace
+│   │   │   ├── runreq/             #     Shared request types, ports and message helpers
+│   │   │   ├── subagent/           #     Runs of spawned agents: admission, step commits, events, compaction between calls
+│   │   │   ├── title/              #     Session titles and new-chat starter prompts
+│   │   │   ├── lifecycle/          #     Context lifecycle ledger: per-run snapshot, terminal status, repair
+│   │   │   ├── memory/             #     Memory recall for a turn and hand-off of finished rounds to the memory provider
+│   │   │   ├── notify/             #     Background task notifications into the originating conversation
+│   │   │   ├── pending/            #     Input waiting for a session: follow-up and steer queues, discuss batches, their sweeps
+│   │   │   ├── persist/            #     History writes: turn and step rows, failure rows, replaced turns
+│   │   │   ├── resume/             #     Resume of runs a server shutdown interrupted
+│   │   │   ├── schedule/           #     Scheduled fires run as agent turns
+│   │   │   ├── transcript/         #     Conversation read path: assemble stored rows for the model, compaction replacement, window, admission filters
+│   │   │   ├── web/                #     Web client sends, retries and edits: admission, queueing behind a busy session, execution
 │   │   ├── adapter/            #     Adapters from lower-level domain ports to runtime implementations
-│   │   ├── admit/              #     Admission of runs, the resume record of a run, signing of server-issued run credentials
-│   │   ├── answer/             #     Answers to parked tool approvals and questions: routing, commit, resuming the parked run
 │   │   ├── background/         #     Background task manager (spawned subagents, video tasks)
-│   │   ├── botenv/             #     Bot settings, time zone, display names, and workspace lifecycle hooks
-│   │   ├── compact/            #     Compaction policy and runs: before a turn, between model calls, after a run, session barrier
 │   │   ├── context/            #     Context fragments, history projection, compaction, and output limits
-│   │   ├── decide/             #     Tool approval and ask_user decisions: authority, recording answers, closing a run's decisions
 │   │   ├── decision/           #     User input, tool approval, and stable user-facing feedback
-│   │   ├── drive/              #     Run driver: consumes, publishes and delivers a run's events, writes its terminal state
 │   │   ├── event/              #     Agent events and transport payload vocabulary
-│   │   ├── externalrun/        #     Turns on out-of-process runtimes: driver dispatch, executor, runtime controls, fork, abort
-│   │   ├── outcome/            #     How a run ended: failure codes, stream failure events, the run result record
-│   │   ├── plan/               #     The plan the driver executes: native tail, chat and schedule setups, resuming after a decision
-│   │   ├── runconfig/          #     What a model request runs with: model, credentials, prompt, context messages, workspace
-│   │   ├── runreq/             #     Shared request types, ports and message helpers
-│   │   ├── subagent/           #     Runs of spawned agents: admission, step commits, events, compaction between calls
-│   │   ├── title/              #     Session titles and new-chat starter prompts
-│   │   ├── lifecycle/          #     Context lifecycle ledger: per-run snapshot, terminal status, repair
-│   │   ├── memory/             #     Memory recall for a turn and hand-off of finished rounds to the memory provider
-│   │   ├── notify/             #     Background task notifications into the originating conversation
-│   │   ├── pending/            #     Input waiting for a session: follow-up and steer queues, discuss batches, their sweeps
-│   │   ├── persist/            #     History writes: turn and step rows, failure rows, replaced turns
-│   │   ├── resume/             #     Resume of runs a server shutdown interrupted
 │   │   ├── runtime/            #     Runtime implementations
 │   │   │   ├── acp/            #       ACP pool, client process manager, and the generic custom-agent profile
 │   │   │   ├── claudecode/     #       Claude Code direct runtime (external.Driver)
@@ -58,12 +63,9 @@ Memoh/
 │   │   │   ├── servertable/    #       Shared agent-process table for direct runtimes (Codex, Grok Build)
 │   │   │   ├── session/        #       Per-thread runtime state and control
 │   │   │   └── toolmount/      #       Memoh tool gateway mounts for direct runtimes
-│   │   ├── schedule/           #     Scheduled fires run as agent turns
 │   │   ├── sessionmode/        #     Session mode resolution
 │   │   ├── partmeta/           #     Memoh annotations (approval, user input, execution location) on sdk.ProviderMetadata, plus the stored-shape fold/unfold
 │   │   ├── step/               #     Runtime-neutral step record (model result, tool results, messages, deferred approval)
-│   │   ├── transcript/         #     Conversation read path: assemble stored rows for the model, compaction replacement, window, admission filters
-│   │   ├── web/                #     Web client sends, retries and edits: admission, queueing behind a busy session, execution
 │   │   ├── tool/               #     Native tool providers (package name remains tools)
 │   │       ├── message.go      #       Send message tool
 │   │       ├── contacts.go     #       Contact list tool

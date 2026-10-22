@@ -1,7 +1,8 @@
-// Package agent is the agent application service: the facade the transports
+// Package agent is the root package of the agent: the Service the transports
 // call, the turn port the channel side talks to, and New, which assembles the
-// components under internal/agent/* and registers the session runtime's
-// callbacks. The work itself lives in those components.
+// components under internal/agent/internal and registers the session runtime's
+// callbacks. The work itself lives in those components. What crosses this
+// package's boundary is defined in internal/agent/agentapi.
 package agent
 
 import (
@@ -11,35 +12,35 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/activeprompt"
-	"github.com/felinics/memoh/internal/agent/admit"
 	"github.com/felinics/memoh/internal/agent/agentapi/ports"
-	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/background"
-	"github.com/felinics/memoh/internal/agent/botenv"
-	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
-	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/externalrun"
-	"github.com/felinics/memoh/internal/agent/lifecycle"
-	"github.com/felinics/memoh/internal/agent/memory"
-	"github.com/felinics/memoh/internal/agent/pending"
-	"github.com/felinics/memoh/internal/agent/persist"
-	"github.com/felinics/memoh/internal/agent/plan"
-	"github.com/felinics/memoh/internal/agent/resume"
-	"github.com/felinics/memoh/internal/agent/runconfig"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/activeprompt"
+	"github.com/felinics/memoh/internal/agent/internal/admit"
+	"github.com/felinics/memoh/internal/agent/internal/answer"
+	"github.com/felinics/memoh/internal/agent/internal/botenv"
+	"github.com/felinics/memoh/internal/agent/internal/compact"
+	"github.com/felinics/memoh/internal/agent/internal/decide"
+	"github.com/felinics/memoh/internal/agent/internal/drive"
+	"github.com/felinics/memoh/internal/agent/internal/externalrun"
+	"github.com/felinics/memoh/internal/agent/internal/lifecycle"
+	"github.com/felinics/memoh/internal/agent/internal/memory"
+	"github.com/felinics/memoh/internal/agent/internal/pending"
+	"github.com/felinics/memoh/internal/agent/internal/persist"
+	"github.com/felinics/memoh/internal/agent/internal/plan"
+	"github.com/felinics/memoh/internal/agent/internal/resume"
+	"github.com/felinics/memoh/internal/agent/internal/runconfig"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/schedule"
+	"github.com/felinics/memoh/internal/agent/internal/subagent"
+	"github.com/felinics/memoh/internal/agent/internal/title"
+	"github.com/felinics/memoh/internal/agent/internal/transcript"
+	"github.com/felinics/memoh/internal/agent/internal/web"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	"github.com/felinics/memoh/internal/agent/schedule"
-	"github.com/felinics/memoh/internal/agent/subagent"
-	"github.com/felinics/memoh/internal/agent/title"
-	"github.com/felinics/memoh/internal/agent/transcript"
-	"github.com/felinics/memoh/internal/agent/web"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -49,7 +50,7 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 )
 
-// Service is the facade over the agent's components. Its exported methods
+// Service is the root package's entry to the agent's components. Its exported methods
 // delegate to one component each; the turn port (StartTurn, StopTurn,
 // AdmitDiscuss and the answers) is implemented here because it speaks the
 // channel side's vocabulary.

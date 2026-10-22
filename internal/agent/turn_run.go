@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/internal/outcome"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 

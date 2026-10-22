@@ -5,8 +5,8 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agentapi/ports"
-	"github.com/felinics/memoh/internal/agent/compact"
-	"github.com/felinics/memoh/internal/agent/notify"
+	"github.com/felinics/memoh/internal/agent/internal/compact"
+	"github.com/felinics/memoh/internal/agent/internal/notify"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
 )

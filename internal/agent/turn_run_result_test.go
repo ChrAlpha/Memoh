@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"

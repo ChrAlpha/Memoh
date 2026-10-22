@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/compact"
-	"github.com/felinics/memoh/internal/agent/pending"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/compact"
+	"github.com/felinics/memoh/internal/agent/internal/pending"
 )
 
 // backlog is a discuss session whose model window is small enough that a dozen

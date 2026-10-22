@@ -3,8 +3,8 @@ package agent
 import (
 	"context"
 
-	"github.com/felinics/memoh/internal/agent/decide"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/decide"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
 )
 
 // continueCommittedToolApprovalResponse resumes what an approval parked when

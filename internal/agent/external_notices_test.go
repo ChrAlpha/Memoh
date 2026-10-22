@@ -10,9 +10,9 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/event"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"

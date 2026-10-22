@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/felinics/memoh/internal/agent/pending"
+	"github.com/felinics/memoh/internal/agent/internal/pending"
 	"github.com/felinics/memoh/internal/team"
 )
 

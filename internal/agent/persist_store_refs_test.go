@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/persist"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/persist"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
 	textprune "github.com/felinics/memoh/internal/prune"

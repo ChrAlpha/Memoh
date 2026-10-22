@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
-	"github.com/felinics/memoh/internal/agent/runreq"
-	"github.com/felinics/memoh/internal/agent/transcript"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/transcript"
 )
 
 // Context at the blocking share of the window is compacted once, before the

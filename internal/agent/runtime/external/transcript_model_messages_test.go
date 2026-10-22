@@ -6,7 +6,7 @@ import (
 
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/event"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 )
 

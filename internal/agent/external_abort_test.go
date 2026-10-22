@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/agent/externalrun"
-	"github.com/felinics/memoh/internal/agent/lifecycle"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
+	"github.com/felinics/memoh/internal/agent/internal/externalrun"
+	"github.com/felinics/memoh/internal/agent/internal/lifecycle"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 

@@ -4,9 +4,9 @@ import (
 	"context"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/internal/subagent"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/step"
-	"github.com/felinics/memoh/internal/agent/subagent"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 )
 
