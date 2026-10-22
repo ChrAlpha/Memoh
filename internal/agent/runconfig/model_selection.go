@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -149,7 +150,7 @@ func (b *Builder) ReconcilePreference(ctx context.Context, botID, modelRef, effo
 func (b *Builder) CompareAndSetPreference(ctx context.Context, sessionUUID pgtype.UUID, runtimeType string, nativeID pgtype.UUID, externalID pgtype.Text, effort, expectedRevision string) error {
 	revision, err := parsePreferenceRevision(expectedRevision)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrModelPreferenceRevisionInvalid, err)
+		return fmt.Errorf("%w: %w", agentapi.ErrModelPreferenceRevisionInvalid, err)
 	}
 	n, err := b.queries.CompareAndSetSessionModelPreference(ctx, sqlc.CompareAndSetSessionModelPreferenceParams{
 		ID: sessionUUID, RuntimeType: runtimeType, ExpectedRevision: revision,
@@ -160,7 +161,7 @@ func (b *Builder) CompareAndSetPreference(ctx context.Context, sessionUUID pgtyp
 		return err
 	}
 	if n == 0 {
-		return ErrModelPreferenceConflict
+		return agentapi.ErrModelPreferenceConflict
 	}
 	return nil
 }
@@ -251,19 +252,6 @@ func (b *Builder) listCandidates(ctx context.Context, providerFilter string) ([]
 	return filtered, nil
 }
 
-// ErrModelPreferenceInvalid marks a model reference the caller can fix by
-// picking another model: missing, unknown, disabled, or not a chat model.
-// Store and settings failures never carry it.
-var ErrModelPreferenceInvalid = errors.New("invalid model preference")
-
-// ErrModelPreferenceRevisionInvalid means expected_model_preference_revision
-// is not a UUID.
-var ErrModelPreferenceRevisionInvalid = errors.New("invalid model preference revision")
-
-// ErrACPPreferenceUnsupported means the session runs on ACP, whose model
-// choice goes through the ACP runtime rather than the session preference.
-var ErrACPPreferenceUnsupported = errors.New("ACP preferences must be changed through the ACP runtime")
-
 type preferenceInvalidError struct{ err error }
 
 func (e preferenceInvalidError) Error() string { return e.err.Error() }
@@ -271,13 +259,10 @@ func (e preferenceInvalidError) Error() string { return e.err.Error() }
 func (e preferenceInvalidError) Unwrap() error { return e.err }
 
 func (preferenceInvalidError) Is(target error) bool {
-	return target == ErrModelPreferenceInvalid
+	return target == agentapi.ErrModelPreferenceInvalid
 }
 
 func invalidPreference(err error) error { return preferenceInvalidError{err: err} }
-
-// ErrModelPreferenceConflict means a picker read predates a newer write.
-var ErrModelPreferenceConflict = errors.New("session model preference changed")
 
 func parsePreferenceRevision(value string) (pgtype.UUID, error) {
 	if strings.TrimSpace(value) == "" {

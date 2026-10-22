@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -229,7 +230,7 @@ func queueMutationError(err error) error {
 		return apperror.New(apperror.CodeQueueItemNotPending, nil)
 	case errors.Is(err, sessionruntime.ErrQueueCapacityExceeded):
 		return apperror.New(apperror.CodeQueueCapacityExceeded, nil)
-	case errors.Is(err, runreq.ErrQueueItemNotEditable):
+	case errors.Is(err, agentapi.ErrQueueItemNotEditable):
 		return apperror.New(apperror.CodeQueueItemNotEditable, nil)
 	default:
 		return err

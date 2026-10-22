@@ -1,10 +1,10 @@
 package runreq
 
 import (
-	"errors"
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -17,12 +17,6 @@ import (
 func EncodeQueueCommand(cmd turn.StartTurnCommand, claims *auth.RouteCredentials) ([]byte, error) {
 	return turnwire.NewQueuedInput(cmd, claims, time.Time{}).Marshal()
 }
-
-// ErrQueueItemNotEditable reports an edit by anyone other than the sender the
-// item recorded. A queued command runs as that sender, with their attribution,
-// credentials, and memory, so rewriting its text is theirs alone; others with
-// queue access can still cancel or reorder it.
-var ErrQueueItemNotEditable = errors.New("queue: only the sender can edit a queued item")
 
 // RewriteQueuePayloadText replaces the user text of a stored item while
 // keeping the command's sender, routing, and attachment metadata intact. Only
@@ -37,7 +31,7 @@ func RewriteQueuePayloadText(payload []byte, editorUserID, text string) ([]byte,
 	body := turnwire.ParseQueuedInput(payload)
 	editor := strings.TrimSpace(editorUserID)
 	if body.Command == nil || editor == "" || strings.TrimSpace(body.Command.UserID) != editor {
-		return nil, ErrQueueItemNotEditable
+		return nil, agentapi.ErrQueueItemNotEditable
 	}
 	body.Text = text
 	body.Command.Query = text

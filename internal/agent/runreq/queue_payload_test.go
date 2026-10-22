@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
@@ -46,7 +47,7 @@ func TestRewriteQueuePayloadTextRequiresRecordedSender(t *testing.T) {
 		"text-only payload": {[]byte(`{"text":"hi"}`), "user-1", false},
 	} {
 		_, err := RewriteQueuePayloadText(tc.payload, tc.editor, "new")
-		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, ErrQueueItemNotEditable)) {
+		if tc.ok != (err == nil) || (!tc.ok && !errors.Is(err, agentapi.ErrQueueItemNotEditable)) {
 			t.Errorf("%s: error = %v, want ok=%v", name, err, tc.ok)
 		}
 	}

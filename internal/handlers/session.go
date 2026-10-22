@@ -15,8 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/externalrun"
-	"github.com/felinics/memoh/internal/agent/runconfig"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -438,9 +437,9 @@ func (h *SessionHandler) ForkSession(c echo.Context) error {
 		override, forkErr := h.agentRuntimes.PrepareExternalFork(c.Request().Context(), bot.ID, sessionID, turnID)
 		if forkErr != nil {
 			switch {
-			case errors.Is(forkErr, externalrun.ErrExternalForkUnsupported):
+			case errors.Is(forkErr, agentapi.ErrExternalForkUnsupported):
 				return echo.NewHTTPError(http.StatusConflict, "this session's runtime does not support forking")
-			case errors.Is(forkErr, externalrun.ErrExternalForkAnchorMissing):
+			case errors.Is(forkErr, agentapi.ErrExternalForkAnchorMissing):
 				return echo.NewHTTPError(http.StatusConflict, "fork source turn has no runtime anchor")
 			default:
 				return forkErr
@@ -1010,11 +1009,11 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			return apperror.FieldRequired("expected_model_preference_revision")
 		}
 		if prefErr := h.modelPrefs.PatchSessionModelPreference(c.Request().Context(), botID, sessionID, req.PreferredChatModelID, req.PreferredReasoningEffort, *req.ExpectedModelPreferenceRevision); prefErr != nil {
-			if errors.Is(prefErr, runconfig.ErrModelPreferenceConflict) {
+			if errors.Is(prefErr, agentapi.ErrModelPreferenceConflict) {
 				return apperror.New(apperror.CodeSessionModelPreferenceConflict, nil)
 			}
 			if session.IsDirectRuntime(result) {
-				if errors.Is(prefErr, externalrun.ErrDirectModelUnavailable) {
+				if errors.Is(prefErr, agentapi.ErrDirectModelUnavailable) {
 					return apperror.New(apperror.CodeACPModelUnavailable, nil)
 				}
 				return apperror.Wrap(apperror.CodeACPOperationFailed, prefErr, nil)
@@ -1309,11 +1308,11 @@ func descriptorFieldError(err error) error {
 // choosing again is a field error, store and settings failures are internal.
 func modelPreferenceError(err error, op string) error {
 	switch {
-	case errors.Is(err, runconfig.ErrModelPreferenceInvalid):
+	case errors.Is(err, agentapi.ErrModelPreferenceInvalid):
 		return apperror.FieldInvalid("preferred_chat_model_id", err)
-	case errors.Is(err, runconfig.ErrModelPreferenceRevisionInvalid):
+	case errors.Is(err, agentapi.ErrModelPreferenceRevisionInvalid):
 		return apperror.FieldInvalid("expected_model_preference_revision", err)
-	case errors.Is(err, runconfig.ErrACPPreferenceUnsupported):
+	case errors.Is(err, agentapi.ErrACPPreferenceUnsupported):
 		return apperror.Wrap(apperror.CodeACPModelSelectionUnsupported, err, nil)
 	default:
 		return errs.Wrap(err, op)

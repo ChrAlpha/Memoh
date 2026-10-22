@@ -24,10 +24,10 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/decide"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/externalrun"
-	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -1358,7 +1358,7 @@ func sendWSErrorFromError(ctx context.Context, writer *wsWriter, ref wsTurnRef, 
 		sendWSRunRejected(writer, ref.withRun(""), code)
 		return apperror.Wrap(code, err, nil)
 	}
-	frame, rendered := server.NewStreamError(ctx, outcome.ExternalAgentError(err), "")
+	frame, rendered := server.NewStreamError(ctx, runtimeerr.ExternalAgentError(err), "")
 	writer.SendJSON(wsErrorEvent(ref, frame))
 	return rendered
 }

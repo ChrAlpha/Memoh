@@ -8,7 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -147,7 +147,7 @@ func (h *ExternalAgentLoginHandler) PollDevice(c echo.Context) error {
 	status, err := login.PollDeviceLogin(c.Request().Context(), ownerUserID, botID, botAgentID, loginID)
 	if err != nil {
 		// Storing the login that came back failed; the sign-in itself did not.
-		err = outcome.ExternalRuntimeError(err)
+		err = runtimeerr.ExternalRuntimeError(err)
 		if apperror.CodeOf(err) != "" {
 			return err
 		}
@@ -196,7 +196,7 @@ func loginIDOf(c echo.Context) (string, error) {
 // runtimeError answers a failure the user can act on with its own code, and
 // any other with the runtime being unavailable.
 func (h *ExternalAgentLoginHandler) runtimeError(c echo.Context, err error) error {
-	if translated := outcome.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
+	if translated := runtimeerr.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
 		return translated
 	}
 	runtime := ""

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
@@ -23,7 +24,7 @@ func TestQueueAdmissionFailureOf(t *testing.T) {
 		{sessionruntime.ErrQueueAdmissionOverloaded, QueueAdmissionOverloaded},
 		{sessionruntime.ErrQueueCapacityExceeded, QueueAdmissionCapacityExceeded},
 		{sessionruntime.ErrQueueInvalidReference, QueueAdmissionInvalidReference},
-		{fmt.Errorf("enqueue: %w", ErrQueueInputIncomplete), QueueAdmissionUnavailable},
+		{fmt.Errorf("enqueue: %w", agentapi.ErrQueueInputIncomplete), QueueAdmissionUnavailable},
 	}
 	for _, tc := range cases {
 		if got := QueueAdmissionFailureOf(tc.err); got != tc.want {

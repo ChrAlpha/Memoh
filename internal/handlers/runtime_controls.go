@@ -7,7 +7,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -133,7 +133,7 @@ func runtimeControlError(err error) error {
 	if errors.As(err, &httpErr) && httpErr.Code < 500 {
 		return err
 	}
-	return outcome.RuntimeControlError(err)
+	return runtimeerr.RuntimeControlError(err)
 }
 
 type RuntimeGoalRequest struct {

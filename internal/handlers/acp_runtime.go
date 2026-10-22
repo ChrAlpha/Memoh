@@ -10,7 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	acpagent "github.com/felinics/memoh/internal/agent/runtime/acp"
 	acpclient "github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
@@ -546,7 +546,7 @@ func runtimePoolError(err error) error {
 	if err == nil || apperror.CodeOf(err) != "" {
 		return err
 	}
-	if translated := outcome.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
+	if translated := runtimeerr.ExternalAgentError(err); apperror.CodeOf(translated) != "" {
 		return translated
 	}
 	var commandNotFound *acpclient.CommandNotFoundError

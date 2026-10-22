@@ -2,11 +2,11 @@ package pending
 
 import (
 	"context"
-	"errors"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -39,18 +39,13 @@ type QueueInput struct {
 	Text                    string
 }
 
-// ErrQueueInputIncomplete reports an ingress that admitted queue input without
-// the identity the continuation needs. It is a wiring error at the ingress,
-// not a rejected user request, so handlers surface it as unavailable.
-var ErrQueueInputIncomplete = errors.New("queue: input is missing team, bot, or session identity")
-
 // queueTurnCommand rebuilds the ordinary chat turn a queued text would have
 // started had the session been idle. Every queue item stores this shape, so
 // the continuation replays a command instead of inferring one.
 func queueTurnCommand(input QueueInput) (turn.StartTurnCommand, error) {
 	teamID, botID, sessionID := strings.TrimSpace(input.TeamID), strings.TrimSpace(input.BotID), strings.TrimSpace(input.SessionID)
 	if teamID == "" || botID == "" || sessionID == "" {
-		return turn.StartTurnCommand{}, ErrQueueInputIncomplete
+		return turn.StartTurnCommand{}, agentapi.ErrQueueInputIncomplete
 	}
 	text := strings.TrimSpace(input.Text)
 	if text == "" || strings.TrimSpace(input.InvocationID) == "" {

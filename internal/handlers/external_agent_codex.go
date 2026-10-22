@@ -11,7 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
-	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	codexruntime "github.com/felinics/memoh/internal/agent/runtime/codex"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -126,6 +126,6 @@ func codexUsageError(err error) error {
 	case errors.Is(err, codexruntime.ErrUsageUnavailable):
 		return apperror.Wrap(apperror.CodeAgentCredentialUsageUnavailable, err, nil)
 	default:
-		return outcome.ExternalRuntimeError(err)
+		return runtimeerr.ExternalRuntimeError(err)
 	}
 }

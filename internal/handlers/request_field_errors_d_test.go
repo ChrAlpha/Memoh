@@ -11,7 +11,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/runconfig"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/apperror"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/server"
@@ -57,9 +57,9 @@ func TestSessionAndMessageRequestErrors(t *testing.T) {
 		{"external runtime mode", rejectSystemExternalRuntime(session.TypeSchedule, session.RuntimeACPAgent), apperror.CodeRequestFieldInvalid, "session_mode", 400},
 		{"limit out of range", limitErr, apperror.CodeRequestFieldInvalid, "limit", 400},
 		{"empty types", typesErr, apperror.CodeRequestFieldInvalid, "types", 400},
-		{"preference invalid", modelPreferenceError(fmt.Errorf("x: %w", runconfig.ErrModelPreferenceInvalid), "op"), apperror.CodeRequestFieldInvalid, "preferred_chat_model_id", 400},
-		{"preference revision", modelPreferenceError(runconfig.ErrModelPreferenceRevisionInvalid, "op"), apperror.CodeRequestFieldInvalid, "expected_model_preference_revision", 400},
-		{"acp preference", modelPreferenceError(runconfig.ErrACPPreferenceUnsupported, "op"), apperror.CodeACPModelSelectionUnsupported, "", 400},
+		{"preference invalid", modelPreferenceError(fmt.Errorf("x: %w", agentapi.ErrModelPreferenceInvalid), "op"), apperror.CodeRequestFieldInvalid, "preferred_chat_model_id", 400},
+		{"preference revision", modelPreferenceError(agentapi.ErrModelPreferenceRevisionInvalid, "op"), apperror.CodeRequestFieldInvalid, "expected_model_preference_revision", 400},
+		{"acp preference", modelPreferenceError(agentapi.ErrACPPreferenceUnsupported, "op"), apperror.CodeACPModelSelectionUnsupported, "", 400},
 		{"preference internal", modelPreferenceError(errors.New("db down"), "op"), apperror.CodeInternal, "", 500},
 		{"descriptor internal", descriptorFieldError(errors.New("boom")), apperror.CodeInternal, "", 500},
 	}

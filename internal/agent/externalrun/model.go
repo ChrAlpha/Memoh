@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/felinics/memoh/internal/agent/runconfig"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -66,7 +66,7 @@ func (h *Host) SetRuntimeModel(ctx context.Context, request turn.RuntimeControlR
 	}
 	err = h.runconfig.CompareAndSetPreference(ctx, db.ParseUUIDOrEmpty(sess.ID), sess.RuntimeType, pgtype.UUID{},
 		pgtype.Text{String: modelID, Valid: modelID != ""}, effort, sess.ModelPreferenceRevision)
-	if errors.Is(err, runconfig.ErrModelPreferenceConflict) {
+	if errors.Is(err, agentapi.ErrModelPreferenceConflict) {
 		return out, apperror.New(apperror.CodeSessionModelPreferenceConflict, nil)
 	}
 	if err != nil {

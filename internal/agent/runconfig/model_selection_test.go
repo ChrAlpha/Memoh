@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -472,8 +473,8 @@ func TestFetchChatModelRejectsDisabledModel(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "disabled") {
 		t.Fatalf("fetchChatModel disabled model error = %v, want disabled error", err)
 	}
-	if !errors.Is(err, ErrModelPreferenceInvalid) {
-		t.Fatalf("fetchChatModel disabled model error = %v, want ErrModelPreferenceInvalid", err)
+	if !errors.Is(err, agentapi.ErrModelPreferenceInvalid) {
+		t.Fatalf("fetchChatModel disabled model error = %v, want agentapi.ErrModelPreferenceInvalid", err)
 	}
 }
 

@@ -14,11 +14,11 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/stretchr/testify/require"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/plan"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -973,7 +973,7 @@ func TestUpdateFollowUpOnlyBySender(t *testing.T) {
 
 	for _, editor := range []string{"user-2", ""} {
 		_, err := proc.svc.UpdateFollowUp(ctx, env.botID, env.sessionID, string(item.ID), editor, "forged")
-		require.ErrorIs(t, err, runreq.ErrQueueItemNotEditable, "edit by %q", editor)
+		require.ErrorIs(t, err, agentapi.ErrQueueItemNotEditable, "edit by %q", editor)
 	}
 	queues, err := proc.svc.ListSessionQueues(ctx, env.botID, env.sessionID)
 	require.NoError(t, err)

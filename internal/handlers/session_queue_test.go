@@ -14,8 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/pending"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -93,7 +92,7 @@ func TestSessionQueueResponsesDoNotUseMixedQueueKind(t *testing.T) {
 }
 
 func TestSessionQueueEditBySomeoneElseIsForbidden(t *testing.T) {
-	err := queueMutationError(fmt.Errorf("update: %w", runreq.ErrQueueItemNotEditable))
+	err := queueMutationError(fmt.Errorf("update: %w", agentapi.ErrQueueItemNotEditable))
 	problem, ok := server.ProblemFrom(err, "")
 	if !ok || problem.Status != http.StatusForbidden || problem.Code != string(apperror.CodeQueueItemNotEditable) {
 		t.Fatalf("queueMutationError() = %v, want %d %s", err, http.StatusForbidden, apperror.CodeQueueItemNotEditable)
@@ -158,7 +157,7 @@ func TestQueueAdmissionErrorKeepsPublishedCodes(t *testing.T) {
 		{sessionruntime.ErrQueueAdmissionOverloaded, apperror.CodeQueueAdmissionOverloaded},
 		{sessionruntime.ErrQueueCapacityExceeded, apperror.CodeQueueCapacityExceeded},
 		{sessionruntime.ErrQueueInvalidReference, apperror.CodeQueueRequestInvalid},
-		{pending.ErrQueueInputIncomplete, apperror.CodeQueueAdmissionUnavailable},
+		{agentapi.ErrQueueInputIncomplete, apperror.CodeQueueAdmissionUnavailable},
 	}
 	for _, tc := range cases {
 		if got := apperror.CodeOf(queueAdmissionError(tc.err)); got != tc.want {

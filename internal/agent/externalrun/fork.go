@@ -8,7 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/felinics/memoh/internal/agent/outcome"
+	"github.com/felinics/memoh/internal/agent/agentapi"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -17,15 +18,6 @@ import (
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
-
-// ErrExternalForkUnsupported reports a fork request against an external
-// runtime that cannot fork.
-var ErrExternalForkUnsupported = errors.New("runtime does not support forking")
-
-// ErrExternalForkAnchorMissing reports a fork anchored at a turn that
-// recorded no runtime turn id, so the runtime-side cut cannot match the
-// visible history.
-var ErrExternalForkAnchorMissing = errors.New("fork source turn has no runtime turn anchor")
 
 // PrepareFork forks the runtime-side conversation behind an external
 // session and returns the complete runtime metadata the forked Memoh session
@@ -39,7 +31,7 @@ func (h *Host) PrepareFork(ctx context.Context, botID, sessionID, turnID string)
 		return err
 	})
 	if errors.Is(err, turn.ErrSessionBusy) {
-		return nil, outcome.RuntimeControlError(err)
+		return nil, runtimeerr.RuntimeControlError(err)
 	}
 	return result, err
 }
@@ -62,7 +54,7 @@ func (h *Host) prepareFork(ctx context.Context, botID, sessionID, turnID string)
 	}
 	forker, ok := driver.(external.ThreadForker)
 	if !ok {
-		return nil, ErrExternalForkUnsupported
+		return nil, agentapi.ErrExternalForkUnsupported
 	}
 	lastTurnID, err := h.runtimeTurnIDForTurn(ctx, botID, sessionID, turnID)
 	if err != nil {
@@ -70,7 +62,7 @@ func (h *Host) prepareFork(ctx context.Context, botID, sessionID, turnID string)
 	}
 	delta, err := forker.ForkThread(ctx, botID, sess.BotAgentID, runreq.RuntimeSessionMeta(sess), lastTurnID)
 	if err != nil {
-		return nil, outcome.ExternalRuntimeError(err)
+		return nil, runtimeerr.ExternalRuntimeError(err)
 	}
 	override := make(map[string]any, len(sess.RuntimeMetadata)+len(delta))
 	for key, value := range sess.RuntimeMetadata {
@@ -106,12 +98,12 @@ func (h *Host) runtimeTurnIDForTurn(ctx context.Context, botID, sessionID, turnI
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", ErrExternalForkAnchorMissing
+			return "", agentapi.ErrExternalForkAnchorMissing
 		}
 		return "", fmt.Errorf("load fork anchor: %w", err)
 	}
 	if runtimeTurnID = strings.TrimSpace(runtimeTurnID); runtimeTurnID == "" {
-		return "", ErrExternalForkAnchorMissing
+		return "", agentapi.ErrExternalForkAnchorMissing
 	}
 	return runtimeTurnID, nil
 }

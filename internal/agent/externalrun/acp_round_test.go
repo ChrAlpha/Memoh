@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -348,7 +349,7 @@ func externalRoundFailure(promptErr error) *outcome.RunFailure {
 	if promptErr == nil {
 		return nil
 	}
-	code, args := outcome.RunFailureCode(outcome.NewExternalPromptFailure(outcome.ExternalAgentError(promptErr)), outcome.PhaseExecution, false)
+	code, args := outcome.RunFailureCode(outcome.NewExternalPromptFailure(runtimeerr.ExternalAgentError(promptErr)), outcome.PhaseExecution, false)
 	return &outcome.RunFailure{Code: code, Args: args, Cause: promptErr, Phase: outcome.PhaseExecution}
 }
 

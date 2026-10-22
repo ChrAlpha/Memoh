@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
@@ -336,7 +337,7 @@ func publicRuntimeControlError(err error) error {
 	if errors.Is(err, turn.ErrTeamNotServed) {
 		return err
 	}
-	return outcome.RuntimeControlError(err)
+	return runtimeerr.RuntimeControlError(err)
 }
 
 func (h *Host) ControlRuntimeGoal(ctx context.Context, request turn.RuntimeControlRequest, action string) (err error) {

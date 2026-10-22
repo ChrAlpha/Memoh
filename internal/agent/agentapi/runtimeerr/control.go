@@ -1,4 +1,4 @@
-package outcome
+package runtimeerr
 
 import (
 	"context"

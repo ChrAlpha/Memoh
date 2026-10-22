@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -196,8 +197,8 @@ func (e *Executor) Execute(ctx context.Context, emit func(native.StreamEvent)) d
 
 	result, promptErr := e.plan.driver.Prompt(ctx, e.promptInput(ctx, emit))
 	promptErr = outcome.RuntimeTurnError(e.plan.runtimeType, promptErr)
-	configurationFailure := outcome.IsRuntimeConfigurationError(promptErr)
-	promptErr = outcome.ExternalAgentError(promptErr)
+	configurationFailure := runtimeerr.IsRuntimeConfigurationError(promptErr)
+	promptErr = runtimeerr.ExternalAgentError(promptErr)
 	e.notices.apply(&result)
 	switch cause := context.Cause(ctx); {
 	case errors.Is(cause, outcome.ErrResponseTimeout), errors.Is(cause, outcome.ErrToolTimeout):

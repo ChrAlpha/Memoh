@@ -3,6 +3,7 @@ package pending
 import (
 	"errors"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
 
@@ -46,7 +47,7 @@ func QueueAdmissionFailureOf(err error) QueueAdmissionFailure {
 		return QueueAdmissionCapacityExceeded
 	case errors.Is(err, sessionruntime.ErrQueueInvalidReference):
 		return QueueAdmissionInvalidReference
-	case errors.Is(err, ErrQueueInputIncomplete):
+	case errors.Is(err, agentapi.ErrQueueInputIncomplete):
 		return QueueAdmissionUnavailable
 	default:
 		return QueueAdmissionNotRefused

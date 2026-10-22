@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -30,7 +31,7 @@ func hasCatalogCode(err error) bool {
 // PublicFailureCode is the catalogued code a cause carries, or the code
 // ExternalAgentError gives it. It is empty when the cause has neither.
 func PublicFailureCode(cause error) apperror.Code {
-	public := ExternalAgentError(cause)
+	public := runtimeerr.ExternalAgentError(cause)
 	if !hasCatalogCode(public) {
 		return ""
 	}

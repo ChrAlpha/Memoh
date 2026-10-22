@@ -13,7 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/labstack/echo/v4"
 
-	"github.com/felinics/memoh/internal/agent/runconfig"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/botagents"
@@ -903,7 +903,7 @@ func TestPreferencePatchReturnsStableConflict(t *testing.T) {
 	const sessionID = "22222222-2222-2222-2222-222222222222"
 	q := &sessionUpdateQueries{bot: testBotRow(botID, nil), session: sqlc.BotSession{ID: testUUID(sessionID), BotID: testUUID(botID), Type: session.TypeChat, SessionMode: session.TypeChat, RuntimeType: session.RuntimeModel}}
 	h := NewSessionHandler(slog.Default(), newThreadServiceForTest(q), nil, bots.NewService(nil, q), newTestAdminAccountService("admin"))
-	h.SetModelPreferenceService(preferenceUpdateStub{queries: q, err: runconfig.ErrModelPreferenceConflict})
+	h.SetModelPreferenceService(preferenceUpdateStub{queries: q, err: agentapi.ErrModelPreferenceConflict})
 	_, err := callUpdateSession(h, botID, sessionID, `{"preferred_chat_model_id":"33333333-3333-3333-3333-333333333333","preferred_reasoning_effort":"high","expected_model_preference_revision":""}`)
 	var appErr *apperror.Error
 	if !errors.As(err, &appErr) || apperror.CodeOf(appErr) != apperror.CodeSessionModelPreferenceConflict {

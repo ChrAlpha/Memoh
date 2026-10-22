@@ -1,4 +1,4 @@
-package outcome_test
+package runtimeerr_test
 
 import (
 	"context"
@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/decision/approval"
-	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
@@ -40,7 +40,7 @@ func TestRuntimeControlErrorMapsSentinels(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := apperror.CodeOf(outcome.RuntimeControlError(tc.err)); got != tc.want {
+			if got := apperror.CodeOf(runtimeerr.RuntimeControlError(tc.err)); got != tc.want {
 				t.Fatalf("code = %q, want %q", got, tc.want)
 			}
 		})
@@ -61,7 +61,7 @@ func TestRuntimeControlErrorKeepsRuntimeFailureCodes(t *testing.T) {
 		{"cancelled while unavailable", external.Unavailable(context.Canceled), apperror.CodeExternalRuntimeUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := apperror.CodeOf(outcome.RuntimeControlError(fmt.Errorf("control: %w", tc.err))); got != tc.want {
+			if got := apperror.CodeOf(runtimeerr.RuntimeControlError(fmt.Errorf("control: %w", tc.err))); got != tc.want {
 				t.Fatalf("code = %q, want %q", got, tc.want)
 			}
 		})
@@ -70,10 +70,10 @@ func TestRuntimeControlErrorKeepsRuntimeFailureCodes(t *testing.T) {
 
 func TestRuntimeControlErrorKeepsExistingCode(t *testing.T) {
 	existing := fmt.Errorf("wrapped: %w", apperror.New(apperror.CodeRuntimeControlRequestInvalid, nil))
-	if got := outcome.RuntimeControlError(existing); !errors.Is(got, existing) {
+	if got := runtimeerr.RuntimeControlError(existing); !errors.Is(got, existing) {
 		t.Fatalf("existing code was re-translated: %v", got)
 	}
-	if outcome.RuntimeControlError(nil) != nil {
+	if runtimeerr.RuntimeControlError(nil) != nil {
 		t.Fatal("nil error was translated")
 	}
 }

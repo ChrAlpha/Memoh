@@ -3,15 +3,14 @@ package externalrun
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/felinics/memoh/internal/agent/outcome"
-	"github.com/felinics/memoh/internal/agent/runconfig"
+	"github.com/felinics/memoh/internal/agent/agentapi"
+	"github.com/felinics/memoh/internal/agent/agentapi/runtimeerr"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -19,8 +18,6 @@ import (
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
-
-var ErrDirectModelUnavailable = errors.New("direct runtime model unavailable")
 
 // Direct runtimes use agent-owned model IDs, never models-table UUIDs. Keep
 // their preference in a separate column so the native foreign key remains
@@ -34,7 +31,7 @@ func (h *Host) reconcilePreference(ctx context.Context, botID, botAgentID, runti
 		BotID: botID, BotAgentID: botAgentID, ProjectPath: projectPath, ModelID: modelID, ResolveDefaults: strings.TrimSpace(modelID) == "",
 	})
 	if err != nil {
-		return "", "", outcome.ExternalRuntimeError(err)
+		return "", "", runtimeerr.ExternalRuntimeError(err)
 	}
 	return reconcilePair(catalog, modelID, effort)
 }
@@ -71,7 +68,7 @@ func reconcilePair(catalog external.ModelCatalog, modelID, effort string) (strin
 		}
 		return modelID, "", nil
 	}
-	return "", "", fmt.Errorf("%w: %q", ErrDirectModelUnavailable, modelID)
+	return "", "", fmt.Errorf("%w: %q", agentapi.ErrDirectModelUnavailable, modelID)
 }
 
 func (h *Host) applyModelPreference(ctx context.Context, req runreq.ChatRequest, sess session.Thread) (runreq.ChatRequest, error) {
@@ -174,7 +171,7 @@ func (h *Host) PatchSessionModelPreference(ctx context.Context, botID, sessionID
 		modelID, reconciledEffort, err = h.reconcilePreference(ctx, sess.BotID.String(), sess.BotAgentID.String(), sess.RuntimeType, projectPath, modelID, targetEffort)
 		externalID = pgtype.Text{String: modelID, Valid: modelID != ""}
 	case sess.RuntimeType == session.RuntimeACPAgent:
-		return runconfig.ErrACPPreferenceUnsupported
+		return agentapi.ErrACPPreferenceUnsupported
 	default:
 		modelID, reconciledEffort, err = h.runconfig.ReconcilePreference(ctx, botID, modelID, targetEffort)
 		nativeID = db.ParseUUIDOrEmpty(modelID)

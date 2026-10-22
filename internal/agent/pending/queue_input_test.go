@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/agent/turn/turnwire"
@@ -36,9 +37,9 @@ func TestQueueInputRequiresRecordedTeam(t *testing.T) {
 		input := queueInputOf("hello")
 		edit(&input)
 		_, err := inputs.EnqueueFollowUp(ctx, input)
-		require.ErrorIs(t, err, ErrQueueInputIncomplete, "follow-up without %s", name)
+		require.ErrorIs(t, err, agentapi.ErrQueueInputIncomplete, "follow-up without %s", name)
 		_, err = inputs.EnqueueSteer(ctx, input)
-		require.ErrorIs(t, err, ErrQueueInputIncomplete, "steer without %s", name)
+		require.ErrorIs(t, err, agentapi.ErrQueueInputIncomplete, "steer without %s", name)
 	}
 
 	blank := queueInputOf("  ")
