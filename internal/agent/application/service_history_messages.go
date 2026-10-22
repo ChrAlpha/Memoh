@@ -9,6 +9,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
 
@@ -48,6 +49,9 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 	for _, m := range composed.Messages {
 		if m.Source != nil && req.ExternalMessageID != "" {
 			m.Source.Current = m.Source.Kind == "external" && m.Source.ID == req.ExternalMessageID
+		}
+		if m.CompactionArtifactID != "" {
+			m.Source = &turn.ContextMessageSource{Kind: "summary", ID: m.CompactionArtifactID}
 		}
 		contentJSON := m.RawContent
 		if len(contentJSON) == 0 {

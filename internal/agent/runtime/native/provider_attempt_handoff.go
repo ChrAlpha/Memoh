@@ -57,6 +57,20 @@ func (h *providerAttemptHandoff) stage(
 	h.mu.Unlock()
 }
 
+// admitted is where the staged attempt carries the loop-owned dynamic
+// messages it admits.
+func (h *providerAttemptHandoff) admitted() []dynamicSourceRef {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.pending == nil {
+		return nil
+	}
+	return cloneDynamicSourceRefs(h.pending.admitted)
+}
+
 // reject drops the staged attempt and removes provider-visibility admission
 // for the boundary the attempt targeted: it will not be dispatched.
 func (h *providerAttemptHandoff) reject() {

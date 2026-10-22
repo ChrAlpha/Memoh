@@ -15,6 +15,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -104,6 +105,14 @@ func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolve
 		cfg.OnStepCommitted = committer.commit
 	}
 	committer.bindContinuation(cfg)
+	// A run that persists its steps compacts in place when a step's request
+	// no longer fits, and is never trimmed by step reselection. A retry or an
+	// edit replays history before its cutoff, which no fold matches.
+	if committer != nil && s.compactionService != nil && s.settingsService != nil && len(cfg.ContextProvenance) > 0 &&
+		req.TurnReplacement == nil && strings.TrimSpace(req.HistoryCutoffBeforeMessageID) == "" {
+		cfg.SwitchContext = s.switchContext(req, committer, cfg.CurrentModelUUID)
+		cfg.ContextStepReselector = nil
+	}
 	return committer
 }
 
@@ -221,6 +230,7 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		c.nextStep++
 		return native.StepDirective{}, nil
 	}
+	stepMessages := len(messages)
 	if (hasAssistantOutput || failureCode != "" || mode == stepSteered) && len(c.persisted) == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
 		messages = prependTurnUserMessage(c.req, messages)
 	}
@@ -313,6 +323,9 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		}
 	}
 	c.persisted = append(c.persisted, persisted...)
+	if len(persisted) == len(messages) && stepMessages == len(record.Messages) {
+		dir.Provenance = stepProvenance(persisted[len(messages)-stepMessages:])
+	}
 	if mode == stepInterrupted && len(persisted) > 0 {
 		c.checkpointed = true
 	}
@@ -339,6 +352,40 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		return fail(queueErr)
 	}
 	return dir, nil
+}
+
+// stepProvenance names the row each message of a step became. A user row
+// that is not runtime feedback is the run's input or a steer, which the run
+// keeps where it is when it compacts.
+func stepProvenance(rows []messagepkg.Message) []native.MessageProvenance {
+	provenance := make([]native.MessageProvenance, len(rows))
+	for i, row := range rows {
+		provenance[i] = native.MessageProvenance{
+			Sources: []turn.ContextMessageSource{{Kind: "history", ID: row.ID}},
+			Anchor:  isRunInputRow(row),
+		}
+	}
+	return provenance
+}
+
+func isRunInputRow(row messagepkg.Message) bool {
+	return strings.EqualFold(strings.TrimSpace(row.Role), "user") && !messagepkg.IsInternalFeedback(row.Metadata)
+}
+
+// inputSources names the run's input and the steers its steps persisted.
+func (c *agentStepCommitter) inputSources() []turn.ContextMessageSource {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var sources []turn.ContextMessageSource
+	for _, row := range c.persisted {
+		if isRunInputRow(row) {
+			sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: row.ID})
+		}
+	}
+	return sources
 }
 
 // stampSteerTurn files this step's injected steer input under the turn drawn

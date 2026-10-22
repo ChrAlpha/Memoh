@@ -20529,7 +20529,8 @@ const docTemplate = `{
                 "mid_stream_retry",
                 "current_input_omitted",
                 "current_input_images_omitted",
-                "run_abort_observed"
+                "run_abort_observed",
+                "context_switch"
             ],
             "x-enum-varnames": [
                 "MutationBeforeModelCallHook",
@@ -20546,7 +20547,8 @@ const docTemplate = `{
                 "MutationMidStreamRetry",
                 "MutationCurrentInputOmitted",
                 "MutationCurrentInputImagesOmitted",
-                "MutationRunAbortObserved"
+                "MutationRunAbortObserved",
+                "MutationContextSwitch"
             ]
         },
         "contextfrag.MutationRecord": {

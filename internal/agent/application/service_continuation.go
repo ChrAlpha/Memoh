@@ -61,6 +61,7 @@ func (s *Service) prepareContinuationRunConfig(
 	base.ContextTrimmableMessages = len(messages)
 
 	base.ContextFrags = historyContextFragsForMessages(messages, retained)
+	base.ContextProvenance = contextProvenance(messages, retained, compactionProtectedSources(req))
 	// Close any tool call left open by an interrupted turn before the transcript
 	// reaches providers that enforce strict assistant-tool adjacency. A process
 	// restart can orphan a deferred ask_user / tool-approval call while a later

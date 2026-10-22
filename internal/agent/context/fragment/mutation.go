@@ -38,6 +38,9 @@ const (
 	// it" recoverable from the snapshot without weakening the diagnostic
 	// status precedence.
 	MutationRunAbortObserved MutationKind = "run_abort_observed"
+	// MutationContextSwitch records a compaction event a run ran in place
+	// at a step boundary, or the reason it could not make the request fit.
+	MutationContextSwitch MutationKind = "context_switch"
 )
 
 // AllMutationKinds lists every mutation kind the ledger can record; the
@@ -59,6 +62,7 @@ func AllMutationKinds() []MutationKind {
 		MutationCurrentInputOmitted,
 		MutationCurrentInputImagesOmitted,
 		MutationRunAbortObserved,
+		MutationContextSwitch,
 	}
 }
 

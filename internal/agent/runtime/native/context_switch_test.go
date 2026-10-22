@@ -1,0 +1,183 @@
+package native
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
+	sdk "github.com/felinics/twilight/sdk"
+
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/turn"
+)
+
+func rowSources(ids ...string) []turn.ContextMessageSource {
+	sources := make([]turn.ContextMessageSource, len(ids))
+	for i, id := range ids {
+		sources[i] = turn.ContextMessageSource{Kind: "history", ID: id}
+	}
+	return sources
+}
+
+// switchRequest is an armed run's request before its third step: an earlier
+// summary, two history rows around a pipeline message the fold leaves alone
+// and a passive message the run never rendered as a source, the run's input,
+// its first step, a steer, and its latest step.
+func switchRequest() ([]sdk.Message, []MessageProvenance) {
+	call := func(id string) sdk.Message {
+		return sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{ToolCallID: id, ToolName: "effect", Input: toolexec.ArgumentsFromValue(map[string]any{"id": id})}}}
+	}
+	result := func(id string) sdk.Message {
+		return sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: id, ToolName: "effect", Result: toolexec.OutputFromValue(id + strings.Repeat(" r", 2000))})
+	}
+	messages := []sdk.Message{
+		sdk.UserMessage("<summary>\nolder\n"),
+		sdk.UserMessage("h1" + strings.Repeat(" h", 2000)),
+		sdk.UserMessage("pipeline message"),
+		sdk.UserMessage("passive message"),
+		sdk.AssistantMessage("h2" + strings.Repeat(" h", 2000)),
+		sdk.UserMessage("INPUT"),
+		call("c1"), result("c1"),
+		sdk.UserMessage("STEER"),
+		call("c2"), result("c2"),
+	}
+	sources := [][]turn.ContextMessageSource{
+		{{Kind: "summary", ID: "A0"}},
+		rowSources("h1"),
+		{{Kind: "external", ID: "rc1"}},
+		nil, rowSources("h2"),
+		rowSources("input"), rowSources("c1"), rowSources("r1"), rowSources("steer"),
+	}
+	var provenance []MessageProvenance
+	for i, source := range sources {
+		if source != nil {
+			provenance = append(provenance, MessageProvenance{Message: messages[i], Sources: source, Anchor: i == 5 || i == 8})
+		}
+	}
+	return messages, provenance
+}
+
+// armedRun is a run armed with event that has committed the latest step of
+// switchRequest, with a step reselector that must never run, and an
+// allowance only the request spliced to keep fits in.
+func armedRun(t *testing.T, messages []sdk.Message, provenance []MessageProvenance, keep []int, event func(context.Context, ContextSwitch) (string, error)) (RunConfig, *error) {
+	t.Helper()
+	var failure error
+	var kept []sdk.Message
+	for _, i := range keep {
+		kept = append(kept, messages[i])
+	}
+	cfg := RunConfig{
+		ContextMutations: contextfrag.NewMutationLedger(),
+		ContextManifest:  contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: contextfrag.ProviderEnvelopeTokens("", append(kept, sdk.UserMessage("<summary>\nnew\n")), nil) + 8}},
+		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
+			t.Error("an armed run reselected its steps")
+			return ContextStepSelectionResult{}
+		},
+		SwitchContext:     event,
+		ContextProvenance: provenance,
+	}
+	cfg.contextSwitch = newContextSwitchState(cfg)
+	cfg.contextSwitch.committed(messages[9:], []MessageProvenance{{Sources: rowSources("c2")}, {Sources: rowSources("r2")}})
+	cfg.contextStepFailure = func(err error) { failure = err }
+	return cfg, &failure
+}
+
+func prepareArmed(cfg RunConfig, messages []sdk.Message) *sdk.Request {
+	return prepareProviderAttempt(context.Background(), cfg, newProviderAttemptHandoff(cfg), LoopReselectActive, false, 6, 2, nil,
+		&sdk.Request{Messages: append([]sdk.Message(nil), messages...)})
+}
+
+func switchDetails(cfg RunConfig) []string {
+	var details []string
+	for _, record := range cfg.ContextMutations.Records() {
+		if record.Kind == contextfrag.MutationContextSwitch {
+			details = append(details, record.Detail)
+		}
+	}
+	return details
+}
+
+// The event sees what the request renders, keeps the input, the steer and the
+// latest step out of the fold, and the request the run sends next is the one
+// it had with the covered messages replaced by the summary at rule P: every
+// other message is the same message, in its order.
+func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
+	t.Parallel()
+
+	messages, provenance := switchRequest()
+	summary := sdk.UserMessage("<summary>\nnew\n")
+	var seen ContextSwitch
+	cfg, failure := armedRun(t, messages, provenance, []int{2, 3, 5, 8, 9, 10}, func(_ context.Context, sw ContextSwitch) (string, error) {
+		seen = sw
+		if _, fits := sw.Fold(ContextFold{Artifact: "A1", Summary: summary, Covered: rowSources("h1", "h2", "c1", "r1"), Absorbed: []string{"A0"}}); !fits {
+			t.Error("the spliced request does not fit")
+		}
+		return "trigger=in_run passes=1", nil
+	})
+	cfg.ContextCachePlan.StableMessageCount = 5
+	params := prepareArmed(cfg, messages)
+
+	want := []sdk.Message{messages[2], messages[3], messages[5], summary, messages[8], messages[9], messages[10]}
+	if *failure != nil || !reflect.DeepEqual(params.Messages, want) {
+		t.Fatalf("failure=%v messages=%d, want the request spliced at rule P with every other message unchanged", *failure, len(params.Messages))
+	}
+	view := append(append([]turn.ContextMessageSource{{Kind: "summary", ID: "A0"}}, rowSources("h1")...), turn.ContextMessageSource{Kind: "external", ID: "rc1"})
+	view = append(view, rowSources("h2", "input", "c1", "r1", "steer", "c2", "r2")...)
+	if !reflect.DeepEqual(seen.View, view) || !reflect.DeepEqual(seen.Anchors, rowSources("input", "steer")) || !reflect.DeepEqual(seen.Tail, rowSources("c2", "r2")) {
+		t.Fatalf("view=%v anchors=%v tail=%v", seen.View, seen.Anchors, seen.Tail)
+	}
+	kept := contextfrag.ProviderEnvelopeTokens("", []sdk.Message{messages[3], messages[5], messages[8], messages[9], messages[10]}, nil)
+	if seen.HistoryBudgetTokens != seen.AllowanceTokens-kept || !reflect.DeepEqual(switchDetails(cfg), []string{"trigger=in_run passes=1"}) {
+		t.Fatalf("history budget=%d (allowance %d, kept %d) details=%q", seen.HistoryBudgetTokens, seen.AllowanceTokens, kept, switchDetails(cfg))
+	}
+
+	next, ok := cfg.contextSwitch.redispatch(cfg, generateDispatch{initialMessageCount: len(messages)}, *params)
+	if !ok || len(next.Messages) != len(want) || next.initialProviderMessageCount != len(want) || next.ContextCachePlan.StableMessageCount != 2 {
+		t.Fatalf("redispatch ok=%v messages=%d prefix=%d stable=%d, want the spliced request with its prefix and breakpoint moved", ok, len(next.Messages), next.initialProviderMessageCount, next.ContextCachePlan.StableMessageCount)
+	}
+	if _, again := cfg.contextSwitch.redispatch(cfg, generateDispatch{}, *params); again {
+		t.Fatal("a second redispatch without a splice")
+	}
+}
+
+// An armed run whose event cannot make the request fit ends the run with the
+// event's reason recorded and sends nothing: no step is dropped or trimmed
+// to rescue it.
+func TestArmedRunFailsClosedWhenTheEventDoesNotFit(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		fold   []turn.ContextMessageSource
+		err    error
+		want   error
+		detail string
+	}{
+		{name: "summarizer down", err: fmt.Errorf("%w: summarizer_failed", contextfrag.ErrBudgetUnsatisfied), want: contextfrag.ErrBudgetUnsatisfied, detail: "trigger=in_run passes=0 reason=summarizer_failed"},
+		{name: "protected overflow", err: fmt.Errorf("%w: protected_overflow", contextfrag.ErrProtectedContextOverflow), want: contextfrag.ErrProtectedContextOverflow, detail: "trigger=in_run passes=0 reason=protected_overflow"},
+		{name: "still over", fold: rowSources("h1"), want: contextfrag.ErrBudgetUnsatisfied, detail: "trigger=in_run reason=still_over"},
+		{name: "result without its call", fold: rowSources("h1", "h2", "r1"), want: contextfrag.ErrBudgetUnsatisfied, detail: "trigger=in_run reason=postcondition"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			messages, provenance := switchRequest()
+			cfg, failure := armedRun(t, messages, provenance, []int{2, 3, 5, 8, 9, 10}, func(_ context.Context, sw ContextSwitch) (string, error) {
+				if tc.fold != nil {
+					sw.Fold(ContextFold{Artifact: "A1", Summary: sdk.UserMessage("<summary>\nnew\n"), Covered: tc.fold})
+					return "", nil
+				}
+				return tc.detail, tc.err
+			})
+			prepareArmed(cfg, messages)
+			details := switchDetails(cfg)
+			if !errors.Is(*failure, tc.want) || len(details) != 1 || !strings.HasPrefix(details[0], tc.detail) {
+				t.Fatalf("failure=%v details=%q, want %v recorded as %q", *failure, details, tc.want, tc.detail)
+			}
+		})
+	}
+}

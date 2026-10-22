@@ -126,6 +126,7 @@ func (l chatHistoryLayout) replaceHistory(ctx context.Context, cfg native.RunCon
 	cfg.ContextMemoryMessageIndex = shiftRecoveryIndex(cfg.ContextMemoryMessageIndex, l.historyCount, delta)
 	cfg.ContextCurrentUserMessageIndex = shiftRecoveryIndex(cfg.ContextCurrentUserMessageIndex, l.historyCount, delta)
 	cfg.ContextFrags = historyContextFragsForMessages(messages, records)
+	cfg.ContextProvenance = contextProvenance(history, records, compactionProtectedSources(req))
 	cfg.ForkContextSourceMessageIDs = make([]string, l.forkCount, len(cfg.Messages))
 	cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, historySourceMessageIDsForMessages(history, records)...)
 	copy(cfg.ForkContextSourceMessageIDs[:l.forkCount], old.ForkContextSourceMessageIDs[:min(l.forkCount, len(old.ForkContextSourceMessageIDs))])

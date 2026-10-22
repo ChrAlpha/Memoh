@@ -622,6 +622,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.ContextFrags = historyContextFragsForMessages(messages, historyRecords)
 	forkMessages := nonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
+	runCfg.ContextProvenance = contextProvenance(forkMessages, historyRecords, compactionProtectedSources(req))
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {
