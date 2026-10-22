@@ -69,6 +69,9 @@ func (s *managerOutboundStream) pushEnd(ctx context.Context, final *StreamEvent)
 // not lose that text, then ends the adapter's preview. A preview that carried
 // no text has nothing to flush.
 func (s *managerOutboundStream) Abort(ctx context.Context) error {
+	// What the reply withheld as a possible media reference is not shown.
+	s.heldText.Reset()
+	s.carried().holding = false
 	var err error
 	if s.deltaRunes > 0 {
 		err = s.push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{}})

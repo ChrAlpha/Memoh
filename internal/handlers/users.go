@@ -1280,6 +1280,7 @@ func (h *UsersHandler) SendBotMessage(c echo.Context) error {
 	if req.Message.IsEmpty() {
 		return apperror.FieldRequired("message")
 	}
+	req.Message = channel.WithoutMarkdownMedia(req.Message)
 	if err := h.channelRuntime.Send(c.Request().Context(), botID, channelType, req); err != nil {
 		return sendChannelMessageHTTPError(err, true)
 	}
@@ -1339,7 +1340,7 @@ func (h *UsersHandler) SendBotMessageSession(c echo.Context) error {
 	}
 	if err := h.channelRuntime.Send(c.Request().Context(), botID, channelType, channel.SendRequest{
 		Target:  route.ReplyTarget,
-		Message: req.Message,
+		Message: channel.WithoutMarkdownMedia(req.Message),
 	}); err != nil {
 		return sendChannelMessageHTTPError(err, false)
 	}

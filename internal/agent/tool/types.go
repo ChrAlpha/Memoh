@@ -386,6 +386,14 @@ func (s SessionContext) CanOmitMessagingTarget() bool {
 	}
 }
 
+// SendsToCurrentConversationAsReply reports whether the session's ordinary
+// reply text is what reaches the conversation it was started from, so the send
+// tool is for other conversations only: a send into this one would repeat the
+// reply, and images and files go in the reply's Markdown.
+func (s SessionContext) SendsToCurrentConversationAsReply() bool {
+	return s.SessionType == sessionmode.Chat && s.ReplyDelivery != sessionfacts.ReplyExplicit
+}
+
 // CanUseLocalMessagingShortcut reports whether current-conversation side
 // effects can be represented by the live agent stream instead of the channel
 // sender. The live stream reaches the conversation only when ordinary output

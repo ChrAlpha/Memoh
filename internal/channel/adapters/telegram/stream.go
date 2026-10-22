@@ -40,6 +40,7 @@ type telegramPreview struct {
 	mu            sync.Mutex
 	buf           strings.Builder
 	streamChatID  int64
+	streamThread  int
 	streamMsgID   int
 	lastEdited    string
 	lastEditedAt  time.Time
@@ -254,7 +255,7 @@ func (s *telegramPreview) sendDraft(ctx context.Context, text string) error {
 		return err
 	}
 
-	draftErr := sendTelegramDraft(bot, s.streamChatID, s.draftID, text, s.parseMode)
+	draftErr := sendTelegramDraft(bot, s.streamChatID, s.streamThread, s.draftID, text, s.parseMode)
 	if draftErr != nil {
 		if isTelegramTooManyRequests(draftErr) {
 			d := getTelegramRetryAfter(draftErr)

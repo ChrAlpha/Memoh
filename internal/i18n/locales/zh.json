@@ -705,7 +705,8 @@
       "oauth_not_discovered": "请先对该连接执行 OAuth 发现。"
     },
     "media": {
-      "asset_not_found": "这个文件已不存在，如仍需要请重新上传。"
+      "asset_not_found": "这个文件已不存在，如仍需要请重新上传。",
+      "reference_unavailable": "文件未能分享，请让 Agent 重新生成或再次分享。"
     },
     "memory": {
       "compact_unsupported": "当前记忆提供方不支持记忆压缩，请在 Bot 的记忆设置中换用支持压缩的提供方。"

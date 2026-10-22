@@ -7,7 +7,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/mcp"
-	"github.com/felinics/memoh/internal/messaging"
 	"github.com/felinics/memoh/internal/sessionfacts"
 )
 
@@ -30,18 +29,15 @@ func TestToolsReadSessionFactsNotModeLabel(t *testing.T) {
 	if desc, _, _, _ := sendToolPromptMetadata(explicitChat); !strings.Contains(desc, "observed conversation") {
 		t.Fatalf("explicit delivery send description = %q", desc)
 	}
-	// Only the direct send promotes workspace attachments before delivery.
-	sender := &promotingSender{}
+	// A send is the only way an explicit session speaks, so it needs no target.
+	sender := &recordingSender{}
 	provider := NewMessageProvider(nil, sender, usageTestReactor{}, usageTestResolver{}, messageTestAssetResolver{})
-	result, err := provider.execSend(context.Background(), explicitChat, "call-test", map[string]any{
-		"text":        "spoken",
-		"attachments": []any{"screenshot.png"},
-	})
+	result, err := provider.execSend(context.Background(), explicitChat, "call-test", map[string]any{"text": "spoken"})
 	if err != nil {
 		t.Fatalf("execSend returned error: %v", err)
 	}
-	if resp, _ := result.(map[string]any); sender.called != 1 || sender.promoted != 1 || resp["delivered"] != "current_conversation" {
-		t.Fatalf("explicit delivery send = %#v with %d sends and %d promotions, want one direct send", result, sender.called, sender.promoted)
+	if resp, _ := result.(map[string]any); sender.called != 1 || resp["delivered"] != "current_conversation" {
+		t.Fatalf("explicit delivery send = %#v with %d sends, want one direct send", result, sender.called)
 	}
 
 	streamDiscuss := SessionContext{
@@ -72,14 +68,4 @@ func TestMCPSessionRunsUnderItsModePreset(t *testing.T) {
 			t.Fatalf("%q: facts = %q/%q, want %q/%q", mode, got.ReplyDelivery, got.DecisionMode, want.ReplyDelivery, want.DecisionMode)
 		}
 	}
-}
-
-type promotingSender struct {
-	recordingSender
-	promoted int
-}
-
-func (s *promotingSender) PromoteAttachments(_ context.Context, _ string, _ messaging.Platform, msg messaging.Message) (messaging.Message, error) {
-	s.promoted++
-	return msg, nil
 }

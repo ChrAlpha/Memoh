@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/markdownmedia"
 	"github.com/felinics/memoh/internal/redact"
 )
 
@@ -301,10 +302,18 @@ func (st State) tailActions(outputs []channel.Message) []Action {
 }
 
 // repeatsCommitted reports whether an output only repeats text a hidden tool
-// call already ended as a message of its own. Attachments and buttons make an
-// output more than that text, so they are never a repeat.
+// call already ended as a message of its own. Attachments, buttons and
+// published media make an output more than that text, so they are never a repeat.
 func (st State) repeatsCommitted(msg channel.Message) bool {
 	if len(st.committed) == 0 || len(msg.Attachments) > 0 || len(msg.Actions) > 0 {
+		return false
+	}
+	// An output that publishes media also delivers what the stream withheld; the
+	// stream drops the repeated text itself.
+	if _, ok := msg.Metadata[markdownmedia.MetadataKey]; ok {
+		return false
+	}
+	if _, ok := msg.Metadata[markdownmedia.EarlierMetadataKey]; ok {
 		return false
 	}
 	text := strings.TrimSpace(msg.PlainText())

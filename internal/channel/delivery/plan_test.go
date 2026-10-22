@@ -7,6 +7,7 @@ import (
 
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/markdownmedia"
 	"github.com/felinics/memoh/internal/redact"
 )
 
@@ -865,6 +866,15 @@ func TestPlanEndSkipsTextAHiddenToolCallCommitted(t *testing.T) {
 		}
 		if actions[0].Final == nil || len(actions[0].Final.Final.Message.Attachments) != 1 {
 			t.Fatalf("final = %+v", actions[0].Final)
+		}
+	})
+	t.Run("an output that publishes media is not a repeat", func(t *testing.T) {
+		for _, key := range []string{markdownmedia.MetadataKey, markdownmedia.EarlierMetadataKey} {
+			published := channel.Message{Text: "Let me check.", Metadata: map[string]any{key: []markdownmedia.Binding{}}}
+			actions, _ := PlanEnd(previewCaps, afterBreak(), []channel.Message{published}, false)
+			if !sameKinds(actions, KindFinish) || actions[0].Final == nil || actions[0].Final.Final.Message.Text != "Let me check." {
+				t.Fatalf("%s: actions = %+v", key, actions)
+			}
 		}
 	})
 	t.Run("text that was never committed is delivered as usual", func(t *testing.T) {

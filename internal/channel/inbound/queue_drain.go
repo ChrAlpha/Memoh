@@ -201,6 +201,7 @@ func (p *ChannelInboundProcessor) deliverBusyRun(ctx, streamCtx context.Context,
 	runErr := p.consumeRun(ctx, runReply{
 		out: out, handle: handle, botID: cmd.BotID, channelType: channelType, caps: desc.Capabilities,
 		target: target, sourceMessageID: sourceMessageID,
+		sessionID: cmd.ThreadID, since: merged.ReceivedAt.Add(-time.Minute),
 		localizer: p.localizer(ctx, cmd.BotID), streamCtx: streamCtx,
 	})
 	if runErr != nil && !stoppedByCommand(ctx, streamCtx) {

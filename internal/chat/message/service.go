@@ -19,6 +19,7 @@ import (
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/markdownmedia"
 	"github.com/felinics/memoh/internal/media"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/runtimekind"
@@ -27,9 +28,10 @@ import (
 
 // DBService persists and reads bot history messages.
 type DBService struct {
-	queries   dbstore.Queries
-	logger    *slog.Logger
-	publisher event.Publisher
+	resolveMarkdownMedia markdownmedia.Resolver
+	queries              dbstore.Queries
+	logger               *slog.Logger
+	publisher            event.Publisher
 }
 
 type historyTurnWriter interface {
@@ -91,6 +93,7 @@ func NewService(log *slog.Logger, queries dbstore.Queries, publishers ...event.P
 
 // Persist writes a single message to bot_history_messages.
 func (s *DBService) Persist(ctx context.Context, input PersistInput) (Message, error) {
+	input = s.prepareMarkdownMedia(ctx, input)
 	const maxTurnSequenceRetries = 3
 	var lastErr error
 	for attempt := 0; attempt < maxTurnSequenceRetries; attempt++ {
@@ -185,6 +188,18 @@ func isTurnSequenceUniqueViolation(err error) bool {
 func (s *DBService) PersistToolTailRound(ctx context.Context, inputs []PersistInput) ([]Message, bool, error) {
 	if s == nil || s.queries == nil || !isToolTailRoundShape(inputs) {
 		return nil, false, nil
+	}
+	for _, input := range inputs {
+		if input.Role == "assistant" && len(markdownmedia.Parse(markdownSource(input))) > 0 {
+			// Published media adds message assets, which the single-statement
+			// write does not carry; keep the round atomic in a transaction.
+			prepared := append([]PersistInput(nil), inputs...)
+			for i := range prepared {
+				prepared[i] = s.prepareMarkdownMedia(ctx, prepared[i])
+			}
+			_, fenced := runtimefence.FromContext(ctx)
+			return s.persistRoundInTx(ctx, prepared, RoundPersistenceOptions{}, fenced, strings.TrimSpace(inputs[0].BotID), strings.TrimSpace(inputs[0].SessionID))
+		}
 	}
 	writer, ok := s.queries.(toolTailRoundWriter)
 	if !ok || !writer.SupportsAtomicDirectHistoryTurnWrites() {
@@ -313,6 +328,17 @@ func (s *DBService) PersistRound(ctx context.Context, inputs []PersistInput, opt
 		}
 	}
 
+	inputs = append([]PersistInput(nil), inputs...)
+	for i := range inputs {
+		inputs[i] = s.prepareMarkdownMedia(ctx, inputs[i])
+	}
+
+	return s.persistRoundInTx(ctx, inputs, options, fenced, botID, sessionID)
+}
+
+// persistRoundInTx writes prepared round inputs in one transaction, retrying
+// turn sequence conflicts.
+func (s *DBService) persistRoundInTx(ctx context.Context, inputs []PersistInput, options RoundPersistenceOptions, fenced bool, botID, sessionID string) ([]Message, bool, error) {
 	const maxTurnSequenceRetries = 3
 	var lastErr error
 	for attempt := 0; attempt < maxTurnSequenceRetries; attempt++ {

@@ -1125,6 +1125,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	p.activeStreams.Store(streamKey, streamCancel)
 	defer p.activeStreams.Delete(streamKey)
 
+	publicationStart := time.Now()
 	handle, startErr := p.startTurn(streamCtx, cmd)
 	if startErr != nil {
 		if errors.Is(startErr, turn.ErrDuplicateTurn) {
@@ -1176,6 +1177,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	runErr := p.consumeRun(ctx, runReply{
 		out: out, handle: handle, botID: identity.BotID, channelType: msg.Channel, caps: desc.Capabilities,
 		target: target, sourceMessageID: sourceMessageID,
+		sessionID: sessionID, since: publicationStart.Add(-time.Minute),
 		localizer: p.localizer(ctx, identity.BotID), streamCtx: streamCtx,
 		status: status,
 	})
@@ -1202,7 +1204,11 @@ type runReply struct {
 	caps            channel.ChannelCapabilities
 	target          string
 	sourceMessageID string
-	localizer       *i18n.Localizer
+	// sessionID and since bound the persisted publications the run's reply
+	// binds its media to; since is a little before the run could publish.
+	sessionID string
+	since     time.Time
+	localizer *i18n.Localizer
 	// streamCtx is the context of the run's caller: /new and /stop end it, and
 	// a run they ended gets no reply.
 	streamCtx context.Context
@@ -1227,7 +1233,7 @@ func (p *ChannelInboundProcessor) consumeRun(ctx context.Context, r runReply) er
 			return ingested
 		},
 		Outputs: func(messages []turn.ModelMessage) ([]channel.Message, bool) {
-			return p.runReplyMessages(r.channelType, r.caps, r.target, r.sourceMessageID, messages)
+			return p.runReplyMessages(ctx, r, messages)
 		},
 		StreamFailure: func(err error) (channel.StreamEvent, bool) {
 			return channel.ErrorEvent(r.streamCtx, r.localizer, threadError(err))
@@ -1276,23 +1282,25 @@ func interceptStatusEvents(ctx context.Context, events <-chan turn.Event, status
 // runReplyMessages selects the message a turn replies with, for a run and for
 // the continuation of a decision alike. A turn whose replies a messaging tool
 // already sent replies with none; otherwise it replies with the one message
-// assistantReply builds.
-func (p *ChannelInboundProcessor) runReplyMessages(
-	channelType channel.ChannelType,
-	caps channel.ChannelCapabilities,
-	target, sourceMessageID string,
-	messages []turn.ModelMessage,
-) ([]channel.Message, bool) {
-	sentTexts, suppressReplies := collectMessageToolContext(p.registry, messages, channelType, target)
+// assistantReply builds, bound to the media the run published. A run that
+// published media but wrote no reply text still replies, so the media the
+// stream carried reaches the user.
+func (p *ChannelInboundProcessor) runReplyMessages(ctx context.Context, r runReply, messages []turn.ModelMessage) ([]channel.Message, bool) {
+	sentTexts, suppressReplies := collectMessageToolContext(p.registry, messages, r.channelType, r.target)
 	if suppressReplies {
 		return nil, true
 	}
-	reply, ok := assistantReply(messages, caps, sentTexts)
+	reply, ok := assistantReply(messages, r.caps, sentTexts)
+	runID := ""
+	if r.handle != nil {
+		runID = r.handle.RunID()
+	}
+	reply, ok = p.bindRunMedia(ctx, r.channelType, messages, reply, ok, r.sessionID, runID, r.since, r.botID)
 	if !ok {
 		return nil, false
 	}
-	if reply.Reply == nil && sourceMessageID != "" {
-		reply.Reply = &channel.ReplyRef{Target: target, MessageID: sourceMessageID}
+	if reply.Reply == nil && r.sourceMessageID != "" {
+		reply.Reply = &channel.ReplyRef{Target: r.target, MessageID: r.sourceMessageID}
 	}
 	return []channel.Message{reply}, false
 }
@@ -3299,20 +3307,21 @@ func splitFirstCommandField(text string) (head, tail string) {
 }
 
 func (p *ChannelInboundProcessor) streamToolApprovalCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, _ string, approvalRunner ToolApprovalRunner, input turn.ToolApprovalResponse) error {
-	return p.streamContinuationCommand(ctx, msg, sender, identity, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
+	return p.streamContinuationCommand(ctx, msg, sender, identity, input.ThreadID, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
 		return approvalRunner.RespondToolApproval(runCtx, input, eventCh)
 	})
 }
 
 func (p *ChannelInboundProcessor) streamUserInputResponseCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, _ string, userInputRunner UserInputRunner, input turn.UserInputResponse) error {
-	return p.streamContinuationCommand(ctx, msg, sender, identity, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
+	return p.streamContinuationCommand(ctx, msg, sender, identity, input.ThreadID, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
 		return userInputRunner.RespondUserInput(runCtx, input, eventCh)
 	})
 }
 
 type streamContinuationFunc func(context.Context, chan<- json.RawMessage) error
 
-func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, run streamContinuationFunc) error {
+func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, sessionID string, run streamContinuationFunc) error {
+	publicationStart := time.Now()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	target := strings.TrimSpace(msg.ReplyTarget)
@@ -3428,8 +3437,12 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 		}
 		return closeStream()
 	}
-	capabilities := channel.ChannelCapabilities{Text: true, Markdown: true, Reply: true}
-	replies, _ := p.runReplyMessages(msg.Channel, capabilities, target, sourceMessageID, finalMessages)
+	replies, _ := p.runReplyMessages(ctx, runReply{
+		botID: identity.BotID, channelType: msg.Channel,
+		caps:   channel.ChannelCapabilities{Text: true, Markdown: true, Reply: true},
+		target: target, sourceMessageID: sourceMessageID,
+		sessionID: sessionID, since: publicationStart.Add(-time.Minute),
+	}, finalMessages)
 	for _, reply := range replies {
 		if err := stream.Push(ctx, channel.StreamEvent{
 			Type:  channel.StreamEventFinal,
