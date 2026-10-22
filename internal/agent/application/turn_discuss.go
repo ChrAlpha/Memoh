@@ -293,6 +293,12 @@ func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnComma
 	runConfig = pauseIdleDuringBudgetRecovery(runConfig, idleCancel)
 	streamCtx, cancelStream := context.WithCancelCause(idleCtx)
 	defer cancelStream(nil)
+	// Stopping the stream decides how the run ends; the watchdog has nothing
+	// left to time while the engine winds down.
+	stopStream := func(cause error) {
+		idleCancel.Stop()
+		cancelStream(cause)
+	}
 	eventCh := s.streamDiscussAgent(streamCtx, runConfig)
 
 	var finalMessages json.RawMessage
@@ -324,7 +330,7 @@ events:
 		if h.publishAgentEvent != nil {
 			if publishErr := h.publishAgentEvent(ctx, publicAgentStreamEvent(event)); publishErr != nil {
 				outcome.setCause(publishErr)
-				cancelStream(publishErr)
+				stopStream(publishErr)
 				break events
 			}
 		}
@@ -334,7 +340,7 @@ events:
 		}
 		if !h.emit(string(event.Type), payload) {
 			outcome.recordCause(context.Cause(ctx))
-			cancelStream(context.Cause(ctx))
+			stopStream(context.Cause(ctx))
 			break events
 		}
 	}
