@@ -30,7 +30,7 @@ type discussBudgetCompactor struct {
 	started chan struct{}
 }
 
-func (c *discussBudgetCompactor) Compact(ctx context.Context, cfg compaction.TriggerConfig, _ func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
+func (c *discussBudgetCompactor) Compact(ctx context.Context, cfg compaction.TriggerConfig) ([]compaction.Pass, error) {
 	c.configs = append(c.configs, cfg)
 	if c.started != nil {
 		close(c.started)

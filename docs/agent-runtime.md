@@ -30,13 +30,14 @@ can recover context at a committed step boundary and continue the same run. An
 empty initial history does not disable recovery. Retry/edit, Discuss, subagent
 and external runtimes have separate ownership and remain outside this capability.
 
-`compaction.Service.Compact` executes one event with admission after each committed
-pass. Each pass absorbs the rendered active summary and the oldest eligible
-sources into one rolling summary. The current request and steers are verbatim
-anchors, not independent summary segments. The latest tool/reasoning closure is
-protected. At approval or ask_user resume, the deferred call/result is the tail;
-earlier committed work remains eligible. The summarizer sees anchors inline but
-never claims their coverage.
+`compaction.Service.Compact` executes one event that folds the rendered active
+summary and every eligible source into one rolling summary. A pass folds what one
+summarizer call can read; the event passes again only for what that call could
+not, and each further pass absorbs the summary before it. The current request and
+steers are verbatim anchors, not independent summary segments. The latest
+tool/reasoning closure is protected. At approval or ask_user resume, the deferred
+call/result is the tail; earlier committed work remains eligible. The summarizer
+sees anchors inline but never claims their coverage.
 
 The native runtime applies each committed replacement to its own request snapshot.
 Uncovered messages retain their bytes. `turn.PlaceSummary` also governs record and
@@ -53,12 +54,13 @@ legacy artifacts without exact coverage fail explicitly. Owner fencing, claim
 reclamation and cancellation remain authoritative. Failed passes publish nothing;
 successful earlier passes and tool effects stay committed.
 
-The next complete request determines when the event stops. Summary bounds include
-rendering and envelope costs, and insufficient room fails before a summarizer
-call. Armed runs fail visibly instead of using step reselection or result stubs.
-Successful events log `context compacted`; the run result records failures, and
+The caller checks the complete next request once, after the event; one that still
+does not fit fails instead of compacting again. Summary bounds include rendering
+and envelope costs, and insufficient room fails before a summarizer call. Armed
+runs fail visibly instead of using step reselection or result stubs. Successful
+events log `context compacted`; the run result records failures, and
 `MutationContextSwitch` records the structured reason. The Compaction Logs page
-shows committed attempts. Automated UI verification and Human QA are separate.
+shows committed attempts.
 
 ## External runtime notices
 

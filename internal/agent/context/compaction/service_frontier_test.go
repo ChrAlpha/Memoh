@@ -99,7 +99,7 @@ func TestCompactDoesNotAbsorbUnrenderedSummary(t *testing.T) {
 			Coverage:  testCoverageJSON(t, "hidden-row"),
 		}},
 	}
-	passes, err := newMachineryService(q).Compact(context.Background(), cfg, func(context.Context, Pass) (bool, error) { return true, nil })
+	passes, err := newMachineryService(q).Compact(context.Background(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestCompactLegacySummaryDoesNotReadUnboundedRawRows(t *testing.T) {
 		priorLogs:    []sqlc.BotHistoryMessageCompact{{ID: parentID, BotID: pgtype.UUID{Bytes: uuid.MustParse(cfg.BotID), Valid: true}, SessionID: pgtype.UUID{Bytes: uuid.MustParse(cfg.SessionID), Valid: true}, Status: "ok", Summary: "legacy summary", Coverage: []byte("[]")}},
 		absorbedRows: map[pgtype.UUID][]sqlc.ListMessagesByCompactIDRow{parentID: {sqlc.ListMessagesByCompactIDRow(old)}},
 	}}
-	passes, err := newMachineryService(q).Compact(context.Background(), cfg, func(context.Context, Pass) (bool, error) { return true, nil })
+	passes, err := newMachineryService(q).Compact(context.Background(), cfg)
 	readCap := compactionReadMaxBytes(cfg.SummaryWindowTokens - estimateBytesAsTokens(systemPrompt) - compactionPromptFramingTokens)
 	if q.loaded > readCap || ReasonOf(err) != ReasonInputOverflow || len(passes) != 0 || stub.calls != 0 || q.completed.Status == "ok" {
 		t.Fatalf("legacy coverage: loaded=%d cap=%d passes=%d calls=%d status=%s err=%v", q.loaded, readCap, len(passes), stub.calls, q.completed.Status, err)

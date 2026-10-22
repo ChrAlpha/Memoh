@@ -28,7 +28,7 @@ type MessageProvenance struct {
 // latest committed step, which stays with everything after it.
 // HistoryBudgetTokens is the room the request leaves for the summary and the
 // history before the tail. Fold applies a pass the event committed to the
-// request and reports the tokens it then takes and whether they fit.
+// request and reports the tokens it then takes.
 type ContextSwitch struct {
 	View                []turn.ContextMessageSource
 	Anchors             []turn.ContextMessageSource
@@ -36,7 +36,7 @@ type ContextSwitch struct {
 	HistoryBudgetTokens int
 	UsageTokens         int
 	AllowanceTokens     int
-	Fold                func(ContextFold) (int, bool)
+	Fold                func(ContextFold) int
 }
 
 // ContextFold is one pass an event committed: the summary that replaces the
@@ -152,10 +152,10 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		splice.from[i] = i
 	}
 	tokens := usage
-	sw.Fold = func(fold ContextFold) (int, bool) {
+	sw.Fold = func(fold ContextFold) int {
 		splice.apply(fold)
 		tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
-		return tokens, tokens <= allowance
+		return tokens
 	}
 	detail, err := cfg.SwitchContext(ctx, sw)
 	if err == nil {

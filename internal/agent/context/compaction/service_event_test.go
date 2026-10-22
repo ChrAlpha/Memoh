@@ -41,7 +41,7 @@ func TestCompactRejectsUnrenderedPipelineVersion(t *testing.T) {
 				cfg.View = append(cfg.View, *message.Source)
 			}
 			q := &fakeQueries{uncompacted: []sqlc.ListUncompactedMessagesBySessionRow{row}}
-			passes, err := newMachineryService(q).Compact(t.Context(), cfg, nil)
+			passes, err := newMachineryService(q).Compact(t.Context(), cfg)
 			if ReasonOf(err) != ReasonStaleSource || len(passes) != 0 || stub.calls != 0 || q.completed.Status == "ok" {
 				t.Fatalf("unseen source version committed: passes=%d calls=%d status=%s err=%v", len(passes), stub.calls, q.completed.Status, err)
 			}
@@ -59,7 +59,7 @@ func TestCompactRejectsSourceEditedAfterRendering(t *testing.T) {
 	}
 	rows[0].Content = []byte(`{"role":"user","content":[{"type":"text","text":"edited after request assembly"}]}`)
 	q := &fakeQueries{uncompacted: rows}
-	passes, err := newMachineryService(q).Compact(t.Context(), cfg, nil)
+	passes, err := newMachineryService(q).Compact(t.Context(), cfg)
 	if ReasonOf(err) != ReasonStaleSource || stub.calls != 0 || len(passes) != 0 {
 		t.Fatalf("passes=%d calls=%d err=%v, want stale_source without summarizing a different version", len(passes), stub.calls, err)
 	}
@@ -107,7 +107,7 @@ func TestCompactRetriesTheSummarizerOnceAndOnlyWhenTransient(t *testing.T) {
 			cfg := machineryConfig(transport.stub, 450)
 			cfg.HTTPClient = &http.Client{Transport: transport}
 
-			passes, err := newMachineryService(q).Compact(context.Background(), cfg, nil)
+			passes, err := newMachineryService(q).Compact(context.Background(), cfg)
 			if transport.calls != tc.calls || (len(passes) == 1) != tc.folded {
 				t.Fatalf("calls=%d passes=%d err=%v, want %d calls folded=%v", transport.calls, len(passes), err, tc.calls, tc.folded)
 			}
@@ -133,7 +133,7 @@ func TestCompactFailsWithoutRoomForAUsefulSummary(t *testing.T) {
 	protectCurrentSources(items, cfg.ProtectedSources)
 	cfg.HistoryBudgetTokens = keptReplayTokens(items, cfg.ProtectedSources) + minSummaryTokens/2
 
-	passes, err := newMachineryService(q).Compact(context.Background(), cfg, nil)
+	passes, err := newMachineryService(q).Compact(context.Background(), cfg)
 	if len(passes) != 0 || ReasonOf(err) != ReasonProtectedOverflow || stub.calls != 0 || q.created {
 		t.Fatalf("passes=%d err=%v summarizer calls=%d claimed=%v, want %s before any claim", len(passes), err, stub.calls, q.created, ReasonProtectedOverflow)
 	}
@@ -181,7 +181,7 @@ func TestCompactCommitsASummaryAtItsStatedLimit(t *testing.T) {
 		cfg := machineryConfig(stub, budget)
 		cfg.HTTPClient = &http.Client{Transport: statedLimit{stub: stub}}
 
-		passes, err := newMachineryService(q).Compact(context.Background(), cfg, nil)
+		passes, err := newMachineryService(q).Compact(context.Background(), cfg)
 		if err != nil || len(passes) != 1 {
 			t.Fatalf("budget %d: passes=%d err=%v, want the summary at its limit committed", budget, len(passes), err)
 		}
@@ -208,7 +208,7 @@ func TestCompactNamesWhyAPassFailed(t *testing.T) {
 			if tc.marked >= 0 {
 				q.markedRowCount = &tc.marked
 			}
-			passes, err := newMachineryService(q).Compact(context.Background(), machineryConfig(&tc.stub, 100000), nil)
+			passes, err := newMachineryService(q).Compact(context.Background(), machineryConfig(&tc.stub, 100000))
 			if len(passes) != 0 || ReasonOf(err) != tc.reason {
 				t.Fatalf("passes=%d err=%v, want %s", len(passes), err, tc.reason)
 			}
@@ -234,7 +234,7 @@ func TestCompactCancellationBeforeCommitPublishesNothing(t *testing.T) {
 	cfg := machineryConfig(stub, 450)
 	cfg.HTTPClient = &http.Client{Transport: cancelOnSummary{stub: stub, cancel: cancel}}
 	q := &fakeQueries{uncompacted: machineryCorpus(t)}
-	passes, err := newMachineryService(q).Compact(ctx, cfg, func(context.Context, Pass) (bool, error) { return true, nil })
+	passes, err := newMachineryService(q).Compact(ctx, cfg)
 	if !errors.Is(err, context.Canceled) || len(passes) > 0 || q.completed.Status == "ok" || len(q.rollupCalls) > 0 {
 		t.Fatalf("canceled pass published a summary: ctx=%v err=%v passes=%d completed=%q rollups=%d", ctx.Err(), err, len(passes), q.completed.Status, len(q.rollupCalls))
 	}

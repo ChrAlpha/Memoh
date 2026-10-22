@@ -132,15 +132,15 @@ func (s *Service) publishActivity(botID string) {
 	}
 }
 
-// Compact runs one compaction event for the caller's request. Each pass
-// folds the active summary and the oldest candidates into one new summary
-// and commits it; admit then measures the caller's request with that summary
-// in place and reports whether it fits. The event ends when it fits, or when
-// nothing is left to fold; a nil admit folds everything there is. It returns
-// the passes it committed: none when there was nothing to fold or the
-// session's compaction was already in flight. A failed pass ends the event
-// with an *EventError and leaves the passes before it committed.
-func (s *Service) Compact(ctx context.Context, cfg TriggerConfig, admit func(context.Context, Pass) (bool, error)) ([]Pass, error) {
+// Compact runs one compaction event for the caller's request: it folds the
+// active summary and every candidate the request does not keep raw into one
+// summary. A pass folds as much as one summarizer call can read and commits
+// it; the event passes again only while candidates are left that the call
+// could not read. It returns the passes it committed: none when there was
+// nothing to fold or the session's compaction was already in flight. A
+// failed pass ends the event with an *EventError and leaves the passes before
+// it committed.
+func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
 	run, ok := s.beginSessionCompaction(cfg.SessionID)
 	if !ok {
 		s.logger.InfoContext(ctx, "compaction: already in flight for session",
@@ -202,16 +202,6 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig, admit func(con
 				return source.Kind == "summary" && slices.Contains(pass.Absorbed, source.ID)
 			})
 			cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "summary", ID: pass.ArtifactID})
-		}
-		if admit != nil {
-			fits, err := admit(ctx, pass)
-			if err != nil {
-				compactErr = err
-				return passes, err
-			}
-			if fits {
-				return passes, nil
-			}
 		}
 		if !pass.More || len(pass.Covered) == 0 {
 			return passes, nil

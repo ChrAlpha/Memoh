@@ -87,7 +87,7 @@ func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 	passes, err := NewService(slog.Default(), queries).Compact(ctx, TriggerConfig{
 		BotID: botID, SessionID: sessionID, ModelID: "compact-model", ClientType: "openai-completions",
 		BaseURL: summarizer.URL, APIKey: "test-key", SummaryWindowTokens: 60000, HistoryBudgetTokens: 4000,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}

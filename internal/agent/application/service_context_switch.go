@@ -16,10 +16,10 @@ import (
 
 // switchContext is the compaction event an armed run asks for when the
 // request before a step does not fit: one compaction.Compact over the
-// sources the request renders, whose admission splices each committed pass
-// into the run's own request and measures it. The run's input and steers
-// stay where they are, and the latest step with everything after it stays
-// raw outside the history budget.
+// sources the request renders, whose passes it then splices into the run's
+// own request before measuring it once. The run's input and steers stay
+// where they are, and the latest step with everything after it stays raw
+// outside the history budget.
 func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, turnModelID string) func(context.Context, native.ContextSwitch) (string, error) {
 	return func(ctx context.Context, sw native.ContextSwitch) (string, error) {
 		start := time.Now()
@@ -39,18 +39,18 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 		}
 		cfg.HistoryBudgetTokens = sw.HistoryBudgetTokens
 
-		tokens, fits := sw.UsageTokens, false
-		passes, err := s.compactionService.Compact(ctx, cfg, func(_ context.Context, pass compaction.Pass) (bool, error) {
-			tokens, fits = sw.Fold(native.ContextFold{
+		passes, err := s.compactionService.Compact(ctx, cfg)
+		tokens := sw.UsageTokens
+		for _, pass := range passes {
+			tokens = sw.Fold(native.ContextFold{
 				Artifact: pass.ArtifactID,
 				Summary:  compaction.SummaryMessage(pass.Summary),
 				Covered:  pass.Covered,
 				Absorbed: pass.Absorbed,
 			})
-			return fits, nil
-		})
+		}
 		reason := compaction.ReasonOf(err)
-		if err == nil && !fits {
+		if err == nil && tokens > sw.AllowanceTokens {
 			reason = compaction.ReasonStillOver
 			err = fmt.Errorf("%s: request_tokens=%d allowance=%d", reason, tokens, sw.AllowanceTokens)
 		}

@@ -134,20 +134,15 @@ type switchRunner struct {
 	err    error
 }
 
-func (r *switchRunner) Compact(ctx context.Context, cfg compaction.TriggerConfig, admit func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
+func (r *switchRunner) Compact(_ context.Context, cfg compaction.TriggerConfig) ([]compaction.Pass, error) {
 	r.cfg = cfg
-	for i, pass := range r.passes {
-		if fits, err := admit(ctx, pass); err != nil || fits {
-			return r.passes[:i+1], err
-		}
-	}
 	return r.passes, r.err
 }
 
 // The event an armed run asks for reads the sources its request renders, not
 // a window of the session, keeps the run's input and steers in place and its
 // latest step outside the history budget, and splices every pass it commits
-// into the request until it fits. A failed event names its reason.
+// into the request, which must then fit. A failed event names its reason.
 func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 	t.Parallel()
 
@@ -164,13 +159,13 @@ func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name   string
-		fitsAt int
+		saved  int // tokens each spliced pass takes off the request
 		err    error
 		want   error
 		reason string
 	}{
-		{name: "second pass fits", fitsAt: 2},
-		{name: "never fits", reason: "still_over", want: contextfrag.ErrBudgetUnsatisfied},
+		{name: "fits", saved: 500},
+		{name: "still over", saved: 100, reason: "still_over", want: contextfrag.ErrBudgetUnsatisfied},
 		{name: "summarizer down", err: &compaction.EventError{Reason: compaction.ReasonSummarizerFailed, Err: errors.New("503")}, reason: "summarizer_failed", want: contextfrag.ErrBudgetUnsatisfied},
 		{name: "protected overflow", err: &compaction.EventError{Reason: compaction.ReasonProtectedOverflow, Err: errors.New("tail")}, reason: "protected_overflow", want: contextfrag.ErrProtectedContextOverflow},
 	} {
@@ -187,9 +182,9 @@ func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 			sw := native.ContextSwitch{
 				View: rows("old-user", "request", "call", "steer", "latest"), Anchors: rows("request", "steer"), Tail: rows("latest"),
 				HistoryBudgetTokens: 900, UsageTokens: 3000, AllowanceTokens: 2000,
-				Fold: func(fold native.ContextFold) (int, bool) {
+				Fold: func(fold native.ContextFold) int {
 					folds = append(folds, fold)
-					return 3000 - 500*len(folds), len(folds) == tc.fitsAt
+					return 3000 - tc.saved*len(folds)
 				},
 			}
 			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
@@ -204,7 +199,7 @@ func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 			if tc.want == nil {
 				if err != nil || len(folds) != 2 || folds[1].Artifact != "a2" || !reflect.DeepEqual(folds[1].Summary, compaction.SummaryMessage("second")) ||
 					!reflect.DeepEqual(folds[1].Absorbed, []string{"a1"}) || detail != "trigger=in_run passes=2 request_tokens=3000->2000 allowance=2000" {
-					t.Fatalf("err=%v folds=%+v detail=%q, want both passes spliced and the event ended where it fits", err, folds, detail)
+					t.Fatalf("err=%v folds=%+v detail=%q, want both passes spliced into a request that fits", err, folds, detail)
 				}
 				return
 			}

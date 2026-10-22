@@ -29,7 +29,7 @@ type recordingCompactionRunner struct {
 	configs []compaction.TriggerConfig
 }
 
-func (r *recordingCompactionRunner) Compact(_ context.Context, cfg compaction.TriggerConfig, _ func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
+func (r *recordingCompactionRunner) Compact(_ context.Context, cfg compaction.TriggerConfig) ([]compaction.Pass, error) {
 	r.configs = append(r.configs, cfg)
 	return []compaction.Pass{{}}, nil
 }

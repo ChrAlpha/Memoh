@@ -51,38 +51,13 @@ func (s *recoveryHistoryService) ListActiveSinceBySessionWithinBytes(_ context.C
 }
 
 type recoveryCompactionRunner struct {
-	configs  []compaction.TriggerConfig
-	run      func() ([]compaction.Pass, error)
-	admitted int
+	configs []compaction.TriggerConfig
+	run     func() ([]compaction.Pass, error)
 }
 
-func (r *recoveryCompactionRunner) Compact(ctx context.Context, cfg compaction.TriggerConfig, admit func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
+func (r *recoveryCompactionRunner) Compact(_ context.Context, cfg compaction.TriggerConfig) ([]compaction.Pass, error) {
 	r.configs = append(r.configs, cfg)
-	passes, err := r.run()
-	if err == nil && admit != nil {
-		for i, pass := range passes {
-			r.admitted++
-			if fits, err := admit(ctx, pass); fits || err != nil {
-				return passes[:i+1], err
-			}
-		}
-	}
-	return passes, err
-}
-
-func TestChatBudgetRecoveryAdmitsAfterFirstSufficientPass(t *testing.T) {
-	_, _, runner, cfg := chatRecoveryFixture(t)
-	run := runner.run
-	runner.run = func() ([]compaction.Pass, error) {
-		passes, err := run()
-		return append(passes, compaction.Pass{}), err
-	}
-	if _, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	if runner.admitted != 1 {
-		t.Fatalf("admission checks=%d, want to stop after the first fitting pass", runner.admitted)
-	}
+	return r.run()
 }
 
 func chatRecoveryFixture(t *testing.T) (*Service, *recoveryHistoryService, *recoveryCompactionRunner, native.RunConfig) {
@@ -207,7 +182,7 @@ func TestChatBudgetRecoveryPreservesMaterializedCurrentMedia(t *testing.T) {
 	cfg.ForkContextSourceMessageIDs = make([]string, len(cfg.Messages))
 	cfg.ForkContextSourceMessageIDs[0] = "inherited-source"
 	cfg = s.prepareRunConfig(t.Context(), cfg)
-	cfg.ContextManifest.BudgetPlan = &contextfrag.ContextBudgetPlan{Window: 16000, HistoryBudget: 2000}
+	cfg.ContextManifest.BudgetPlan = &contextfrag.ContextBudgetPlan{HistoryBudget: 2000}
 	current := cfg.Messages[*cfg.ContextCurrentUserMessageIndex]
 	got, recovered, err := cfg.RecoverContextBudget(t.Context(), cfg)
 	if err != nil || !recovered {
@@ -313,7 +288,7 @@ type delayedRecoveryCompactor struct {
 	history *recoveryHistoryService
 }
 
-func (c *delayedRecoveryCompactor) Compact(ctx context.Context, _ compaction.TriggerConfig, admit func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
+func (c *delayedRecoveryCompactor) Compact(ctx context.Context, _ compaction.TriggerConfig) ([]compaction.Pass, error) {
 	c.calls.Add(1)
 	select {
 	case <-time.After(c.delay):
@@ -321,11 +296,6 @@ func (c *delayedRecoveryCompactor) Compact(ctx context.Context, _ compaction.Tri
 		return nil, context.Cause(ctx)
 	}
 	c.history.messages = []messagepkg.Message{{ID: "history-new", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, Role: "assistant", Content: newTextContent("compacted history")}}
-	if admit != nil {
-		if _, err := admit(ctx, compaction.Pass{}); err != nil {
-			return nil, err
-		}
-	}
 	return []compaction.Pass{{}}, nil
 }
 

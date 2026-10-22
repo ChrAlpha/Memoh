@@ -160,7 +160,7 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		ProtectedSources:    []turn.ContextMessageSource{{Kind: "history", ID: uuid.UUID(rows[4].ID.Bytes).String(), Current: true}},
 		SummaryWindowTokens: 128000,
 		HistoryBudgetTokens: 1000,
-	}, nil)
+	})
 	if err != nil || len(passes) != 1 || passes[0].More {
 		t.Fatalf("passes = %+v err = %v, want one pass that stops at the island", passes, err)
 	}

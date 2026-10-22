@@ -651,10 +651,11 @@ func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 
 // A tool loop that outgrows the model window keeps going on one rolling
 // summary in every entry of the coverage set: each effect runs once, each
-// event's first pass fits, requests between events only grow, the input and
-// the latest results stay verbatim, a row written into the session by someone
-// else is left alone, and the next turn renders the summary the run sent at
-// the same place without compacting again. When the summarizer is down the
+// event folds everything before the latest step in one summarizer call,
+// requests between events only grow, the input and the latest results stay
+// verbatim, a row written into the session by someone else is left alone,
+// and the next turn renders the summary the run sent at the same place
+// without compacting again. When the summarizer is down the
 // loop ends visibly with budget_unsatisfied after one retry, keeps the steps
 // it committed, and the next turn is answered once the summarizer is back.
 // The entries outside the set never fold: they end bounded, without
@@ -707,6 +708,9 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 			t.Fatalf("request %d is not request %d with the step between them appended", i+1, i)
 		}
 		if kept > first {
+			if kept != i {
+				t.Fatalf("request %d keeps results from %d raw, want an event to fold everything before the latest step", i+1, kept)
+			}
 			events++
 		}
 		first, previous = kept, messages

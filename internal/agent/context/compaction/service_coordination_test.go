@@ -16,14 +16,13 @@ func TestRunCompactionSyncReportsNoopWhileSessionIsBusy(t *testing.T) {
 	if _, ok := svc.beginSessionCompaction(cfg.SessionID); !ok {
 		t.Fatal("first acquisition must succeed")
 	}
-	res, err := svc.compactOnce(context.Background(), cfg)
-	if err != nil || res.Status != passNoop || stub.calls != 0 || len(q.markedIDs) != 0 {
-		t.Fatalf("busy session must noop without running: res=%#v err=%v calls=%d marked=%d", res, err, stub.calls, len(q.markedIDs))
+	passes, err := svc.Compact(context.Background(), cfg)
+	if err != nil || len(passes) != 0 || stub.calls != 0 || len(q.markedIDs) != 0 {
+		t.Fatalf("busy session must noop without running: passes=%d err=%v calls=%d marked=%d", len(passes), err, stub.calls, len(q.markedIDs))
 	}
 
 	svc.endSessionCompaction(cfg.SessionID)
-	res, err = svc.compactOnce(context.Background(), cfg)
-	if err != nil || res.Status != passOK {
-		t.Fatalf("session must be usable after the owner completes: res=%#v err=%v", res, err)
+	if passes, err = svc.Compact(context.Background(), cfg); err != nil || len(passes) == 0 {
+		t.Fatalf("session must be usable after the owner completes: passes=%d err=%v", len(passes), err)
 	}
 }

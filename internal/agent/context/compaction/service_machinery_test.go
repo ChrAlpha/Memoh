@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
@@ -335,13 +336,12 @@ type passResult struct {
 	MessageCount int
 }
 
-// compactOnce runs an event whose admission accepts the first pass.
+// compactOnce runs one pass of an event on its own.
 func (s *Service) compactOnce(ctx context.Context, cfg TriggerConfig) (passResult, error) {
-	passes, err := s.Compact(ctx, cfg, func(context.Context, Pass) (bool, error) { return true, nil })
-	if err != nil || len(passes) == 0 {
+	pass, folded, err := s.doCompaction(ctx, db.ParseUUIDOrEmpty(cfg.BotID), db.ParseUUIDOrEmpty(cfg.SessionID), cfg)
+	if err != nil || !folded {
 		return passResult{Status: passNoop}, err
 	}
-	pass := passes[0]
 	result := passResult{Status: passOK, Summary: pass.Summary}
 	if pass.More {
 		result.Status = passProgress

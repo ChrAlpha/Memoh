@@ -117,8 +117,8 @@ func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
 	var seen ContextSwitch
 	cfg, failure := armedRun(t, messages, provenance, []int{2, 3, 5, 8, 9, 10}, func(_ context.Context, sw ContextSwitch) (string, error) {
 		seen = sw
-		if _, fits := sw.Fold(ContextFold{Artifact: "A1", Summary: summary, Covered: rowSources("h1", "h2", "c1", "r1"), Absorbed: []string{"A0"}}); !fits {
-			t.Error("the spliced request does not fit")
+		if tokens := sw.Fold(ContextFold{Artifact: "A1", Summary: summary, Covered: rowSources("h1", "h2", "c1", "r1"), Absorbed: []string{"A0"}}); tokens > sw.AllowanceTokens {
+			t.Errorf("the spliced request takes %d tokens, over its %d allowance", tokens, sw.AllowanceTokens)
 		}
 		return "trigger=in_run passes=1", nil
 	})

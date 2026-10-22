@@ -10,7 +10,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -57,41 +56,26 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		budget -= anchoredTokens(cfg.ContextProvenance, req.compactionAnchors())
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
-		recovered, fits := cfg, false
-		admit := func(ctx context.Context, _ compaction.Pass) (bool, error) {
-			var messages []ModelMessage
-			var records []historyfrag.HistoryRecord
-			var pressure int
-			if layout.usePipeline {
-				var err error
-				if messages, pressure, _, err = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens); err != nil {
-					return false, err
-				}
-			} else {
-				prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
-				if err != nil {
-					return false, err
-				}
-				messages, records, pressure = prepared.messages, prepared.records, prepared.pressureTokens
-			}
+		if err := s.compactForBudget(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); err != nil {
+			return cfg, false, fmt.Errorf("%w: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
+		}
+		var messages []ModelMessage
+		var records []historyfrag.HistoryRecord
+		if layout.usePipeline {
 			var err error
-			recovered, err = layout.replaceHistory(ctx, cfg, req, messages, records)
-			if err != nil {
-				return false, err
+			if messages, _, _, err = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens); err != nil {
+				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
 			}
-			nextLayout := layout
-			nextLayout.historyCount, nextLayout.pressureTokens = recovered.ContextTrimmableMessages, pressure
-			remaining, _ := nextLayout.availableHistoryBudget(recovered)
-			plan := recovered.ContextManifest.BudgetPlan
-			tokens := contextfrag.ProviderEnvelopeTokens(recovered.System, recovered.Messages, nil) + plan.ToolDefsCost
-			fits = remaining == 0 && tokens <= plan.Window-plan.OutputReserve
-			return fits, nil
+		} else {
+			prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
+			if err != nil {
+				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
+			}
+			messages, records = prepared.messages, prepared.records
 		}
-		if err := s.compactForBudgetWithAdmission(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID, admit); err != nil {
-			return cfg, false, fmt.Errorf("%w: %w", contextfrag.ErrBudgetUnsatisfied, err)
-		}
-		if !fits {
-			return cfg, false, fmt.Errorf("%w: compacted request is still over budget", contextfrag.ErrBudgetUnsatisfied)
+		recovered, err := layout.replaceHistory(ctx, cfg, req, messages, records)
+		if err != nil {
+			return cfg, false, err
 		}
 		if reflect.DeepEqual(recovered.Messages, cfg.Messages) {
 			return cfg, false, fmt.Errorf("%w: compaction left the history unchanged", contextfrag.ErrBudgetUnsatisfied)

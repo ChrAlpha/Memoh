@@ -229,16 +229,15 @@ func TestRunCompactionPanicReleasesSlot(t *testing.T) {
 	recovered := make(chan any, 1)
 	go func() {
 		defer func() { recovered <- recover() }()
-		_, _ = svc.compactOnce(context.Background(), cfg)
+		_, _ = svc.Compact(context.Background(), cfg)
 	}()
 	if r := <-recovered; r == nil {
 		t.Fatal("the panic must propagate, not be swallowed")
 	}
 
 	q.listPanic = false
-	res, err := svc.compactOnce(context.Background(), cfg)
-	if err != nil || res.Status != passOK {
-		t.Fatalf("the slot must be released after a panic: res=%#v err=%v", res, err)
+	if passes, err := svc.Compact(context.Background(), cfg); err != nil || len(passes) == 0 {
+		t.Fatalf("the slot must be released after a panic: passes=%d err=%v", len(passes), err)
 	}
 }
 
@@ -269,7 +268,7 @@ func TestPreHookPanicReleasesSlot(t *testing.T) {
 	recovered := make(chan any, 1)
 	go func() {
 		defer func() { recovered <- recover() }()
-		_, _ = svc.compactOnce(context.Background(), cfg)
+		_, _ = svc.Compact(context.Background(), cfg)
 	}()
 	if r := <-recovered; r == nil {
 		t.Fatal("a pre-hook panic must propagate, not be swallowed")
@@ -277,7 +276,7 @@ func TestPreHookPanicReleasesSlot(t *testing.T) {
 
 	provider.armed.Store(false)
 	before := provider.calls.Load()
-	if _, err := svc.compactOnce(context.Background(), cfg); err == nil {
+	if _, err := svc.Compact(context.Background(), cfg); err == nil {
 		t.Fatal("the next run must reach the failing pre-hook, proving the slot was released")
 	}
 	if provider.calls.Load() == before || stub.calls != 0 {
@@ -304,12 +303,12 @@ func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 	cfg := machineryConfig(stub, 450)
 
 	recovered := make(chan any, 1)
-	results := make(chan passResult, 1)
+	results := make(chan []Pass, 1)
 	errs := make(chan error, 1)
 	go func() {
 		defer func() { recovered <- recover() }()
-		res, err := svc.compactOnce(context.Background(), cfg)
-		results <- res
+		passes, err := svc.Compact(context.Background(), cfg)
+		results <- passes
 		errs <- err
 	}()
 	if r := <-recovered; r != nil {
@@ -318,8 +317,8 @@ func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 	if err := <-errs; err != nil {
 		t.Fatalf("a post-hook panic must not fail the completed compaction: %v", err)
 	}
-	if res := <-results; res.Status != passOK || res.Summary != "SUMMARY-OK" {
-		t.Fatalf("completed compaction result lost to a post-hook panic: %#v", res)
+	if passes := <-results; len(passes) != 1 || passes[0].Summary != "SUMMARY-OK" {
+		t.Fatalf("completed compaction result lost to a post-hook panic: %#v", passes)
 	}
 	if provider.calls.Load() == 0 {
 		t.Fatal("the post-hook must actually have run (and panicked)")
@@ -327,7 +326,7 @@ func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 
 	q.onComplete = nil
 	svc.SetHookService(nil)
-	if res, err := svc.compactOnce(context.Background(), cfg); err != nil || res.Status != passOK {
-		t.Fatalf("a contained post-hook panic must leave the session usable: res=%#v err=%v", res, err)
+	if passes, err := svc.Compact(context.Background(), cfg); err != nil || len(passes) == 0 {
+		t.Fatalf("a contained post-hook panic must leave the session usable: passes=%d err=%v", len(passes), err)
 	}
 }

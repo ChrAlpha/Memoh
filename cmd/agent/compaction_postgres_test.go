@@ -25,13 +25,13 @@ import (
 
 // fold runs one compaction event over the fixture's session, by default for
 // a request with a 100000-token history budget.
-func (f *backlogFixture) fold(ctx context.Context, cfg compaction.TriggerConfig, admit func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
+func (f *backlogFixture) fold(ctx context.Context, cfg compaction.TriggerConfig) ([]compaction.Pass, error) {
 	cfg.BotID, cfg.SessionID = f.botID, f.sessionID
 	cfg.ModelID, cfg.ClientType, cfg.APIKey, cfg.BaseURL = "compact-model", "openai-completions", "test-key", f.providerURL
 	cfg.SummaryWindowTokens = cmp.Or(cfg.SummaryWindowTokens, 128000)
 	cfg.HistoryBudgetTokens = cmp.Or(cfg.HistoryBudgetTokens, 100000)
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
-	return compaction.NewService(slog.Default(), queries).Compact(ctx, cfg, admit)
+	return compaction.NewService(slog.Default(), queries).Compact(ctx, cfg)
 }
 
 // foldedRows lists the history rows passes folded.
@@ -70,7 +70,7 @@ func TestPostgresCompactionFoldsALegacySummaryIntoOne(t *testing.T) {
 	}
 	f.appendBacklog(4, 400)
 
-	passes, err := f.fold(f.ctx, compaction.TriggerConfig{}, nil)
+	passes, err := f.fold(f.ctx, compaction.TriggerConfig{})
 	if err != nil || len(passes) != 1 {
 		t.Fatalf("passes=%+v err=%v", passes, err)
 	}
@@ -111,7 +111,7 @@ func TestPostgresCompactionLeavesRowsOutsideTheViewRaw(t *testing.T) {
 		f.appendMessage(fmt.Sprintf("after-%d", i), fmt.Sprintf("after-%d ", i)+strings.Repeat("z", 400))
 	}
 
-	if passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesFrom: f.base, CandidatesBefore: cutoff}, nil); err != nil || len(passes) != 1 {
+	if passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesFrom: f.base, CandidatesBefore: cutoff}); err != nil || len(passes) != 1 {
 		t.Fatalf("passes=%+v err=%v", passes, err)
 	}
 	if raw, compacted := f.backlogRows(); raw != 3 || compacted != 0 {
@@ -125,44 +125,32 @@ func TestPostgresCompactionLeavesRowsOutsideTheViewRaw(t *testing.T) {
 	}
 }
 
-// An event ends at the first pass after which the request fits, though more
-// is left to fold; while it does not fit, each further pass folds the summary
-// before it with the next rows, so the session keeps one active summary.
-func TestPostgresCompactionEventEndsAtTheFirstPassThatFits(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		fitsAt int
-	}{{"first pass fits", 1}, {"second pass fits", 2}, {"never fits", 0}} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newBacklogFixture(t)
-			f.appendBacklog(6, 1600)
-			admit := func(context.Context, compaction.Pass) (bool, error) {
-				return int(f.summaries.Load()) == tc.fitsAt, nil
-			}
-			passes, err := f.fold(f.ctx, compaction.TriggerConfig{SummaryWindowTokens: 2400}, admit)
-			if err != nil || len(passes) < 2 {
-				if tc.fitsAt != 1 || err != nil || len(passes) != 1 || !passes[0].More {
-					t.Fatalf("passes=%+v err=%v", passes, err)
-				}
-			}
-			if tc.fitsAt > 0 && len(passes) != tc.fitsAt || int(f.summaries.Load()) != len(passes) {
-				t.Fatalf("passes=%d summarizer calls=%d, want %d of each", len(passes), f.summaries.Load(), tc.fitsAt)
-			}
-			for i := 1; i < len(passes); i++ {
-				if !slices.Equal(passes[i].Absorbed, []string{passes[i-1].ArtifactID}) {
-					t.Fatalf("pass %d absorbed %v, want the summary of pass %d", i, passes[i].Absorbed, i-1)
-				}
-			}
-			queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
-			frontier, err := compaction.NewArtifactProjection(queries).LoadActiveSession(f.ctx, compaction.ArtifactOwner{BotID: f.botID, SessionID: f.sessionID, SessionIDKnown: true})
-			if err != nil || len(frontier.Artifacts) != 1 || frontier.Artifacts[0].ID != passes[len(passes)-1].ArtifactID {
-				t.Fatalf("frontier=%+v err=%v, want the last pass as the one active summary", frontier.Artifacts, err)
-			}
-			raw, compacted := f.backlogRows()
-			if compacted != len(foldedRows(passes...)) || (tc.fitsAt == 0) != (raw == 0) {
-				t.Fatalf("backlog raw=%d compacted=%d after %d passes", raw, compacted, len(passes))
-			}
-		})
+// An event folds the whole backlog. A pass folds what one summarizer call can
+// read, and the event passes again only for what that call could not: each
+// further pass folds the summary before it with the next rows, so the event
+// leaves one active summary and nothing raw.
+func TestPostgresCompactionEventFoldsTheWholeBacklog(t *testing.T) {
+	f := newBacklogFixture(t)
+	f.appendBacklog(6, 1600)
+	passes, err := f.fold(f.ctx, compaction.TriggerConfig{SummaryWindowTokens: 2400})
+	if err != nil || len(passes) < 2 || int(f.summaries.Load()) != len(passes) {
+		t.Fatalf("passes=%d summarizer calls=%d err=%v, want one call per pass and a backlog one call cannot read", len(passes), f.summaries.Load(), err)
+	}
+	for i, pass := range passes {
+		if pass.More != (i < len(passes)-1) {
+			t.Fatalf("pass %d More=%t, want only the last pass to leave nothing to read", i, pass.More)
+		}
+		if i > 0 && !slices.Equal(pass.Absorbed, []string{passes[i-1].ArtifactID}) {
+			t.Fatalf("pass %d absorbed %v, want the summary of pass %d", i, pass.Absorbed, i-1)
+		}
+	}
+	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
+	frontier, err := compaction.NewArtifactProjection(queries).LoadActiveSession(f.ctx, compaction.ArtifactOwner{BotID: f.botID, SessionID: f.sessionID, SessionIDKnown: true})
+	if err != nil || len(frontier.Artifacts) != 1 || frontier.Artifacts[0].ID != passes[len(passes)-1].ArtifactID {
+		t.Fatalf("frontier=%+v err=%v, want the last pass as the one active summary", frontier.Artifacts, err)
+	}
+	if raw, compacted := f.backlogRows(); raw != 0 || compacted != len(foldedRows(passes...)) {
+		t.Fatalf("backlog raw=%d compacted=%d after %d passes, want all of it folded", raw, compacted, len(passes))
 	}
 }
 
@@ -202,7 +190,7 @@ func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
 		Anchors:          []turn.ContextMessageSource{history("input")},
 		ProtectedSources: []turn.ContextMessageSource{history("tail")},
 	}
-	passes, err := f.fold(f.ctx, cfg, nil)
+	passes, err := f.fold(f.ctx, cfg)
 	if err != nil || len(passes) != 1 {
 		t.Fatalf("passes=%+v err=%v", passes, err)
 	}
@@ -254,7 +242,7 @@ func TestPostgresCompactionCommitsOnlyWhatItsOwnerClaimed(t *testing.T) {
 				claimBacklog(t, f, queries)
 			}
 			if interruption != "owner crashed after claim" {
-				passes, err := f.fold(f.owner(1), compaction.TriggerConfig{}, nil)
+				passes, err := f.fold(f.owner(1), compaction.TriggerConfig{})
 				if len(passes) != 0 || compaction.ReasonOf(err) != compaction.ReasonStaleSource {
 					t.Fatalf("interrupted event passes=%d err=%v, want %s", len(passes), err, compaction.ReasonStaleSource)
 				}
@@ -266,7 +254,7 @@ func TestPostgresCompactionCommitsOnlyWhatItsOwnerClaimed(t *testing.T) {
 			if interruption != "owner replaced" {
 				f.activate(t, queries, 2)
 			}
-			if passes, err := f.fold(f.owner(2), compaction.TriggerConfig{}, nil); err != nil || len(passes) != 1 {
+			if passes, err := f.fold(f.owner(2), compaction.TriggerConfig{}); err != nil || len(passes) != 1 {
 				t.Fatalf("next event passes=%+v err=%v", passes, err)
 			}
 			if raw, compacted := f.backlogRows(); raw != 0 || compacted != 4 {

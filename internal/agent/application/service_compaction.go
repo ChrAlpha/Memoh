@@ -19,14 +19,9 @@ import (
 
 // compactForBudget folds the session history before the protected tail into
 // one summary that fits historyBudget, in as many passes as the summarizer
-// needs to read it all: the request is rebuilt from history afterwards, so
-// the event folds all there is. It reports why when the history could not be
-// folded; a failed pass leaves the history it did not commit as it was.
+// needs to read it all. It reports why when the history could not be folded;
+// a failed pass leaves the history it did not commit as it was.
 func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) error {
-	return s.compactForBudgetWithAdmission(ctx, req, inputTokens, historyBudget, turnModelID, nil)
-}
-
-func (s *Service) compactForBudgetWithAdmission(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string, admit func(context.Context, compaction.Pass) (bool, error)) error {
 	if s.compactionService == nil || s.settingsService == nil {
 		return errors.New("compaction service unavailable")
 	}
@@ -59,7 +54,7 @@ func (s *Service) compactForBudgetWithAdmission(ctx context.Context, req ChatReq
 	cfg.HistoryBudgetTokens = historyBudget
 
 	start := time.Now()
-	passes, err := s.compactionService.Compact(ctx, cfg, admit)
+	passes, err := s.compactionService.Compact(ctx, cfg)
 	if err != nil {
 		s.logger.WarnContext(ctx, "compaction failed",
 			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
