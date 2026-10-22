@@ -31,7 +31,6 @@ type nativeExecutor struct {
 
 	// Written by execute, read by commit after execute returned.
 	terminal    *native.StreamEvent
-	toolCalls   int
 	uncommitted persist.UncommittedStepText
 	// text and usage are the run's result as the terminal event reports it,
 	// kept apart from the history write so a scheduled fire reads them
@@ -48,9 +47,6 @@ type nativeExecutor struct {
 // write has succeeded.
 func (e *nativeExecutor) Execute(ctx context.Context, emit func(native.StreamEvent)) drive.ExecEnding {
 	for ev := range e.agent.Stream(ctx, e.cfg) {
-		if ev.Type == native.EventToolCallStart {
-			e.toolCalls++
-		}
 		e.uncommitted.Observe(ev)
 		if ev.IsTerminal() {
 			terminal := ev
