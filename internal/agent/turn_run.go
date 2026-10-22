@@ -250,3 +250,9 @@ func (t *turnRun) closeInject() {
 // errRunAlreadyFinished is what a steer gets once the run it names has stopped
 // executing. It reads as the port's own vocabulary rather than as the driver's.
 var errRunAlreadyFinished = errors.New("turn: run already finished")
+
+// DrainActiveTurns runs after transports cancel their requests and before the
+// PostgreSQL pool closes. It is bounded by the caller's shutdown context.
+func (s *Service) DrainActiveTurns(ctx context.Context) error {
+	return s.activeTurns.Drain(ctx)
+}
