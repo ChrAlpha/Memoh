@@ -158,42 +158,174 @@ func TestChatStorageDomainsDoNotDependOnUpperLayers(t *testing.T) {
 // the parent alone must compare the path exactly, never with isPackageOrChild.
 const agentParent = "internal/agent"
 
-// applicationLayerDirs are the packages that make up turn orchestration besides
-// the parent package: the components split out of it. Rules that bind
-// orchestration, or keep lower layers from reaching it, cover the parent
-// (applicationLayerFiles, isApplicationLayer) and all of them.
-var applicationLayerDirs = []string{
-	"internal/agent/runreq",
-	"internal/agent/outcome",
-	"internal/agent/activeprompt",
-	"internal/agent/botenv",
-	"internal/agent/transcript",
-	"internal/agent/lifecycle",
-	"internal/agent/notify",
-	"internal/agent/persist",
-	"internal/agent/drive",
-	"internal/agent/drivetest",
-	"internal/agent/memory",
-	"internal/agent/compact",
-	"internal/agent/decide",
-	"internal/agent/admit",
-	"internal/agent/runconfig",
-	"internal/agent/subagent",
-	"internal/agent/externalrun",
-	"internal/agent/plan",
-	"internal/agent/pending",
-	"internal/agent/answer",
-	"internal/agent/resume",
-	"internal/agent/schedule",
-	"internal/agent/web",
-	"internal/agent/title",
-	"internal/agent/agenttest",
+// agentGroup is the role of a directory under internal/agent. Every directory
+// with Go files belongs to exactly one group, and the groups bound each other's
+// imports (see the rules below TestAgentDirectoriesAreClassified).
+type agentGroup string
+
+const (
+	// groupFacade is the parent package itself: the Service facade.
+	groupFacade agentGroup = "facade"
+	// groupOrchestration is the packages of agentLayers.
+	groupOrchestration agentGroup = "orchestration"
+	// groupTestSupport is the doubles and fixtures that only tests import.
+	groupTestSupport agentGroup = "test support"
+	// groupAdapter is the assembly adapters that cmd wires to other domains.
+	groupAdapter agentGroup = "assembly adapter"
+	// groupFoundation is the packages the orchestration is built on.
+	groupFoundation agentGroup = "foundation"
+)
+
+// testSupportLayers declares how high each test-support package may reach. A
+// test-support package imports orchestration packages of a layer up to its own
+// number, and test-support packages of an equal or lower number, so a fixture
+// cannot grow into something that needs the components it is meant to test.
+// agenttest is the shared doubles for the lowest components (runreq is layer 0,
+// botenv layer 1); drivetest builds the driver's executor and delivery doubles,
+// and drive is layer 4.
+var testSupportLayers = map[string]int{
+	"agenttest": 1,
+	"drivetest": 4,
 }
 
-// applicationLayerFiles lists the Go files of the parent package itself and of
-// every package in applicationLayerDirs. The parent's own files are only those
-// directly in internal/agent.
-func applicationLayerFiles(t *testing.T, root string) []string {
+// adapterRoot holds the assembly adapters; the directory has no Go files of its
+// own, so every adapter is a child of it.
+const adapterRoot = "adapter"
+
+// foundationSubtrees are the foundation packages that are whole subtrees: the
+// directory and everything under it. A new directory below one of them is
+// foundation without a table change.
+var foundationSubtrees = []string{
+	"runtime",
+	"tool",
+	"context",
+	"decision",
+	"event",
+	"turn",
+}
+
+// foundationPackages are the single-directory foundation packages. They are
+// listed by exact name so a new top-level directory is not swept in silently.
+var foundationPackages = []string{
+	"view",
+	"step",
+	"partmeta",
+	"sessionmode",
+	"toolexec",
+	"background",
+}
+
+// agentGroups returns the groups the directory rel (relative to internal/agent,
+// "" for the parent) belongs to. A classified directory yields one group.
+func agentGroups(rel string) []agentGroup {
+	var groups []agentGroup
+	if rel == "" {
+		groups = append(groups, groupFacade)
+	}
+	if _, ok := agentLayers[rel]; ok {
+		groups = append(groups, groupOrchestration)
+	}
+	if _, ok := testSupportLayers[rel]; ok {
+		groups = append(groups, groupTestSupport)
+	}
+	if strings.HasPrefix(rel, adapterRoot+"/") {
+		groups = append(groups, groupAdapter)
+	}
+	if slices.Contains(foundationPackages, rel) ||
+		slices.ContainsFunc(foundationSubtrees, func(prefix string) bool { return rel == prefix || strings.HasPrefix(rel, prefix+"/") }) {
+		groups = append(groups, groupFoundation)
+	}
+	return groups
+}
+
+// agentDirs lists the directories under internal/agent that contain Go files
+// (tests included, so a test-only directory counts), relative to it, "" for the
+// parent. testdata, hidden and underscore directories are skipped: the go tool
+// ignores them, and they hold fixtures rather than packages.
+func agentDirs(t *testing.T, root string) []string {
+	t.Helper()
+	var dirs []string
+	base := filepath.Join(root, agentParent)
+	err := filepath.WalkDir(base, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if path != base && (name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_")) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		rel, err := filepath.Rel(base, filepath.Dir(path))
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			rel = ""
+		}
+		if !slices.Contains(dirs, rel) {
+			dirs = append(dirs, rel)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", agentParent, err)
+	}
+	slices.Sort(dirs)
+	return dirs
+}
+
+// importGroup classifies an import path inside internal/agent. ok is false for
+// paths outside it and for directories no group claims (the completeness test
+// reports those).
+func importGroup(imp string) (agentGroup, bool) {
+	rel := ""
+	switch {
+	case imp == modulePrefix+agentParent:
+	case strings.HasPrefix(imp, modulePrefix+agentParent+"/"):
+		rel = strings.TrimPrefix(imp, modulePrefix+agentParent+"/")
+	default:
+		return "", false
+	}
+	return onlyGroup(rel)
+}
+
+// onlyGroup returns the group of dir if it belongs to exactly one.
+func onlyGroup(dir string) (agentGroup, bool) {
+	groups := agentGroups(dir)
+	if len(groups) != 1 {
+		return "", false
+	}
+	return groups[0], true
+}
+
+// orchestrationDirs are the agentLayers packages as repo-relative directories.
+func orchestrationDirs() []string {
+	dirs := make([]string, 0, len(agentLayers))
+	for name := range agentLayers {
+		dirs = append(dirs, agentParent+"/"+name)
+	}
+	slices.Sort(dirs)
+	return dirs
+}
+
+// testSupportDirs are the test-support packages as repo-relative directories.
+func testSupportDirs() []string {
+	dirs := make([]string, 0, len(testSupportLayers))
+	for name := range testSupportLayers {
+		dirs = append(dirs, agentParent+"/"+name)
+	}
+	slices.Sort(dirs)
+	return dirs
+}
+
+// parentFiles lists the Go files directly in internal/agent.
+func parentFiles(t *testing.T, root string) []string {
 	t.Helper()
 	entries, err := os.ReadDir(filepath.Join(root, agentParent))
 	if err != nil {
@@ -205,50 +337,250 @@ func applicationLayerFiles(t *testing.T, root string) []string {
 			files = append(files, agentParent+"/"+entry.Name())
 		}
 	}
-	for _, dir := range applicationLayerDirs {
-		files = append(files, allGoFiles(t, root, dir)...)
-	}
 	return files
 }
 
-// isApplicationLayer reports whether imp is the parent package or one of
-// applicationLayerDirs.
-func isApplicationLayer(imp string) bool {
-	if imp == modulePrefix+agentParent {
-		return true
+// orchestrationFiles lists the Go files of the parent package itself and of
+// every orchestration package, tests included.
+func orchestrationFiles(t *testing.T, root string) []string {
+	t.Helper()
+	files := parentFiles(t, root)
+	for _, dir := range orchestrationDirs() {
+		files = append(files, allGoFiles(t, root, dir)...)
 	}
-	for _, dir := range applicationLayerDirs {
-		if isPackageOrChild(imp, modulePrefix+dir) {
-			return true
-		}
-	}
-	return false
+	requireFiles(t, "orchestration packages", files)
+	return files
 }
 
-// TestApplicationDoesNotDependOnChannel keeps use-case orchestration on
-// neutral Agent/Chat ports. Platform identity and conversation vocabulary
-// must enter through adapters at the composition root.
-func TestApplicationDoesNotDependOnChannel(t *testing.T) {
+// testSupportFiles lists the Go files of the test-support packages.
+func testSupportFiles(t *testing.T, root string) []string {
+	t.Helper()
+	var files []string
+	for _, dir := range testSupportDirs() {
+		files = append(files, allGoFiles(t, root, dir)...)
+	}
+	requireFiles(t, "test support packages", files)
+	return files
+}
+
+// requireFiles fails a rule that found nothing to check. A rule whose target
+// directory was renamed or emptied would otherwise pass without checking
+// anything.
+func requireFiles(t *testing.T, target string, files []string) {
+	t.Helper()
+	if len(files) == 0 {
+		t.Errorf("rule matched no Go files under %s: the target moved or the rule is stale", target)
+	}
+}
+
+// isOrchestrationLayer reports whether imp is the parent package or one of the
+// agentLayers packages.
+func isOrchestrationLayer(imp string) bool {
+	group, ok := importGroup(imp)
+	return ok && (group == groupFacade || group == groupOrchestration)
+}
+
+// isAboveFoundation reports whether imp is something the foundation packages
+// must not reach: orchestration, or the test support built on top of it.
+func isAboveFoundation(imp string) bool {
+	if isOrchestrationLayer(imp) {
+		return true
+	}
+	group, ok := importGroup(imp)
+	return ok && group == groupTestSupport
+}
+
+// TestAgentDirectoriesAreClassified requires every directory under
+// internal/agent with Go files to belong to exactly one group, and every entry
+// of the group tables to point at something that exists. A new directory has to
+// be placed deliberately, because the import rules below are written per group.
+func TestAgentDirectoriesAreClassified(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range applicationLayerFiles(t, root) {
+	dirs := agentDirs(t, root)
+	requireFiles(t, agentParent, dirs)
+
+	for _, dir := range dirs {
+		switch groups := agentGroups(dir); len(groups) {
+		case 0:
+			t.Errorf("%s/%s has Go files but belongs to no group: add it to agentLayers, testSupportLayers, foundationPackages or foundationSubtrees, or place it under %s/", agentParent, dir, adapterRoot)
+		case 1:
+		default:
+			t.Errorf("%s/%s belongs to several groups %v: a directory has exactly one", agentParent, dir, groups)
+		}
+	}
+
+	hasDir := func(rel string) bool { return slices.Contains(dirs, rel) }
+	missing := func(kind, rel string) {
+		t.Errorf("%s %q is listed but %s/%s has no Go files", kind, rel, agentParent, rel)
+	}
+	if !hasDir("") {
+		missing("facade", "")
+	}
+	for name := range agentLayers {
+		if !hasDir(name) {
+			missing("orchestration package", name)
+		}
+	}
+	for name := range testSupportLayers {
+		if !hasDir(name) {
+			missing("test support package", name)
+		}
+	}
+	for _, name := range foundationPackages {
+		if !hasDir(name) {
+			missing("foundation package", name)
+		}
+	}
+	for _, prefix := range foundationSubtrees {
+		if !slices.ContainsFunc(dirs, func(d string) bool { return d == prefix || strings.HasPrefix(d, prefix+"/") }) {
+			missing("foundation subtree", prefix)
+		}
+	}
+	if !slices.ContainsFunc(dirs, func(d string) bool { return strings.HasPrefix(d, adapterRoot+"/") }) {
+		missing("adapter subtree", adapterRoot)
+	}
+}
+
+// TestFoundationDoesNotImportUpward keeps the packages the orchestration is
+// built on from reaching the facade, the orchestration, the test support or the
+// assembly adapters.
+func TestFoundationDoesNotImportUpward(t *testing.T) {
+	root := repoRoot(t)
+	var files []string
+	for _, dir := range agentDirs(t, root) {
+		if group, ok := onlyGroup(dir); ok && group == groupFoundation {
+			files = append(files, goFiles(t, root, agentParent+"/"+dir)...)
+		}
+	}
+	requireFiles(t, "foundation packages", files)
+	for _, file := range files {
+		for _, imp := range imports(t, root, file) {
+			if group, ok := importGroup(imp); ok && group != groupFoundation {
+				t.Errorf("%s imports %s: foundation must not import the %s", file, imp, group)
+			}
+		}
+	}
+}
+
+// TestOrchestrationDoesNotImportAdaptersOrTestSupport keeps the facade and the
+// orchestration packages off the assembly adapters and the test doubles.
+func TestOrchestrationDoesNotImportAdaptersOrTestSupport(t *testing.T) {
+	root := repoRoot(t)
+	files := parentFiles(t, root)
+	for _, dir := range orchestrationDirs() {
+		files = append(files, goFiles(t, root, dir)...)
+	}
+	var production []string
+	for _, file := range files {
+		if !strings.HasSuffix(file, "_test.go") {
+			production = append(production, file)
+		}
+	}
+	requireFiles(t, "orchestration packages", production)
+	for _, file := range production {
+		for _, imp := range imports(t, root, file) {
+			if group, ok := importGroup(imp); ok && (group == groupAdapter || group == groupTestSupport) {
+				t.Errorf("%s imports %s: orchestration must not import the %s", file, imp, group)
+			}
+		}
+	}
+}
+
+// TestAssemblyAdaptersAreOnlyImportedByCmd keeps the adapters at the composition
+// root: they bind agent ports to other domains, so no package inside
+// internal/agent (tests included) may depend on one.
+func TestAssemblyAdaptersAreOnlyImportedByCmd(t *testing.T) {
+	root := repoRoot(t)
+	files := allGoFiles(t, root, agentParent)
+	requireFiles(t, agentParent, files)
+	for _, file := range files {
+		for _, imp := range imports(t, root, file) {
+			if group, ok := importGroup(imp); ok && group == groupAdapter {
+				t.Errorf("%s imports %s: assembly adapters are wired in cmd/** only", file, imp)
+			}
+		}
+	}
+}
+
+// TestTestSupportIsNotImportedByProductionCode keeps the doubles out of
+// binaries: only test files, and the other test-support packages, import them.
+func TestTestSupportIsNotImportedByProductionCode(t *testing.T) {
+	root := repoRoot(t)
+	supportDirs := testSupportDirs()
+	var files []string
+	for _, dir := range []string{"internal", "cmd"} {
+		files = append(files, goFiles(t, root, dir)...)
+	}
+	requireFiles(t, "internal and cmd", files)
+	for _, file := range files {
+		if slices.ContainsFunc(supportDirs, func(dir string) bool { return strings.HasPrefix(file, dir+"/") }) {
+			continue
+		}
+		for _, imp := range imports(t, root, file) {
+			if group, ok := importGroup(imp); ok && group == groupTestSupport {
+				t.Errorf("%s imports %s: test support is for _test.go files only", file, imp)
+			}
+		}
+	}
+}
+
+// TestTestSupportStaysWithinItsLayer holds each test-support package to the
+// layer it declares in testSupportLayers, counting its tests as well.
+func TestTestSupportStaysWithinItsLayer(t *testing.T) {
+	root := repoRoot(t)
+	for name, layer := range testSupportLayers {
+		files := allGoFiles(t, root, agentParent+"/"+name)
+		requireFiles(t, agentParent+"/"+name, files)
+		for _, file := range files {
+			for _, imp := range imports(t, root, file) {
+				if imp == modulePrefix+agentParent {
+					t.Errorf("%s imports %s: test support must not import the agent facade", file, imp)
+					continue
+				}
+				if other, ok := agentSubpackage(imp); ok && agentLayers[other] > layer {
+					t.Errorf("%s imports %s: %s may import orchestration up to layer %d, %s is layer %d",
+						file, imp, name, layer, other, agentLayers[other])
+				}
+				if rel, ok := strings.CutPrefix(imp, modulePrefix+agentParent+"/"); ok {
+					other, _, _ := strings.Cut(rel, "/")
+					if otherLayer, support := testSupportLayers[other]; support && other != name && otherLayer > layer {
+						t.Errorf("%s imports %s: %s (layer %d) must not import the higher test support %s (layer %d)",
+							file, imp, name, layer, other, otherLayer)
+					}
+				}
+			}
+		}
+	}
+}
+
+// TestOrchestrationDoesNotDependOnChannel keeps use-case orchestration on
+// neutral Agent/Chat ports. Platform identity and conversation vocabulary
+// must enter through adapters at the composition root. The test-support
+// packages are held to the same rule.
+func TestOrchestrationDoesNotDependOnChannel(t *testing.T) {
+	root := repoRoot(t)
+	files := append(orchestrationFiles(t, root), testSupportFiles(t, root)...)
+	for _, file := range files {
 		for _, imp := range imports(t, root, file) {
 			if isPackageOrChild(imp, modulePrefix+"internal/channel") {
-				t.Errorf("%s imports %s: Agent application must consume neutral ports, not Channel", file, imp)
+				t.Errorf("%s imports %s: Agent orchestration must consume neutral ports, not Channel", file, imp)
 			}
 		}
 	}
 }
 
 // TestAgentContextDoesNotDependOnExecutionOrDelivery keeps context assembly
-// reusable by application and runtimes without creating a reverse dependency.
+// reusable by orchestration and runtimes without creating a reverse dependency.
 // Persistence-backed compaction is intentionally allowed to use db/sqlc until
 // its store adapter is extracted.
 func TestAgentContextDoesNotDependOnExecutionOrDelivery(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range goFiles(t, root, "internal/agent/context") {
+	files := goFiles(t, root, "internal/agent/context")
+	requireFiles(t, "internal/agent/context", files)
+	for _, file := range files {
 		for _, imp := range imports(t, root, file) {
 			switch {
-			case isApplicationLayer(imp),
+			case isAboveFoundation(imp),
 				isPackageOrChild(imp, modulePrefix+"internal/agent/runtime"),
 				isPackageOrChild(imp, modulePrefix+"internal/agent/tool"),
 				isPackageOrChild(imp, modulePrefix+"internal/agent/adapter"):
@@ -266,17 +598,19 @@ func TestAgentContextDoesNotDependOnExecutionOrDelivery(t *testing.T) {
 	}
 }
 
-// TestNativeRuntimeStaysBelowApplicationAndDelivery keeps the in-process
-// runtime reusable behind the application service. Native execution may use
+// TestNativeRuntimeStaysBelowOrchestrationAndDelivery keeps the in-process
+// runtime reusable behind the orchestration. Native execution may use
 // Agent ports and lower-level domains, but it must not reach back into turn
 // orchestration or either delivery layer.
-func TestNativeRuntimeStaysBelowApplicationAndDelivery(t *testing.T) {
+func TestNativeRuntimeStaysBelowOrchestrationAndDelivery(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range goFiles(t, root, "internal/agent/runtime/native") {
+	files := goFiles(t, root, "internal/agent/runtime/native")
+	requireFiles(t, "internal/agent/runtime/native", files)
+	for _, file := range files {
 		for _, imp := range imports(t, root, file) {
 			switch {
-			case isApplicationLayer(imp):
-				t.Errorf("%s imports %s: native runtime must not depend on Agent application orchestration", file, imp)
+			case isAboveFoundation(imp):
+				t.Errorf("%s imports %s: native runtime must not depend on Agent orchestration", file, imp)
 			case isPackageOrChild(imp, modulePrefix+"internal/channel"):
 				t.Errorf("%s imports %s: native runtime must not depend on Channel delivery", file, imp)
 			case isPackageOrChild(imp, modulePrefix+"internal/handlers"):
@@ -290,11 +624,13 @@ func TestNativeRuntimeStaysBelowApplicationAndDelivery(t *testing.T) {
 // orchestration or either delivery implementation.
 func TestAgentToolStaysOnNeutralPorts(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range allGoFiles(t, root, "internal/agent/tool") {
+	files := allGoFiles(t, root, "internal/agent/tool")
+	requireFiles(t, "internal/agent/tool", files)
+	for _, file := range files {
 		for _, imp := range imports(t, root, file) {
 			switch {
-			case isApplicationLayer(imp):
-				t.Errorf("%s imports %s: Agent tools must not depend on application orchestration", file, imp)
+			case isAboveFoundation(imp):
+				t.Errorf("%s imports %s: Agent tools must not depend on orchestration", file, imp)
 			case isPackageOrChild(imp, modulePrefix+"internal/channel"):
 				t.Errorf("%s imports %s: Agent tools must use neutral messaging/contact ports", file, imp)
 			case isPackageOrChild(imp, modulePrefix+"internal/handlers"):
@@ -308,7 +644,9 @@ func TestAgentToolStaysOnNeutralPorts(t *testing.T) {
 // independent from Thread/Message/view implementations.
 func TestAgentRuntimeDoesNotDependOnChat(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range allGoFiles(t, root, "internal/agent/runtime") {
+	files := allGoFiles(t, root, "internal/agent/runtime")
+	requireFiles(t, "internal/agent/runtime", files)
+	for _, file := range files {
 		for _, imp := range imports(t, root, file) {
 			if isPackageOrChild(imp, modulePrefix+"internal/chat") {
 				t.Errorf("%s imports %s: Agent runtime must consume Agent-owned contracts", file, imp)
@@ -320,7 +658,9 @@ func TestAgentRuntimeDoesNotDependOnChat(t *testing.T) {
 func TestDirectExternalRuntimesDoNotDependOnACP(t *testing.T) {
 	root := repoRoot(t)
 	for _, dir := range []string{"internal/agent/runtime/codex", "internal/agent/runtime/claudecode"} {
-		for _, file := range goFiles(t, root, dir) {
+		files := goFiles(t, root, dir)
+		requireFiles(t, dir, files)
+		for _, file := range files {
 			for _, imp := range imports(t, root, file) {
 				if isPackageOrChild(imp, modulePrefix+"internal/agent/runtime/acp") {
 					t.Errorf("%s imports %s: direct External Agent runtimes must not depend on ACP", file, imp)
@@ -337,7 +677,9 @@ func TestDirectExternalRuntimesDoNotDependOnACP(t *testing.T) {
 func TestACPNativeDirectRuntimesUseOnlyTheACPClient(t *testing.T) {
 	root := repoRoot(t)
 	client := modulePrefix + "internal/agent/runtime/acp/client"
-	for _, file := range allGoFiles(t, root, "internal/agent/runtime/grok") {
+	files := allGoFiles(t, root, "internal/agent/runtime/grok")
+	requireFiles(t, "internal/agent/runtime/grok", files)
+	for _, file := range files {
 		for _, imp := range imports(t, root, file) {
 			if isPackageOrChild(imp, modulePrefix+"internal/agent/runtime/acp") && imp != client {
 				t.Errorf("%s imports %s: an ACP-native direct runtime may use only the ACP client", file, imp)
@@ -418,10 +760,12 @@ func TestChannelAndTimelineDoNotImportFx(t *testing.T) {
 
 // TestTurnPortStaysPure: the contract package (and its transports) must not
 // depend on HTTP frameworks, assembly, generated SQL, the channel side, or
-// the application implementation.
+// the orchestration.
 func TestTurnPortStaysPure(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range goFiles(t, root, "internal/agent/turn") {
+	files := goFiles(t, root, "internal/agent/turn")
+	requireFiles(t, "internal/agent/turn", files)
+	for _, file := range files {
 		for _, imp := range imports(t, root, file) {
 			switch {
 			case strings.HasPrefix(imp, "github.com/labstack/echo"):
@@ -433,7 +777,7 @@ func TestTurnPortStaysPure(t *testing.T) {
 			case imp == modulePrefix+"internal/channel" || strings.HasPrefix(imp, modulePrefix+"internal/channel/"):
 				t.Errorf("%s imports the channel side", file)
 			case turnForbiddenLayerImport(imp):
-				t.Errorf("%s imports %s: the turn contract must not depend on retired domains, application, or runtime", file, imp)
+				t.Errorf("%s imports %s: the turn contract must not depend on retired domains, orchestration, or runtime", file, imp)
 			}
 		}
 	}
@@ -453,7 +797,7 @@ func turnForbiddenLayerImport(imp string) bool {
 			return true
 		}
 	}
-	return isApplicationLayer(imp)
+	return isAboveFoundation(imp)
 }
 
 // TestRetiredDomainPackagesStayRemoved prevents compatibility imports from
@@ -504,7 +848,7 @@ func TestRetiredDomainPackagesStayRemoved(t *testing.T) {
 	}
 }
 
-// agentLayers is the order of the packages split out of the agent application.
+// agentLayers is the order of the packages split out of the agent facade.
 // A package imports only packages of a lower layer; packages of one layer do not
 // import each other, and none imports the parent package internal/agent.
 var agentLayers = map[string]int{
@@ -550,7 +894,9 @@ func agentSubpackage(imp string) (string, bool) {
 func TestAgentSubpackagesImportDownward(t *testing.T) {
 	root := repoRoot(t)
 	for name, layer := range agentLayers {
-		for _, file := range allGoFiles(t, root, agentParent+"/"+name) {
+		files := allGoFiles(t, root, agentParent+"/"+name)
+		requireFiles(t, agentParent+"/"+name, files)
+		for _, file := range files {
 			for _, imp := range imports(t, root, file) {
 				if imp == modulePrefix+agentParent {
 					t.Errorf("%s imports %s: a component must not import the agent facade", file, imp)
@@ -573,7 +919,9 @@ func TestAgentEntryPackagesDoNotImportEachOther(t *testing.T) {
 	entries := []string{"web", "schedule", "resume", "answer", "subagent"}
 	root := repoRoot(t)
 	for _, name := range entries {
-		for _, file := range allGoFiles(t, root, agentParent+"/"+name) {
+		files := allGoFiles(t, root, agentParent+"/"+name)
+		requireFiles(t, agentParent+"/"+name, files)
+		for _, file := range files {
 			for _, imp := range imports(t, root, file) {
 				other, layered := agentSubpackage(imp)
 				if layered && other != name && slices.Contains(entries, other) {
@@ -661,7 +1009,7 @@ func TestRouteCredentialsHaveOneIssuer(t *testing.T) {
 	root := repoRoot(t)
 	forbidden := regexp.MustCompile(`\bauth\.(GenerateChatToken|GenerateToken)\b`)
 	files := goFiles(t, root, "internal/channel")
-	for _, file := range applicationLayerFiles(t, root) {
+	for _, file := range append(orchestrationFiles(t, root), testSupportFiles(t, root)...) {
 		if !strings.HasSuffix(file, "_test.go") {
 			files = append(files, file)
 		}
@@ -688,7 +1036,12 @@ func TestRouteCredentialsHaveOneIssuer(t *testing.T) {
 // FinishRunWithFailure, and the driver's own entry is named Finish.
 func TestRunTerminalStateHasOneWriter(t *testing.T) {
 	root := repoRoot(t)
-	for _, file := range goFiles(t, root, "internal/agent") {
+	files := goFiles(t, root, "internal/agent")
+	requireFiles(t, "internal/agent", files)
+	if !slices.Contains(files, "internal/agent/drive/finish.go") {
+		t.Error("internal/agent/drive/finish.go is missing: the one writer of a run's terminal state moved, update this rule")
+	}
+	for _, file := range files {
 		if file == "internal/agent/drive/finish.go" ||
 			strings.HasPrefix(file, "internal/agent/runtime/session/") ||
 			strings.HasPrefix(file, "internal/agent/agenttest/") {
