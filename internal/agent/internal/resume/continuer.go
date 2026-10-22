@@ -120,7 +120,6 @@ func NewContinuer(d ContinuerDeps) *Continuer {
 type intent struct {
 	Resume                *admit.ResumeContext                       `json:"resume"`
 	DecisionContinuations map[string]decision.ContinuationCheckpoint `json:"decision_continuations"`
-	CoverPosition         *int64                                     `json:"cover_position"`
 }
 
 // readIntent parses the intent of a run and checks that it can still be
@@ -253,13 +252,7 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 		oldCancel := cancel
 		cancel = func() { cancelDeadline(); oldCancel() }
 	}
-	// A discuss run's cover position travels with its continuation, so the
-	// batch it was answering is covered when the continuation completes.
-	payloadFields := map[string]any{"kind": "resume", "interrupted_run_id": row.RunID.String(), "resume": data}
-	if input.CoverPosition != nil {
-		payloadFields["cover_position"] = *input.CoverPosition
-	}
-	payload, err := json.Marshal(payloadFields)
+	payload, err := json.Marshal(map[string]any{"kind": "resume", "interrupted_run_id": row.RunID.String(), "resume": data})
 	if err != nil {
 		cancel()
 		return nil, err
@@ -286,6 +279,10 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 		BotID: row.BotID.String(), ThreadID: row.SessionID.String(), InvocationID: "resume:" + row.RunID.String(),
 		Submission: payload, StopCause: outcome.ErrRunStopped, ResumeRunID: row.RunID.String(),
 		JoinTurn: &join,
+		// The continuation is the interrupted run again: the mode it was
+		// admitted in, and for a discuss run the cover position, so the batch it
+		// was answering is covered when the continuation completes.
+		Mode: row.Mode, DiscussCoverPosition: coverPosition(row.DiscussCoverPosition),
 	})
 	if err != nil {
 		cancel()
@@ -334,4 +331,11 @@ func (c *Continuer) start(ctx context.Context, owed pending.Continuation) (<-cha
 
 	c.logger.InfoContext(runCtx, "interrupted session resumed", slog.String("previous_run_id", row.RunID.String()), slog.String("run_id", admission.RunID), slog.String("session_id", req.ThreadID))
 	return done, nil
+}
+
+func coverPosition(position pgtype.Int8) *int64 {
+	if !position.Valid {
+		return nil
+	}
+	return &position.Int64
 }

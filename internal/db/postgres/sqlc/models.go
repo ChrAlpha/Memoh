@@ -861,6 +861,8 @@ type SessionRun struct {
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
 	InitiatorID           pgtype.Text        `json:"initiator_id"`
+	Mode                  string             `json:"mode"`
+	DiscussCoverPosition  pgtype.Int8        `json:"discuss_cover_position"`
 }
 
 type Snapshot struct {

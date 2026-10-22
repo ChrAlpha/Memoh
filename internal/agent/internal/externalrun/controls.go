@@ -16,6 +16,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
@@ -282,7 +283,7 @@ func (h *Host) runSessionControl(ctx context.Context, request turn.RuntimeContro
 		return err
 	}
 	admission, err := h.admitter.Admit(runCtx, sessionruntime.AdmitInput{
-		BotID: request.BotID, SessionID: request.ThreadID, InvocationID: uuid.NewString(), InitiatorID: request.ActorID, Payload: payload,
+		BotID: request.BotID, SessionID: request.ThreadID, InvocationID: uuid.NewString(), InitiatorID: request.ActorID, Mode: sessionmode.Chat, Payload: payload,
 		Execution: sessionruntime.Execution{
 			ConfigurationOnly: configurationOnly,
 			Admission: func(context.Context, sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {

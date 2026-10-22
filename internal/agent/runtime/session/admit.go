@@ -86,6 +86,12 @@ type AdmitInput struct {
 	// a turn (a discuss batch, a continuation): the run takes that turn instead
 	// of opening one nobody will write to.
 	JoinTurn *ledger.Turn
+	// Mode is the session mode the run is admitted in (the sessionmode values);
+	// empty is a chat run. A resumed run carries the interrupted run's.
+	Mode string
+	// DiscussCoverPosition is the history position the batch a discuss run
+	// answers ends at. It is set exactly when Mode is discuss.
+	DiscussCoverPosition *int64
 	// Payload is the canonically encoded submission. Its fingerprint decides
 	// whether a repeated invocation_id is the same submit or a conflict, so the
 	// encoding must be stable for equal inputs — same key order, no timestamps,
@@ -127,6 +133,7 @@ func (in AdmitInput) normalized() AdmitInput {
 	in.SessionID = strings.TrimSpace(in.SessionID)
 	in.InvocationID = strings.TrimSpace(in.InvocationID)
 	in.InitiatorID = strings.TrimSpace(in.InitiatorID)
+	in.Mode = strings.TrimSpace(in.Mode)
 	return in
 }
 
@@ -233,6 +240,9 @@ func (m *Manager) Admit(ctx context.Context, in AdmitInput) (Admission, error) {
 		InputFingerprint: fingerprint,
 		ResumeRunID:      in.ResumeRunID,
 		InitiatorID:      in.InitiatorID,
+		Mode:             in.Mode,
+
+		DiscussCoverPosition: in.DiscussCoverPosition,
 	})
 	switch {
 	case errors.Is(err, ledger.ErrHistoryResetInProgress):

@@ -34,7 +34,7 @@ func (h *Host) Admit(
 	}
 	runCtx, admission, release, err := h.admit.Triggered(ctx, admit.Trigger{
 		BotID: botID, ThreadID: threadID, InvocationID: invocationID,
-		Submission: submission, StopCause: context.Canceled,
+		Mode: sessionmode.Subagent, Submission: submission, StopCause: context.Canceled,
 	})
 	if err != nil {
 		endActiveTurn()

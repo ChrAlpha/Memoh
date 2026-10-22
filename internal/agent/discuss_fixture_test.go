@@ -498,7 +498,7 @@ type discussRun struct {
 func (e discussEnv) runs(t *testing.T) map[string]discussRun {
 	t.Helper()
 	rows, err := e.pool.Query(context.Background(), `
-		SELECT invocation_id, run_id::text, state, COALESCE((input_json->>'cover_position')::bigint, 0), input_json
+		SELECT invocation_id, run_id::text, state, COALESCE(discuss_cover_position, 0), input_json
 		FROM session_runs WHERE session_id = $1 AND invocation_id LIKE 'discuss:%'
 	`, e.sessionID)
 	if err != nil {

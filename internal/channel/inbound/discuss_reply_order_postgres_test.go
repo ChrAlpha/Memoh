@@ -298,7 +298,7 @@ func TestDiscussReplyStaysBesideTheMessageItAnswers(t *testing.T) {
 			}
 			t.Logf("order keys: A=%v first reply row=%v B=%v", keyA, keyReply, keyB)
 			runRows, err := e.pool.Query(context.Background(), `
-				SELECT turn_position, state, invocation_id, COALESCE(input_json->>'cover_position', '-') FROM session_runs
+				SELECT turn_position, state, invocation_id, COALESCE(discuss_cover_position::text, '-') FROM session_runs
 				WHERE session_id = $1 ORDER BY turn_position
 			`, e.sessionID)
 			if err != nil {

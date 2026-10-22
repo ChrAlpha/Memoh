@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/internal/agenttest"
 	"github.com/felinics/memoh/internal/agent/internal/resume"
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -47,6 +48,9 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 		SessionID: db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID),
 		TurnID:    db.ParseUUIDOrEmpty(uuid.NewString()),
 		InputJson: raw,
+		// A discuss run interrupted while it answered a batch.
+		Mode:                 sessionmode.Discuss,
+		DiscussCoverPosition: pgtype.Int8{Int64: 11, Valid: true},
 	}
 	done, err := startContinuation(t.Context(), service, row)
 	if err != nil {
@@ -77,6 +81,11 @@ func TestResumeReentersSavedSessionOnceAndKeepsDeadline(t *testing.T) {
 	inputs := fixture.admitter.Admitted()
 	if len(inputs) != 1 || inputs[0].InvocationID != "resume:"+row.RunID.String() {
 		t.Fatalf("admission=%+v", inputs)
+	}
+	// The continuation is the interrupted run again: its mode and, for a
+	// discuss run, the position its batch ends at.
+	if inputs[0].Mode != sessionmode.Discuss || inputs[0].DiscussCoverPosition == nil || *inputs[0].DiscussCoverPosition != 11 {
+		t.Fatalf("resume admitted mode %q cover %v, want the interrupted discuss run's mode and cover position 11", inputs[0].Mode, inputs[0].DiscussCoverPosition)
 	}
 	fixture.admitter.Mu.Lock()
 	fixture.admitter.Started = false

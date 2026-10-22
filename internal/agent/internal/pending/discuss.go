@@ -150,10 +150,9 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	}
 	hw := head.TurnPosition.Int64
 	payload, err := json.Marshal(map[string]any{
-		"mode":           sessionmode.Discuss,
-		"bot_id":         botID,
-		"session_id":     sessionID,
-		"cover_position": hw,
+		"mode":       sessionmode.Discuss,
+		"bot_id":     botID,
+		"session_id": sessionID,
 	})
 	if err != nil {
 		return 0, nil, err
@@ -165,6 +164,7 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	}
 	runCtx, admission, release, err := in.admit.Triggered(ctx, admit.Trigger{
 		BotID: botID, ThreadID: sessionID, InvocationID: DiscussInvocationID(sessionID, hw),
+		Mode: sessionmode.Discuss, DiscussCoverPosition: &hw,
 		Submission: payload, StopCause: outcome.ErrRunStopped,
 		JoinTurn: &ledger.Turn{ID: head.TurnID.String(), Position: hw},
 	})

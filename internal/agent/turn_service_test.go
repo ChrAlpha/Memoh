@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/internal/agenttest"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -354,6 +355,9 @@ func TestStartTurnAdmitsUnderTheIdempotencyKey(t *testing.T) {
 	}
 	if admitted[0].BotID != "b" || admitted[0].SessionID != "s" {
 		t.Fatalf("admitted %q/%q, want b/s", admitted[0].BotID, admitted[0].SessionID)
+	}
+	if admitted[0].Mode != sessionmode.Chat {
+		t.Fatalf("admitted mode = %q, want %q", admitted[0].Mode, sessionmode.Chat)
 	}
 	if h.RunID() != "run-1" {
 		t.Fatalf("run id = %q, want the admitted run id", h.RunID())

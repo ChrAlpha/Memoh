@@ -189,6 +189,12 @@ type AdmitParams struct {
 	// InitiatorID is the principal the submission was made under. A resume
 	// that names none inherits the interrupted run's initiator.
 	InitiatorID string
+	// Mode is the session mode the run is admitted in; it is recorded as is and
+	// the table refuses a value outside the session modes.
+	Mode string
+	// DiscussCoverPosition is the history position a discuss run's batch ends
+	// at. It is set exactly when Mode is discuss.
+	DiscussCoverPosition *int64
 }
 
 // ClaimParams moves ownership of an accepted run to one owner.

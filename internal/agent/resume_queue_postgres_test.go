@@ -295,7 +295,7 @@ func TestColdStartHoldsDiscussInputBehindTheContinuationUntilTheWorkspaceIsReady
 	require.Equal(t, "resume:"+interrupted.runID, runs[1].invocation)
 	var resumedCover int64
 	require.NoError(t, env.pool.QueryRow(ctx, `
-		SELECT COALESCE((input_json->>'cover_position')::bigint, 0) FROM session_runs WHERE invocation_id = $1
+		SELECT COALESCE(discuss_cover_position, 0) FROM session_runs WHERE invocation_id = $1
 	`, "resume:"+interrupted.runID).Scan(&resumedCover))
 	require.Equal(t, first, resumedCover, "the continuation keeps the cover position of the run it continues")
 	require.Equal(t, env.invocation(second), runs[2].invocation, "the new input is answered after the continuation")

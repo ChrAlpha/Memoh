@@ -544,7 +544,7 @@ func TestDiscussResumeKeepsCoverPosition(t *testing.T) {
 	var state string
 	var cover int64
 	if err := env.pool.QueryRow(ctx, `
-		SELECT state, COALESCE((input_json->>'cover_position')::bigint, 0) FROM session_runs WHERE invocation_id = $1
+		SELECT state, COALESCE(discuss_cover_position, 0) FROM session_runs WHERE invocation_id = $1
 	`, "resume:"+interrupted.runID).Scan(&state, &cover); err != nil {
 		t.Fatal(err)
 	}

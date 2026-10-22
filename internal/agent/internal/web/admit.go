@@ -93,6 +93,7 @@ func (r *Runner) Admit(ctx context.Context, in agentapi.WebAdmitInput) (*Admissi
 		SessionID:    strings.TrimSpace(in.SessionID),
 		InvocationID: strings.TrimSpace(in.InvocationID),
 		InitiatorID:  in.InitiatorID,
+		Mode:         sessionmode.Chat,
 		Payload:      in.Payload,
 		Execution: sessionruntime.Execution{
 			Admission: builder,

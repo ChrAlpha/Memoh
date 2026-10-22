@@ -74,7 +74,9 @@ INSERT INTO session_runs (
   state,
   input_json,
   input_fingerprint,
-  initiator_id
+  initiator_id,
+  mode,
+  discuss_cover_position
 )
 SELECT
   sqlc.arg(run_id),
@@ -86,7 +88,9 @@ SELECT
   'accepted',
   sqlc.arg(input_json),
   sqlc.arg(input_fingerprint),
-  NULLIF(sqlc.arg(initiator_id)::text, '')
+  NULLIF(sqlc.arg(initiator_id)::text, ''),
+  sqlc.arg(mode)::text,
+  sqlc.narg(discuss_cover_position)::bigint
 FROM target_session
 CROSS JOIN turn_slot
 ON CONFLICT (team_id, session_id, invocation_id) DO NOTHING

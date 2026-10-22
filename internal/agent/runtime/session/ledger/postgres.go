@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/sessionmode"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -108,15 +109,17 @@ func (s *PostgresStore) Admit(ctx context.Context, params AdmitParams) (Run, boo
 		}
 	}
 	row, err := txq.AdmitLockedSessionRun(ctx, dbsqlc.AdmitLockedSessionRunParams{
-		RunID:            runID,
-		BotID:            botID,
-		SessionID:        sessionID,
-		InvocationID:     params.InvocationID,
-		TurnID:           turnID,
-		TurnPosition:     joinPosition(params.JoinTurn),
-		InputJson:        params.Input,
-		InputFingerprint: params.InputFingerprint,
-		InitiatorID:      params.InitiatorID,
+		RunID:                runID,
+		BotID:                botID,
+		SessionID:            sessionID,
+		InvocationID:         params.InvocationID,
+		TurnID:               turnID,
+		TurnPosition:         joinPosition(params.JoinTurn),
+		InputJson:            params.Input,
+		InputFingerprint:     params.InputFingerprint,
+		InitiatorID:          params.InitiatorID,
+		Mode:                 runMode(params.Mode),
+		DiscussCoverPosition: coverPosition(params.DiscussCoverPosition),
 	})
 	if err == nil {
 		if params.ResumeRunID != "" {
@@ -1002,6 +1005,22 @@ func textOrNull(value string) pgtype.Text {
 
 // joinPosition is the position of the turn a run joins, null for a run that
 // opens a new turn.
+// runMode is the mode a run is recorded under; one admitted without a mode is
+// a chat run, as the column's default says.
+func runMode(mode string) string {
+	if mode == "" {
+		return sessionmode.Chat
+	}
+	return mode
+}
+
+func coverPosition(position *int64) pgtype.Int8 {
+	if position == nil {
+		return pgtype.Int8{}
+	}
+	return pgtype.Int8{Int64: *position, Valid: true}
+}
+
 func joinPosition(turn *Turn) pgtype.Int8 {
 	if turn == nil {
 		return pgtype.Int8{}

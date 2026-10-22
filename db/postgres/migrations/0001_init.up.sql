@@ -2224,6 +2224,10 @@ CREATE TABLE IF NOT EXISTS public.session_runs (
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     initiator_id       TEXT,
+    -- The session mode the run was admitted in, and for a discuss run the
+    -- history position its batch ends at. Only a discuss run covers a batch.
+    mode               TEXT        NOT NULL DEFAULT 'chat',
+    discuss_cover_position BIGINT,
     CONSTRAINT session_runs_team_run_key UNIQUE (team_id, run_id),
     CONSTRAINT session_runs_team_session_run_key UNIQUE (team_id, session_id, run_id),
     CONSTRAINT session_runs_state_check CHECK (state IN (
@@ -2240,6 +2244,9 @@ CREATE TABLE IF NOT EXISTS public.session_runs (
     ),
     CONSTRAINT session_runs_fencing_token_check CHECK (fencing_token >= 0),
     CONSTRAINT session_runs_owner_claim_check CHECK ((owner_id IS NULL) = (owner_since IS NULL)),
+    CONSTRAINT session_runs_mode_check CHECK (mode IN ('chat', 'schedule', 'subagent', 'discuss', 'acp_agent')),
+    CONSTRAINT session_runs_discuss_cover_position_check CHECK (discuss_cover_position > 0),
+    CONSTRAINT session_runs_discuss_cover_pairing_check CHECK ((mode = 'discuss') = (discuss_cover_position IS NOT NULL)),
     CONSTRAINT session_runs_bot_id_fkey
         FOREIGN KEY (team_id, bot_id)
         REFERENCES public.bots(team_id, id) ON DELETE CASCADE,
@@ -2269,6 +2276,11 @@ CREATE INDEX IF NOT EXISTS idx_session_runs_orphan
 CREATE INDEX IF NOT EXISTS session_runs_discuss_cover
     ON public.session_runs (team_id, session_id, state, ((input_json->>'cover_position')::bigint))
     WHERE input_json ? 'cover_position';
+
+-- Discuss cursor: the maximum cover position of a session's completed discuss runs.
+CREATE INDEX IF NOT EXISTS session_runs_discuss_cover_position
+    ON public.session_runs (team_id, session_id, state, discuss_cover_position)
+    WHERE discuss_cover_position IS NOT NULL;
 
 -- Interrupted runs whose resume intent is still pending; the recovery worker
 -- lists these instead of walking a team's run history.

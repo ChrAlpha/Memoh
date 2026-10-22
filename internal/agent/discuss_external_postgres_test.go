@@ -145,7 +145,7 @@ func TestExternalDiscussBatchSurvivesAResumeRecord(t *testing.T) {
 	if err := env.pool.QueryRow(context.Background(), `
 		SELECT COALESCE(input_json->'resume'->>'query', '')
 		FROM session_runs
-		WHERE session_id = $1 AND input_json ? 'cover_position'
+		WHERE session_id = $1 AND mode = 'discuss'
 		ORDER BY created_at DESC LIMIT 1`, env.sessionID).Scan(&recorded); err != nil {
 		t.Fatalf("read the run's resume record: %v", err)
 	}

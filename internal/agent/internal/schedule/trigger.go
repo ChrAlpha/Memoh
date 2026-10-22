@@ -61,7 +61,7 @@ func (r *Runner) Trigger(ctx context.Context, botID string, payload schedulepkg.
 	}
 	runCtx, admission, release, err := r.admit.Triggered(ctx, admit.Trigger{
 		BotID: botID, ThreadID: payload.SessionID, InvocationID: scheduleInvocationID(payload),
-		Submission: submission, View: viewFn, StopCause: outcome.ErrRunStopped,
+		Mode: sessionmode.Schedule, Submission: submission, View: viewFn, StopCause: outcome.ErrRunStopped,
 	})
 	if errors.Is(err, sessionruntime.ErrSessionBusy) {
 		// A fire that cannot take the thread's slot has no value once the next

@@ -1,12 +1,12 @@
 -- name: GetDiscussCoverPosition :one
 -- The discuss cursor: the highest history position a run in one of the given
--- states covered. Runs that carry no cover_position never move it.
-SELECT COALESCE(MAX((input_json->>'cover_position')::bigint), 0)::bigint AS cover_position
+-- states covered. Runs that cover no position never move it.
+SELECT COALESCE(MAX(discuss_cover_position), 0)::bigint AS cover_position
 FROM session_runs
 WHERE team_id = public.memoh_current_team_id()
   AND session_id = sqlc.arg(session_id)
   AND state = ANY(sqlc.arg(states)::text[])
-  AND input_json ? 'cover_position';
+  AND discuss_cover_position IS NOT NULL;
 
 -- name: ListDiscussPendingInputs :many
 -- The external input past the cover position, oldest first: the one definition
@@ -14,8 +14,7 @@ WHERE team_id = public.memoh_current_team_id()
 -- session event are external input; rows refused at admission have none, and
 -- the bot's own output is stored as assistant rows. A row that a run other
 -- than a discuss run took as its request message was answered by that run,
--- whatever state the run is in, so it is not pending. A run is a discuss run
--- when it carries a cover position, the same marker the cover query reads.
+-- whatever state the run is in, so it is not pending.
 -- The attention flags live on the input's session event.
 SELECT
   m.id,
@@ -36,7 +35,7 @@ WHERE m.team_id = public.memoh_current_team_id()
     FROM session_runs r
     WHERE r.team_id = m.team_id
       AND r.run_id = m.run_id
-      AND NOT (r.input_json ? 'cover_position')
+      AND r.mode <> 'discuss'
   )
 ORDER BY m.turn_position;
 
@@ -75,10 +74,10 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND s.deleted_at IS NULL
 GROUP BY m.bot_id, m.session_id
 HAVING MAX(m.turn_position) > COALESCE((
-  SELECT MAX((c.input_json->>'cover_position')::bigint)
+  SELECT MAX(c.discuss_cover_position)
   FROM session_runs c
   WHERE c.team_id = public.memoh_current_team_id()
     AND c.session_id = m.session_id
     AND c.state = ANY(sqlc.arg(states)::text[])
-    AND c.input_json ? 'cover_position'
+    AND c.discuss_cover_position IS NOT NULL
 ), 0);

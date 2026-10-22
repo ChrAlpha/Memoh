@@ -34,6 +34,12 @@ type Trigger struct {
 	// driver executes names its ending from the driver's own stop marker; a
 	// run another layer executes keeps the plain cancellation it already reads.
 	StopCause error
+	// Mode is the session mode the run is admitted in. A resumed run takes the
+	// interrupted run's.
+	Mode string
+	// DiscussCoverPosition is the history position a discuss run's batch ends
+	// at: set for a discuss run and for a resumed one that continues it.
+	DiscussCoverPosition *int64
 	// ResumeRunID names the interrupted run a resumed run continues.
 	ResumeRunID string
 	// JoinTurn is the existing turn the run answers; nil opens a new one.
@@ -59,8 +65,11 @@ func (a *Admitter) Triggered(ctx context.Context, t Trigger) (context.Context, s
 		SessionID:    t.ThreadID,
 		InvocationID: t.InvocationID,
 		Payload:      t.Submission,
+		Mode:         t.Mode,
 		ResumeRunID:  t.ResumeRunID,
 		JoinTurn:     t.JoinTurn,
+
+		DiscussCoverPosition: t.DiscussCoverPosition,
 		Execution: sessionruntime.Execution{
 			Admission: func(_ context.Context, handle sessionruntime.RunHandle) (sessionruntime.RunAdmissionView, error) {
 				if t.View == nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/turn"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 )
@@ -42,6 +43,7 @@ func (a *Admitter) Turn(
 		SessionID:    cmd.ThreadID,
 		InvocationID: invocationID,
 		InitiatorID:  runreq.FirstNonEmpty(cmd.UserID, cmd.SourceChannelIdentityID),
+		Mode:         sessionmode.Chat,
 		Payload:      payload,
 		Execution: sessionruntime.Execution{
 			// Project the inbound user message so subscribers (an open web
