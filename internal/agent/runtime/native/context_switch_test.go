@@ -122,7 +122,7 @@ func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
 		}
 		return "trigger=in_run passes=1", nil
 	})
-	cfg.ContextCachePlan.StableMessageCount = 5
+	cfg.ContextCachePlan = contextfrag.CachePlan{StablePrefixHash: "compiled", StableMessageCount: 5, StablePrefixTokenEstimate: 4000}
 	params := prepareArmed(cfg, messages)
 
 	want := []sdk.Message{messages[2], messages[3], messages[5], summary, messages[8], messages[9], messages[10]}
@@ -139,9 +139,14 @@ func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
 		t.Fatalf("history budget=%d (allowance %d, kept %d) details=%q", seen.HistoryBudgetTokens, seen.AllowanceTokens, kept, switchDetails(cfg))
 	}
 
+	cfg.Messages = messages
 	next, ok := cfg.contextSwitch.redispatch(cfg, generateDispatch{initialMessageCount: len(messages)}, *params)
 	if !ok || len(next.Messages) != len(want) || next.initialProviderMessageCount != len(want) || next.ContextCachePlan.StableMessageCount != 2 {
 		t.Fatalf("redispatch ok=%v messages=%d prefix=%d stable=%d, want the spliced request with its prefix and breakpoint moved", ok, len(next.Messages), next.initialProviderMessageCount, next.ContextCachePlan.StableMessageCount)
+	}
+	estimate := 4000 + messagesTokens(want[:2]) - messagesTokens(messages[:5])
+	if plan := next.ContextCachePlan; plan.StablePrefixTokenEstimate != estimate || plan.StablePrefixHash != "" {
+		t.Fatalf("cache plan = %+v, want the estimate %d of the spliced prefix and no compiled hash", plan, estimate)
 	}
 	if _, again := cfg.contextSwitch.redispatch(cfg, generateDispatch{}, *params); again {
 		t.Fatal("a second redispatch without a splice")

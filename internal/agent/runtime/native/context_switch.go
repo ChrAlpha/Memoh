@@ -271,9 +271,9 @@ func (s *contextSwitchState) remap(refs []dynamicSourceRef) []dynamicSourceRef {
 
 // redispatch is the configuration that dispatches params again after a
 // splice, the way a mid-stream retry dispatches a failed call again: from the
-// request as it now is, with the boundary's inputs admitted, and the prefix
-// and cache breakpoints moved with what the splice removed. It reports false
-// when no splice happened since the last dispatch.
+// request as it now is, with the boundary's inputs admitted, and the prefix,
+// cache breakpoints and stable prefix estimate moved with what the splice
+// removed. It reports false when no splice happened since the last dispatch.
 //
 //nolint:gocritic // hugeParam: the run configuration and request are copied into the next dispatch.
 func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch, params sdk.Request) (RunConfig, bool) {
@@ -286,17 +286,33 @@ func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch
 	}
 	messages := cloneProviderMessages(params.Messages[offset:])
 	clearProviderCacheControls(messages)
+	plan := &cfg.ContextCachePlan
+	stableBefore := messagesTokens(cfg.Messages[:min(plan.StableMessageCount, len(cfg.Messages))])
 	cfg.Messages = messages
 	cfg.retryDynamicRefs = shiftDynamicSourceRefs(dispatch.handoff.admitted(), -offset)
 	cfg.initialProviderPrefixSet = true
 	cfg.initialProviderMessageCount = s.movedCount(dispatch.initialMessageCount) - offset
-	for _, count := range []*int{&cfg.ContextCachePlan.StableMessageCount, &cfg.ContextCachePlan.MidStableMessageCount} {
+	for _, count := range []*int{&plan.StableMessageCount, &plan.MidStableMessageCount} {
 		if *count > 0 {
 			*count = s.movedCount(*count+offset) - offset
 		}
 	}
+	// The stable prefix is no longer the one the view compiled: its estimate
+	// follows the messages the splice changed, and it has no compiled hash.
+	if plan.StablePrefixTokenEstimate > 0 {
+		plan.StablePrefixTokenEstimate += messagesTokens(messages[:min(plan.StableMessageCount, len(messages))]) - stableBefore
+	}
+	plan.StablePrefixHash = ""
 	s.moved = nil
 	return cfg, true
+}
+
+func messagesTokens(messages []sdk.Message) int {
+	tokens := 0
+	for _, message := range messages {
+		tokens += contextfrag.EstimateSDKMessageTokens(message)
+	}
+	return tokens
 }
 
 // movedCount maps a message count of the request before the last splice,
