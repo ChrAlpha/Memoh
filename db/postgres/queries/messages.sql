@@ -3527,3 +3527,16 @@ WHERE message.team_id = public.memoh_current_team_id()
   AND btrim(COALESCE(message.metadata->>'agent_turn_id', '')) <> ''
 ORDER BY message.created_at DESC, message.id DESC
 LIMIT 1;
+
+-- name: MergeRunInterruptedRowMetadata :execrows
+-- Names the failure of the run on the interrupted checkpoint rows the run itself
+-- wrote. Only those rows are touched, and only the failure keys are merged into
+-- their metadata; everything else on the row stays as written.
+UPDATE bot_history_messages
+SET metadata = COALESCE(metadata, '{}'::jsonb) || sqlc.arg(failure_metadata)::jsonb
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND run_id = sqlc.arg(run_id)
+  AND role = 'assistant'
+  AND metadata @> '{"agent_step_interrupted": true}'::jsonb;

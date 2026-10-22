@@ -6314,6 +6314,40 @@ func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, arg M
 	return i, err
 }
 
+const mergeRunInterruptedRowMetadata = `-- name: MergeRunInterruptedRowMetadata :execrows
+UPDATE bot_history_messages
+SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $2
+  AND session_id = $3
+  AND run_id = $4
+  AND role = 'assistant'
+  AND metadata @> '{"agent_step_interrupted": true}'::jsonb
+`
+
+type MergeRunInterruptedRowMetadataParams struct {
+	FailureMetadata []byte      `json:"failure_metadata"`
+	BotID           pgtype.UUID `json:"bot_id"`
+	SessionID       pgtype.UUID `json:"session_id"`
+	RunID           pgtype.UUID `json:"run_id"`
+}
+
+// Names the failure of the run on the interrupted checkpoint rows the run itself
+// wrote. Only those rows are touched, and only the failure keys are merged into
+// their metadata; everything else on the row stays as written.
+func (q *Queries) MergeRunInterruptedRowMetadata(ctx context.Context, arg MergeRunInterruptedRowMetadataParams) (int64, error) {
+	result, err := q.db.Exec(ctx, mergeRunInterruptedRowMetadata,
+		arg.FailureMetadata,
+		arg.BotID,
+		arg.SessionID,
+		arg.RunID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const replaceHistoryTurn = `-- name: ReplaceHistoryTurn :one
 WITH RECURSIVE owner_session AS MATERIALIZED (
   SELECT session.id

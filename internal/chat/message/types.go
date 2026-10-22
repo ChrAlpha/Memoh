@@ -219,8 +219,22 @@ type TurnSlotAllocator interface {
 	AllocateTurnSlot(ctx context.Context, sessionID string) (TurnSlot, error)
 }
 
+// InterruptedStepFailure is the failure a run ended with, to be named on the
+// interrupted checkpoint rows that run already wrote. Metadata holds only the
+// failure keys.
+type InterruptedStepFailure struct {
+	RunID     string
+	BotID     string
+	SessionID string
+	Metadata  map[string]any
+}
+
 type AgentStepPersister interface {
 	PersistAgentStep(ctx context.Context, step AgentStep) ([]Message, error)
+	// RecordInterruptedStepFailure merges the failure keys into the run's
+	// interrupted rows under the run's fence. It fails once the fence is
+	// revoked.
+	RecordInterruptedStepFailure(ctx context.Context, failure InterruptedStepFailure) error
 }
 
 // CompactionSummary is one live compaction artifact of a session.

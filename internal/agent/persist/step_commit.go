@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strings"
 	"sync"
 
@@ -165,22 +166,11 @@ func (c *StepCommitter) commit(ctx context.Context, stepIndex int, record *step.
 }
 
 // interrupt writes the checkpoint of the model call a cancellation cut short.
-// The cancellation's cause is the failure the run ends with, named by the same
-// policy the driver applies to it, so the row carries the code session_runs
-// records; a stop or a lost ownership names no failure and leaves the row
-// without one.
+// The checkpoint carries no failure: the run's failure is named once, by the
+// driver, and RecordFailure then writes that value onto this row.
 func (c *StepCommitter) interrupt(ctx context.Context, stepIndex int, record *step.Record) error {
-	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, cancellationFailure(ctx))
+	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, outcome.RunFailure{})
 	return err
-}
-
-func cancellationFailure(ctx context.Context) outcome.RunFailure {
-	cause := context.Cause(ctx)
-	if cause == nil || outcome.RunStopped(ctx) || errors.Is(cause, context.Canceled) || outcome.OwnershipLost(cause) {
-		return outcome.RunFailure{}
-	}
-	code, args := outcome.RunFailureCode(cause, outcome.PhaseExecution, false)
-	return outcome.RunFailure{Code: code, Args: args, Cause: cause, Phase: outcome.PhaseExecution}
 }
 
 // persist writes one step. failure, when it names a code, is the failure that
@@ -444,21 +434,53 @@ func (c *StepCommitter) publishQueueUserTurns(ctx context.Context, stepIndex int
 // written as an interrupted step carrying f's code and args. An empty failure
 // still records an assistant row through the same transaction, including a
 // replacement's first user clone and turn binding. A model call the runtime
-// already checkpointed is not written again.
+// already checkpointed gets f's code and args on its existing row instead of a
+// second row, so exactly one row carries the failure.
 func (c *StepCommitter) RecordFailure(ctx context.Context, partialText string, f outcome.RunFailure) ([]messagepkg.Message, error) {
 	if c == nil || f.Code == "" {
 		return nil, nil
 	}
 	c.mu.Lock()
-	skip := c.finalized || c.checkpointed
+	finalized, checkpointed := c.finalized, c.checkpointed
 	stepIndex := c.nextStep
 	c.mu.Unlock()
-	if skip {
+	if finalized {
 		return nil, nil
+	}
+	if checkpointed {
+		return nil, c.nameCheckpoint(ctx, f)
 	}
 	record := &step.Record{Messages: toolexec.BuildStepMessages(partialText, nil, nil, nil, nil, nil)}
 	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, f)
 	return nil, err
+}
+
+// nameCheckpoint merges f into the metadata of the checkpoint rows this run
+// wrote, under the run's fence, and into the in-memory copies the run reports.
+func (c *StepCommitter) nameCheckpoint(ctx context.Context, f outcome.RunFailure) error {
+	ctx, err := StepContext(ctx, c.ownerContext)
+	if err != nil {
+		return err
+	}
+	keys := FailureRowMetadata(f, "", nil)
+	if err := c.persister.RecordInterruptedStepFailure(ctx, messagepkg.InterruptedStepFailure{
+		RunID: c.req.RunID, BotID: c.req.BotID, SessionID: c.req.ThreadID, Metadata: keys,
+	}); err != nil {
+		c.noteFailure(err)
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, message := range c.persisted {
+		if message.Metadata[messagepkg.AgentStepInterruptedMetadataKey] != true {
+			continue
+		}
+		merged := make(map[string]any, len(message.Metadata)+len(keys))
+		maps.Copy(merged, message.Metadata)
+		maps.Copy(merged, keys)
+		c.persisted[i].Metadata = merged
+	}
+	return nil
 }
 
 // Finish closes the run's history once its steps are committed: it records the

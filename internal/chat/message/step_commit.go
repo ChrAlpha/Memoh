@@ -2,6 +2,7 @@ package message
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,7 @@ import (
 var ErrAgentStepNotWritable = errors.New("agent step is no longer writable")
 
 type agentStepQueries interface {
+	MergeRunInterruptedRowMetadata(context.Context, sqlc.MergeRunInterruptedRowMetadataParams) (int64, error)
 	LockSessionRunForAgentStepCommit(context.Context, sqlc.LockSessionRunForAgentStepCommitParams) (pgtype.UUID, error)
 }
 
@@ -48,6 +50,58 @@ func (s *DBService) PersistAgentStep(ctx context.Context, step AgentStep) ([]Mes
 		s.publishMessageCreated(message)
 	}
 	return persisted, nil
+}
+
+// RecordInterruptedStepFailure writes the failure a run was named with onto the
+// interrupted rows the run wrote. It takes the same lock as an interrupted
+// step, so a revoked fence or a finished run is ErrAgentStepNotWritable.
+func (s *DBService) RecordInterruptedStepFailure(ctx context.Context, failure InterruptedStepFailure) error {
+	if s == nil || s.queries == nil {
+		return errors.New("message service is not configured")
+	}
+	runID, botID, sessionID := strings.TrimSpace(failure.RunID), strings.TrimSpace(failure.BotID), strings.TrimSpace(failure.SessionID)
+	if runID == "" || botID == "" || sessionID == "" || len(failure.Metadata) == 0 {
+		return errors.New("interrupted step failure requires run, bot, session ids and metadata")
+	}
+	fence, ok := runtimefence.FromContext(ctx)
+	if !ok {
+		return errors.New("interrupted step failure requires a runtime persistence fence")
+	}
+	payload, err := json.Marshal(failure.Metadata)
+	if err != nil {
+		return fmt.Errorf("encode interrupted step failure: %w", err)
+	}
+	pgRunID, err := dbpkg.ParseUUID(runID)
+	if err != nil {
+		return fmt.Errorf("invalid run id: %w", err)
+	}
+	pgBotID, err := dbpkg.ParseUUID(botID)
+	if err != nil {
+		return fmt.Errorf("invalid bot id: %w", err)
+	}
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return fmt.Errorf("invalid session id: %w", err)
+	}
+	return runtimefence.InTransaction(ctx, s.queries, botID, sessionID, func(queries dbstore.Queries) error {
+		writer, ok := queries.(agentStepQueries)
+		if !ok {
+			return errors.New("persistence store does not support agent step writes")
+		}
+		_, lockErr := writer.LockSessionRunForAgentStepCommit(ctx, sqlc.LockSessionRunForAgentStepCommitParams{
+			RunID: pgRunID, BotID: pgBotID, SessionID: pgSessionID,
+			FencingToken: fence.Token, Interrupted: true,
+		})
+		if errors.Is(lockErr, pgx.ErrNoRows) {
+			return ErrAgentStepNotWritable
+		} else if lockErr != nil {
+			return fmt.Errorf("lock session run for agent step: %w", lockErr)
+		}
+		_, err := writer.MergeRunInterruptedRowMetadata(ctx, sqlc.MergeRunInterruptedRowMetadataParams{
+			FailureMetadata: payload, BotID: pgBotID, SessionID: pgSessionID, RunID: pgRunID,
+		})
+		return err
+	})
 }
 
 func (s *DBService) persistAgentStepTx(ctx context.Context, queries dbstore.Queries, step AgentStep) ([]Message, error) {

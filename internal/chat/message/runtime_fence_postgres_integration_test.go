@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -241,6 +242,76 @@ func TestPostgresRuntimeFenceAgentStepCompleteAndInterruptedWrites(t *testing.T)
 	}
 	if _, err := service.PersistAgentStep(owner, step); !errors.Is(err, ErrAgentStepNotWritable) {
 		t.Fatalf("post-finalize interrupted step error = %v, want ErrAgentStepNotWritable", err)
+	}
+}
+
+// The failure a run was named with is merged into its interrupted row only, the
+// row keeps every other key, and a revoked fence cannot write it.
+func TestPostgresRuntimeFenceNamesTheFailureOnTheRunsInterruptedRow(t *testing.T) {
+	ctx := context.Background()
+	pool := openRuntimeFencePostgresPool(t, ctx)
+	botID, sessionID := createRuntimeFenceFixtures(t, ctx, pool)
+	queries := dbsqlc.New(pool)
+	token := acquireRuntimeFenceToken(t, ctx, queries, botID, sessionID)
+	runID, turnID := uuid.New(), uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO session_runs
+		(run_id, bot_id, session_id, invocation_id, turn_id, turn_position, state,
+		 input_json, input_fingerprint, owner_id, fencing_token, owner_since, live_generation)
+		VALUES ($1, $2, $3, $4, $5, 0, 'running', '{}'::jsonb, 'test', 'test-owner', $6, now(), 'test')`,
+		runID, botID, sessionID, uuid.NewString(), turnID, token); err != nil {
+		t.Fatalf("create running session run: %v", err)
+	}
+	position := int64(0)
+	service := NewService(nil, postgresstore.NewQueriesWithPool(pool, queries))
+	owner := runtimefence.WithContext(ctx, runtimefence.Fence{BotID: botID.String(), SessionID: sessionID.String(), Token: token})
+	persisted, err := service.PersistAgentStep(owner, AgentStep{RunID: runID.String(), Messages: []PersistInput{
+		{BotID: botID.String(), SessionID: sessionID.String(), RunID: runID.String(), TurnID: turnID.String(), TurnPosition: &position, Role: "user", Content: []byte(`{"role":"user","content":"hello"}`)},
+		{BotID: botID.String(), SessionID: sessionID.String(), RunID: runID.String(), Role: "assistant", Content: []byte(`{"role":"assistant","content":"done"}`)},
+	}})
+	if err != nil || len(persisted) != 2 {
+		t.Fatalf("first step commit = (%d, %v), want (2, nil)", len(persisted), err)
+	}
+	checkpoint := interruptedCheckpointInput(botID, sessionID, runID, persisted[0].ID, "cut short")
+	checkpoint.Metadata["kept"] = "yes"
+	if _, err := service.PersistAgentStep(owner, AgentStep{RunID: runID.String(), Interrupted: true, Messages: []PersistInput{checkpoint}}); err != nil {
+		t.Fatalf("interrupted commit: %v", err)
+	}
+
+	failure := InterruptedStepFailure{
+		RunID: runID.String(), BotID: botID.String(), SessionID: sessionID.String(),
+		Metadata: map[string]any{HistoryErrorCodeMetadataKey: "agent.response_timeout"},
+	}
+	if err := service.RecordInterruptedStepFailure(owner, failure); err != nil {
+		t.Fatalf("record failure: %v", err)
+	}
+	history, err := service.ListBySession(ctx, sessionID.String())
+	if err != nil || len(history) != 3 {
+		t.Fatalf("history = %d rows, %v, want 3", len(history), err)
+	}
+	for _, row := range history[:2] {
+		if _, named := row.Metadata[HistoryErrorCodeMetadataKey]; named {
+			t.Fatalf("row %s outside the checkpoint was named: %#v", row.Role, row.Metadata)
+		}
+	}
+	want := map[string]any{
+		AgentStepInterruptedMetadataKey: true,
+		"kept":                          "yes",
+		HistoryErrorCodeMetadataKey:     "agent.response_timeout",
+	}
+	if !reflect.DeepEqual(history[2].Metadata, want) {
+		t.Fatalf("checkpoint metadata = %#v, want %#v", history[2].Metadata, want)
+	}
+
+	// A newer owner revokes the fence: the old one cannot overwrite the row.
+	acquireRuntimeFenceToken(t, ctx, queries, botID, sessionID)
+	failure.Metadata = map[string]any{HistoryErrorCodeMetadataKey: "agent.provider_auth_failed"}
+	if err := service.RecordInterruptedStepFailure(owner, failure); !errors.Is(err, runtimefence.ErrStale) {
+		t.Fatalf("stale owner error = %v, want ErrStale", err)
+	}
+	history, err = service.ListBySession(ctx, sessionID.String())
+	if err != nil || history[2].Metadata[HistoryErrorCodeMetadataKey] != "agent.response_timeout" {
+		t.Fatalf("checkpoint after the stale write = %#v, %v", history[2].Metadata, err)
 	}
 }
 

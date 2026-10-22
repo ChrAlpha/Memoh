@@ -20,6 +20,20 @@ type RecordingMessages struct {
 	Deleted                 [][]string
 	// RunRequest is the request row GetRunTurnRequest finds; nil finds none.
 	RunRequest *messagepkg.RunTurnRequest
+	// InterruptedFailures are the failures named onto interrupted rows;
+	// InterruptedFailureErr, when set, refuses them.
+	InterruptedFailures   []messagepkg.InterruptedStepFailure
+	InterruptedFailureErr error
+}
+
+// RecordInterruptedStepFailure records the failure a run named on its
+// checkpoint rows.
+func (s *RecordingMessages) RecordInterruptedStepFailure(_ context.Context, failure messagepkg.InterruptedStepFailure) error {
+	if s.InterruptedFailureErr != nil {
+		return s.InterruptedFailureErr
+	}
+	s.InterruptedFailures = append(s.InterruptedFailures, failure)
+	return nil
 }
 
 func (s *RecordingMessages) Persist(_ context.Context, input messagepkg.PersistInput) (messagepkg.Message, error) {
