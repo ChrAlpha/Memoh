@@ -4521,7 +4521,12 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND m.compact_id = $1
   AND m.id IN (
     SELECT bounded.id FROM (
-      SELECT source.id, SUM(octet_length(row_to_json(source)::text)) OVER (
+      SELECT source.id, SUM(
+        octet_length(source.content::text)
+        + octet_length(source.metadata::text)
+        + octet_length(COALESCE(source.usage, '{}'::jsonb)::text)
+        + octet_length(COALESCE(source.display_text, ''))
+      ) OVER (
         ORDER BY source.turn_position ASC, source.turn_message_seq ASC, source.created_at ASC, source.id ASC
       ) AS read_bytes
       FROM bot_visible_history_messages source
@@ -4562,6 +4567,10 @@ type ListMessagesByCompactIDWithinBytesRow struct {
 	ReplyTarget             pgtype.Text        `json:"reply_target"`
 }
 
+// Reads back the rows one attempt claimed, measured as
+// ListUncompactedMessagesBySessionWithinBytes measures its candidates: rows
+// the candidate read admitted fit the same budget here unless their payload
+// changed since.
 func (q *Queries) ListMessagesByCompactIDWithinBytes(ctx context.Context, arg ListMessagesByCompactIDWithinBytesParams) ([]ListMessagesByCompactIDWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listMessagesByCompactIDWithinBytes, arg.CompactID, arg.MaxBytes)
 	if err != nil {

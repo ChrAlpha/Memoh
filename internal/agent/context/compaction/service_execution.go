@@ -402,7 +402,7 @@ func verifyClaimedCoverage(ctx context.Context, q dbstore.Queries, logID pgtype.
 		return err
 	}
 	if len(current) != len(ids) {
-		return fmt.Errorf("%w: %d of %d claimed rows carry the claim", errStaleSource, len(current), len(ids))
+		return fmt.Errorf("%w: read back %d of %d claimed rows", errStaleSource, len(current), len(ids))
 	}
 	if len(current) == 0 {
 		return nil

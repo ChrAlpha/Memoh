@@ -187,7 +187,7 @@ func boundedRowsForTest(rows []sqlc.ListUncompactedMessagesBySessionRow) []sqlc.
 	converted := make([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, len(rows))
 	var cumulative int64
 	for i, row := range rows {
-		cumulative += int64(len(row.Content) + len(row.Metadata) + len(row.Usage) + len(row.DisplayText.String))
+		cumulative += payloadBytesForTest(row.Content, row.Metadata, row.Usage, row.DisplayText.String)
 		converted[i] = sqlc.ListUncompactedMessagesBySessionWithinBytesRow{
 			ID: row.ID, BotID: row.BotID, SessionID: row.SessionID,
 			SenderChannelIdentityID: row.SenderChannelIdentityID, SenderUserID: row.SenderUserID,
@@ -201,6 +201,12 @@ func boundedRowsForTest(rows []sqlc.ListUncompactedMessagesBySessionRow) []sqlc.
 		}
 	}
 	return converted
+}
+
+// payloadBytesForTest measures a row the way the candidate and claimed-row
+// reads do.
+func payloadBytesForTest(content, metadata, usage []byte, displayText string) int64 {
+	return int64(len(content) + len(metadata) + len(usage) + len(displayText))
 }
 
 func (f *fakeQueries) ListMessageAssetsBatch(_ context.Context, _ []pgtype.UUID) ([]sqlc.ListMessageAssetsBatchRow, error) {
@@ -226,8 +232,7 @@ func (f *fakeQueries) ListMessagesByCompactIDWithinBytes(ctx context.Context, ar
 	rows, err := f.ListMessagesByCompactID(ctx, arg.CompactID)
 	var bounded []sqlc.ListMessagesByCompactIDWithinBytesRow
 	for _, row := range rows {
-		encoded, _ := json.Marshal(row)
-		arg.MaxBytes -= int64(len(encoded))
+		arg.MaxBytes -= payloadBytesForTest(row.Content, row.Metadata, row.Usage, row.DisplayText.String)
 		if arg.MaxBytes < 0 {
 			break
 		}
