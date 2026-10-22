@@ -32,12 +32,12 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 	stub := &stubModel{summary: "compacted the old exchange"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), currentConfig(stub, 100, rows[5]))
+	res, err := svc.compactOnce(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if res.Status != StatusOK {
-		t.Fatalf("status = %q, want %q: a leading row that renders nothing must not starve the history behind it", res.Status, StatusOK)
+	if res.Status != passOK {
+		t.Fatalf("status = %q, want %q: a leading row that renders nothing must not starve the history behind it", res.Status, passOK)
 	}
 
 	if len(q.markedIDs) != 5 {
@@ -64,12 +64,12 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 	stub := &stubModel{summary: "should never be produced"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), currentConfig(stub, 100, rows[5]))
+	res, err := svc.compactOnce(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if res.Status != StatusNoop {
-		t.Fatalf("status = %q, want %q", res.Status, StatusNoop)
+	if res.Status != passNoop {
+		t.Fatalf("status = %q, want %q", res.Status, passNoop)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("model called %d times for an unmarkable window, want 0", stub.calls)
@@ -98,12 +98,12 @@ func TestDoCompactionCoversOversizedRenderEmptyHead(t *testing.T) {
 
 	cfg := machineryConfig(stub, 100)
 	cfg.ProtectedSources = historySources(rows[4])
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
+	res, err := svc.compactOnce(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if res.Status != StatusOK {
-		t.Fatalf("status = %q, want %q: a render-empty head must not eat the trim budget", res.Status, StatusOK)
+	if res.Status != passOK {
+		t.Fatalf("status = %q, want %q: a render-empty head must not eat the trim budget", res.Status, passOK)
 	}
 	if len(q.markedIDs) != 4 {
 		t.Fatalf("marked = %v, want the render-empty head covered with the old question/answer pair", q.markedIDs)
@@ -126,12 +126,12 @@ func TestDoCompactionCostsAnExchangeByWhatItRenders(t *testing.T) {
 
 	cfg := machineryConfig(stub, 100)
 	cfg.ProtectedSources = historySources(rows[4])
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
+	res, err := svc.compactOnce(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if res.Status != StatusOK {
-		t.Fatalf("status = %q, want %q: an exchange's raw usage estimate must not eat the trim budget", res.Status, StatusOK)
+	if res.Status != passOK {
+		t.Fatalf("status = %q, want %q: an exchange's raw usage estimate must not eat the trim budget", res.Status, passOK)
 	}
 	if len(q.markedIDs) != 4 {
 		t.Fatalf("marked = %v, want the exchange covered with the old question/answer pair", q.markedIDs)
@@ -173,8 +173,8 @@ func TestCompactionCoversThePrefixPastAnsweredAskUserAndReasoningRows(t *testing
 	rows := productionStarvationCorpus(t)
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 72)}
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 100000, rows[len(rows)-1]))
-	if err != nil || res.Status != StatusOK {
+	res, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 100000, rows[len(rows)-1]))
+	if err != nil || res.Status != passOK {
 		t.Fatalf("compaction stalled on the short head fragment: result=%+v err=%v", res, err)
 	}
 	if stub.calls != 1 {
@@ -208,8 +208,8 @@ func TestCompactionCountsTheReplayOfRowsThatRenderNothing(t *testing.T) {
 	}
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 20)}
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 100000, rows[3]))
-	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 3 {
+	res, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 100000, rows[3]))
+	if err != nil || res.Status != passOK || len(q.markedIDs) != 3 {
 		t.Fatalf("a summary far smaller than the replayed reasoning was rejected: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
 	}
 }
@@ -228,8 +228,8 @@ func TestBudgetCompactionSummarizesTheNewestFinishedExchange(t *testing.T) {
 	cfg := machineryConfig(&stubModel{summary: "the user pasted a long report"}, 0)
 	cfg.TotalInputTokens = 5000
 	cfg.HistoryBudgetTokens = 2700
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
-	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 2 {
+	res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
+	if err != nil || res.Status != passOK || len(q.markedIDs) != 2 {
 		t.Fatalf("the newest finished exchange stayed raw although it cannot fit: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
 	}
 }

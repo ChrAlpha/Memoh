@@ -5457,6 +5457,9 @@ WITH candidate_rows AS MATERIALIZED (
     AND m.session_id = $1
     AND ($2::timestamptz IS NULL OR m.created_at >= $2::timestamptz)
     AND ($3::timestamptz IS NULL OR m.created_at < $3::timestamptz)
+    AND ($4::uuid[] IS NULL
+      OR m.id = ANY($4::uuid[])
+      OR m.source_message_id = ANY($5::text[]))
     AND (m.compact_id IS NULL OR NOT EXISTS (
       SELECT 1 FROM bot_history_message_compacts c
       WHERE c.team_id = public.memoh_current_team_id()
@@ -5482,7 +5485,7 @@ WITH candidate_rows AS MATERIALIZED (
 ), admitted_candidates AS MATERIALIZED (
   SELECT id, turn_position, turn_message_seq, created_at, payload_bytes, candidate_count, candidate_bytes, cumulative_bytes
   FROM ranked_candidates
-  WHERE cumulative_bytes <= $4::BIGINT
+  WHERE cumulative_bytes <= $6::BIGINT
 )
 SELECT
   m.id,
@@ -5530,10 +5533,12 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
 type ListUncompactedMessagesBySessionWithinBytesParams struct {
-	SessionID     pgtype.UUID        `json:"session_id"`
-	CreatedFrom   pgtype.Timestamptz `json:"created_from"`
-	CreatedBefore pgtype.Timestamptz `json:"created_before"`
-	MaxBytes      int64              `json:"max_bytes"`
+	SessionID          pgtype.UUID        `json:"session_id"`
+	CreatedFrom        pgtype.Timestamptz `json:"created_from"`
+	CreatedBefore      pgtype.Timestamptz `json:"created_before"`
+	MessageIds         []pgtype.UUID      `json:"message_ids"`
+	ExternalMessageIds []string           `json:"external_message_ids"`
+	MaxBytes           int64              `json:"max_bytes"`
 }
 
 type ListUncompactedMessagesBySessionWithinBytesRow struct {
@@ -5569,11 +5574,15 @@ type ListUncompactedMessagesBySessionWithinBytesRow struct {
 // so an oversized leading row returns no payload instead of crossing the
 // process-memory boundary. CandidateCount reports whether the prefix was
 // truncated and lets the service choose a progress-preserving selection.
+// message_ids, when set, restricts candidates to those rows and the rows of
+// external_message_ids: what the caller's request renders.
 func (q *Queries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg ListUncompactedMessagesBySessionWithinBytesParams) ([]ListUncompactedMessagesBySessionWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listUncompactedMessagesBySessionWithinBytes,
 		arg.SessionID,
 		arg.CreatedFrom,
 		arg.CreatedBefore,
+		arg.MessageIds,
+		arg.ExternalMessageIds,
 		arg.MaxBytes,
 	)
 	if err != nil {
@@ -6192,6 +6201,9 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND ($2::timestamptz IS NULL OR m.created_at >= $2::timestamptz)
   AND ($3::timestamptz IS NULL OR m.created_at < $3::timestamptz)
+  AND ($4::uuid[] IS NULL
+    OR m.id = ANY($4::uuid[])
+    OR m.source_message_id = ANY($5::text[]))
   AND (m.compact_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM bot_history_message_compacts c
     WHERE c.team_id = public.memoh_current_team_id()
@@ -6208,9 +6220,11 @@ WHERE m.team_id = public.memoh_current_team_id()
 `
 
 type MeasureUncompactedMessagesBySessionParams struct {
-	SessionID     pgtype.UUID        `json:"session_id"`
-	CreatedFrom   pgtype.Timestamptz `json:"created_from"`
-	CreatedBefore pgtype.Timestamptz `json:"created_before"`
+	SessionID          pgtype.UUID        `json:"session_id"`
+	CreatedFrom        pgtype.Timestamptz `json:"created_from"`
+	CreatedBefore      pgtype.Timestamptz `json:"created_before"`
+	MessageIds         []pgtype.UUID      `json:"message_ids"`
+	ExternalMessageIds []string           `json:"external_message_ids"`
 }
 
 type MeasureUncompactedMessagesBySessionRow struct {
@@ -6222,7 +6236,13 @@ type MeasureUncompactedMessagesBySessionRow struct {
 // Metadata-only companion for the bounded compaction read. It never returns
 // message payloads and exposes the oversized-head degradation explicitly.
 func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, arg MeasureUncompactedMessagesBySessionParams) (MeasureUncompactedMessagesBySessionRow, error) {
-	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession, arg.SessionID, arg.CreatedFrom, arg.CreatedBefore)
+	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession,
+		arg.SessionID,
+		arg.CreatedFrom,
+		arg.CreatedBefore,
+		arg.MessageIds,
+		arg.ExternalMessageIds,
+	)
 	var i MeasureUncompactedMessagesBySessionRow
 	err := row.Scan(&i.CandidateCount, &i.CandidateBytes, &i.LargestCandidateBytes)
 	return i, err

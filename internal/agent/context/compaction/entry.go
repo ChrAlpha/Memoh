@@ -3,8 +3,11 @@ package compaction
 import (
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	sdk "github.com/felinics/twilight/sdk"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -46,8 +49,14 @@ func isToolPartType(value string) bool {
 	return isToolCallPartType(value) || isToolResultPartType(value)
 }
 
+// renderCandidateEntry renders a history row for the summarizer. Each tool
+// result a stored row holds cites the ref get_messages reads it back by.
 func renderCandidateEntry(record historyfrag.HistoryRecord) string {
-	content := strings.TrimSpace(renderEntryContent(record.ModelMessage))
+	rowID := ""
+	if record.SourceKind == historyfrag.SourceDBMessage {
+		rowID = record.Ref.ID
+	}
+	content := strings.TrimSpace(entryRender{rowID: rowID}.content(record.ModelMessage))
 	if content == "" {
 		return ""
 	}
@@ -114,14 +123,26 @@ func cleanEntryMetadataValue(value string) string {
 // show their outcome text (falling back to a marker) instead of dumping the
 // raw stored JSON.
 func renderEntryContent(mm turn.ModelMessage) string {
+	return entryRender{}.content(mm)
+}
+
+// entryRender names the row a message was stored in, so each tool result it
+// renders cites ref=<row>:<part>, the part's position in the message history
+// replays from that row.
+type entryRender struct {
+	rowID string
+}
+
+func (r entryRender) content(mm turn.ModelMessage) string {
 	parts := parseEntryParts(mm.Content)
+	refs := r.resultRefs(mm)
 
 	// Legacy OpenAI-style tool-result envelope: ToolCallID lives on the
 	// ModelMessage itself and Content IS the result payload directly, not a
 	// content-part array (see timeline.nativeToolRoleContent). A content-part
 	// tool-result, when present, still takes precedence below.
 	if strings.TrimSpace(mm.ToolCallID) != "" && !hasToolResultPart(parts) {
-		return renderToolResult(mm.Content)
+		return r.toolResult(mm.Name, refs, 0, mm.Content)
 	}
 
 	var segs []string
@@ -130,6 +151,7 @@ func renderEntryContent(mm turn.ModelMessage) string {
 	}
 
 	sawToolCallPart := false
+	results := 0
 	for _, p := range parts {
 		switch {
 		case p.Type == "image":
@@ -140,7 +162,8 @@ func renderEntryContent(mm turn.ModelMessage) string {
 			sawToolCallPart = true
 			segs = append(segs, toolCallMarker(p.ToolName, p.Input))
 		case isToolResultPartType(p.Type):
-			segs = append(segs, renderToolResult(p.Output, p.Result))
+			segs = append(segs, r.toolResult(p.ToolName, refs, results, p.Output, p.Result))
+			results++
 		}
 	}
 
@@ -151,6 +174,32 @@ func renderEntryContent(mm turn.ModelMessage) string {
 	}
 
 	return strings.Join(segs, "\n")
+}
+
+// resultRefs lists the ref of each tool result in mm, in order: its row and
+// its part index in the message history replays from that row.
+func (r entryRender) resultRefs(mm turn.ModelMessage) []string {
+	if r.rowID == "" {
+		return nil
+	}
+	var refs []string
+	for i, part := range historyfrag.StoredModelMessageToSDKMessage(mm).Content {
+		if _, ok := part.(sdk.ToolResultPart); ok {
+			refs = append(refs, r.rowID+":"+strconv.Itoa(i))
+		}
+	}
+	return refs
+}
+
+func (r entryRender) toolResult(name string, refs []string, index int, candidates ...json.RawMessage) string {
+	if index >= len(refs) {
+		return renderToolResult(candidates...)
+	}
+	label := "[tool_result"
+	if name = cleanEntryMetadataValue(name); name != "" {
+		label += ": " + name
+	}
+	return label + " ref=" + refs[index] + "] " + renderToolResult(candidates...)
 }
 
 func hasToolResultPart(parts []entryPart) bool {

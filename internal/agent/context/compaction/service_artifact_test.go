@@ -52,7 +52,7 @@ func TestDoCompactionPersistsDurableCoverageAndAnchor(t *testing.T) {
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY"}
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
+	if _, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -86,7 +86,7 @@ func TestDoCompactionOrdersDurableCoverageBySourceTime(t *testing.T) {
 	rows[3].CreatedAt = pgtype.Timestamptz{Time: time.UnixMilli(4000), Valid: true}
 	q := &fakeQueries{uncompacted: rows}
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2])); err != nil {
+	if _, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2])); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestDoCompactionCoverageHashIncludesMessageAssets(t *testing.T) {
 	}
 	stub := &stubModel{summary: "SUMMARY"}
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
+	if _, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 200, rows[2])); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -154,8 +154,10 @@ func TestDoCompactionCoverageHashIncludesMessageAssets(t *testing.T) {
 	if coverage[0].Ref.ContentHash == plainHash {
 		t.Fatal("coverage hash ignored the attached asset")
 	}
-	if q.assetCalls != 1 {
-		t.Fatalf("asset batch calls = %d, want 1", q.assetCalls)
+	// Assets load once for the claim and once more for the commit, which
+	// rechecks the coverage hashes it writes.
+	if q.assetCalls != 2 {
+		t.Fatalf("asset batch calls = %d, want 2", q.assetCalls)
 	}
 	wantMessageIDs := []pgtype.UUID{rows[0].ID, rows[1].ID}
 	if !slices.Equal(q.markArg.MessageIds, wantMessageIDs) {
@@ -165,7 +167,7 @@ func TestDoCompactionCoverageHashIncludesMessageAssets(t *testing.T) {
 	if !slices.Equal(q.markArg.ExpectedCompactIds, wantClaims) {
 		t.Fatalf("expected compact IDs = %v, want %v", q.markArg.ExpectedCompactIds, wantClaims)
 	}
-	if !slices.Equal(q.queryCalls, []string{"mark", "assets"}) {
+	if !slices.Equal(q.queryCalls, []string{"mark", "assets", "assets"}) {
 		t.Fatalf("claim protocol calls = %v, want mark before assets", q.queryCalls)
 	}
 }
@@ -185,7 +187,7 @@ func TestDoCompactionStopsWhenAssetsCannotBeLoaded(t *testing.T) {
 		assetsErr:   assetErr,
 	}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
+	_, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if !errors.Is(err, assetErr) {
 		t.Fatalf("RunCompactionSync error = %v, want %v", err, assetErr)
 	}
@@ -209,7 +211,7 @@ func TestDoCompactionReturnsSuccessfulArtifactFinalizationError(t *testing.T) {
 		completeErr: completeErr,
 	}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
+	_, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if !errors.Is(err, completeErr) {
 		t.Fatalf("RunCompactionSync error = %v, want %v", err, completeErr)
 	}
@@ -230,7 +232,7 @@ func TestDoCompactionRejectsPartialSourceMarking(t *testing.T) {
 	markedRows := int64(1)
 	q := &fakeQueries{uncompacted: rows, markedRowCount: &markedRows}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
+	_, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(&stubModel{summary: "SUMMARY"}, 200, rows[2]))
 	if err == nil || !strings.Contains(err.Error(), "marked 1 of 2") {
 		t.Fatalf("RunCompactionSync error = %v, want partial-mark failure", err)
 	}

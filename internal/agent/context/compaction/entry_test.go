@@ -1,9 +1,11 @@
 package compaction
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
@@ -489,5 +491,40 @@ func TestRenderEntryHeaderCarriesExecutionLocation(t *testing.T) {
 		Metadata: map[string]any{"execution_location": map[string]any{"name": "No Target"}},
 	}); strings.Contains(got, "workspace") {
 		t.Fatalf("header rendered a workspace without a target id:\n%s", got)
+	}
+}
+
+// A tool result's ref names the part get_messages reads back: its row and its
+// position in the message history replays from that row.
+func TestRenderEntryCitesTheRefGetMessagesResolves(t *testing.T) {
+	t.Parallel()
+
+	for _, content := range []string{
+		`[{"type":"text","text":"two results"},{"type":"tool-result","toolCallId":"a","toolName":"read","output":{"type":"text","value":"first"}},{"type":"tool-result","toolCallId":"b","toolName":"exec","output":{"type":"text","value":"second"}}]`,
+		`{"role":"tool","tool_call_id":"c1","name":"search","content":{"output":"legacy result"}}`,
+	} {
+		row := mkRow(t, "tool", content, 0)
+		items, _ := candidatesFromRows([]sqlc.ListUncompactedMessagesBySessionRow{row})
+		rendered := renderCandidateEntry(items[0].Record)
+		replayed := historyfrag.StoredModelMessageToSDKMessage(historyfrag.DecodeStoredModelMessage(nil, formatUUID(row.ID), row.Role, row.Content))
+		cited := 0
+		for _, field := range strings.Fields(rendered) {
+			ref, ok := strings.CutPrefix(strings.TrimSuffix(field, "]"), "ref=")
+			if !ok {
+				continue
+			}
+			id, part, _ := strings.Cut(ref, ":")
+			index, err := strconv.Atoi(part)
+			if id != formatUUID(row.ID) || err != nil || index >= len(replayed.Content) {
+				t.Fatalf("ref %q does not name a part of row %s", ref, formatUUID(row.ID))
+			}
+			if _, ok := replayed.Content[index].(sdk.ToolResultPart); !ok {
+				t.Fatalf("ref %q names a %s part, not a tool result", ref, replayed.Content[index].PartType())
+			}
+			cited++
+		}
+		if want := strings.Count(content, "tool-result") + strings.Count(content, "tool_call_id"); cited != want {
+			t.Fatalf("rendered %q cites %d refs, want %d", rendered, cited, want)
+		}
 	}
 }

@@ -76,6 +76,7 @@ type backlogFixture struct {
 	summaries   atomic.Int32
 	failSummary atomic.Bool
 	longSummary atomic.Bool
+	onSummary   func(body []byte)
 	modelCalls  atomic.Int32
 	lastRequest atomic.Value
 }
@@ -113,6 +114,9 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 			return
 		}
 		f.summaries.Add(1)
+		if f.onSummary != nil {
+			f.onSummary(body)
+		}
 		if f.failSummary.Load() {
 			http.Error(w, "summarizer down", http.StatusBadRequest)
 			return

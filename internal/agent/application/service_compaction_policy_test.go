@@ -29,9 +29,9 @@ type recordingCompactionRunner struct {
 	configs []compaction.TriggerConfig
 }
 
-func (r *recordingCompactionRunner) RunCompactionSync(_ context.Context, cfg compaction.TriggerConfig) (compaction.Result, error) {
+func (r *recordingCompactionRunner) Compact(_ context.Context, cfg compaction.TriggerConfig, _ func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
 	r.configs = append(r.configs, cfg)
-	return compaction.Result{Status: compaction.StatusOK}, nil
+	return []compaction.Pass{{}}, nil
 }
 
 func newControllerPolicyService(t *testing.T) (*Service, *recordingCompactionRunner) {

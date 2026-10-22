@@ -3152,6 +3152,8 @@ WHERE message.team_id = public.memoh_current_team_id()
 -- so an oversized leading row returns no payload instead of crossing the
 -- process-memory boundary. CandidateCount reports whether the prefix was
 -- truncated and lets the service choose a progress-preserving selection.
+-- message_ids, when set, restricts candidates to those rows and the rows of
+-- external_message_ids: what the caller's request renders.
 WITH candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
@@ -3172,6 +3174,9 @@ WITH candidate_rows AS MATERIALIZED (
     AND m.session_id = sqlc.arg(session_id)
     AND (sqlc.narg(created_from)::timestamptz IS NULL OR m.created_at >= sqlc.narg(created_from)::timestamptz)
     AND (sqlc.narg(created_before)::timestamptz IS NULL OR m.created_at < sqlc.narg(created_before)::timestamptz)
+    AND (sqlc.narg(message_ids)::uuid[] IS NULL
+      OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
+      OR m.source_message_id = ANY(sqlc.narg(external_message_ids)::text[]))
     AND (m.compact_id IS NULL OR NOT EXISTS (
       SELECT 1 FROM bot_history_message_compacts c
       WHERE c.team_id = public.memoh_current_team_id()
@@ -3268,6 +3273,9 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
   AND (sqlc.narg(created_from)::timestamptz IS NULL OR m.created_at >= sqlc.narg(created_from)::timestamptz)
   AND (sqlc.narg(created_before)::timestamptz IS NULL OR m.created_at < sqlc.narg(created_before)::timestamptz)
+  AND (sqlc.narg(message_ids)::uuid[] IS NULL
+    OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
+    OR m.source_message_id = ANY(sqlc.narg(external_message_ids)::text[]))
   AND (m.compact_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM bot_history_message_compacts c
     WHERE c.team_id = public.memoh_current_team_id()

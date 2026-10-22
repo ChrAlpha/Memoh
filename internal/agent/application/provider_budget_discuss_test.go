@@ -24,13 +24,13 @@ import (
 
 type discussBudgetCompactor struct {
 	configs []compaction.TriggerConfig
-	status  string
+	passes  int
 	err     error
 	delay   time.Duration
 	started chan struct{}
 }
 
-func (c *discussBudgetCompactor) RunCompactionSync(ctx context.Context, cfg compaction.TriggerConfig) (compaction.Result, error) {
+func (c *discussBudgetCompactor) Compact(ctx context.Context, cfg compaction.TriggerConfig, _ func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
 	c.configs = append(c.configs, cfg)
 	if c.started != nil {
 		close(c.started)
@@ -39,10 +39,10 @@ func (c *discussBudgetCompactor) RunCompactionSync(ctx context.Context, cfg comp
 		select {
 		case <-time.After(c.delay):
 		case <-ctx.Done():
-			return compaction.Result{}, context.Cause(ctx)
+			return nil, context.Cause(ctx)
 		}
 	}
-	return compaction.Result{Status: c.status}, c.err
+	return make([]compaction.Pass, c.passes), c.err
 }
 
 func TestDiscussProviderBudgetRecoveryDoesNotConsumeModelIdleTimeout(t *testing.T) {
@@ -119,7 +119,7 @@ func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, 
 	service.settingsService = policyService.settingsService
 	service.modelsService = policyService.modelsService
 	service.queries = policyService.queries
-	compactor := &discussBudgetCompactor{status: compaction.StatusOK}
+	compactor := &discussBudgetCompactor{passes: 1}
 	service.compactionService = compactor
 	cmd := lifecycleDiscussCommand()
 	cmd.DiscussMessages = nil
@@ -221,7 +221,7 @@ func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testi
 				compactor.err = errors.New("private summarizer failure")
 				wantCompactions = 1
 			case "compaction noop":
-				compactor.status = compaction.StatusNoop
+				compactor.passes = 0
 				wantCompactions = 1
 			}
 			_, lifecycles := configureDiscussLifecycle(service)
@@ -339,7 +339,7 @@ func TestDiscussExhaustedRecoveryStillShedsOlderImages(t *testing.T) {
 		t.Run(fmt.Sprintf("exhausted=%v", exhausted), func(t *testing.T) {
 			service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
 			configureDiscussLifecycle(service)
-			compactor.status = compaction.StatusNoop
+			compactor.passes = 0
 			resolver.resolveResult.RunConfig.SupportsImageInput = true
 			service.turnHooks.inlineImages = echoDiscussImages
 			cmd.DiscussMessages = []turn.DiscussMessage{
@@ -376,7 +376,7 @@ func TestDiscussExhaustedRecoveryStillShedsOlderImages(t *testing.T) {
 func TestDiscussFailedCompactionRunsOnceAfterShedding(t *testing.T) {
 	service, resolver, _, compactor, cmd := discussBudgetRecoveryFixture(t)
 	configureDiscussLifecycle(service)
-	compactor.status = compaction.StatusNoop
+	compactor.passes = 0
 	resolver.resolveResult.RunConfig.SupportsImageInput = true
 	service.turnHooks.inlineImages = echoDiscussImages
 	last := len(cmd.DiscussMessages) - 1

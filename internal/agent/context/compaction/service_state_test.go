@@ -24,11 +24,11 @@ func TestRunCompactionSyncReportsScopedNoop(t *testing.T) {
 	stub := &stubModel{summary: "unused"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 100))
+	res, err := svc.compactOnce(context.Background(), machineryConfig(stub, 100))
 	if err != nil {
 		t.Fatalf("no-op must not error: %v", err)
 	}
-	if res.Status != StatusNoop || res.MessageCount != 0 || res.Summary != "" {
+	if res.Status != passNoop || res.MessageCount != 0 || res.Summary != "" {
 		t.Fatalf("no-op result = %+v, want noop/0/empty", res)
 	}
 	if stub.calls != 0 || q.created {
@@ -41,11 +41,11 @@ func TestRunCompactionSyncReportsScopedSummaryOnSuccess(t *testing.T) {
 	stub := &stubModel{summary: "SUMMARY-OK"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 450))
+	res, err := svc.compactOnce(context.Background(), machineryConfig(stub, 450))
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if res.Status != StatusOK || res.Summary != "SUMMARY-OK" || res.MessageCount != len(q.markedIDs) {
+	if res.Status != passOK || res.Summary != "SUMMARY-OK" || res.MessageCount != len(q.markedIDs) {
 		t.Fatalf("success result = %+v, want ok/SUMMARY-OK/%d", res, len(q.markedIDs))
 	}
 }
@@ -56,11 +56,11 @@ func TestRunCompactionSyncFailureSurfacesError(t *testing.T) {
 	cfg := machineryConfig(&stubModel{}, 450)
 	cfg.HTTPClient = &http.Client{Transport: &failingModel{}}
 
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
+	res, err := svc.compactOnce(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("a summarizer failure must surface an error, not a stale result")
 	}
-	if res.Status == StatusOK {
+	if res.Status == passOK {
 		t.Fatalf("failed result must not report ok: %+v", res)
 	}
 }
@@ -73,7 +73,7 @@ func TestRunCompactionRetriesImmediatelyAfterFailure(t *testing.T) {
 	cfg.HTTPClient = &http.Client{Transport: fail}
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		if _, err := svc.RunCompactionSync(context.Background(), cfg); err == nil {
+		if _, err := svc.compactOnce(context.Background(), cfg); err == nil {
 			t.Fatalf("attempt %d must run and fail", attempt)
 		}
 		if fail.calls != attempt {
@@ -83,7 +83,7 @@ func TestRunCompactionRetriesImmediatelyAfterFailure(t *testing.T) {
 
 	stub := &stubModel{summary: "SUMMARY-OK"}
 	cfg.HTTPClient = &http.Client{Transport: stub}
-	if res, err := svc.RunCompactionSync(context.Background(), cfg); err != nil || res.Status != StatusOK {
+	if res, err := svc.compactOnce(context.Background(), cfg); err != nil || res.Status != passOK {
 		t.Fatalf("a fixed summarizer must succeed on the next attempt: res=%#v err=%v", res, err)
 	}
 }
@@ -95,11 +95,11 @@ func TestRunCompactionSyncSurfacesCompletionPersistenceFailure(t *testing.T) {
 	svc := newMachineryService(q)
 	stub := &stubModel{summary: "durable summary"}
 
-	res, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 200))
+	res, err := svc.compactOnce(context.Background(), machineryConfig(stub, 200))
 	if err == nil {
 		t.Fatal("completion persistence failure must surface an error")
 	}
-	if res.Status == StatusOK {
+	if res.Status == passOK {
 		t.Fatal("result must not claim ok when the summary was never persisted")
 	}
 }
@@ -134,12 +134,12 @@ func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) 
 			priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", 1200))
 		}
 		q := &fakeQueries{uncompacted: rows, priorLogs: priorLogs}
-		res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+		res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("RunCompactionSync: %v", err)
 		}
-		if res.Status != StatusProgress {
-			t.Fatalf("status = %q, want %q: the rows past the summarizer input wait for the next pass", res.Status, StatusProgress)
+		if res.Status != passProgress {
+			t.Fatalf("status = %q, want %q: the rows past the summarizer input wait for the next pass", res.Status, passProgress)
 		}
 		if request := estimateBytesAsTokens(stub.prompt); request+stub.maxTokens > cfg.SummaryWindowTokens {
 			t.Fatalf("request %d + max_tokens %d exceeds the %d window", request, stub.maxTokens, cfg.SummaryWindowTokens)
@@ -186,16 +186,16 @@ func TestDoCompactionSharesTheWindowBetweenWholeGroupsAndTheSummary(t *testing.T
 			if tc.earlier > 0 {
 				q.priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", tc.earlier*4))
 			}
-			res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+			res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 			if tc.read == 0 {
 				if !errors.Is(err, errCompactionInputOverflow) || stub.calls != 0 || q.created || len(q.markedIDs) != 0 {
 					t.Fatalf("err=%v calls=%d created=%t marked=%v, want an overflow before any claim or call: a summary covers only what its model read", err, stub.calls, q.created, q.markedIDs)
 				}
 				return
 			}
-			wantStatus := StatusOK
+			wantStatus := passOK
 			if tc.read < len(tc.rows) {
-				wantStatus = StatusProgress
+				wantStatus = passProgress
 				if strings.Contains(stub.prompt, strings.Repeat("x", tc.rows[tc.read]*4)) {
 					t.Fatal("a deferred group reached the summarizer")
 				}
@@ -229,15 +229,15 @@ func TestRunCompactionPanicReleasesSlot(t *testing.T) {
 	recovered := make(chan any, 1)
 	go func() {
 		defer func() { recovered <- recover() }()
-		_, _ = svc.RunCompactionSync(context.Background(), cfg)
+		_, _ = svc.compactOnce(context.Background(), cfg)
 	}()
 	if r := <-recovered; r == nil {
 		t.Fatal("the panic must propagate, not be swallowed")
 	}
 
 	q.listPanic = false
-	res, err := svc.RunCompactionSync(context.Background(), cfg)
-	if err != nil || res.Status != StatusOK {
+	res, err := svc.compactOnce(context.Background(), cfg)
+	if err != nil || res.Status != passOK {
 		t.Fatalf("the slot must be released after a panic: res=%#v err=%v", res, err)
 	}
 }
@@ -269,7 +269,7 @@ func TestPreHookPanicReleasesSlot(t *testing.T) {
 	recovered := make(chan any, 1)
 	go func() {
 		defer func() { recovered <- recover() }()
-		_, _ = svc.RunCompactionSync(context.Background(), cfg)
+		_, _ = svc.compactOnce(context.Background(), cfg)
 	}()
 	if r := <-recovered; r == nil {
 		t.Fatal("a pre-hook panic must propagate, not be swallowed")
@@ -277,7 +277,7 @@ func TestPreHookPanicReleasesSlot(t *testing.T) {
 
 	provider.armed.Store(false)
 	before := provider.calls.Load()
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err == nil {
+	if _, err := svc.compactOnce(context.Background(), cfg); err == nil {
 		t.Fatal("the next run must reach the failing pre-hook, proving the slot was released")
 	}
 	if provider.calls.Load() == before || stub.calls != 0 {
@@ -304,11 +304,11 @@ func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 	cfg := machineryConfig(stub, 450)
 
 	recovered := make(chan any, 1)
-	results := make(chan Result, 1)
+	results := make(chan passResult, 1)
 	errs := make(chan error, 1)
 	go func() {
 		defer func() { recovered <- recover() }()
-		res, err := svc.RunCompactionSync(context.Background(), cfg)
+		res, err := svc.compactOnce(context.Background(), cfg)
 		results <- res
 		errs <- err
 	}()
@@ -318,7 +318,7 @@ func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 	if err := <-errs; err != nil {
 		t.Fatalf("a post-hook panic must not fail the completed compaction: %v", err)
 	}
-	if res := <-results; res.Status != StatusOK || res.Summary != "SUMMARY-OK" {
+	if res := <-results; res.Status != passOK || res.Summary != "SUMMARY-OK" {
 		t.Fatalf("completed compaction result lost to a post-hook panic: %#v", res)
 	}
 	if provider.calls.Load() == 0 {
@@ -327,7 +327,7 @@ func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 
 	q.onComplete = nil
 	svc.SetHookService(nil)
-	if res, err := svc.RunCompactionSync(context.Background(), cfg); err != nil || res.Status != StatusOK {
+	if res, err := svc.compactOnce(context.Background(), cfg); err != nil || res.Status != passOK {
 		t.Fatalf("a contained post-hook panic must leave the session usable: res=%#v err=%v", res, err)
 	}
 }

@@ -29,7 +29,7 @@ func TestDoCompactionRefusesALegacySummaryWithoutSourceRows(t *testing.T) {
 	}
 	svc := newMachineryService(q)
 
-	_, err := svc.RunCompactionSync(context.Background(), cfg)
+	_, err := svc.compactOnce(context.Background(), cfg)
 	if !errors.Is(err, errIncompleteAbsorbedCoverage) || stub.calls != 0 || q.created || len(q.backfills) != 0 {
 		t.Fatalf("err=%v calls=%d created=%t backfills=%d, want a refusal before any claim", err, stub.calls, q.created, len(q.backfills))
 	}
@@ -68,7 +68,7 @@ func TestDoCompactionAbsorbsOnlyTheActiveArtifactFrontier(t *testing.T) {
 		},
 	}
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); err != nil {
+	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if !strings.Contains(stub.prompt, "active-frontier-summary") || strings.Contains(stub.prompt, "stale-parent-summary") {

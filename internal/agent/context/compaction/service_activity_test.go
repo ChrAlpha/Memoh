@@ -20,7 +20,7 @@ func TestCompactionActivityLifecycle(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		_, err := svc.RunCompactionSync(context.Background(), cfg)
+		_, err := svc.compactOnce(context.Background(), cfg)
 		done <- err
 	}()
 	select {
@@ -65,7 +65,7 @@ func TestCompactionActivityClearsAfterPanic(t *testing.T) {
 				t.Error("expected injected panic")
 			}
 		}()
-		_, _ = svc.RunCompactionSync(context.Background(), cfg)
+		_, _ = svc.compactOnce(context.Background(), cfg)
 	}()
 	if len(svc.ActiveSessions(cfg.BotID)) != 0 || len(sub.Events) != 2 {
 		t.Fatal("panic must clear activity and notify subscribers")

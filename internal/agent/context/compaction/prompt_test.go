@@ -55,3 +55,30 @@ func TestPromptKeepsTheCurrentRequestAsMaterialOutsideTheSummary(t *testing.T) {
 		}
 	}
 }
+
+// A kept message shows where it stands among what the summary replaces,
+// and the prompt says it stays verbatim before the summary.
+func TestPromptShowsKeptMessagesInPlace(t *testing.T) {
+	t.Parallel()
+
+	prompt := buildUserPrompt(nil,
+		[]messageEntry{{Role: "tool", Content: "first result"}, {Role: "user", Content: "steer: use staging", Kept: true}, {Role: "tool", Content: "second result"}},
+		nil, summaryRoom{HistoryTokens: 9000, SummaryTokens: 2048},
+	)
+	if !strings.Contains(prompt, "tool: first result\n<kept>\nuser: steer: use staging\n</kept>\ntool: second result\n") {
+		t.Fatalf("kept message not in place:\n%s", prompt)
+	}
+	for _, want := range []string{
+		"A message inside <kept> in <conversation> is not replaced",
+		"what was planned, what is done, what is still open or owed, and what was attempted with an unknown result",
+		"get_messages reads it back by that ref",
+	} {
+		if !strings.Contains(systemPrompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, systemPrompt)
+		}
+	}
+	kept := messageEntry{Role: "user", Content: "steer", Kept: true}
+	if entryPromptCost(kept) <= entryPromptCost(messageEntry{Role: "user", Content: "steer"}) {
+		t.Fatal("a kept entry is priced without its tags")
+	}
+}

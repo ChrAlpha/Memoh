@@ -17,7 +17,7 @@ func TestDoCompactionRejectsEpochChangeBeforeAttemptCreation(t *testing.T) {
 	stub := &stubModel{summary: "must not run"}
 	svc := newMachineryService(q)
 
-	_, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 450))
+	_, err := svc.compactOnce(context.Background(), machineryConfig(stub, 450))
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("RunCompactionSync() error = %v, want pgx.ErrNoRows", err)
 	}
@@ -35,7 +35,7 @@ func TestDoCompactionRecordsErrorWhenSuccessCompletionIsFenced(t *testing.T) {
 	stub := &stubModel{summary: "stale summary"}
 	svc := newMachineryService(q)
 
-	_, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 450))
+	_, err := svc.compactOnce(context.Background(), machineryConfig(stub, 450))
 	if !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("RunCompactionSync() error = %v, want pgx.ErrNoRows", err)
 	}

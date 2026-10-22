@@ -27,8 +27,8 @@ func TestSummaryRecoveryPreservesCurrentRawMessage(t *testing.T) {
 	rows = rows[len(rows)-1:]
 	cfg.ProtectedSources = historySources(rows[0])
 	q := &fakeQueries{uncompacted: rows, priorLogs: parents}
-	res, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 0 || res.MessageCount != 0 {
+	res, err := newMachineryService(q).compactOnce(t.Context(), cfg)
+	if err != nil || res.Status != passOK || len(q.markedIDs) != 0 || res.MessageCount != 0 {
 		t.Fatalf("recovery consumed current source: result=%+v err=%v claims=%v", res, err, q.markedIDs)
 	}
 }
@@ -58,8 +58,8 @@ func TestSummaryRecoveryFailureKeepsParentsActive(t *testing.T) {
 			case "missing_coverage":
 				q.priorLogs[0].Coverage = []byte("[]")
 			}
-			res, err := newMachineryService(q).RunCompactionSync(ctx, cfg)
-			if res.Status == StatusOK {
+			res, err := newMachineryService(q).compactOnce(ctx, cfg)
+			if res.Status == passOK {
 				t.Fatalf("unsafe replacement accepted: %+v", res)
 			}
 			if err == nil {
@@ -87,8 +87,8 @@ func TestCompactionRecoversSummaryOnlyFrontier(t *testing.T) {
 			}
 			parents := fusionParentLogs(t, cfg, summaries...)
 			q := &fakeQueries{priorLogs: parents}
-			result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-			if err != nil || result.Status != StatusOK {
+			result, err := newMachineryService(q).compactOnce(t.Context(), cfg)
+			if err != nil || result.Status != passOK {
 				t.Fatalf("summary-only recovery: result=%+v err=%v", result, err)
 			}
 			if stub.calls != 1 || result.MessageCount != 0 || len(q.markedIDs) != 0 {
@@ -111,16 +111,16 @@ func TestSummaryRecoveryBoundsActualReplay(t *testing.T) {
 		cfg := machineryConfig(stub, 500)
 		parents := fusionParentLogs(t, cfg, strings.Repeat("p", 8000))
 		q := &fakeQueries{priorLogs: parents}
-		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
+		result, err := newMachineryService(q).compactOnce(t.Context(), cfg)
 		if limit := statedSummaryLimit(t, stub.prompt); limit > 500 {
 			t.Fatalf("stated summary limit=%d exceeds the 500-token room", limit)
 		}
 		if len(summary) > 2000 {
-			if err == nil || result.Status == StatusOK || len(q.rollupCalls) > 0 {
+			if err == nil || result.Status == passOK || len(q.rollupCalls) > 0 {
 				t.Fatalf("oversized replay accepted: result=%+v err=%v", result, err)
 			}
 			assertFusionParentsActive(t, q, parents)
-		} else if err != nil || result.Status != StatusOK {
+		} else if err != nil || result.Status != passOK {
 			t.Fatalf("fitting summary rejected: result=%+v err=%v", result, err)
 		}
 	}
@@ -130,8 +130,8 @@ func TestSummaryBudgetIsStatedNotUsedAsOutputCap(t *testing.T) {
 	stub := &stubModel{summary: "short summary", reasoning: 300}
 	cfg := machineryConfig(stub, 500)
 	q := &fakeQueries{uncompacted: qualityRows(t)}
-	result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-	if err != nil || result.Status != StatusOK {
+	result, err := newMachineryService(q).compactOnce(t.Context(), cfg)
+	if err != nil || result.Status != passOK {
 		t.Fatalf("reasoning summarizer failed under a small replay budget: result=%+v err=%v", result, err)
 	}
 	if stub.maxTokens != models.DefaultOutputReserveTokens {
@@ -163,14 +163,14 @@ func TestSummaryRecoveryReservesKeptRawReplay(t *testing.T) {
 		rows[3] = mkRow(t, "assistant", jsonStr(strings.Repeat("u", keptBytes)), 0)
 		cfg.ProtectedSources = historySources(rows[2])
 		q := &fakeQueries{uncompacted: rows}
-		result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
+		result, err := newMachineryService(q).compactOnce(t.Context(), cfg)
 		if keptBytes == 2400 {
 			if !errors.Is(err, errNoSummaryRoom) || stub.calls != 0 || q.created {
 				t.Fatalf("kept history over the room: result=%+v err=%v calls=%d, want no room before any claim", result, err, stub.calls)
 			}
 			continue
 		}
-		if limit := statedSummaryLimit(t, stub.prompt); err != nil || result.Status != StatusOK || limit >= 200 {
+		if limit := statedSummaryLimit(t, stub.prompt); err != nil || result.Status != passOK || limit >= 200 {
 			t.Fatalf("failed to reserve kept raw: result=%+v err=%v stated limit=%d", result, err, limit)
 		}
 	}
@@ -185,8 +185,8 @@ func TestSummaryRecoveryProtectsCurrentSourcesAndCountsThemOnce(t *testing.T) {
 	rows[3] = mkRow(t, "user", jsonStr(strings.Repeat("b", 2400)), 600)
 	cfg.ProtectedSources = []turn.ContextMessageSource{{Kind: "history", ID: rows[2].ID.String(), Current: true}, {Kind: "history", ID: rows[3].ID.String(), Current: true}}
 	q := &fakeQueries{uncompacted: rows}
-	result, err := newMachineryService(q).RunCompactionSync(t.Context(), cfg)
-	if err != nil || result.Status != StatusOK {
+	result, err := newMachineryService(q).compactOnce(t.Context(), cfg)
+	if err != nil || result.Status != passOK {
 		t.Fatalf("current input counted twice: result=%+v err=%v", result, err)
 	}
 	for _, id := range q.markedIDs {
@@ -202,7 +202,7 @@ func TestSummaryRecoveryProtectsCurrentSourcesAndCountsThemOnce(t *testing.T) {
 		cfg.ProtectedSources[i].Current = false
 	}
 	stub.calls = 0
-	if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).RunCompactionSync(t.Context(), cfg); !errors.Is(err, errNoSummaryRoom) || stub.calls != 0 {
+	if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).compactOnce(t.Context(), cfg); !errors.Is(err, errNoSummaryRoom) || stub.calls != 0 {
 		t.Fatalf("err=%v calls=%d, want protected history inside the budget to leave no summary room", err, stub.calls)
 	}
 }
@@ -230,7 +230,7 @@ func TestProtectedSourcesSurviveTruncatedRead(t *testing.T) {
 		if truncated {
 			svc = newMachineryService(protectedTruncatedQueries{q})
 		}
-		result, err := svc.RunCompactionSync(t.Context(), cfg)
+		result, err := svc.compactOnce(t.Context(), cfg)
 		if err != nil {
 			t.Fatal(err)
 		}

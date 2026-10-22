@@ -149,32 +149,21 @@ func TestCandidatesFromRowsKeepsOnlyPendingAskUserCall(t *testing.T) {
 	}
 }
 
-func TestGuardedSelectionCompactsAroundMustKeepAskExchange(t *testing.T) {
+func TestGuardedSelectionStopsAtAMustKeepAskExchange(t *testing.T) {
 	t.Parallel()
 
+	// The session renders one rolling summary, so no pass folds rows behind
+	// an exchange it must keep: a summary there would be a second one.
 	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100)
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		askCall,
 		mkRow(t, "user", `"question 2"`, 100),
 		mkRow(t, "assistant", `"answer 2"`, 100),
-		mkRow(t, "user", `"question 3"`, 100),
-		mkRow(t, "assistant", `"answer 3"`, 100),
 		mkRow(t, "user", `"current question"`, 100),
 		mkRow(t, "assistant", `"current answer"`, 100),
 	}
-	_, ids := buildEntriesAndIDs(foldBefore(rows, rows[5]))
-	if len(ids) == 0 {
-		t.Fatal("a must-keep ask exchange at the window head must not starve compaction of newer history")
-	}
-	for _, id := range ids {
-		if id == askCall.ID {
-			t.Fatalf("must-keep ask_user row was marked for compaction")
-		}
-		for _, protected := range []pgtype.UUID{rows[5].ID, rows[6].ID} {
-			if id == protected {
-				t.Fatalf("current turn row was marked for compaction")
-			}
-		}
+	if _, ids := buildEntriesAndIDs(foldBefore(rows, rows[3])); len(ids) != 0 {
+		t.Fatalf("marked %d rows behind a pending ask_user exchange, want none", len(ids))
 	}
 }
 
@@ -226,9 +215,8 @@ func TestGuardedSelectionKeepsCompactRunContiguousAcrossMustKeepIsland(t *testin
 		mkRow(t, "user", `"current q"`, 100),      // 5 protected recent
 		mkRow(t, "assistant", `"current a"`, 100), // 6
 	}
-	// One pass must select a single contiguous run so the read path can drop it
-	// in place. It may only be the rows before the first must-keep island, never
-	// straddling ask_user into "mid q"/"mid a" under a shared compact_id.
+	// A pass folds only the rows before the first must-keep island, never
+	// straddling ask_user into "mid q"/"mid a".
 	_, gotIDs := buildEntriesAndIDs(foldBefore(rows, rows[5]))
 	wantIDs := []pgtype.UUID{rows[0].ID, rows[1].ID}
 	if len(gotIDs) != len(wantIDs) {
@@ -240,16 +228,10 @@ func TestGuardedSelectionKeepsCompactRunContiguousAcrossMustKeepIsland(t *testin
 		}
 	}
 
-	// The run after the island is not starved: once the pre-island run is
-	// compacted away, the next pass makes progress on "mid q"/"mid a".
-	_, nextIDs := buildEntriesAndIDs(foldBefore(rows[2:], rows[5]))
-	if len(nextIDs) == 0 {
-		t.Fatal("run after the must-keep island must be compactable on a later pass")
-	}
-	for _, id := range nextIDs {
-		if id == askCall.ID {
-			t.Fatalf("must-keep ask_user row was marked for compaction")
-		}
+	// Once the pre-island run is folded, the island ends what a later pass
+	// may fold: the rows behind it stay raw.
+	if _, nextIDs := buildEntriesAndIDs(foldBefore(rows[2:], rows[5])); len(nextIDs) != 0 {
+		t.Fatalf("marked %d rows behind the must-keep island, want none", len(nextIDs))
 	}
 }
 

@@ -1,26 +1,59 @@
 package compaction
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
-// Compaction result statuses reported by RunCompactionSync.
+// Pass is one committed pass of a compaction event: the summary it wrote and
+// what that summary replaces.
+type Pass struct {
+	ArtifactID string
+	Summary    string
+	// Covered names each row the summary folds, by history ID and, when the
+	// row has one, by external ID. Absorbed names the earlier summaries it
+	// folds.
+	Covered  []turn.ContextMessageSource
+	Absorbed []string
+	// More reports candidates the pass left for a later one.
+	More bool
+}
+
+// Reason names why a compaction event ended without a request that fits.
+type Reason string
+
 const (
-	StatusProgress = "progress" // compacted history still exceeds the requested replay budget
-	StatusOK       = "ok"       // messages were compacted into a summary
-	StatusNoop     = "noop"     // nothing to compact (already compact or in flight)
+	ReasonSummarizerFailed  Reason = "summarizer_failed"
+	ReasonTruncated         Reason = "truncated"
+	ReasonEmpty             Reason = "empty"
+	ReasonIneffective       Reason = "ineffective"
+	ReasonStaleSource       Reason = "stale_source"
+	ReasonInputOverflow     Reason = "input_overflow"
+	ReasonStillOver         Reason = "still_over"
+	ReasonProtectedOverflow Reason = "protected_overflow"
 )
 
-// Result is the scoped outcome of a synchronous compaction. Callers use it to
-// respond with this session's own result instead of reading unscoped bot-wide
-// logs. A failed attempt returns an error, not a Result.
-type Result struct {
-	Status       string
-	Summary      string
-	MessageCount int
+// EventError is a pass that failed, with the reason the event reports for it.
+// Passes committed before it stay committed.
+type EventError struct {
+	Reason Reason
+	Err    error
+}
+
+func (e *EventError) Error() string { return string(e.Reason) + ": " + e.Err.Error() }
+
+func (e *EventError) Unwrap() error { return e.Err }
+
+// ReasonOf is the reason err reports, or empty when it reports none.
+func ReasonOf(err error) Reason {
+	var event *EventError
+	if errors.As(err, &event) {
+		return event.Reason
+	}
+	return ""
 }
 
 // Log represents a compaction log entry.
@@ -68,9 +101,16 @@ type TriggerConfig struct {
 	// Rows outside are not part of that request. Zero leaves that side open.
 	CandidatesFrom   time.Time
 	CandidatesBefore time.Time
-	// ProtectedSources stay raw. Current ones are the caller's current input,
-	// budgeted outside HistoryBudgetTokens; the rest are history it keeps.
+	// ProtectedSources stay raw, with everything after them. Current ones are
+	// the caller's current input, budgeted outside HistoryBudgetTokens; the
+	// rest are history it keeps.
 	ProtectedSources []turn.ContextMessageSource
+	// View, when set, is what the caller's request renders: only these
+	// history rows and inbound messages are candidates, whatever else the
+	// session holds. Anchors stay raw where they are without ending what a
+	// pass may fold; the summarizer reads them in place.
+	View    []turn.ContextMessageSource
+	Anchors []turn.ContextMessageSource
 	// CurrentRequest is the caller's current input, shown to the summarizer
 	// when no protected source is a history row yet.
 	CurrentRequest string

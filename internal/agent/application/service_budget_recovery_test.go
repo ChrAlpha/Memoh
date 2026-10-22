@@ -52,10 +52,10 @@ func (s *recoveryHistoryService) ListActiveSinceBySessionWithinBytes(_ context.C
 
 type recoveryCompactionRunner struct {
 	configs []compaction.TriggerConfig
-	run     func() (compaction.Result, error)
+	run     func() ([]compaction.Pass, error)
 }
 
-func (r *recoveryCompactionRunner) RunCompactionSync(_ context.Context, cfg compaction.TriggerConfig) (compaction.Result, error) {
+func (r *recoveryCompactionRunner) Compact(_ context.Context, cfg compaction.TriggerConfig, _ func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
 	r.configs = append(r.configs, cfg)
 	return r.run()
 }
@@ -66,9 +66,9 @@ func chatRecoveryFixture(t *testing.T) (*Service, *recoveryHistoryService, *reco
 	s.queries = &recoveryHistoryQueries{controllerQueries: s.queries.(*controllerQueries)}
 	history := &recoveryHistoryService{}
 	s.messageService = history
-	runner := &recoveryCompactionRunner{run: func() (compaction.Result, error) {
+	runner := &recoveryCompactionRunner{run: func() ([]compaction.Pass, error) {
 		history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent("compacted history")}}
-		return compaction.Result{Status: compaction.StatusOK}, nil
+		return []compaction.Pass{{}}, nil
 	}}
 	s.compactionService = runner
 	modelMessages := []ModelMessage{{Role: "assistant", Content: newTextContent("frozen fork")}}
@@ -139,18 +139,18 @@ func TestChatBudgetRecoveryCannotBypassFailure(t *testing.T) {
 	for _, outcome := range []string{"noop", "failure", "reload failure", "droppable reload"} {
 		t.Run(outcome, func(t *testing.T) {
 			_, history, runner, cfg := chatRecoveryFixture(t)
-			runner.run = func() (compaction.Result, error) {
+			runner.run = func() ([]compaction.Pass, error) {
 				switch outcome {
 				case "noop":
-					return compaction.Result{}, nil
+					return nil, nil
 				case "failure":
-					return compaction.Result{}, errors.New("private failure")
+					return nil, errors.New("private failure")
 				case "reload failure":
 					history.err = errors.New("private reload failure")
 				case "droppable reload":
 					history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent(strings.Repeat("h", 8000))}}
 				}
-				return compaction.Result{Status: compaction.StatusOK}, nil
+				return []compaction.Pass{{}}, nil
 			}
 			_, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
 			if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || len(runner.configs) != 1 {
@@ -234,10 +234,10 @@ func (p *recoverySilentProvider) DoStream(ctx context.Context, _ sdk.Request) (<
 func TestChatBudgetRecoveryPausesIdleUntilProviderDispatch(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		_, history, runner, cfg := chatRecoveryFixture(t)
-		runner.run = func() (compaction.Result, error) {
+		runner.run = func() ([]compaction.Pass, error) {
 			time.Sleep(time.Minute)
 			history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent("compacted history")}}
-			return compaction.Result{Status: compaction.StatusOK}, nil
+			return []compaction.Pass{{}}, nil
 		}
 		provider := &recoverySilentProvider{}
 		cfg.Model.Provider = provider
@@ -265,10 +265,10 @@ func (m triggerRecoveryMessages) ListActiveSinceBySessionWithinBytes(ctx context
 func TestTriggeredBudgetRecoveryPausesIdleUntilProviderDispatch(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, history, runner, cfg := chatRecoveryFixture(t)
-		runner.run = func() (compaction.Result, error) {
+		runner.run = func() ([]compaction.Pass, error) {
 			time.Sleep(time.Minute)
 			history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent("compacted history")}}
-			return compaction.Result{Status: compaction.StatusOK}, nil
+			return []compaction.Pass{{}}, nil
 		}
 		s.messageService = triggerRecoveryMessages{recordingMessageService: &recordingMessageService{}, history: history}
 		provider := &recoverySilentProvider{}
@@ -288,15 +288,15 @@ type delayedRecoveryCompactor struct {
 	history *recoveryHistoryService
 }
 
-func (c *delayedRecoveryCompactor) RunCompactionSync(ctx context.Context, _ compaction.TriggerConfig) (compaction.Result, error) {
+func (c *delayedRecoveryCompactor) Compact(ctx context.Context, _ compaction.TriggerConfig, _ func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error) {
 	c.calls.Add(1)
 	select {
 	case <-time.After(c.delay):
 	case <-ctx.Done():
-		return compaction.Result{}, context.Cause(ctx)
+		return nil, context.Cause(ctx)
 	}
 	c.history.messages = []messagepkg.Message{{ID: "history-new", BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, Role: "assistant", Content: newTextContent("compacted history")}}
-	return compaction.Result{Status: compaction.StatusOK}, nil
+	return []compaction.Pass{{}}, nil
 }
 
 // slowRecoveryFixture serves a history above the final allowance but below the
@@ -362,7 +362,7 @@ func TestChatBudgetRecoveryCompactsOrdinaryHistoryOrFails(t *testing.T) {
 		t.Run(fmt.Sprintf("summarizer_fails=%v", summarizerFails), func(t *testing.T) {
 			s, history, runner, cfg := chatRecoveryFixture(t)
 			if summarizerFails {
-				runner.run = func() (compaction.Result, error) { return compaction.Result{}, errors.New("summarizer down") }
+				runner.run = func() ([]compaction.Pass, error) { return nil, errors.New("summarizer down") }
 			}
 			cfg.Messages = []sdk.Message{sdk.AssistantMessage(strings.Repeat("h", 8000)), sdk.UserMessage("continue")}
 			cfg.ContextFrags = nil
@@ -522,24 +522,6 @@ func TestBudgetRecoveryRetainsPressureAfterAllHistoryWasTrimmed(t *testing.T) {
 				t.Fatalf("reloaded history/current lost: err=%v loads=%d messages=%v", err, history.loads, got.Messages)
 			}
 		})
-	}
-}
-
-func TestChatBudgetRecoveryContinuesAfterPartialProgress(t *testing.T) {
-	_, history, runner, cfg := chatRecoveryFixture(t)
-	runner.run = func() (compaction.Result, error) {
-		text := strings.Repeat("h", 8000)
-		status := compaction.StatusProgress
-		if len(runner.configs) == 2 {
-			text = "fitting final summary"
-			status = compaction.StatusOK
-		}
-		history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent(text)}}
-		return compaction.Result{Status: status, MessageCount: 1}, nil
-	}
-	got, err := contextview.ProviderRunConfigApplier(nil)(t.Context(), cfg)
-	if err != nil || len(runner.configs) != 2 || countRecoveryText(got.Messages, "fitting final summary") != 1 {
-		t.Fatalf("progress did not reach admission: error=%v calls=%d", err, len(runner.configs))
 	}
 }
 

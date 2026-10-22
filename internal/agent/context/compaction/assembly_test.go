@@ -92,16 +92,16 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 		name       string
 		breakIndex int
 	}{
-		{name: "call is unparseable", breakIndex: 0},
-		{name: "result is unparseable", breakIndex: 1},
+		{name: "call is unparseable", breakIndex: 2},
+		{name: "result is unparseable", breakIndex: 3},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			rows := []sqlc.ListUncompactedMessagesBySessionRow{
-				toolCallRow(t, 100),
-				toolResultRow(t, 100),
 				mkRow(t, "user", `"old question"`, 100),
 				mkRow(t, "assistant", `"old answer"`, 100),
+				toolCallRow(t, 100),
+				toolResultRow(t, 100),
 				mkRow(t, "user", `"current question"`, 100),
 				mkRow(t, "assistant", `"current answer"`, 100),
 			}
@@ -114,8 +114,8 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 			protectCurrentSources(items, historySources(rows[4]))
 			entries, ids := buildEntriesAndIDs(foldableItems(items))
 
-			if len(ids) != 2 || ids[0] != rows[2].ID || ids[1] != rows[3].ID {
-				t.Fatalf("ids = %#v, want only the complete run after the protected tool exchange", ids)
+			if len(ids) != 2 || ids[0] != rows[0].ID || ids[1] != rows[1].ID {
+				t.Fatalf("ids = %#v, want only the run before the protected tool exchange", ids)
 			}
 			if len(entries) != 2 {
 				t.Fatalf("entries = %#v, want the old question and answer", entries)

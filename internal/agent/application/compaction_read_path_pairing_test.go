@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -73,6 +74,17 @@ func (f *pairingQueries) CreateCompactionLog(context.Context, sqlc.CreateCompact
 	return sqlc.BotHistoryMessageCompact{ID: f.logID}, nil
 }
 
+func (f *pairingQueries) ListMessagesByCompactID(_ context.Context, compactID pgtype.UUID) ([]sqlc.ListMessagesByCompactIDRow, error) {
+	var rows []sqlc.ListMessagesByCompactIDRow
+	for _, row := range f.uncompacted {
+		if compactID == f.logID && slices.Contains(f.markedIDs, row.ID) {
+			row.CompactID = compactID
+			rows = append(rows, sqlc.ListMessagesByCompactIDRow(row))
+		}
+	}
+	return rows, nil
+}
+
 func (f *pairingQueries) MarkMessagesCompacted(_ context.Context, arg sqlc.MarkMessagesCompactedParams) (int64, error) {
 	f.markedIDs = append([]pgtype.UUID(nil), arg.MessageIds...)
 	return int64(len(arg.MessageIds)), nil
@@ -108,10 +120,10 @@ func pairingRow(t *testing.T, role, content string) sqlc.ListUncompactedMessages
 // TestSelectorToReadPathPreservesOrderEndToEnd drives the real compaction
 // selector over a history with a pending ask_user island and feeds its
 // actual marked rows into replaceCompactedHistoryRecords. It pins the pair of
-// invariants that live in two packages: the selector marks one contiguous
-// pre-island run under one compact_id, and the read path substitutes it in
-// place — content behind the island (like "mid q") must never fold in front
-// of it.
+// invariants that live in two packages: the selector folds only the run
+// before the island, which ends what any pass folds, and the read path
+// substitutes it in place — content behind the island (like "mid q") must
+// never fold in front of it.
 func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -128,7 +140,7 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	}
 	svc := compaction.NewService(slog.New(slog.DiscardHandler), q)
 
-	res, err := svc.RunCompactionSync(context.Background(), compaction.TriggerConfig{
+	passes, err := svc.Compact(context.Background(), compaction.TriggerConfig{
 		BotID:               uuid.NewString(),
 		SessionID:           uuid.NewString(),
 		ModelID:             "stub-model",
@@ -139,12 +151,9 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		ProtectedSources:    []turn.ContextMessageSource{{Kind: "history", ID: uuid.UUID(rows[4].ID.Bytes).String(), Current: true}},
 		SummaryWindowTokens: 128000,
 		HistoryBudgetTokens: 1000,
-	})
-	if err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
-	}
-	if res.Status != compaction.StatusProgress {
-		t.Fatalf("status = %q, want %q with mid q still foldable behind the island", res.Status, compaction.StatusProgress)
+	}, nil)
+	if err != nil || len(passes) != 1 || passes[0].More {
+		t.Fatalf("passes = %+v err = %v, want one pass that stops at the island", passes, err)
 	}
 
 	marked := make(map[pgtype.UUID]bool, len(q.markedIDs))
@@ -171,9 +180,9 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		records = append(records, record)
 	}
 
-	got := replaceCompactedHistoryRecords(records, map[string]string{compactID: res.Summary}, contextfrag.Scope{})
+	got := replaceCompactedHistoryRecords(records, map[string]string{compactID: passes[0].Summary}, contextfrag.Scope{})
 	want := []ModelMessage{
-		{Role: "user", Content: newTextContent("<summary>\n" + res.Summary + "\n</summary>")},
+		{Role: "user", Content: newTextContent("<summary>\n" + passes[0].Summary + "\n</summary>")},
 		{Role: "assistant", Content: newTextContent("ask you something")},
 		{Role: "user", Content: newTextContent("mid q")},
 		{Role: "user", Content: newTextContent("current q")},

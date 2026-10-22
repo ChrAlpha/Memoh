@@ -117,7 +117,7 @@ func TestTrimCompactMessagesKeepsOldestAndToolExchangeIntact(t *testing.T) {
 	t.Parallel()
 
 	// compact input (oldest -> newest): a small tool exchange, then two text
-	// rows of ~130 rendered tokens. maxTokens 150 keeps the oldest groups
+	// rows of ~130 rendered tokens. maxTokens 200 keeps the oldest groups
 	// within budget — the whole exchange plus the first text row — and defers
 	// the newest overflow to a later pass.
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
@@ -127,7 +127,7 @@ func TestTrimCompactMessagesKeepsOldestAndToolExchangeIntact(t *testing.T) {
 		textRow(t, "assistant", 100),
 	}
 	items, _ := candidatesFromRows(rows)
-	trimmed := trimCompactMessages(items, 150)
+	trimmed := trimCompactMessages(items, 200)
 	if len(trimmed) != 3 {
 		t.Fatalf("trimmed = %d, want the oldest exchange plus the first text row", len(trimmed))
 	}

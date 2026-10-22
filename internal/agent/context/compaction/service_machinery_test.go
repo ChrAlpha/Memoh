@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
@@ -210,7 +211,14 @@ func (f *fakeQueries) ListMessagesByCompactID(_ context.Context, compactID pgtyp
 	if err := f.absorbedRowErrs[compactID]; err != nil {
 		return nil, err
 	}
-	return f.absorbedRows[compactID], nil
+	rows := slices.Clone(f.absorbedRows[compactID])
+	for _, row := range f.uncompacted {
+		if f.claims[row.ID] == compactID {
+			row.CompactID = compactID
+			rows = append(rows, sqlc.ListMessagesByCompactIDRow(row))
+		}
+	}
+	return rows, nil
 }
 
 func (f *fakeQueries) MarkMessagesCompacted(_ context.Context, arg sqlc.MarkMessagesCompactedParams) (int64, error) {
@@ -279,6 +287,39 @@ func newMachineryService(q dbstore.Queries) *Service {
 	return NewService(slog.New(slog.DiscardHandler), q)
 }
 
+const (
+	passNoop     = "noop"
+	passOK       = "ok"
+	passProgress = "progress"
+)
+
+// passResult is the outcome of compactOnce: whether a pass committed and
+// left candidates behind, its summary and the rows it folded.
+type passResult struct {
+	Status       string
+	Summary      string
+	MessageCount int
+}
+
+// compactOnce runs an event whose admission accepts the first pass.
+func (s *Service) compactOnce(ctx context.Context, cfg TriggerConfig) (passResult, error) {
+	passes, err := s.Compact(ctx, cfg, func(context.Context, Pass) (bool, error) { return true, nil })
+	if err != nil || len(passes) == 0 {
+		return passResult{Status: passNoop}, err
+	}
+	pass := passes[0]
+	result := passResult{Status: passOK, Summary: pass.Summary}
+	if pass.More {
+		result.Status = passProgress
+	}
+	for _, source := range pass.Covered {
+		if source.Kind == "history" {
+			result.MessageCount++
+		}
+	}
+	return result, nil
+}
+
 func machineryConfig(stub *stubModel, historyBudgetTokens int) TriggerConfig {
 	return TriggerConfig{
 		BotID:               uuid.NewString(),
@@ -341,7 +382,7 @@ func TestDoCompactionMarksToolAwareWindowAndRendersCleanPrompt(t *testing.T) {
 	// exchanges kept whole on the folded side.
 	cfg := machineryConfig(stub, 450)
 	cfg.ProtectedSources = historySources(rows[7])
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
+	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -409,7 +450,7 @@ func TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget(t *testing.T) {
 	cfg := machineryConfig(stub, 100)
 	cfg.SummaryWindowTokens = 1000
 
-	_, err := svc.RunCompactionSync(context.Background(), cfg)
+	_, err := svc.compactOnce(context.Background(), cfg)
 	if !errors.Is(err, errCompactionInputOverflow) {
 		t.Fatalf("RunCompactionSync error = %v, want errCompactionInputOverflow", err)
 	}
@@ -436,7 +477,7 @@ func TestDoCompactionAllEmptyWindowSkipsModelAndMarking(t *testing.T) {
 
 	cfg := machineryConfig(stub, 150)
 	cfg.ProtectedSources = historySources(rows[2])
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
+	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if stub.calls != 0 {
@@ -462,7 +503,7 @@ func TestDoCompactionCoversToolExchangeWhoseResultRendersEmpty(t *testing.T) {
 
 	cfg := machineryConfig(stub, 150)
 	cfg.ProtectedSources = historySources(rows[2])
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
+	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if stub.calls != 1 || len(q.markedIDs) != 2 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID {
@@ -487,7 +528,7 @@ func TestDoCompactionCoversEmptyMiddleRowWithItsNeighbours(t *testing.T) {
 
 	cfg := machineryConfig(stub, 250)
 	cfg.ProtectedSources = historySources(rows[3])
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
+	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if len(q.markedIDs) != 3 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID || q.markedIDs[2] != rows[2].ID {
@@ -503,7 +544,7 @@ func TestDoCompactionEmptyHistoryNoOp(t *testing.T) {
 	stub := &stubModel{summary: "unused"}
 	svc := newMachineryService(q)
 
-	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 100)); err != nil {
+	if _, err := svc.compactOnce(context.Background(), machineryConfig(stub, 100)); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if stub.calls != 0 || len(q.markedIDs) != 0 {
@@ -557,11 +598,11 @@ func TestDoCompactionRetriesRateLimitedSummarizerCall(t *testing.T) {
 	cfg := machineryConfig(stub, 450)
 	cfg.HTTPClient = &http.Client{Transport: transport}
 
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if transport.calls != 2 || res.Status != StatusOK || res.Summary != "SUMMARY-RETRIED" {
+	if transport.calls != 2 || res.Status != passOK || res.Summary != "SUMMARY-RETRIED" {
 		t.Fatalf("result = %+v after %d calls, want the retried summary after 2", res, transport.calls)
 	}
 }
@@ -574,7 +615,7 @@ func TestDoCompactionSummarizerFailureRecordsErrorWithReclaimableClaims(t *testi
 	cfg := machineryConfig(&stubModel{}, 450)
 	cfg.HTTPClient = &http.Client{Transport: &failingModel{}}
 
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err == nil {
+	if _, err := svc.compactOnce(context.Background(), cfg); err == nil {
 		t.Fatal("summarizer failure must surface an error")
 	}
 	if len(q.markedIDs) == 0 {
@@ -591,7 +632,7 @@ func TestDoCompactionEmptySummaryRecordsErrorWithReclaimableClaims(t *testing.T)
 	stub := &stubModel{summary: "   "}
 	svc := newMachineryService(q)
 
-	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 450)); err == nil {
+	if _, err := svc.compactOnce(context.Background(), machineryConfig(stub, 450)); err == nil {
 		t.Fatal("an empty summary must surface an error")
 	}
 	if len(q.markedIDs) == 0 {

@@ -102,7 +102,7 @@ type workspaceTargetResolver interface {
 }
 
 type compactionRunner interface {
-	RunCompactionSync(context.Context, compaction.TriggerConfig) (compaction.Result, error)
+	Compact(context.Context, compaction.TriggerConfig, func(context.Context, compaction.Pass) (bool, error)) ([]compaction.Pass, error)
 }
 
 // Service orchestrates chat with the internal agent.

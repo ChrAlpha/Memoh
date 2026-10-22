@@ -170,3 +170,12 @@ func metadataMap(raw []byte) map[string]any {
 	}
 	return out
 }
+
+// markAnchors marks the rows the caller keeps raw in place.
+func markAnchors(items []CompactionCandidate, anchors []turn.ContextMessageSource) {
+	for i := range items {
+		if isProtectedSource(items[i], anchors) {
+			items[i].Policies = appendPolicy(items[i].Policies, CompactPolicyAnchor)
+		}
+	}
+}
