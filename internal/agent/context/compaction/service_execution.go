@@ -160,6 +160,8 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			return Pass{}, false, nil
 		}
 	}
+	entries, keptAfter := keptAfterSummary(entries)
+	current = append(keptAfter, current...)
 	readTokens := entriesPromptCost(entries) + earlierCost
 	if readTokens > inputTokens {
 		return Pass{}, false, failed(ReasonInputOverflow, fmt.Errorf("%w: entries=%d entry_tokens=%d input_tokens=%d", errCompactionInputOverflow, len(entries), readTokens, inputTokens))
@@ -169,7 +171,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	// prompt states keeps one that obeys it, as the request renders it,
 	// under that too.
 	replacedTokens := max(entriesPromptCost(coveredEntries(entries)), compactedReplayTokens(messages, compactedMessageIDs)) + earlierTokens
-	maxTokens := min(capability, readWindow-readTokens)
+	maxTokens := min(capability, promptWindow-entriesPromptCost(current)-readTokens)
 	room.SummaryTokens = min(summaryLimit, summaryOutputLimit(replacedTokens-1, capability), maxTokens)
 	if room.SummaryTokens <= 0 {
 		return Pass{}, false, failed(ReasonIneffective, fmt.Errorf("%w: replaced_tokens=%d", errIneffectiveSummary, replacedTokens))

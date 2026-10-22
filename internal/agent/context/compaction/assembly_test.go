@@ -123,3 +123,44 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 		})
 	}
 }
+
+// Selection prices a kept entry in its wrapper, as the prompt renders it, so
+// what it selects never costs more than the limit it was given.
+func TestTrimCompactMessagesPricesKeptEntriesAsRendered(t *testing.T) {
+	t.Parallel()
+
+	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "assistant", `"old work"`, 0),
+		mkRow(t, "user", `"kept input"`, 0),
+		mkRow(t, "assistant", `"later work"`, 0),
+	}
+	items, _ := candidatesFromRows(rows)
+	markAnchors(items, historySources(rows[1]))
+	all, _ := buildEntriesAndIDs(items)
+	for limit := 0; limit <= entriesPromptCost(all); limit++ {
+		selected, _ := buildEntriesAndIDs(trimCompactMessages(items, limit))
+		if cost := entriesPromptCost(selected); cost > limit {
+			t.Fatalf("limit=%d: selected %d entries costing %d", limit, len(selected), cost)
+		}
+	}
+}
+
+// Kept entries after the last one a summary covers stay after the summary in
+// the request; the summarizer reads them there, unwrapped.
+func TestKeptAfterSummarySplitsTrailingKeptEntries(t *testing.T) {
+	t.Parallel()
+
+	entries := []messageEntry{
+		{Role: "tool", Content: "first result"},
+		{Role: "user", Content: "steer", Kept: true},
+		{Role: "tool", Content: "second result"},
+		{Role: "user", Content: "later steer", Kept: true},
+	}
+	conversation, after := keptAfterSummary(entries)
+	if len(conversation) != 3 || !conversation[1].Kept || conversation[2].Content != "second result" {
+		t.Fatalf("conversation = %+v, want the entries through the last covered one", conversation)
+	}
+	if len(after) != 1 || after[0].Kept || after[0].Content != "later steer" {
+		t.Fatalf("after = %+v, want the trailing steer unwrapped", after)
+	}
+}

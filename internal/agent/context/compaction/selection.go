@@ -247,18 +247,43 @@ func buildEntriesAndIDs(items []CompactionCandidate) ([]messageEntry, []pgtype.U
 	var entries []messageEntry
 	var ids []pgtype.UUID
 	for _, item := range items {
-		anchor := item.HasPolicy(CompactPolicyAnchor)
-		if !anchor {
+		if !item.HasPolicy(CompactPolicyAnchor) {
 			ids = append(ids, item.ID)
 		}
-		if content := renderCandidateEntry(item.Record); strings.TrimSpace(content) != "" {
-			entries = append(entries, messageEntry{Role: item.Record.ModelMessage.Role, Content: content, Kept: anchor})
+		if entry, ok := candidateEntry(item); ok {
+			entries = append(entries, entry)
 		}
 	}
 	if len(coveredEntries(entries)) == 0 {
 		return nil, nil
 	}
 	return entries, ids
+}
+
+// candidateEntry is what the summarizer reads for item, kept when item is an
+// anchor. A row that renders nothing has no entry.
+func candidateEntry(item CompactionCandidate) (messageEntry, bool) {
+	content := renderCandidateEntry(item.Record)
+	if strings.TrimSpace(content) == "" {
+		return messageEntry{}, false
+	}
+	return messageEntry{Role: item.Record.ModelMessage.Role, Content: content, Kept: item.HasPolicy(CompactPolicyAnchor)}, true
+}
+
+// keptAfterSummary splits off the kept entries after the last one a summary
+// covers. The request keeps them after the summary, so the summarizer reads
+// them with what follows it rather than in place.
+func keptAfterSummary(entries []messageEntry) ([]messageEntry, []messageEntry) {
+	last := len(entries)
+	for last > 0 && entries[last-1].Kept {
+		last--
+	}
+	after := make([]messageEntry, 0, len(entries)-last)
+	for _, entry := range entries[last:] {
+		entry.Kept = false
+		after = append(after, entry)
+	}
+	return entries[:last], after
 }
 
 // coveredEntries are the entries a summary replaces: all but the kept ones.
@@ -305,22 +330,20 @@ func leadingGroupCost(items []CompactionCandidate) int {
 
 // markableGroupCost is the summarizer-prompt cost of one tool-exchange group:
 // zero for a must-keep group, otherwise the line buildUserPrompt emits for
-// each rendered entry, as entriesPromptCost prices it, so tiny-but-real
-// entries can never ride along for free. Rows that render nothing cost
-// nothing. Costing the rendered bytes rather than the raw usage estimate
-// matters: a row whose generation cost five tokens can still render a
-// two-kilobyte tool outcome into the prompt.
+// each rendered entry, kept ones in their wrapper, as entriesPromptCost
+// prices it, so tiny-but-real entries can never ride along for free. Rows
+// that render nothing cost nothing. Costing the rendered bytes rather than
+// the raw usage estimate matters: a row whose generation cost five tokens
+// can still render a two-kilobyte tool outcome into the prompt.
 func markableGroupCost(items []CompactionCandidate, group []int) int {
 	cost := 0
 	for _, idx := range group {
 		if items[idx].HasPolicy(CompactPolicyMustKeep) {
 			return 0
 		}
-		rendered := renderCandidateEntry(items[idx].Record)
-		if strings.TrimSpace(rendered) == "" {
-			continue
+		if entry, ok := candidateEntry(items[idx]); ok {
+			cost += entryPromptCost(entry)
 		}
-		cost += entryPromptCost(messageEntry{Role: items[idx].Record.ModelMessage.Role, Content: rendered})
 	}
 	return cost
 }

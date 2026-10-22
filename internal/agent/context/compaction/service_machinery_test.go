@@ -406,6 +406,33 @@ func machineryCorpus(t *testing.T) []sqlc.ListUncompactedMessagesBySessionRow {
 
 // --- tests --------------------------------------------------------------------
 
+// A pass that folds only what precedes an input the request keeps shows that
+// input after the summary, where the request keeps it, not as kept in place.
+func TestDoCompactionShowsAKeptInputAfterTheSummaryItFollows(t *testing.T) {
+	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "user", `"old question"`, 100),
+		mkRow(t, "assistant", `"old answer"`, 100),
+		mkRow(t, "user", `"KEPT_INPUT"`, 100),
+		mkRow(t, "assistant", `"LATEST_STEP"`, 100),
+	}
+	q := &fakeQueries{uncompacted: rows}
+	stub := &stubModel{summary: "SUMMARY-OK"}
+	cfg := currentConfig(stub, 450, rows[3])
+	cfg.Anchors = historySources(rows[2])
+	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	marked := idSet(q.markedIDs)
+	if len(marked) != 2 || !marked[rows[0].ID] || !marked[rows[1].ID] {
+		t.Fatalf("marked %d rows, want the two before the input", len(marked))
+	}
+	_, rendered, _ := strings.Cut(stub.prompt, "<conversation>")
+	conversation, current, _ := strings.Cut(rendered, "<current_request>")
+	if strings.Contains(conversation, "KEPT_INPUT") || !strings.Contains(current, "user: KEPT_INPUT\nassistant: LATEST_STEP") {
+		t.Fatalf("the kept input must read after the summary, before the latest step:\n%s", stub.prompt)
+	}
+}
+
 func TestDoCompactionMarksToolAwareWindowAndRendersCleanPrompt(t *testing.T) {
 	rows := machineryCorpus(t)
 	q := &fakeQueries{uncompacted: rows}
