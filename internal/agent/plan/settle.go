@@ -2,7 +2,6 @@ package plan
 
 import (
 	"context"
-	"sync"
 
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -24,7 +23,7 @@ func (p *Planner) settleResolved(ctx context.Context, req runreq.ChatRequest, rc
 }
 
 // connectInject forwards the messages injected into a running turn to the model
-// runtime, and records the ones the runtime consumed.
+// runtime.
 func (p *Planner) connectInject(ctx context.Context, req runreq.ChatRequest, rc *runreq.ResolvedContext) {
 	if req.InjectCh == nil {
 		return
@@ -48,16 +47,4 @@ func (p *Planner) connectInject(ctx context.Context, req runreq.ChatRequest, rc 
 		close(agentInjectCh)
 	}()
 	runCfg.InjectCh = agentInjectCh
-
-	records := make([]runreq.InjectedMessageRecord, 0)
-	rc.InjectedRecords = &records
-	var recMu sync.Mutex
-	runCfg.InjectedRecorder = func(headerifiedText string, insertAfter int) {
-		recMu.Lock()
-		records = append(records, runreq.InjectedMessageRecord{
-			HeaderifiedText: headerifiedText,
-			InsertAfter:     insertAfter,
-		})
-		recMu.Unlock()
-	}
 }

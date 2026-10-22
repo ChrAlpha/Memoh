@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/transcript"
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/workspace"
 )
@@ -22,6 +23,13 @@ import (
 // driver handed the run, and live says whether a caller receives the run's
 // events as they happen. The call has passed decide.DecidedCall.Validate.
 func (p *Planner) Continue(ctx context.Context, call decide.DecidedCall, req runreq.ChatRequest, live bool) (drive.RunPlan, error) {
+	if call.RunID == "" {
+		// An answer no session runtime routed has no admitted run, hence no
+		// fence and no step committer to write the resumed history with. The
+		// decision predates the run ledger, so the request can no longer
+		// continue: the approved call is not run and nothing is written.
+		return drive.RunPlan{}, expiredDecision(call.Kind)
+	}
 	ctx = workspace.WithWorkspaceTarget(ctx, call.WorkspaceTargetID)
 
 	result := call.Result
@@ -116,4 +124,13 @@ func (p *Planner) session(ctx context.Context, call decide.DecidedCall) (runconf
 		call.ConversationType,
 		call.ChatToken,
 	)
+}
+
+// expiredDecision is the failure of an answer whose decision can no longer
+// continue.
+func expiredDecision(kind decide.CallKind) error {
+	if kind == decide.CallUserInput {
+		return apperror.New(apperror.CodeUserInputExpired, nil)
+	}
+	return apperror.New(apperror.CodeToolApprovalExpired, nil)
 }

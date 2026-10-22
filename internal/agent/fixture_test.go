@@ -294,8 +294,10 @@ func withWebAdmitter() testOption { return withTurnAdmitter(&webAdmitter{}) }
 
 func lifecycleTestAdmission() sessionruntime.Admission {
 	return sessionruntime.Admission{
-		RunID:   agenttest.LifecycleRunID,
-		Started: true,
+		RunID:        agenttest.LifecycleRunID,
+		TurnID:       "lifecycle-turn",
+		TurnPosition: 1,
+		Started:      true,
 		Handle: sessionruntime.RunHandle{
 			RunID:        agenttest.LifecycleRunID,
 			BotID:        agenttest.LifecycleBotID,

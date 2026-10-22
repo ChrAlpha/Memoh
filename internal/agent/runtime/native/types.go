@@ -199,13 +199,6 @@ type RunConfig struct {
 	// and appends user messages to the conversation before the next LLM call.
 	InjectCh <-chan InjectMessage
 
-	// InjectedRecorder is called during terminal delivery for each user
-	// message the loop appended at a step boundary and a provider attempt
-	// admitted: live injections and steer directive inputs alike. It records
-	// the headerified text and the number of output messages that preceded
-	// the message, so the resolver can interleave them in storeRound.
-	InjectedRecorder func(headerifiedText string, insertAfter int)
-
 	// OnProviderStreamEventObserved receives normalized provider parts before
 	// Twilight buffers them or invokes the step commit barrier. Persistence uses
 	// this production boundary to measure reasoning without putting timing on

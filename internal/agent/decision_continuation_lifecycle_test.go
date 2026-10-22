@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -47,6 +48,17 @@ func (s *unavailableContinuationMessages) PersistRound(
 		}
 	}
 	return s.RecordingMessages.PersistRound(ctx, inputs, options)
+}
+
+// PersistAgentStep refuses the rows of an assistant the same way.
+func (s *unavailableContinuationMessages) PersistAgentStep(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
+	for _, input := range step.Messages {
+		if input.Role == "assistant" {
+			s.calls++
+			return nil, s.err
+		}
+	}
+	return s.RecordingMessages.PersistAgentStep(ctx, step)
 }
 
 type continuationRunConfigCapture struct {
@@ -85,7 +97,7 @@ var continuationSessions = []struct {
 		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (drive.RunPlan, error) {
 			return service.plan.Continue(ctx, decide.DecidedCall{
 				Kind: decide.CallUserInput, Verdict: decide.VerdictAnswered,
-				DecisionID: "user-input", BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
+				RunID: req.RunID, DecisionID: "user-input", BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
 				SessionID: agenttest.LifecycleSessionID, SourcePlatform: "web",
 				ToolCallID: "ask-user-call", ToolName: "ask_user",
 				Result: sdk.ToolResultPart{ToolCallID: "ask-user-call", ToolName: "ask_user", Result: sdk.TextOutput("answer")},
@@ -97,7 +109,7 @@ var continuationSessions = []struct {
 		resolve: func(ctx context.Context, service *Service, req runreq.ChatRequest) (drive.RunPlan, error) {
 			return service.plan.Continue(ctx, decide.DecidedCall{
 				Kind: decide.CallToolApproval, Verdict: decide.VerdictRejected,
-				DecisionID: "tool-approval", BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
+				RunID: req.RunID, DecisionID: "tool-approval", BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
 				SessionID: agenttest.LifecycleSessionID, SourcePlatform: "web",
 				ToolCallID: "approved-tool-call", ToolName: "container_exec",
 				Result: sdk.ToolResultPart{ToolCallID: "approved-tool-call", ToolName: "container_exec", Result: sdk.TextOutput("rejected"), IsError: true},
@@ -110,18 +122,22 @@ func TestRuntimeDecisionContinuationsPropagateResolvedBudgetAndAdmittedRunIDToAg
 	for _, tt := range continuationSessions {
 		t.Run(tt.name, func(t *testing.T) {
 			capture := &continuationRunConfigCapture{}
+			manager := newPlanManager(t)
 			fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess, withFixtureDeps(func(d *Deps) {
 				d.Agent = native.New(native.Deps{
 					Logger:             d.Logger,
 					ContextViewApplier: capture.apply,
 				})
-			}))
+			}), withFixtureOptions(withSessionManager(manager)))
+			req := continuationSessionRequest()
+			req.RunHandle = startPlanRun(t, manager, -1)
+			ctx := fencedContext(context.Background(), req.RunHandle.FencingToken)
 
-			plan, err := tt.resolve(context.Background(), fixture.service, continuationSessionRequest())
+			plan, err := tt.resolve(ctx, fixture.service, req)
 			if err != nil {
 				t.Fatalf("continuation setup error = %v", err)
 			}
-			plan.Exec.Execute(context.Background(), func(native.StreamEvent) {})
+			plan.Exec.Execute(ctx, func(native.StreamEvent) {})
 			calls, budget, runID := capture.snapshot()
 			if calls == 0 {
 				t.Fatal("ContextView applier was not reached through agent.Stream")
@@ -146,21 +162,33 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 				RecordingMessages: &agenttest.RecordingMessages{},
 				err:               errors.New("assistant message store unavailable"),
 			}
-			fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess, withFixtureMessages(messages))
+			manager := newPlanManager(t)
+			fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess, withFixtureMessages(messages),
+				withFixtureOptions(withSessionManager(manager)))
 			req := continuationSessionRequest()
+			req.RunHandle = startPlanRun(t, manager, -1)
+			ctx := fencedContext(context.Background(), req.RunHandle.FencingToken)
 
-			err := fixture.service.answer.DriveUnrouted(context.Background(), answer.Continuation{
+			err := fixture.service.answer.DriveUnrouted(ctx, answer.Continuation{
 				Req: req,
 				Setup: func(ctx context.Context, _ runreq.ChatRequest) (drive.RunPlan, error) {
 					return tt.resolve(ctx, fixture.service, req)
 				},
 			}, nil)
-			if apperror.CodeOf(err) != apperror.CodeSessionHistoryInconsistent {
-				t.Fatalf("continuation error = %v, want the history write failure", err)
+			// A step the committer cannot write ends the run as the stream's own
+			// failure, which carries no history code.
+			if apperror.CodeOf(err) != apperror.CodeRuntimeRunFailed {
+				t.Fatalf("continuation error = %v, want the run's failure", err)
 			}
 			if messages.calls == 0 {
 				t.Fatal("test did not exercise unavailable assistant persistence")
 			}
+			// The session runtime tells the recorder how the run it admitted
+			// ended; this run was driven without one, so the test does.
+			fixture.service.lifecycle.ReconcileTerminal(ctx, sessionruntime.TerminalRun{
+				RunID: req.RunHandle.RunID, BotID: req.RunHandle.BotID, SessionID: req.RunHandle.SessionID,
+				FencingToken: req.RunHandle.FencingToken, State: "failed", ErrorCode: string(apperror.CodeRuntimeRunFailed), Applied: true,
+			})
 			assertDirectLifecycle(
 				t,
 				fixture.lifecycles,

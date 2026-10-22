@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -150,59 +148,6 @@ func TestStoreRoundSkipsMemoryWhenPersistenceIsPartial(t *testing.T) {
 	select {
 	case got := <-memory.AfterChat:
 		t.Fatalf("memory extraction ran for partial persistence: %+v", got)
-	case <-time.After(100 * time.Millisecond):
-	}
-}
-
-func TestPersistTerminalSnapshotHonorsSkipMemoryExtraction(t *testing.T) {
-	t.Parallel()
-
-	memory := &agenttest.MemoryProvider{AfterChat: make(chan memprovider.AfterChatRequest, 2)}
-	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
-	registry.Register(agenttest.MemoryProviderID, memory)
-	resolver := newTestService(t, Deps{
-		Messages: &agenttest.RecordingMessages{},
-		Settings: settings.NewService(slog.New(slog.DiscardHandler), &agenttest.MemorySettingsQueries{}, nil, nil),
-		Memory:   registry,
-	})
-
-	req := runreq.ChatRequest{
-		BotID:    agenttest.MemoryBotID,
-		ThreadID: "session-1",
-		Query:    "hello",
-	}
-	if _, err := resolver.persist.TerminalSnapshotResult(
-		context.Background(),
-		req,
-		runreq.ResolvedContext{},
-		persist.TerminalSnapshot{
-			SDKMessages:   []sdk.Message{sdk.AssistantMessage("pong")},
-			VisibleOutput: true,
-		},
-	); err != nil {
-		t.Fatalf("persistTerminalSnapshot returned error: %v", err)
-	}
-	select {
-	case <-memory.AfterChat:
-	case <-time.After(time.Second):
-		t.Fatal("expected ordinary terminal snapshot to write memory")
-	}
-
-	req.SkipMemoryExtraction = true
-	if _, err := resolver.persist.TerminalSnapshotResult(
-		context.Background(),
-		req,
-		runreq.ResolvedContext{},
-		persist.TerminalSnapshot{
-			SDKMessages:   []sdk.Message{sdk.AssistantMessage("done")},
-			VisibleOutput: true,
-		},
-	); err != nil {
-		t.Fatalf("persistTerminalSnapshot returned error with skip memory: %v", err)
-	}
-	select {
-	case got := <-memory.AfterChat:
-		t.Fatalf("expected skip memory extraction to suppress memory write, got %#v", got)
 	case <-time.After(100 * time.Millisecond):
 	}
 }

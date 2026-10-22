@@ -284,11 +284,20 @@ func (s *synchronizedLifecycleStore) ListTerminalSessionRunsNeedingContextLifecy
 	return s.store.ListTerminalSessionRunsNeedingContextLifecycle(ctx, batchSize)
 }
 
+// creates are the lifecycle rows the run wrote: the ones written directly, and
+// the ones the session runtime's terminal observer wrote once the run's fenced
+// terminal write was accepted.
 func (s *synchronizedLifecycleStore) creates() []sqlc.CreateContextLifecycleParams {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	creates := make([]sqlc.CreateContextLifecycleParams, len(s.store.Creates))
+	creates := make([]sqlc.CreateContextLifecycleParams, len(s.store.Creates), len(s.store.Creates)+len(s.store.TerminalUpserts))
 	copy(creates, s.store.Creates)
+	for _, upsert := range s.store.TerminalUpserts {
+		creates = append(creates, sqlc.CreateContextLifecycleParams{
+			RunID: upsert.RunID, BotID: upsert.BotID, SessionID: upsert.SessionID,
+			Status: upsert.Status, ErrorCode: upsert.ErrorCode, Snapshot: upsert.Snapshot,
+		})
+	}
 	for i := range creates {
 		creates[i].Snapshot = append([]byte(nil), creates[i].Snapshot...)
 	}
@@ -484,7 +493,7 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode, opti
 	}
 	lifecycles := &synchronizedLifecycleStore{}
 	messages := &agenttest.RecordingMessages{}
-	runtime := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission()}
+	runtime := &agenttest.LifecycleAdmitter{Admission: lifecycleTestAdmission(), Fenced: true}
 	httpClient := &http.Client{Transport: streamTransport}
 	setup := directLifecycleSetup{deps: Deps{
 		Logger:   logger,
@@ -508,6 +517,9 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode, opti
 	}
 	setup.deps.Queries = effective
 	service := newTestService(t, setup.deps, setup.opts...)
+	// The session runtime tells the lifecycle recorder of every run it ends, so
+	// the snapshot a fenced run staged is written; the stand-in does the same.
+	runtime.Observer = service.lifecycle.ReconcileTerminal
 	return directLifecycleFixture{
 		service:     service,
 		queries:     queries,
@@ -769,6 +781,7 @@ type chatTurnFixture struct {
 func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode, options ...directLifecycleOption) chatTurnFixture {
 	t.Helper()
 	admitter := agenttest.NewScriptedAdmitter()
+	admitter.Fenced = true
 	// The composition root compiles the run's context fragments into the
 	// provider-facing request there; without it the routing a run assembled
 	// never reaches the model, and a test could not tell a lost route from an
@@ -802,6 +815,7 @@ func newChatTurnFixture(t *testing.T, mode directLifecycleModelMode, options ...
 		}),
 	}
 	fixture := newDirectLifecycleFixture(t, mode, append(base, options...)...)
+	admitter.Observer = fixture.service.lifecycle.ReconcileTerminal
 	return chatTurnFixture{fixture: fixture, admitter: admitter}
 }
 

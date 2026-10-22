@@ -52,6 +52,12 @@ type ScriptedAdmitter struct {
 	// started reports whether the admission owns execution. False models a
 	// replay of a run owned elsewhere or already finished.
 	Started bool
+	// Fenced makes the runs it admits carry their fence, as a session runtime's
+	// do.
+	Fenced bool
+	// Observer, when set, is told of each run it finishes, as the session
+	// runtime tells its terminal observer once the fenced write is accepted.
+	Observer func(context.Context, sessionruntime.TerminalRun)
 
 	// terminal and finishErr are what FinishRunWithErrorCode returns.
 	Terminal  sessionruntime.TerminalRun
@@ -68,6 +74,9 @@ type ScriptedAdmitter struct {
 	FinishStarted chan struct{}
 	FinishRelease chan struct{}
 }
+
+// FencesRuns reports whether the admitted runs are fenced.
+func (a *ScriptedAdmitter) FencesRuns() bool { return a.Fenced }
 
 func (a *ScriptedAdmitter) Admit(_ context.Context, in sessionruntime.AdmitInput) (sessionruntime.Admission, error) {
 	a.Mu.Lock()
@@ -98,7 +107,7 @@ func (a *ScriptedAdmitter) FinishRunWithErrorCode(ctx context.Context, handle se
 	return a.FinishRunWithFailure(ctx, handle, status, message, nil)
 }
 
-func (a *ScriptedAdmitter) FinishRunWithFailure(_ context.Context, handle sessionruntime.RunHandle, status, message string, args map[string]string) (sessionruntime.TerminalRun, error) {
+func (a *ScriptedAdmitter) FinishRunWithFailure(ctx context.Context, handle sessionruntime.RunHandle, status, message string, args map[string]string) (sessionruntime.TerminalRun, error) {
 	if a.FinishStarted != nil {
 		close(a.FinishStarted)
 	}
@@ -111,21 +120,25 @@ func (a *ScriptedAdmitter) FinishRunWithFailure(_ context.Context, handle sessio
 	if a.FinishErr != nil {
 		return a.Terminal, a.FinishErr
 	}
-	if a.Terminal.RunID != "" {
-		return a.Terminal, nil
+	run := a.Terminal
+	if run.RunID == "" {
+		// A real write records the run it ended; the double reports the same,
+		// so a caller that reads the record sees what it wrote.
+		run = sessionruntime.TerminalRun{
+			RunID:        handle.RunID,
+			BotID:        handle.BotID,
+			SessionID:    handle.SessionID,
+			FencingToken: handle.FencingToken,
+			State:        terminalStateForStatus(status),
+			ErrorCode:    message,
+			ErrorArgs:    args,
+			Applied:      true,
+		}
 	}
-	// A real write records the run it ended; the double reports the same, so a
-	// caller that reads the record sees what it wrote.
-	return sessionruntime.TerminalRun{
-		RunID:        handle.RunID,
-		BotID:        handle.BotID,
-		SessionID:    handle.SessionID,
-		FencingToken: handle.FencingToken,
-		State:        terminalStateForStatus(status),
-		ErrorCode:    message,
-		ErrorArgs:    args,
-		Applied:      true,
-	}, nil
+	if a.Observer != nil {
+		a.Observer(ctx, run)
+	}
+	return run, nil
 }
 
 func (*ScriptedAdmitter) MarkInlineDecisionRun(string, string, string) {}
@@ -176,10 +189,19 @@ func (a *ScriptedAdmitter) AwaitFinish(t *testing.T) RecordedFinish {
 // LifecycleAdmitter is a turn admitter double that records how runs finish.
 type LifecycleAdmitter struct {
 	Admission sessionruntime.Admission
+	// Fenced makes the runs it admits carry their fence, as a session runtime's
+	// do.
+	Fenced bool
+	// Observer, when set, is told of each run it finishes, as the session
+	// runtime tells its terminal observer once the fenced write is accepted.
+	Observer  func(context.Context, sessionruntime.TerminalRun)
 	Cancel    context.CancelFunc
 	Finishes  []RecordedFinish
 	FinishErr error
 }
+
+// FencesRuns reports whether the admitted runs are fenced.
+func (a *LifecycleAdmitter) FencesRuns() bool { return a.Fenced }
 
 func (a *LifecycleAdmitter) Admit(
 	_ context.Context,
@@ -194,13 +216,21 @@ func (a *LifecycleAdmitter) FinishRunWithErrorCode(ctx context.Context, handle s
 }
 
 func (a *LifecycleAdmitter) FinishRunWithFailure(
-	_ context.Context,
+	ctx context.Context,
 	handle sessionruntime.RunHandle,
 	status, code string,
 	args map[string]string,
 ) (sessionruntime.TerminalRun, error) {
 	a.Finishes = append(a.Finishes, RecordedFinish{Handle: handle, Status: status, Message: code, Args: args})
-	return sessionruntime.TerminalRun{}, a.FinishErr
+	if a.FinishErr != nil || a.Observer == nil {
+		return sessionruntime.TerminalRun{}, a.FinishErr
+	}
+	run := sessionruntime.TerminalRun{
+		RunID: handle.RunID, BotID: handle.BotID, SessionID: handle.SessionID, FencingToken: handle.FencingToken,
+		State: terminalStateForStatus(status), ErrorCode: code, ErrorArgs: args, Applied: true,
+	}
+	a.Observer(ctx, run)
+	return run, nil
 }
 
 func (*LifecycleAdmitter) MarkInlineDecisionRun(string, string, string) {}

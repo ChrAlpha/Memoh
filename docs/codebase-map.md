@@ -45,7 +45,7 @@ Memoh/
 │   │   ├── memory/             #     Memory recall for a turn and hand-off of finished rounds to the memory provider
 │   │   ├── notify/             #     Background task notifications into the originating conversation
 │   │   ├── pending/            #     Input waiting for a session: follow-up and steer queues, discuss batches, their sweeps
-│   │   ├── persist/            #     History writes: turn and step rows, failure rows, terminal snapshots, replaced turns
+│   │   ├── persist/            #     History writes: turn and step rows, failure rows, replaced turns
 │   │   ├── resume/             #     Resume of runs a server shutdown interrupted
 │   │   ├── runtime/            #     Runtime implementations
 │   │   │   ├── acp/            #       ACP pool, client process manager, and the generic custom-agent profile

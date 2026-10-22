@@ -9,7 +9,6 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
-	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -26,10 +25,6 @@ type RoundOptions struct {
 	AgentPublication                  *messagepkg.AgentPublication
 	AgentTurnID                       string
 	ContextLifecycle                  *contextfrag.LifecycleHolder
-	// Failure, when it names a code, is the failure that ended the run after
-	// the round's answer: the last assistant row is stored as the interrupted
-	// answer carrying it.
-	Failure outcome.RunFailure
 }
 
 func (w *Writer) StoreRound(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts RoundOptions) error {
@@ -78,7 +73,7 @@ func (w *Writer) StoreRoundResult(ctx context.Context, req runreq.ChatRequest, m
 		// including terminal-only callers that do not use SDK step commits.
 		opts.RequireCompletePersist = true
 	}
-	opts = opts.withFailureMetadata(filtered).withContextLifecycleMetadata(w.logger, req, filtered)
+	opts = opts.withContextLifecycleMetadata(w.logger, req, filtered)
 
 	persisted, persistErr := w.storeMessagesResult(ctx, req, filtered, modelID, opts)
 	opts.ContextLifecycle.SetAssistantMessageID(runreq.LastPersistedAssistantMessageID(persisted))
@@ -105,23 +100,6 @@ func (w *Writer) StoreRoundResult(ctx context.Context, req runreq.ChatRequest, m
 	}
 
 	return persisted, nil
-}
-
-// withFailureMetadata records opts.Failure on the last assistant row of
-// messages, the rows as they will be stored.
-func (opts RoundOptions) withFailureMetadata(messages []runreq.ModelMessage) RoundOptions {
-	if opts.Failure.Code == "" {
-		return opts
-	}
-	idx := lastAssistantMessageIndex(messages)
-	if idx < 0 {
-		return opts
-	}
-	if opts.MessageMetadataByIndex == nil {
-		opts.MessageMetadataByIndex = make(map[int]map[string]any, 1)
-	}
-	opts.MessageMetadataByIndex[idx] = interruptedRowMetadata(opts.Failure, "", opts.MessageMetadataByIndex[idx])
-	return opts
 }
 
 func (opts RoundOptions) withContextLifecycleMetadata(logger *slog.Logger, req runreq.ChatRequest, messages []runreq.ModelMessage) RoundOptions {
@@ -167,6 +145,15 @@ func lastAssistantMessageIndex(messages []runreq.ModelMessage) int {
 		}
 	}
 	return -1
+}
+
+func hasPersistableAssistantOutput(messages []runreq.ModelMessage) bool {
+	for _, msg := range messages {
+		if strings.EqualFold(strings.TrimSpace(msg.Role), "assistant") && !runreq.IsEmptyAssistantMessage(msg) {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *Writer) storeMessagesResult(ctx context.Context, req runreq.ChatRequest, messages []runreq.ModelMessage, modelID string, opts RoundOptions) ([]messagepkg.Message, error) {

@@ -256,7 +256,12 @@ func runDecisionContinuation(t *testing.T, run func(chan<- runreq.WSStreamEvent)
 // to avoid.
 func driveApprovalContinuation(t *testing.T) []sdk.Request {
 	t.Helper()
-	fixture, recorder := newDriveRequestFixture(t, withFixtureMessages(driveDecisionHistory(t, "container_exec", sdk.TextOutput("command finished"))))
+	manager := newPlanManager(t)
+	handle := startPlanRun(t, manager, -1)
+	ctx := fencedContext(context.Background(), handle.FencingToken)
+	fixture, recorder := newDriveRequestFixture(t,
+		withFixtureMessages(driveDecisionHistory(t, "container_exec", sdk.TextOutput("command finished"))),
+		withFixtureOptions(withSessionManager(manager)))
 	approval := toolapproval.Request{
 		ID: "tool-approval", BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID,
 		ToolCallID: driveToolCallID, ToolName: "container_exec",
@@ -267,11 +272,11 @@ func driveApprovalContinuation(t *testing.T) []sdk.Request {
 		ToolCallID: approval.ToolCallID, ToolName: approval.ToolName,
 		Result: sdk.TextOutput("command finished"),
 	}
-	call := fixture.service.decider.ToolApprovalCall(decide.NewCommittedToolApproval(approval, input, false))
+	call := fixture.service.decider.ToolApprovalCall(decide.NewCommittedToolApproval(approval, input, false).ForRun(handle.RunID, handle))
 	call.Verdict, call.Result = decide.VerdictAnswered, result
-	cont := fixture.service.answer.DecidedContinuation(context.Background(), call, true)
+	cont := fixture.service.answer.DecidedContinuation(ctx, call, true)
 	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
-		return fixture.service.answer.DriveUnrouted(context.Background(), cont, eventCh)
+		return fixture.service.answer.DriveUnrouted(ctx, cont, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
 }
@@ -289,17 +294,21 @@ func driveAskUserContinuation(t *testing.T) []sdk.Request {
 		SourcePlatform: "telegram", ReplyTarget: "im-chat-1", ConversationType: "private",
 		Result: map[string]any{"answers": []any{map[string]any{"text": "blue"}}},
 	}
+	manager := newPlanManager(t)
+	handle := startPlanRun(t, manager, -1)
+	ctx := fencedContext(context.Background(), handle.FencingToken)
 	fixture, recorder := newDriveRequestFixture(t,
 		withFixtureMessages(driveDecisionHistory(t, "ask_user", sdk.TextOutput(`{"answers":[{"text":"blue"}]}`))),
-		withFixtureOptions(withDecide(func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{Target: answered, Resolved: answered} })))
-	committed, err := fixture.service.decider.CommitUserInputResponse(context.Background(), decide.UserInputResponseInput{
+		withFixtureOptions(withSessionManager(manager), withDecide(func(d *decide.Deps) { d.UserInput = &agenttest.UserInput{Target: answered, Resolved: answered} })))
+	committed, err := fixture.service.decider.CommitUserInputResponse(ctx, decide.UserInputResponseInput{
 		BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID, UserInputID: answered.ID,
 	})
 	if err != nil {
 		t.Fatalf("CommitUserInputResponse() error = %v", err)
 	}
+	committed = committed.ForRun(handle.RunID, handle)
 	runDecisionContinuation(t, func(eventCh chan<- runreq.WSStreamEvent) error {
-		return fixture.service.ContinueCommittedUserInputResponse(context.Background(), committed, eventCh)
+		return fixture.service.ContinueCommittedUserInputResponse(ctx, committed, eventCh)
 	})
 	return requireDriveRequests(t, recorder)
 }

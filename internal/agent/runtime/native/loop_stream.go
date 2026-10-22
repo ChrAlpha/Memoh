@@ -395,15 +395,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		}
 	}
 	termEvent.EndReason = endReason
-	// The legacy recorder is append-only durability state. Flush only messages
-	// admitted by the final provider handoff whose target provider step also
-	// completed, so provider-start failures and retry-revoked injections
-	// cannot be persisted as durable input.
-	// The engine state is written by the engine goroutine, so read it only
-	// after its event channel has closed and published the final step slice.
-	if streamClosed {
-		dynamic.flushInjected(eng.steps, interruptedDurableStep, cfg.InjectedRecorder)
-	}
 	// Stop secondary producers before delivering the terminal event. The stream
 	// context cancellation also unblocks an emitter already waiting on ch.
 	cancel(context.Canceled)

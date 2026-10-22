@@ -315,7 +315,7 @@ func driveDecisionHistory(t *testing.T, toolName string, result sdk.ToolOutput) 
 		ToolName:   toolName,
 		Input:      sdk.ParseToolArguments(`{}`),
 	}}}
-	return &driveHistoryMessages{history: []messagepkg.Message{
+	return &driveHistoryMessages{RecordingMessages: agenttest.RecordingMessages{RunRequest: &messagepkg.RunTurnRequest{MessageID: driveRequestMessageID}}, history: []messagepkg.Message{
 		agenttest.AdmissionHistoryMessage(t, driveRequestMessageID, sdk.UserMessage(directLifecyclePrompt), nil),
 		agenttest.AdmissionHistoryMessage(t, driveReplacedAssistantID, call, nil),
 		agenttest.AdmissionHistoryMessage(t, driveEarlierAssistantMessageID, sdk.ToolMessage(sdk.ToolResultPart{

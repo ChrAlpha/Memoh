@@ -39,8 +39,8 @@ func (p *Planner) ScheduleSetup(spec drive.RunSpec, payload schedule.TriggerPayl
 	return func(setupCtx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		req.RunHandle = spec.Run.Handle
 		// The admitted turn's identity travels with the request: the step
-		// committer refuses to arm without it, and a scheduled run without one
-		// would persist only as a terminal snapshot.
+		// committer refuses to arm without it, and a run without a committer
+		// does not start.
 		req.TurnID = spec.Run.TurnID
 		req.TurnPosition = spec.Run.TurnPosition
 		req.Query = payload.Command

@@ -1369,6 +1369,10 @@ func (m *Manager) reconcileCanceledRunClaim(ctx context.Context, ctrl *runContro
 	return nil
 }
 
+// FencesRuns says the runs this manager admits carry a fencing token that the
+// history writes check.
+func (*Manager) FencesRuns() bool { return true }
+
 // MarkInlineDecisionRun declares, before the runtime starts prompting, that
 // this run's runtime blocks inline on decisions: terminal decision statuses
 // resume the run directly. Runs without the declaration keep the native park

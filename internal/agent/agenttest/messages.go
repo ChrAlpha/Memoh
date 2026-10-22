@@ -55,6 +55,32 @@ func (s *RecordingMessages) PersistRound(_ context.Context, inputs []messagepkg.
 	return persisted, true, nil
 }
 
+// PersistAgentStep records the rows of a committed step like those of any other
+// write, so a run's history reads from Persisted.
+func (s *RecordingMessages) PersistAgentStep(_ context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
+	if s.RoundPersistErr != nil {
+		return nil, s.RoundPersistErr
+	}
+	if s.persistErr != nil {
+		return nil, s.persistErr
+	}
+	persisted := make([]messagepkg.Message, 0, len(step.Messages)+1)
+	if step.Replacement != nil && step.Replacement.RequestMessageID != "" {
+		persisted = append(persisted, messagepkg.Message{ID: "cloned-request", Role: "user"})
+	}
+	for _, input := range step.Messages {
+		s.Persisted = append(s.Persisted, input)
+		persisted = append(persisted, messagepkg.Message{
+			ID:             "message-id",
+			SessionID:      input.SessionID,
+			Role:           input.Role,
+			Content:        input.Content,
+			DisplayContent: input.DisplayText,
+		})
+	}
+	return persisted, nil
+}
+
 func (*RecordingMessages) List(context.Context, string) ([]messagepkg.Message, error) {
 	return nil, nil
 }

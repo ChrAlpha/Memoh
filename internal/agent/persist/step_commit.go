@@ -24,8 +24,8 @@ import (
 )
 
 // StepCommitter bridges Twilight's complete-step barrier to history
-// persistence. It is intentionally enabled only for admitted, fenced turns;
-// legacy calls without a runtime owner keep their terminal-snapshot behavior.
+// persistence. It is the only writer of a native run's history, and exists only
+// for admitted, fenced turns.
 type StepCommitter struct {
 	ownerContext    context.Context
 	writer          *Writer

@@ -43,11 +43,7 @@ func TestAgentStreamRecordsInjectedMessageMutation(t *testing.T) {
 		},
 	}}}})
 	ledger := contextfrag.NewMutationLedger()
-	type recordedInjection struct {
-		text        string
-		insertAfter int
-	}
-	var recorded []recordedInjection
+	var committed []step.Record
 
 	var terminal StreamEvent
 	for event := range a.Stream(context.Background(), RunConfig{
@@ -57,15 +53,10 @@ func TestAgentStreamRecordsInjectedMessageMutation(t *testing.T) {
 		InjectCh:         injectCh,
 		Identity:         SessionContext{BotID: "bot-1"},
 		ContextMutations: ledger,
-		InjectedRecorder: func(text string, insertAfter int) {
-			recorded = append(recorded, recordedInjection{text: text, insertAfter: insertAfter})
-		},
+		OnStepCommitted:  commitStepsInto(&committed),
 	}) {
 		if event.IsTerminal() {
 			terminal = event
-			if len(recorded) != 1 {
-				t.Fatalf("recorded injections at terminal delivery = %#v, want one", recorded)
-			}
 		}
 	}
 	if !providerAttemptContainsText(secondCall.Messages, marker) {
@@ -77,8 +68,12 @@ func TestAgentStreamRecordsInjectedMessageMutation(t *testing.T) {
 	if terminal.Type != EventAgentEnd {
 		t.Fatalf("terminal event = %q, want %q", terminal.Type, EventAgentEnd)
 	}
-	if len(recorded) != 1 || recorded[0].text != marker {
-		t.Fatalf("recorded injections = %#v, want marker once", recorded)
+	texts := committedStepTexts(committed)
+	if len(texts) != 2 || len(texts[1]) == 0 || texts[1][0] != marker {
+		t.Fatalf("committed step texts = %#v, want the marker once, leading the second step", texts)
+	}
+	if got := countTextParts(committed[0].Messages, marker) + countTextParts(committed[1].Messages, marker); got != 1 {
+		t.Fatalf("committed steps carry the marker %d times, want once", got)
 	}
 }
 
@@ -115,11 +110,7 @@ func TestAgentStreamRecordsDuplicateAdmittedInjections(t *testing.T) {
 		},
 	}}}})
 
-	type recordedInjection struct {
-		text        string
-		insertAfter int
-	}
-	var recorded []recordedInjection
+	var committed []step.Record
 	for range a.Stream(context.Background(), RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
 		Messages:         []sdk.Message{sdk.UserMessage("start")},
@@ -127,17 +118,13 @@ func TestAgentStreamRecordsDuplicateAdmittedInjections(t *testing.T) {
 		InjectCh:         injectCh,
 		Identity:         SessionContext{BotID: "bot-1"},
 		ContextMutations: contextfrag.NewMutationLedger(),
-		InjectedRecorder: func(text string, insertAfter int) {
-			recorded = append(recorded, recordedInjection{text: text, insertAfter: insertAfter})
-		},
+		OnStepCommitted:  commitStepsInto(&committed),
 	}) {
 	}
 
-	if len(recorded) != 2 || recorded[0].text != marker || recorded[1].text != marker {
-		t.Fatalf("recorded injections = %#v, want duplicate marker in arrival order", recorded)
-	}
-	if recorded[0].insertAfter != recorded[1].insertAfter {
-		t.Fatalf("recorded insertion boundaries = %d/%d, want identical boundary for one PrepareStep", recorded[0].insertAfter, recorded[1].insertAfter)
+	texts := committedStepTexts(committed)
+	if len(texts) != 2 || len(texts[1]) < 2 || texts[1][0] != marker || texts[1][1] != marker {
+		t.Fatalf("committed step texts = %#v, want the duplicate marker twice, in arrival order, leading the second step", texts)
 	}
 }
 
@@ -181,11 +168,7 @@ func TestAgentStreamRecordsLaterInjectionAtOutputBoundary(t *testing.T) {
 		},
 	}}}})
 
-	type recordedInjection struct {
-		text        string
-		insertAfter int
-	}
-	var recorded []recordedInjection
+	var committed []step.Record
 	for range a.Stream(context.Background(), RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
 		Messages:         []sdk.Message{sdk.UserMessage("start")},
@@ -193,26 +176,25 @@ func TestAgentStreamRecordsLaterInjectionAtOutputBoundary(t *testing.T) {
 		InjectCh:         injectCh,
 		Identity:         SessionContext{BotID: "bot-1"},
 		ContextMutations: contextfrag.NewMutationLedger(),
-		InjectedRecorder: func(text string, insertAfter int) {
-			recorded = append(recorded, recordedInjection{text: text, insertAfter: insertAfter})
-		},
+		OnStepCommitted:  commitStepsInto(&committed),
 	}) {
 	}
 
-	if len(recorded) != 2 {
-		t.Fatalf("recorded injections = %#v, want two", recorded)
+	texts := committedStepTexts(committed)
+	if len(texts) != 3 {
+		t.Fatalf("committed step texts = %#v, want three steps", texts)
 	}
-	if recorded[0] != (recordedInjection{text: firstMarker, insertAfter: 2}) {
-		t.Fatalf("first injection = %#v, want boundary after first tool pair", recorded[0])
+	if len(texts[1]) == 0 || texts[1][0] != firstMarker {
+		t.Fatalf("second step = %#v, want the first injection leading it", texts[1])
 	}
-	if recorded[1] != (recordedInjection{text: secondMarker, insertAfter: 4}) {
-		t.Fatalf("second injection = %#v, want boundary after two tool pairs", recorded[1])
+	if len(texts[2]) == 0 || texts[2][0] != secondMarker {
+		t.Fatalf("third step = %#v, want the second injection leading it", texts[2])
 	}
 }
 
 // A retryable failure on the attempt that carried the injected message is
-// retried with the message still in the input, once: the recorder and the
-// terminal messages see a single copy.
+// retried with the message still in the input, once: the committed steps and
+// the terminal messages see a single copy.
 func TestAgentStreamRetryAfterRetryableFailureKeepsInjectedMessageOnce(t *testing.T) {
 	t.Parallel()
 
@@ -245,7 +227,6 @@ func TestAgentStreamRetryAfterRetryableFailureKeepsInjectedMessageOnce(t *testin
 		},
 	}}}})
 
-	var recorded []string
 	var committed []step.Record
 	var terminal StreamEvent
 	for event := range a.Stream(context.Background(), RunConfig{
@@ -255,7 +236,6 @@ func TestAgentStreamRetryAfterRetryableFailureKeepsInjectedMessageOnce(t *testin
 		InjectCh:         injectCh,
 		Identity:         SessionContext{BotID: "bot-1"},
 		ContextMutations: contextfrag.NewMutationLedger(),
-		InjectedRecorder: func(text string, _ int) { recorded = append(recorded, text) },
 		OnStepCommitted: func(_ context.Context, _ int, record *step.Record) (StepDirective, error) {
 			committed = append(committed, *record)
 			return StepDirective{}, nil
@@ -274,9 +254,6 @@ func TestAgentStreamRetryAfterRetryableFailureKeepsInjectedMessageOnce(t *testin
 	}
 	if terminal.Type != EventAgentEnd {
 		t.Fatalf("terminal event = %q, want %q", terminal.Type, EventAgentEnd)
-	}
-	if len(recorded) != 1 || recorded[0] != marker {
-		t.Fatalf("recorded injections = %#v, want marker once", recorded)
 	}
 	copies := 0
 	for _, record := range committed {
@@ -340,5 +317,30 @@ func TestVerifyDynamicRefsRequiresTrackedMessageAtIndex(t *testing.T) {
 				t.Fatalf("verified refs = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+// committedStepTexts collects the text of every message of the steps a run
+// committed, per step, in commit order.
+func committedStepTexts(steps []step.Record) [][]string {
+	out := make([][]string, len(steps))
+	for i, record := range steps {
+		for _, msg := range record.Messages {
+			var text strings.Builder
+			for _, part := range msg.Content {
+				if value, ok := part.(sdk.TextPart); ok {
+					text.WriteString(value.Text)
+				}
+			}
+			out[i] = append(out[i], text.String())
+		}
+	}
+	return out
+}
+
+func commitStepsInto(steps *[]step.Record) func(context.Context, int, *step.Record) (StepDirective, error) {
+	return func(_ context.Context, _ int, record *step.Record) (StepDirective, error) {
+		*steps = append(*steps, *record)
+		return StepDirective{}, nil
 	}
 }

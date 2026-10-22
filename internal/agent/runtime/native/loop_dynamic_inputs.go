@@ -227,38 +227,6 @@ func (d *loopDynamicInputs) mergeReadMedia(steps []step.Record, fallback []sdk.M
 	return merged, feedbackIndexes
 }
 
-// flushInjected drives the legacy append-only injected-message recorder:
-// only messages admitted by a dispatched provider attempt whose target step
-// completed are recorded, positioned by the step outputs that preceded them
-// plus any durable read-media carriers at or before the same boundary.
-func (d *loopDynamicInputs) flushInjected(steps []step.Record, interruptedDurableStep int, recorder func(headerifiedText string, insertAfter int)) {
-	if d == nil || recorder == nil {
-		return
-	}
-	d.mu.Lock()
-	records := append([]dynamicInputRecord(nil), d.records...)
-	d.mu.Unlock()
-
-	outputCounts := make([]int, len(steps)+1)
-	for i := range steps {
-		outputCounts[i+1] = outputCounts[i] + len(steps[i].Messages)
-	}
-	completed := d.offset + len(steps)
-	for _, record := range records {
-		local := record.boundary - d.offset
-		if record.readMedia || !record.admitted || local < 0 || local >= len(steps) {
-			continue
-		}
-		insertAfter := outputCounts[local]
-		for _, media := range records {
-			if media.readMediaDurable(completed, interruptedDurableStep) && media.boundary <= record.boundary {
-				insertAfter++
-			}
-		}
-		recorder(record.text, insertAfter)
-	}
-}
-
 // decorateCommittedStep prepends the admitted loop-appended input messages to
 // one completed step so persistence sees the input exactly as the provider
 // did, then applies the deferred-approval and execution-metadata annotations.

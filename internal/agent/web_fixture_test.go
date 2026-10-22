@@ -643,6 +643,9 @@ const (
 	// call, which commits a step, and rejects the second call before any
 	// output.
 	wsStepHistoryToolThenAuthFailure wsStepHistoryModel = "tool_then_auth_failure"
+	// wsStepHistoryToolThenText answers the first call with a tool call, which
+	// commits a step, and every later call with text.
+	wsStepHistoryToolThenText wsStepHistoryModel = "tool_then_text"
 	// wsStepHistoryTextLoop repeats the same text until the runtime's loop
 	// detection aborts the run. The abort follows no error event, and its
 	// cause carries no catalogued code.
@@ -689,7 +692,7 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 		}
 	}
 	switch t.mode {
-	case wsStepHistoryToolThenBrokenStream, wsStepHistoryToolThenAuthFailure:
+	case wsStepHistoryToolThenBrokenStream, wsStepHistoryToolThenAuthFailure, wsStepHistoryToolThenText:
 		if call == 1 {
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -703,6 +706,9 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 		}
 		if t.mode == wsStepHistoryToolThenBrokenStream {
 			return stream(failingReader{err: errors.New("upstream stream broke")}), nil
+		}
+		if t.mode == wsStepHistoryToolThenText {
+			return stream(strings.NewReader("data: {\"id\":\"chatcmpl-ws-step\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")), nil
 		}
 		fallthrough
 	case wsStepHistoryAuthFailure:
@@ -876,6 +882,13 @@ func newWSStepHistoryService(t *testing.T, mode wsStepHistoryModel, queries dbst
 // the client and is expected to stop the run.
 func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, runID string)) wsStepHistoryRun {
 	t.Helper()
+	return h.runRequest(t, stop, nil)
+}
+
+// runRequest is run with the chat request adjusted by mutate, which the test
+// uses to give the run its own input channel.
+func (h wsStepHistoryHarness) runRequest(t *testing.T, stop func(ctx context.Context, runID string), mutate func(*runreq.ChatRequest)) wsStepHistoryRun {
+	t.Helper()
 	baseCtx := context.Background()
 	admission, err := h.service.AdmitWebRun(baseCtx, web.AdmitInput{
 		BotID:        h.botID,
@@ -893,7 +906,7 @@ func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, r
 	if stop != nil {
 		delivery.onText = func() { go stop(baseCtx, admission.RunID) }
 	}
-	h.service.RunWebSend(admission, runreq.ChatRequest{
+	req := runreq.ChatRequest{
 		BotID:           h.botID,
 		ChatID:          h.botID,
 		ThreadID:        h.sessionID,
@@ -901,7 +914,19 @@ func (h wsStepHistoryHarness) run(t *testing.T, stop func(ctx context.Context, r
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
 		CurrentChannel:  "local",
-	}, delivery)
+	}
+	if mutate == nil {
+		h.service.RunWebSend(admission, req, delivery)
+	} else {
+		// The request is adjusted after admission wired it, which is the only
+		// way to give the run an input channel of the test's own.
+		spec := web.RunSpec(admission, req, delivery, outcome.InputHeld)
+		mutate(&spec.Req)
+		spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
+			return h.service.plan.ChatSetup(ctx, req, spec)
+		}
+		h.service.web.Start(admission, spec)
+	}
 	select {
 	case <-delivery.done:
 	case <-time.After(20 * time.Second):

@@ -77,9 +77,7 @@ func fencedContext(token int64) context.Context {
 }
 
 func tailRequest() runreq.ChatRequest {
-	req := resumedRequest()
-	req.RunID = agenttest.LifecycleRunID
-	return req
+	return resumedRequest()
 }
 
 func tailExecutor(t *testing.T, plan drive.RunPlan) *nativeExecutor {
@@ -97,7 +95,7 @@ func tailExecutor(t *testing.T, plan drive.RunPlan) *nativeExecutor {
 func TestNativePlanAppliesTheEntrysInteractionFlags(t *testing.T) {
 	t.Parallel()
 
-	planner := tailPlanner(t, &agenttest.RecordingMessages{}, tailManager(t))
+	planner := tailPlanner(t, &stepMessages{}, tailManager(t))
 	for _, tc := range []struct {
 		name       string
 		live, ask  bool
@@ -113,8 +111,8 @@ func TestNativePlanAppliesTheEntrysInteractionFlags(t *testing.T) {
 			t.Parallel()
 			// The entry's own cfg may carry the opposite of what it asks for.
 			cfg := native.RunConfig{LiveToolStream: !tc.live, CanRequestUserInput: !tc.ask}
-			plan, err := planner.nativePlan(context.Background(), tailRequest(), runreq.ResolvedContext{}, cfg, nativeOptions{
-				LiveToolStream: tc.live, CanRequestUserInput: tc.ask, Steps: stepsOff,
+			plan, err := planner.nativePlan(fencedContext(1), tailRequest(), runreq.ResolvedContext{}, cfg, nativeOptions{
+				LiveToolStream: tc.live, CanRequestUserInput: tc.ask, Steps: stepsFresh,
 			})
 			if err != nil {
 				t.Fatalf("nativePlan() error = %v", err)
@@ -132,9 +130,9 @@ func TestNativePlanAppliesTheEntrysInteractionFlags(t *testing.T) {
 func TestNativePlanCompilesThePromptOverStaleSourceFragments(t *testing.T) {
 	t.Parallel()
 
-	planner := tailPlanner(t, &agenttest.RecordingMessages{}, tailManager(t))
+	planner := tailPlanner(t, &stepMessages{}, tailManager(t))
 	cfg := native.RunConfig{ContextSourceFrags: []contextfrag.ContextFrag{{ID: "stale-source-fragment", Kind: contextfrag.KindConversationEvent}}}
-	plan, err := planner.nativePlan(context.Background(), tailRequest(), runreq.ResolvedContext{}, cfg, nativeOptions{Steps: stepsOff})
+	plan, err := planner.nativePlan(fencedContext(1), tailRequest(), runreq.ResolvedContext{}, cfg, nativeOptions{Steps: stepsFresh})
 	if err != nil {
 		t.Fatalf("nativePlan() error = %v", err)
 	}
@@ -148,10 +146,9 @@ func TestNativePlanCompilesThePromptOverStaleSourceFragments(t *testing.T) {
 	}
 }
 
-// How a run commits its steps is the entry's: off writes the history from the
-// terminal snapshot alone and does not even time reasoning, a fresh run gets a
-// committer when it can have one, and a resumed run without a live queue to
-// join gets none but still times its reasoning.
+// The history of a native run is written only by its step committer, so a run
+// that cannot have one does not start: a fresh run needs a fence, and a resumed
+// run needs a live queue to join.
 func TestNativePlanStepModes(t *testing.T) {
 	t.Parallel()
 
@@ -160,28 +157,33 @@ func TestNativePlanStepModes(t *testing.T) {
 		steps         stepMode
 		ctx           context.Context
 		wantCommitter bool
-		wantTiming    bool
+		wantErr       error
 	}{
-		{name: "off", steps: stepsOff, ctx: fencedContext(1)},
-		{name: "fresh with a fence", steps: stepsFresh, ctx: fencedContext(1), wantCommitter: true, wantTiming: true},
-		{name: "fresh without a fence", steps: stepsFresh, ctx: context.Background(), wantTiming: true},
-		{name: "resume without an owned run", steps: stepsResume, ctx: fencedContext(1), wantTiming: true},
+		{name: "fresh with a fence", steps: stepsFresh, ctx: fencedContext(1), wantCommitter: true},
+		{name: "fresh without a fence", steps: stepsFresh, ctx: context.Background(), wantErr: errStepCommitterUnavailable},
+		{name: "resume without an owned run", steps: stepsResume, ctx: fencedContext(1), wantErr: errResumeCommitterUnavailable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			planner := tailPlanner(t, &stepMessages{}, tailManager(t))
 			req := tailRequest()
 			plan, err := planner.nativePlan(tc.ctx, req, runreq.ResolvedContext{}, native.RunConfig{}, nativeOptions{Steps: tc.steps})
-			if err != nil {
-				t.Fatalf("nativePlan() error = %v", err)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("nativePlan() error = %v, want %v", err, tc.wantErr)
+			}
+			if tc.wantErr != nil {
+				if plan.Exec != nil {
+					t.Fatalf("a run that cannot commit steps was planned: %#v", plan)
+				}
+				return
 			}
 			exec := tailExecutor(t, plan)
 			if (exec.committer != nil) != tc.wantCommitter {
 				t.Fatalf("committer = %v, want present=%t", exec.committer, tc.wantCommitter)
 			}
-			if (exec.cfg.OnProviderStreamEventObserved != nil) != tc.wantTiming || (exec.cfg.OnStepCommitted != nil) != tc.wantTiming || (exec.cfg.OnStepInterrupted != nil) != tc.wantTiming {
-				t.Fatalf("reasoning timing hooks = observed:%t committed:%t interrupted:%t, want all %t",
-					exec.cfg.OnProviderStreamEventObserved != nil, exec.cfg.OnStepCommitted != nil, exec.cfg.OnStepInterrupted != nil, tc.wantTiming)
+			if exec.cfg.OnProviderStreamEventObserved == nil || exec.cfg.OnStepCommitted == nil || exec.cfg.OnStepInterrupted == nil {
+				t.Fatalf("reasoning timing hooks = observed:%t committed:%t interrupted:%t, want all set",
+					exec.cfg.OnProviderStreamEventObserved != nil, exec.cfg.OnStepCommitted != nil, exec.cfg.OnStepInterrupted != nil)
 			}
 			if plan.Req.StepIndexOffset != 0 || plan.Req.QueueSteerEnabled {
 				t.Fatalf("request = offset:%d steer:%t, want a request left as it came", plan.Req.StepIndexOffset, plan.Req.QueueSteerEnabled)
@@ -217,8 +219,8 @@ func TestNativePlanResumeContinuesTheParkedRunsSteps(t *testing.T) {
 	if exec.committer == nil {
 		t.Fatal("the resumed run has no step committer")
 	}
-	if plan.Req.StepIndexOffset != 3 || exec.cfg.StepIndexOffset != 3 || exec.req.StepIndexOffset != 3 {
-		t.Fatalf("step offset = request:%d config:%d executor:%d, want 3 (steps 0 through 2 are committed)", plan.Req.StepIndexOffset, exec.cfg.StepIndexOffset, exec.req.StepIndexOffset)
+	if plan.Req.StepIndexOffset != 3 || exec.cfg.StepIndexOffset != 3 {
+		t.Fatalf("step offset = request:%d config:%d, want 3 (steps 0 through 2 are committed)", plan.Req.StepIndexOffset, exec.cfg.StepIndexOffset)
 	}
 	if !plan.Req.QueueSteerEnabled {
 		t.Fatal("the resumed request does not take steers")
@@ -258,8 +260,8 @@ func TestNativePlanResumeFailsWithoutALiveQueue(t *testing.T) {
 		req := tailRequest()
 		req.RunHandle = handle
 		// A message store that cannot write steps leaves no committer.
-		_, err = tailPlanner(t, &agenttest.RecordingMessages{}, manager).nativePlan(fencedContext(handle.FencingToken), req, runreq.ResolvedContext{}, native.RunConfig{}, nativeOptions{Steps: stepsResume})
-		if err == nil || err.Error() != "live queue step committer is unavailable for decision continuation" {
+		_, err = tailPlanner(t, struct{ messagepkg.Service }{&agenttest.RecordingMessages{}}, manager).nativePlan(fencedContext(handle.FencingToken), req, runreq.ResolvedContext{}, native.RunConfig{}, nativeOptions{Steps: stepsResume})
+		if !errors.Is(err, errResumeCommitterUnavailable) {
 			t.Fatalf("nativePlan() error = %v, want the missing committer", err)
 		}
 	})

@@ -29,9 +29,9 @@ func FailureRowMetadata(f outcome.RunFailure, origin string, metadata map[string
 }
 
 // interruptedRowMetadata is the metadata of an assistant row a failure cut
-// short: the interrupted mark plus the failure's code and args. A native step,
-// the turn's failure row and the last answer of a terminal snapshot all record
-// a failure through it, so they read the same in history.
+// short: the interrupted mark plus the failure's code and args. A native step
+// and the turn's failure row both record a failure through it, so they read the
+// same in history.
 func interruptedRowMetadata(f outcome.RunFailure, origin string, metadata map[string]any) map[string]any {
 	if metadata == nil {
 		metadata = map[string]any{}

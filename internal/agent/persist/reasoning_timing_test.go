@@ -1,7 +1,6 @@
 package persist
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -97,34 +96,54 @@ func TestReasoningTimingTrackerRetryKeepsOnlySurvivingAttempt(t *testing.T) {
 	}
 }
 
+// Each committed step takes the timing of its own model call, so a later
+// provider call cannot erase an earlier tool-loop step as if it were a retry.
 func TestConfigureNativeReasoningTimingKeepsCompletedStepsAcrossProviderCalls(t *testing.T) {
-	t.Parallel()
-
+	fx := newSteerFixture(t)
+	handle := fx.handle
+	ctx := replacementTestContext(fx)
+	committer := fx.writer.NewStepCommitter(ctx, runreq.ChatRequest{
+		BotID: handle.BotID, ThreadID: handle.SessionID, RunID: handle.RunID, RunHandle: handle,
+		TurnID: "turn-1", TurnPosition: int64Pointer(1), Query: "hello",
+	}, replacementResolvedContext())
+	if committer == nil {
+		t.Fatal("missing step committer")
+	}
 	clock := newReasoningTimingTestClock()
 	tracker := NewReasoningTimingTracker(clock.read)
 	cfg := native.RunConfig{}
-	ConfigureNativeReasoningTiming(&cfg, tracker, nil)
+	ConfigureNativeReasoningTiming(&cfg, tracker, committer)
 
+	reasoningStep := func(text string) *step.Record {
+		return &step.Record{Messages: []sdk.Message{{
+			Role:    sdk.MessageRoleAssistant,
+			Content: []sdk.MessagePart{sdk.ReasoningPart{Text: text}, sdk.TextPart{Text: "answer"}},
+		}}}
+	}
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventRetry})
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventReasoningDelta, Delta: "first step"})
 	clock.advance(2 * time.Second)
-	if _, err := cfg.OnStepCommitted(context.Background(), 0, &step.Record{}); err != nil {
-		t.Fatalf("commit first timing checkpoint: %v", err)
+	if _, err := cfg.OnStepCommitted(ctx, 0, reasoningStep("first step")); err != nil {
+		t.Fatalf("commit first step: %v", err)
 	}
 
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventRetry})
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventReasoningDelta, Delta: "second step"})
 	clock.advance(3 * time.Second)
-	if _, err := cfg.OnStepCommitted(context.Background(), 1, &step.Record{}); err != nil {
-		t.Fatalf("commit second timing checkpoint: %v", err)
+	if _, err := cfg.OnStepCommitted(ctx, 1, reasoningStep("second step")); err != nil {
+		t.Fatalf("commit second step: %v", err)
 	}
 
-	segments := tracker.take("completed")
-	if len(segments) != 2 {
-		t.Fatalf("segments = %#v, want both completed steps", segments)
+	steps := fx.messages.Steps
+	if len(steps) != 2 {
+		t.Fatalf("committed steps = %d, want 2", len(steps))
 	}
-	if segments[0].DurationMS != 2000 || segments[1].DurationMS != 3000 {
-		t.Fatalf("multi-step durations = %#v", segments)
+	for i, want := range []int64{2000, 3000} {
+		rows := steps[i].Messages
+		segments := messagepkg.ReasoningTimingFromMetadata(rows[len(rows)-1].Metadata)
+		if len(segments) != 1 || segments[0].DurationMS != want {
+			t.Fatalf("step %d reasoning timing = %#v, want one segment of %dms", i, segments, want)
+		}
 	}
 }
 

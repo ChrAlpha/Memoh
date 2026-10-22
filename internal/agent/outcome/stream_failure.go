@@ -40,28 +40,6 @@ func ClassifyUserMessageHookError(err error) error {
 	return apperror.Wrap(apperror.CodeHookUserMessageFailed, err, nil)
 }
 
-// HasVisibleAgentStreamOutput reports whether event carries output a user can see.
-func HasVisibleAgentStreamOutput(event native.StreamEvent) bool {
-	switch event.Type {
-	case native.EventTextDelta,
-		native.EventReasoningDelta:
-		return strings.TrimSpace(event.Delta) != ""
-	case native.EventToolCallInputStart,
-		native.EventToolCallStart,
-		native.EventToolCallProgress,
-		native.EventToolCallEnd,
-		native.EventToolApprovalRequest,
-		native.EventUserInputRequest,
-		native.EventReaction,
-		native.EventSpeech:
-		return true
-	case native.EventAttachment:
-		return len(event.Attachments) > 0
-	default:
-		return false
-	}
-}
-
 // AgentStreamFailure translates the failure an error event reports into the
 // run's public error, keeping the event's cause, and returns nil for any other
 // event. Every consumer of agent events uses it, so the run's terminal write,

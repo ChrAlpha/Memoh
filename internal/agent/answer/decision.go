@@ -257,6 +257,10 @@ type Continuation struct {
 	// so the request it closed over has no asset collector, and a resumed run
 	// that used it would write its outbound assets unlinked.
 	Setup func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error)
+	// Input says who holds the answer the run resumes from. The zero value is
+	// an accepted input, whose failure leaves a row in the turn the decision
+	// parked.
+	Input outcome.InputOwnership
 }
 
 // DriveRouted drives the run an answer the session runtime routed
@@ -285,7 +289,9 @@ func (r *Responder) DriveRouted(runCtx context.Context, command sessionruntime.C
 
 // DriveUnrouted drives the run an answer resumes when no session
 // runtime routed it, so no run was admitted for it: the caller that submitted
-// the answer follows the run on eventCh, or nobody does when it is nil.
+// the answer follows the run on eventCh, or nobody does when it is nil. A
+// native run without an admission has no fence and cannot write history, so
+// its continuation fails with the decision's expired code instead of running.
 //
 // A caller without an event stream learns a failure only from the return
 // value; one with a stream already received it as the run's error event.
@@ -296,11 +302,15 @@ func (r *Responder) DriveUnrouted(ctx context.Context, cont Continuation, eventC
 	if eventCh != nil {
 		delivery = drive.NewChannelDelivery(eventCh)
 	}
+	input := cont.Input
+	if input == 0 {
+		input = outcome.InputAccepted
+	}
 	result := r.driver.Drive(ctx, drive.RunSpec{
 		Req:      cont.Req,
 		Setup:    cont.Setup,
 		Delivery: delivery,
-		Input:    outcome.InputAccepted,
+		Input:    input,
 	})
 	if eventCh != nil {
 		return nil
@@ -341,8 +351,9 @@ func continuationContext(ctx context.Context) (context.Context, func()) {
 // model runs on from there. live says whether a caller receives the run's
 // events as they happen.
 func (r *Responder) DecidedContinuation(ctx context.Context, call decide.DecidedCall, live bool) Continuation {
-	// An answer no session runtime routed has no run to name a request row; its
-	// result is stored without one. A routed run always has, and must find it.
+	// An answer no session runtime routed has no run to name a request row, and
+	// its continuation fails at setup as an expired decision (plan.Continue)
+	// without writing a row. A routed run always has one, and must find it.
 	var (
 		request messagepkg.RunTurnRequest
 		reqErr  error
@@ -367,7 +378,7 @@ func (r *Responder) DecidedContinuation(ctx context.Context, call decide.Decided
 		SkipMemoryExtraction: call.SkipMemoryExtraction,
 		WorkspaceTargetID:    call.WorkspaceTargetID,
 	}
-	return Continuation{
+	cont := Continuation{
 		Req: req,
 		// The resumed run is the driver's request, which carries the per-run
 		// asset collector. Everything else in it is what this entry built.
@@ -381,4 +392,10 @@ func (r *Responder) DecidedContinuation(ctx context.Context, call decide.Decided
 			return r.continuer.Continue(ctx, call, runReq, live)
 		},
 	}
+	if call.RunID == "" {
+		// There is no run, so no turn to leave a failure row in; the failure
+		// reaches the caller.
+		cont.Input = outcome.InputHeld
+	}
+	return cont
 }

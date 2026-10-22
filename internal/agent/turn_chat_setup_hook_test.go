@@ -195,11 +195,12 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"allow"}`)
 	service := fixture.fixture.service
 
-	if _, err := service.plan.ChatSetup(context.Background(), runreq.ChatRequest{
-		BotID:           agenttest.LifecycleBotID,
-		ChatID:          agenttest.LifecycleBotID,
-		ThreadID:        agenttest.LifecycleSessionID,
-		RunID:           agenttest.LifecycleRunID,
+	if _, err := service.plan.ChatSetup(fencedContext(context.Background(), 1), runreq.ChatRequest{
+		BotID:    agenttest.LifecycleBotID,
+		ChatID:   agenttest.LifecycleBotID,
+		ThreadID: agenttest.LifecycleSessionID,
+		RunID:    agenttest.LifecycleRunID,
+		TurnID:   "turn-1", TurnPosition: int64Ptr(1),
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
@@ -217,11 +218,13 @@ func TestChatSetupRetryRerunsTheHook(t *testing.T) {
 func TestChatSetupRetryOfAnAnsweredTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
-	if _, err := fixture.fixture.service.plan.ChatSetup(context.Background(), runreq.ChatRequest{
-		BotID:                     agenttest.LifecycleBotID,
-		ChatID:                    agenttest.LifecycleBotID,
-		ThreadID:                  agenttest.LifecycleSessionID,
-		RunID:                     agenttest.LifecycleRunID,
+	if _, err := fixture.fixture.service.plan.ChatSetup(fencedContext(context.Background(), 1), runreq.ChatRequest{
+		BotID:    agenttest.LifecycleBotID,
+		ChatID:   agenttest.LifecycleBotID,
+		ThreadID: agenttest.LifecycleSessionID,
+		RunID:    agenttest.LifecycleRunID,
+		TurnID:   "turn-1", TurnPosition: int64Ptr(1),
+		PersistedUserMessageID:    "request-message",
 		Query:                     directLifecyclePrompt,
 		RawQuery:                  directLifecyclePrompt,
 		UserVisibleText:           directLifecyclePrompt,
@@ -287,11 +290,12 @@ func TestChatSetupExternalRuntimeRefusesTurnReplacement(t *testing.T) {
 func TestChatSetupReplacementTurnSkipsTheHook(t *testing.T) {
 	workspace, fixture := withUserMessageHook(t, `{"decision":"deny","reason":"policy"}`)
 
-	_, err := fixture.fixture.service.plan.ChatSetup(context.Background(), runreq.ChatRequest{
-		BotID:           agenttest.LifecycleBotID,
-		ChatID:          agenttest.LifecycleBotID,
-		ThreadID:        agenttest.LifecycleSessionID,
-		RunID:           agenttest.LifecycleRunID,
+	_, err := fixture.fixture.service.plan.ChatSetup(fencedContext(context.Background(), 1), runreq.ChatRequest{
+		BotID:    agenttest.LifecycleBotID,
+		ChatID:   agenttest.LifecycleBotID,
+		ThreadID: agenttest.LifecycleSessionID,
+		RunID:    agenttest.LifecycleRunID,
+		TurnID:   "turn-1", TurnPosition: int64Ptr(1),
 		Query:           directLifecyclePrompt,
 		RawQuery:        directLifecyclePrompt,
 		UserVisibleText: directLifecyclePrompt,
@@ -319,3 +323,5 @@ func TestChatSetupWithoutAHookRunsTheTurn(t *testing.T) {
 		t.Fatalf("finish status = %q, want completed", got)
 	}
 }
+
+func int64Ptr(v int64) *int64 { return &v }

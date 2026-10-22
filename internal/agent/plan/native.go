@@ -2,6 +2,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -13,17 +14,19 @@ import (
 type stepMode int
 
 const (
-	// stepsFresh commits each step through a committer of the run, when the run
-	// has what one needs: a fence, a message store that writes steps, a named
+	// stepsFresh commits each step through a committer of the run. The run must
+	// have what one needs: a fence, a message store that writes steps, a named
 	// turn.
 	stepsFresh stepMode = iota
-	// stepsOff commits nothing as the run goes and does not time its reasoning:
-	// the run's history is written from its terminal snapshot alone.
-	stepsOff
 	// stepsResume commits through the live queue the run was admitted with,
 	// numbering the steps after the ones the parked run already committed.
 	stepsResume
 )
+
+// errStepCommitterUnavailable is why a native run that commits steps cannot be
+// planned: the history of a run is written only by its step committer, so a run
+// that cannot have one does not start.
+var errStepCommitterUnavailable = errors.New("step committer is unavailable for the run")
 
 // nativeOptions are the ways the entries of a native run differ at its tail.
 type nativeOptions struct {
@@ -48,18 +51,16 @@ func (p *Planner) nativePlan(ctx context.Context, req runreq.ChatRequest, rc run
 
 	reasoningTiming := persist.NewReasoningTimingTracker(nil)
 	var stepCommitter *persist.StepCommitter
-	if opts.Steps != stepsOff {
-		if opts.Steps == stepsResume {
-			var err error
-			if stepCommitter, err = p.resumeCommitter(ctx, &req, &cfg, rc); err != nil {
-				return drive.RunPlan{}, err
-			}
-		} else {
-			stepCommitter = p.persist.NewStepCommitter(ctx, req, rc)
+	if opts.Steps == stepsResume {
+		var err error
+		if stepCommitter, err = p.resumeCommitter(ctx, &req, &cfg, rc); err != nil {
+			return drive.RunPlan{}, err
 		}
-		persist.ConfigureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
-		stepCommitter.BindContinuation(&cfg)
+	} else if stepCommitter = p.persist.NewStepCommitter(ctx, req, rc); stepCommitter == nil {
+		return drive.RunPlan{}, errStepCommitterUnavailable
 	}
+	persist.ConfigureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
+	stepCommitter.BindContinuation(&cfg)
 	cfg = p.runconfig.Prepare(ctx, cfg)
 	p.compact.BindStep(&cfg, req, stepCommitter)
 
@@ -68,10 +69,7 @@ func (p *Planner) nativePlan(ctx context.Context, req runreq.ChatRequest, rc run
 			agent:     p.agent,
 			cfg:       cfg,
 			rc:        rc,
-			req:       req,
 			committer: stepCommitter,
-			timing:    reasoningTiming,
-			persist:   p.persist,
 		},
 		Req:        req,
 		IdleEffort: drive.ReasoningEffortForIdle(cfg),

@@ -103,9 +103,6 @@ func (p *Planner) ChatSetup(ctx context.Context, req runreq.ChatRequest, spec dr
 		CanRequestUserInput: true,
 		Steps:               stepsFresh,
 	}
-	if spec.Unattended {
-		opts.Steps = stepsOff
-	}
 	plan, err := p.nativePlan(ctx, req, rc, rc.RunConfig, opts)
 	if err != nil {
 		return drive.RunPlan{}, err

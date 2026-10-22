@@ -22,6 +22,7 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/runtimefence"
 )
 
 // fixedStream is a native runtime that produces a fixed event sequence.
@@ -56,48 +57,6 @@ func testWriterOn(messages messagepkg.Service, manager *sessionruntime.Manager) 
 	})
 }
 
-// A replacement run without step commits has no queue coordinator: the ending
-// writes the new turn from the terminal snapshot, in the same transaction that
-// replaces the old turn, once.
-func TestNativeReplacementWithoutStepCommitsWritesTheTurnOnce(t *testing.T) {
-	t.Parallel()
-
-	messages := &agenttest.RecordingMessages{}
-	position := int64(2)
-	replacement := &messagepkg.TurnReplacement{OldTurnID: "old-turn", ReplacementTurnID: "new-turn", ReplacementTurnPosition: &position, RequestMessageID: "request-message", Reason: "retry"}
-	req := runreq.ChatRequest{
-		BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
-		UserMessagePersisted: true, PersistedUserMessageID: "request-message",
-		ReusePersistedUserMessage: true, TurnID: "new-turn", TurnPosition: &position,
-		TurnReplacement: replacement,
-	}
-	snapshot, err := json.Marshal([]sdk.Message{sdk.AssistantMessage("ANSWER")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	exec := &nativeExecutor{
-		agent: fixedStream{
-			{Type: native.EventAgentStart},
-			{Type: native.EventTextDelta, Delta: "ANSWER"},
-			{Type: native.EventAgentEnd, Messages: snapshot, EndReason: event.EndCompleted},
-		},
-		req:     req,
-		timing:  persist.NewReasoningTimingTracker(nil),
-		persist: testWriter(t, messages),
-	}
-
-	ending := exec.Execute(context.Background(), func(native.StreamEvent) {})
-	if _, err := ending.Commit(context.Background(), nil, false); err != nil {
-		t.Fatalf("Commit() error = %v", err)
-	}
-	if len(messages.Persisted) == 0 {
-		t.Fatal("the terminal snapshot was not written")
-	}
-	if len(messages.RoundOptions) != 1 || messages.RoundOptions[0].Replacement != replacement {
-		t.Fatalf("round options = %#v, want one write carrying the replacement", messages.RoundOptions)
-	}
-}
-
 // The native agent writes the step it was in when a stop arrived, as the stop
 // unwinds the stream, so its ending has nothing left for the driver's stopped
 // write. A hook here would write that step a second time.
@@ -110,14 +69,25 @@ func TestNativeExecutorLeavesTheStoppedWriteToTheRuntime(t *testing.T) {
 			{Type: native.EventTextDelta, Delta: "partial"},
 			{Type: native.EventAgentAbort, EndReason: event.EndCanceled},
 		},
-		timing:  persist.NewReasoningTimingTracker(nil),
-		persist: testWriter(t, &agenttest.RecordingMessages{}),
 	}
 
 	ending := exec.Execute(context.Background(), func(native.StreamEvent) {})
 	if ending.CommitStopped != nil {
 		t.Fatal("the native ending offers a stopped write, want the runtime's own step checkpoint to be the only one")
 	}
+}
+
+// testCommitter is the step committer of a fenced run whose steps go to store.
+func testCommitter(t *testing.T, store messagepkg.Service, req runreq.ChatRequest) *persist.StepCommitter {
+	t.Helper()
+	ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{
+		BotID: req.BotID, SessionID: req.ThreadID, Token: 1,
+	})
+	committer := testWriter(t, store).NewStepCommitter(ctx, req, runreq.ResolvedContext{})
+	if committer == nil {
+		t.Fatal("missing step committer")
+	}
+	return committer
 }
 
 // testDriver is a driver over stand-ins whose history goes to messages.
@@ -159,6 +129,7 @@ func driveUnrouted(t *testing.T, driver *drive.Driver, req runreq.ChatRequest, p
 
 func resumedRequest() runreq.ChatRequest {
 	return runreq.ChatRequest{
+		RunID: agenttest.LifecycleRunID,
 		BotID: agenttest.LifecycleBotID, ChatID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
 		UserMessagePersisted: true, PersistedUserMessageID: "request-message",
 	}
@@ -166,12 +137,12 @@ func resumedRequest() runreq.ChatRequest {
 
 // failureRow is the one assistant failure row a resumed run left. A resumed run
 // writes no user row: the turn's request message is in history.
-func failureRow(t *testing.T, messages *agenttest.RecordingMessages) messagepkg.PersistInput {
+func failureRow(t *testing.T, store *agenttest.RecordingStepPersister) messagepkg.PersistInput {
 	t.Helper()
-	if len(messages.Persisted) != 1 || messages.Persisted[0].Role != "assistant" {
-		t.Fatalf("persisted %#v, want one assistant failure row", messages.Persisted)
+	if len(store.Steps) != 1 || !store.Steps[0].Interrupted || len(store.Steps[0].Messages) != 1 || store.Steps[0].Messages[0].Role != "assistant" {
+		t.Fatalf("persisted steps %#v, want one interrupted step with an assistant failure row", store.Steps)
 	}
-	row := messages.Persisted[0]
+	row := store.Steps[0].Messages[0]
 	if row.TurnRequestMessageID != "request-message" {
 		t.Fatalf("failure row turn request = %q, want the parked turn's request message", row.TurnRequestMessageID)
 	}
@@ -203,7 +174,7 @@ func (rejectingProvider) DoStream(context.Context, sdk.Request) (<-chan sdk.Stre
 func TestResumedRunNamesTheProviderFailure(t *testing.T) {
 	t.Parallel()
 
-	messages := &agenttest.RecordingMessages{}
+	messages := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	req := resumedRequest()
 	cfg := native.RunConfig{
 		Model:    &sdk.Model{ID: "continuation-model", Provider: rejectingProvider{}, Type: sdk.ModelTypeChat},
@@ -211,12 +182,10 @@ func TestResumedRunNamesTheProviderFailure(t *testing.T) {
 		Identity: native.SessionContext{BotID: agenttest.LifecycleBotID, SessionID: agenttest.LifecycleSessionID},
 	}
 	exec := &nativeExecutor{
-		agent:   native.New(native.Deps{Logger: slog.New(slog.DiscardHandler)}),
-		cfg:     cfg,
-		rc:      runreq.ResolvedContext{RunConfig: cfg, Model: models.GetResponse{ID: "model-1"}},
-		req:     req,
-		timing:  persist.NewReasoningTimingTracker(nil),
-		persist: testWriter(t, messages),
+		agent:     native.New(native.Deps{Logger: slog.New(slog.DiscardHandler)}),
+		cfg:       cfg,
+		rc:        runreq.ResolvedContext{RunConfig: cfg, Model: models.GetResponse{ID: "model-1"}},
+		committer: testCommitter(t, messages, req),
 	}
 	eventCh := make(chan runreq.WSStreamEvent, 64)
 
@@ -251,11 +220,11 @@ func TestResumedRunNamesTheProviderFailure(t *testing.T) {
 
 // A failed run whose terminal still carries the conversation it was given, but
 // nothing the user saw, leaves one failure row: the row is the failure's, and
-// the terminal's snapshot has no output of its own to add.
-func TestResumedRunSnapshotWithoutOutputWritesOneRow(t *testing.T) {
+// the terminal's messages have no output of their own to add.
+func TestResumedRunTerminalWithoutOutputWritesOneRow(t *testing.T) {
 	t.Parallel()
 
-	messages := &agenttest.RecordingMessages{}
+	messages := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
 	snapshot, err := json.Marshal([]sdk.Message{sdk.UserMessage("continue after the decision")})
 	if err != nil {
 		t.Fatal(err)
@@ -268,9 +237,7 @@ func TestResumedRunSnapshotWithoutOutputWritesOneRow(t *testing.T) {
 			{Type: native.EventError, Code: string(apperror.CodeAgentProviderAuthFailed), Cause: failure},
 			{Type: native.EventAgentAbort, Messages: snapshot, EndReason: event.EndFailed},
 		},
-		req:     req,
-		timing:  persist.NewReasoningTimingTracker(nil),
-		persist: testWriter(t, messages),
+		committer: testCommitter(t, messages, req),
 	}
 
 	_ = driveUnrouted(t, testDriver(t, messages), req, drive.RunPlan{Exec: exec, Req: req}, nil)
@@ -281,52 +248,22 @@ func TestResumedRunSnapshotWithoutOutputWritesOneRow(t *testing.T) {
 	}
 }
 
-// A run that ends cleanly without a snapshot and without anything the user
-// could see has nothing to write: it commits without error and leaves no
-// synthetic row. A run that showed output but has no snapshot to write it from
-// is a history failure, not a success.
-func TestNativeExecutorCommitWithoutASnapshot(t *testing.T) {
+// A run that ends cleanly without anything the user could see has nothing to
+// write: it commits without error and leaves no synthetic row.
+func TestNativeExecutorCommitWithoutOutputWritesNothing(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name    string
-		stream  fixedStream
-		wantErr bool
-	}{
-		{
-			name:   "clean end with no output",
-			stream: fixedStream{{Type: native.EventAgentStart}, {Type: native.EventAgentEnd}},
-		},
-		{
-			name:    "visible output but no snapshot",
-			stream:  fixedStream{{Type: native.EventAgentStart}, {Type: native.EventTextDelta, Delta: "partial"}, {Type: native.EventAgentEnd}},
-			wantErr: true,
-		},
+	messages := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
+	exec := &nativeExecutor{
+		agent:     fixedStream{{Type: native.EventAgentStart}, {Type: native.EventAgentEnd}},
+		committer: testCommitter(t, messages, resumedRequest()),
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
 
-			messages := &agenttest.RecordingMessages{}
-			exec := &nativeExecutor{
-				agent:   tc.stream,
-				timing:  persist.NewReasoningTimingTracker(nil),
-				persist: testWriter(t, messages),
-			}
-
-			ending := exec.Execute(context.Background(), func(native.StreamEvent) {})
-			_, err := ending.Commit(context.Background(), nil, false)
-
-			if tc.wantErr {
-				if err == nil || apperror.CodeOf(err) != apperror.CodeSessionHistoryInconsistent {
-					t.Fatalf("Commit() error = %v, want a history failure", err)
-				}
-			} else if err != nil {
-				t.Fatalf("Commit() error = %v, want a clean commit", err)
-			}
-			if len(messages.Persisted) != 0 {
-				t.Fatalf("persisted %#v, want no row without a snapshot", messages.Persisted)
-			}
-		})
+	ending := exec.Execute(context.Background(), func(native.StreamEvent) {})
+	if _, err := ending.Commit(context.Background(), nil, false); err != nil {
+		t.Fatalf("Commit() error = %v, want a clean commit", err)
+	}
+	if len(messages.Steps) != 0 || len(messages.Persisted) != 0 {
+		t.Fatalf("persisted steps %#v rows %#v, want nothing without output", messages.Steps, messages.Persisted)
 	}
 }

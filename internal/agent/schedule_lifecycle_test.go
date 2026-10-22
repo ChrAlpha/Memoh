@@ -303,7 +303,9 @@ func TestTriggerScheduleContextViewFallbackPersistsFallbackAndReachesProvider(t 
 func TestTriggerScheduleLifecycleStoreFailureDoesNotFailSuccessfulTrigger(t *testing.T) {
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 	fixture.lifecycles.mu.Lock()
+	// A fenced run's lifecycle row is written when the runtime ends the run.
 	fixture.lifecycles.store.CreateErr = errors.New("context lifecycle store unavailable")
+	fixture.lifecycles.store.TerminalUpsertErr = fixture.lifecycles.store.CreateErr
 	fixture.lifecycles.mu.Unlock()
 
 	result, err := triggerDirectSchedule(t, fixture.service)

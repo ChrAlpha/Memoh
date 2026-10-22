@@ -16,7 +16,6 @@ type ResolvedContext struct {
 	// remembered one, and the session's preference is due a write-back of the
 	// pair this run resolved. A schedule fire never carries one.
 	PairCarried     bool
-	InjectedRecords *[]InjectedMessageRecord
 	EstimatedTokens int // estimated input token count for compaction
 	// pressure is a native chat run's estimate of its next request, which the
 	// background trigger judges the finished run by.

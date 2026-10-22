@@ -1,14 +1,12 @@
 package persist
 
 import (
-	"context"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
-	"github.com/felinics/memoh/internal/agent/step"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -21,11 +19,10 @@ type reasoningTimingActiveSegment struct {
 // by Native and ACP. It keeps only the current, uncommitted model attempt so a
 // retry cannot leak discarded timing into durable history.
 type ReasoningTimingTracker struct {
-	mu        sync.Mutex
-	now       func() time.Time
-	active    *reasoningTimingActiveSegment
-	segments  []messagepkg.ReasoningTimingSegment
-	committed []messagepkg.ReasoningTimingSegment
+	mu       sync.Mutex
+	now      func() time.Time
+	active   *reasoningTimingActiveSegment
+	segments []messagepkg.ReasoningTimingSegment
 }
 
 func NewReasoningTimingTracker(now func() time.Time) *ReasoningTimingTracker {
@@ -51,8 +48,6 @@ func (t *ReasoningTimingTracker) Observe(event native.StreamEvent) {
 	case native.EventRetry:
 		// The terminal model transcript contains only the surviving attempt.
 		// Drop both active and already-closed segments from the failed attempt.
-		// Segments checkpointed by an earlier completed step remain part of the
-		// final multi-step transcript.
 		t.active = nil
 		t.segments = nil
 	case native.EventReasoningStart:
@@ -107,22 +102,6 @@ func (t *ReasoningTimingTracker) finishActiveLocked(now time.Time, state string)
 	})
 }
 
-// checkpoint closes the current step and protects its segments from the
-// EventRetry marker emitted when the next provider call begins. Step-backed
-// persistence uses take directly; terminal-snapshot paths checkpoint each
-// completed step and take the full accumulated result at the end.
-func (t *ReasoningTimingTracker) checkpoint(state string) {
-	if t == nil {
-		return
-	}
-	now := t.now()
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.finishActiveLocked(now, state)
-	t.committed = append(t.committed, t.segments...)
-	t.segments = nil
-}
-
 // take closes an unterminated block at the persistence boundary, returns all
 // segments for the current durable unit, and resets the unit for the next step.
 func (t *ReasoningTimingTracker) take(state string) []messagepkg.ReasoningTimingSegment {
@@ -133,10 +112,7 @@ func (t *ReasoningTimingTracker) take(state string) []messagepkg.ReasoningTiming
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.finishActiveLocked(now, state)
-	segments := make([]messagepkg.ReasoningTimingSegment, 0, len(t.committed)+len(t.segments))
-	segments = append(segments, t.committed...)
-	segments = append(segments, t.segments...)
-	t.committed = nil
+	segments := t.segments
 	t.segments = nil
 	return segments
 }
@@ -150,10 +126,8 @@ func TakeTerminalReasoningTiming(t *ReasoningTimingTracker, eventType native.Str
 }
 
 // ConfigureNativeReasoningTiming samples provider parts before Twilight's
-// step buffer. Durable step paths consume timings inside their persistence
-// barrier. Compatibility paths checkpoint completed steps and attach the full
-// set to the terminal snapshot, so a later provider call cannot erase an
-// earlier tool-loop step as if it were a retry.
+// step buffer and binds the step committer, which consumes the timings inside
+// its persistence barrier.
 func ConfigureNativeReasoningTiming(
 	cfg *native.RunConfig,
 	tracker *ReasoningTimingTracker,
@@ -169,36 +143,9 @@ func ConfigureNativeReasoningTiming(
 		}
 		tracker.Observe(event)
 	}
-	if stepCommitter != nil {
-		stepCommitter.reasoningTiming = tracker
-		cfg.OnStepCommitted = stepCommitter.commit
-		cfg.OnStepInterrupted = stepCommitter.interrupt
-		return
-	}
-
-	previousCommit := cfg.OnStepCommitted
-	cfg.OnStepCommitted = func(ctx context.Context, stepIndex int, record *step.Record) (native.StepDirective, error) {
-		var dir native.StepDirective
-		if previousCommit != nil {
-			var err error
-			dir, err = previousCommit(ctx, stepIndex, record)
-			if err != nil {
-				return native.StepDirective{}, err
-			}
-		}
-		tracker.checkpoint("completed")
-		return dir, nil
-	}
-	previousInterrupt := cfg.OnStepInterrupted
-	cfg.OnStepInterrupted = func(ctx context.Context, stepIndex int, record *step.Record) error {
-		if previousInterrupt != nil {
-			if err := previousInterrupt(ctx, stepIndex, record); err != nil {
-				return err
-			}
-		}
-		tracker.checkpoint("interrupted")
-		return nil
-	}
+	stepCommitter.reasoningTiming = tracker
+	cfg.OnStepCommitted = stepCommitter.commit
+	cfg.OnStepInterrupted = stepCommitter.interrupt
 }
 
 func (opts RoundOptions) withReasoningTimingMetadata(messages []runreq.ModelMessage) RoundOptions {

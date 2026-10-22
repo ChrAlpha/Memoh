@@ -125,13 +125,6 @@ type WorkspaceTarget struct {
 	Name     string `json:"name"`
 }
 
-// InjectedMessageRecord records where an injected message belongs in the
-// persisted model-message sequence.
-type InjectedMessageRecord struct {
-	HeaderifiedText string
-	InsertAfter     int
-}
-
 // The canonical turn value objects are re-exported inside application so the
 // orchestration code can use them without maintaining a second DTO family.
 type (

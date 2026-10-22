@@ -49,7 +49,7 @@ func TestAgentStreamProviderStartFailureDoesNotPersistInjectedMessage(t *testing
 		},
 	}}}})
 
-	var recorded []string
+	var committed []step.Record
 	var terminal StreamEvent
 	for event := range a.Stream(context.Background(), RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
@@ -58,8 +58,9 @@ func TestAgentStreamProviderStartFailureDoesNotPersistInjectedMessage(t *testing
 		InjectCh:         injectCh,
 		Identity:         SessionContext{BotID: "bot-1"},
 		ContextMutations: contextfrag.NewMutationLedger(),
-		InjectedRecorder: func(text string, _ int) {
-			recorded = append(recorded, text)
+		OnStepCommitted: func(_ context.Context, _ int, record *step.Record) (StepDirective, error) {
+			committed = append(committed, *record)
+			return StepDirective{}, nil
 		},
 	}) {
 		if event.IsTerminal() {
@@ -70,8 +71,10 @@ func TestAgentStreamProviderStartFailureDoesNotPersistInjectedMessage(t *testing
 	if provider.calls.Load() != 2 {
 		t.Fatalf("provider calls = %d, want 2", provider.calls.Load())
 	}
-	if len(recorded) != 0 {
-		t.Fatalf("recorded injections = %#v, want no message without a completed step", recorded)
+	for _, record := range committed {
+		if got := countTextParts(record.Messages, marker); got != 0 {
+			t.Fatalf("committed step carries the injection %d times, want no message without a completed step", got)
+		}
 	}
 	var terminalMessages []sdk.Message
 	if !terminal.IsTerminal() || json.Unmarshal(terminal.Messages, &terminalMessages) != nil {
@@ -128,7 +131,6 @@ func TestAgentStreamInterruptedInjectedMessageIsDurableExactlyOnce(t *testing.T)
 	}}}})
 
 	var interrupted *step.Record
-	var recorded []string
 	events := a.Stream(ctx, RunConfig{
 		Model:            &sdk.Model{ID: "mock-model", Provider: provider},
 		Messages:         []sdk.Message{sdk.UserMessage("start")},
@@ -142,9 +144,6 @@ func TestAgentStreamInterruptedInjectedMessageIsDurableExactlyOnce(t *testing.T)
 			}
 			interrupted = step
 			return nil
-		},
-		InjectedRecorder: func(text string, _ int) {
-			recorded = append(recorded, text)
 		},
 	})
 
@@ -181,8 +180,5 @@ streamClosed:
 	}
 	if got := countRound8MessageText(terminalMessages, marker); got != 1 {
 		t.Fatalf("terminal marker count = %d, want 1", got)
-	}
-	if len(recorded) != 0 {
-		t.Fatalf("recorded injections = %#v, want interrupted checkpoint ownership", recorded)
 	}
 }

@@ -12,7 +12,7 @@
   - `botenv/`: bot settings, time zone, identities and lifecycle hooks.
   - `transcript/`: reading a conversation back from the database for the model (assembly, compaction replacement, window, admission filters).
   - `lifecycle/`: the context lifecycle ledger.
-  - `persist/`: the history a run writes (turn and step rows, the failure row, the terminal snapshot, the rewrite of a replaced turn).
+  - `persist/`: the history a run writes (turn and step rows, the failure row, the rewrite of a replaced turn).
   - `memory/`: recalling what the bot's memory provider knows and handing it finished rounds.
   - `compact/`: deciding when context has outgrown its window and compacting it (before a turn, between model calls, after a run).
   - `decide/`: tool approvals and `ask_user` questions (who may answer, recording the answer, closing the decisions of a run that ended).

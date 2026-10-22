@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -143,6 +144,9 @@ func (m *decisionHistory) GetRunTurnRequest(context.Context, string, string, str
 }
 
 type decisionHarness struct {
+	// handle is the parked run the decision continuations resume: a run the
+	// harness's session runtime owns.
+	handle  sessionruntime.RunHandle
 	service *Service
 	history *decisionHistory
 	capture *planCapture

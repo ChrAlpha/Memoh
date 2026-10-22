@@ -21,11 +21,13 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/externalrun"
+	"github.com/felinics/memoh/internal/agent/plan"
 	"github.com/felinics/memoh/internal/agent/runconfig"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
@@ -51,14 +53,14 @@ import (
 
 // adaptChat resolves a chat entry's native plan (plan.ChatSetup).
 func adaptChat(ctx context.Context, s *Service, req runreq.ChatRequest, spec drive.RunSpec) (drive.RunPlan, error) {
-	return s.plan.ChatSetup(ctx, req, spec)
+	return s.plan.ChatSetup(fencedUnlessFenced(ctx), req, spec)
 }
 
 // adaptSchedule resolves a scheduled fire's native plan through the schedule
 // entry's own setup (plan.ScheduleSetup).
 func adaptSchedule(ctx context.Context, s *Service, spec drive.RunSpec, payload schedule.TriggerPayload, req runreq.ChatRequest) (drive.RunPlan, error) {
 	setup := s.plan.ScheduleSetup(spec, payload, req.BotID, "", externalrun.Dispatch{})
-	return setup(ctx, req)
+	return setup(fencedUnlessFenced(ctx), req)
 }
 
 type decisionKind string
@@ -77,7 +79,7 @@ var decisionKinds = []decisionKind{kindUserInput, kindApproval}
 func adaptContinueResume(ctx context.Context, s *Service, kind decisionKind, req runreq.ChatRequest, live bool) (drive.RunPlan, error) {
 	call := decide.DecidedCall{
 		Verdict: decide.VerdictAnswered, BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
-		SessionID: agenttest.LifecycleSessionID, SourcePlatform: "web",
+		SessionID: agenttest.LifecycleSessionID, SourcePlatform: "web", RunID: req.RunID,
 	}
 	switch kind {
 	case kindUserInput:
@@ -139,6 +141,15 @@ func (m *stepMessages) stepCalls() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.steps)
+}
+
+// fencedUnlessFenced is ctx as an admitted run's context: it carries the fence
+// the run was admitted under, unless the test already chose one.
+func fencedUnlessFenced(ctx context.Context) context.Context {
+	if _, ok := runtimefence.FromContext(ctx); ok {
+		return ctx
+	}
+	return fencedContext(ctx, 1)
 }
 
 func fencedContext(ctx context.Context, token int64) context.Context {
@@ -275,12 +286,16 @@ func TestPlanNativeContinuationInteractionFlagsFollowLive(t *testing.T) {
 		for _, live := range []bool{true, false} {
 			t.Run(string(kind), func(t *testing.T) {
 				t.Parallel()
-				service, capture, _ := newContinuationPlanService(t, false)
-				plan, err := adaptContinueResume(context.Background(), service, kind, continuationSessionRequest(), live)
+				manager := newPlanManager(t)
+				service, capture, _ := newContinuationPlanService(t, false, withSessionManager(manager))
+				req := continuationSessionRequest()
+				req.RunHandle = startPlanRun(t, manager, -1)
+				ctx := fencedContext(context.Background(), req.RunHandle.FencingToken)
+				plan, err := adaptContinueResume(ctx, service, kind, req, live)
 				if err != nil {
 					t.Fatalf("continuation plan error = %v", err)
 				}
-				execute(context.Background(), plan)
+				execute(ctx, plan)
 				cfg := capture.first(t)
 				if cfg.LiveToolStream != live || cfg.CanRequestUserInput != live {
 					t.Fatalf("live=%v: LiveToolStream=%v CanRequestUserInput=%v, want both %v",
@@ -328,52 +343,40 @@ func TestPlanNativeScheduleCommitsStepsAndTimesReasoning(t *testing.T) {
 	}
 }
 
-func TestPlanNativeUnattendedChatHasNoCommitterAndNoReasoningTiming(t *testing.T) {
-	t.Parallel()
-	service, capture, steps := newChatPlanService(t, true)
-	ctx := fencedContext(context.Background(), 7)
-	plan, err := adaptChat(ctx, service, chatPlanRequest(), drive.RunSpec{Unattended: true})
-	if err != nil {
-		t.Fatalf("chat plan error = %v", err)
-	}
-	execute(ctx, plan)
-	if calls := steps.stepCalls(); calls != 0 {
-		t.Fatalf("PersistAgentStep calls = %d, want 0 for an unattended chat run", calls)
-	}
-	cfg := capture.first(t)
-	if cfg.OnProviderStreamEventObserved != nil || cfg.OnStepCommitted != nil || cfg.OnStepInterrupted != nil {
-		t.Fatalf("unattended chat cfg observer=%v committed=%v interrupted=%v, want all nil",
-			cfg.OnProviderStreamEventObserved != nil, cfg.OnStepCommitted != nil, cfg.OnStepInterrupted != nil)
-	}
-}
-
-func TestPlanNativeContinuationWithIncompleteHandleTimesReasoningWithoutCommitter(t *testing.T) {
+// An answer no session runtime routed has no admitted run: no fence and no step
+// committer to write the resumed history with. Its continuation fails as an
+// expired decision, and neither runs the approved call nor writes a row.
+func TestPlanNativeUnroutedContinuationExpires(t *testing.T) {
 	t.Parallel()
 	for _, kind := range decisionKinds {
-		t.Run(string(kind), func(t *testing.T) {
-			t.Parallel()
-			service, capture, steps := newContinuationPlanService(t, true)
-			ctx := fencedContext(context.Background(), 7)
-			plan, err := adaptContinueResume(ctx, service, kind, continuationSessionRequest(), true)
-			if err != nil {
-				t.Fatalf("continuation plan error = %v", err)
-			}
-			execute(ctx, plan)
-			if calls := steps.stepCalls(); calls != 0 {
-				t.Fatalf("PersistAgentStep calls = %d, want 0 without a complete run handle", calls)
-			}
-			cfg := capture.first(t)
-			if cfg.OnProviderStreamEventObserved == nil {
-				t.Fatal("reasoning timing is not configured on the continuation cfg")
-			}
-			if plan.Req.StepIndexOffset != 0 || plan.Req.QueueSteerEnabled {
-				t.Fatalf("plan.Req StepIndexOffset=%d QueueSteerEnabled=%v, want 0/false",
-					plan.Req.StepIndexOffset, plan.Req.QueueSteerEnabled)
-			}
-			if cfg.StepIndexOffset != 0 {
-				t.Fatalf("cfg.StepIndexOffset = %d, want 0", cfg.StepIndexOffset)
-			}
-		})
+		for _, verdict := range []decide.Verdict{decide.VerdictAnswered, decide.VerdictApproved} {
+			t.Run(string(kind), func(t *testing.T) {
+				t.Parallel()
+				service, _, steps := newContinuationPlanService(t, true)
+				call := decide.DecidedCall{
+					Kind: decide.CallToolApproval, Verdict: verdict, DecisionID: "decision-1",
+					ToolCallID: "call-1", ToolName: "container_exec", ToolInput: map[string]any{"cmd": "ls"},
+					BotID: agenttest.LifecycleBotID, ScopeBotID: agenttest.LifecycleBotID,
+					SessionID: agenttest.LifecycleSessionID, SourcePlatform: "web",
+					Result: sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "container_exec", Result: sdk.TextOutput("result")},
+				}
+				want := apperror.CodeToolApprovalExpired
+				if kind == kindUserInput {
+					call.Kind = decide.CallUserInput
+					want = apperror.CodeUserInputExpired
+				}
+				req := continuationSessionRequest()
+				req.RunID = ""
+				ctx := fencedContext(context.Background(), 7)
+				_, err := service.plan.Continue(ctx, call, req, true)
+				if got := apperror.CodeOf(err); got != want {
+					t.Fatalf("continuation error = %v (code %q), want %q", err, got, want)
+				}
+				if steps.stepCalls() != 0 || len(steps.Persisted) != 0 {
+					t.Fatalf("an expired continuation wrote history: steps=%d rows=%#v", steps.stepCalls(), steps.Persisted)
+				}
+			})
+		}
 	}
 }
 
@@ -491,10 +494,10 @@ func TestPlanNativeContinuationWithoutStepPersisterFailsAtSetup(t *testing.T) {
 	for _, kind := range decisionKinds {
 		t.Run(string(kind), func(t *testing.T) {
 			t.Parallel()
-			// The message service does not persist agent steps, so a complete
-			// handle cannot get a committer.
 			manager := newPlanManager(t)
-			service, _, _ := newContinuationPlanService(t, false, withSessionManager(manager))
+			// A message store that cannot write steps leaves no committer.
+			service, _, _ := newContinuationPlanService(t, false, withSessionManager(manager),
+				withDeps(func(d *Deps) { d.Messages = struct{ messagepkg.Service }{&agenttest.RecordingMessages{}} }))
 			handle := startPlanRun(t, manager, -1)
 			req := continuationSessionRequest()
 			req.RunHandle = handle
@@ -505,38 +508,6 @@ func TestPlanNativeContinuationWithoutStepPersisterFailsAtSetup(t *testing.T) {
 				t.Fatalf("continuation error = %v, want %q", err, want)
 			}
 		})
-	}
-}
-
-// ---- D. chat replacement --------------------------------------------------
-
-func TestPlanNativeChatReplacementWritesTheNewTurnOnceWithoutCommitter(t *testing.T) {
-	t.Parallel()
-	_, agent := newCapturingAgent(native.Limits{})
-	messages := &agenttest.RecordingMessages{}
-	service := newChatTurnFixture(t, directLifecycleModelSuccess,
-		withFixtureDeps(func(d *Deps) { d.Agent = agent }), withFixtureMessages(messages),
-	).fixture.service
-	position := int64(2)
-	replacement := &messagepkg.TurnReplacement{OldTurnID: "old-turn", ReplacementTurnID: "new-turn", ReplacementTurnPosition: &position, Reason: "edit"}
-	req := chatPlanRequest()
-	req.TurnReplacement = replacement
-	plan, err := adaptChat(context.Background(), service, req, drive.RunSpec{Replacement: &drive.TurnReplacement{}})
-	if err != nil {
-		t.Fatalf("chat plan error = %v", err)
-	}
-	ending := execute(context.Background(), plan)
-	if ending.Terminal == nil {
-		t.Fatalf("the run produced no terminal event; cause = %v", ending.Cause)
-	}
-	if _, err := ending.Commit(context.Background(), nil, false); err != nil {
-		t.Fatalf("Commit() error = %v", err)
-	}
-	if len(messages.RoundOptions) != 1 || messages.RoundOptions[0].Replacement != replacement {
-		t.Fatalf("round options = %#v, want one write carrying the replacement", messages.RoundOptions)
-	}
-	if len(messages.Persisted) == 0 {
-		t.Fatal("the new turn wrote no messages")
 	}
 }
 
@@ -558,10 +529,6 @@ func (planTargets) ResolveWorkspaceTarget(ctx context.Context, _, targetID strin
 
 const planDecisionTurnID = "decision-turn"
 
-func planDecisionHandle() sessionruntime.RunHandle {
-	return sessionruntime.RunHandle{TurnID: planDecisionTurnID}
-}
-
 // newDecisionHarness is a service whose latest turn called toolName and whose
 // agent offers planTool, with the output limits the limit tests need.
 func newDecisionHarness(t *testing.T, toolName string) decisionHarness {
@@ -570,11 +537,16 @@ func newDecisionHarness(t *testing.T, toolName string) decisionHarness {
 	capture, agent := newCapturingAgent(native.Limits{ToolOutputMaxBytes: 512, ToolOutputMaxLines: 80}, tool)
 	history := &decisionHistory{driveHistoryMessages: driveDecisionHistory(t, toolName, sdk.TextOutput("{}")), requestID: driveRequestMessageID}
 	queries := &decisionQueries{count: 1}
+	// The parked run is owned by the session runtime the continuation joins.
+	manager := newPlanManager(t)
+	handle := startPlanRun(t, manager, -1)
+	handle.TurnID = planDecisionTurnID
 	service := newDirectLifecycleFixture(t, directLifecycleModelSuccess,
 		withFixtureDeps(func(d *Deps) { d.Agent = agent; d.WorkspaceTargets = planTargets{} }),
 		withFixtureMessages(history),
+		withFixtureOptions(withSessionManager(manager)),
 		withFixtureQueries(func(base dbstore.Queries) dbstore.Queries { queries.Queries = base; return queries })).service
-	return decisionHarness{service: service, history: history, capture: capture, tool: tool, queries: queries}
+	return decisionHarness{service: service, history: history, capture: capture, tool: tool, queries: queries, handle: handle}
 }
 
 func planApproval(status string) (toolapproval.Request, decide.ToolApprovalResponseInput) {
@@ -590,7 +562,7 @@ func planApproval(status string) (toolapproval.Request, decide.ToolApprovalRespo
 }
 
 func approvalContinuation(ctx context.Context, h decisionHarness, approval toolapproval.Request, input decide.ToolApprovalResponseInput, live bool) answer.Continuation {
-	committed := decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, planDecisionHandle())
+	committed := decide.NewCommittedToolApproval(approval, input, false).ForRun(agenttest.LifecycleRunID, h.handle)
 	return adaptApprovalContinuation(ctx, h.service, committed, live)
 }
 
@@ -606,7 +578,7 @@ func planAnswer(platform, replyTarget string) userinput.Request {
 
 func userInputContinuation(ctx context.Context, h decisionHarness, answered userinput.Request, live bool) answer.Continuation {
 	input := decide.UserInputResponseInput{BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID}
-	committed := decide.NewCommittedUserInput(answered, input).ForRun(agenttest.LifecycleRunID, planDecisionHandle())
+	committed := decide.NewCommittedUserInput(answered, input).ForRun(agenttest.LifecycleRunID, h.handle)
 	return adaptUserInputContinuation(ctx, h.service, committed, live)
 }
 
@@ -615,7 +587,7 @@ func TestPlanNativeApprovedApprovalExecutesToolAndStoresUIOnlyDataOnRowMetadata(
 	h := newDecisionHarness(t, planApprovalToolName)
 	approval, input := planApproval(toolapproval.StatusApproved)
 	cont := approvalContinuation(context.Background(), h, approval, input, true)
-	plan, err := cont.Setup(context.Background(), cont.Req)
+	plan, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req)
 	if err != nil {
 		t.Fatalf("approval setup error = %v", err)
 	}
@@ -691,19 +663,71 @@ func TestPlanNativeApprovedApprovalLosesRunWhenCheckpointDoesNotApply(t *testing
 	}
 }
 
-func TestPlanNativeApprovedApprovalWithoutFenceSkipsCheckpoint(t *testing.T) {
+// The answer no session runtime routed continues nothing: the caller learns the
+// decision expired, over the return value or as the error event of its stream,
+// the approved call does not run and no row is written.
+func TestDriveUnroutedNativeContinuationExpires(t *testing.T) {
+	t.Parallel()
+	approval, input := planApproval(toolapproval.StatusApproved)
+	answered := planAnswer("telegram", "im-chat-1")
+	for _, tc := range []struct {
+		name string
+		want apperror.Code
+		cont func(h decisionHarness) answer.Continuation
+	}{
+		{"tool approval", apperror.CodeToolApprovalExpired, func(h decisionHarness) answer.Continuation {
+			committed := decide.NewCommittedToolApproval(approval, input, false)
+			return adaptApprovalContinuation(context.Background(), h.service, committed, true)
+		}},
+		{"user input", apperror.CodeUserInputExpired, func(h decisionHarness) answer.Continuation {
+			committed := decide.NewCommittedUserInput(answered, decide.UserInputResponseInput{
+				BotID: agenttest.LifecycleBotID, ThreadID: agenttest.LifecycleSessionID,
+			})
+			return adaptUserInputContinuation(context.Background(), h.service, committed, true)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			toolName := planApprovalToolName
+			if tc.want == apperror.CodeUserInputExpired {
+				toolName = "ask_user"
+			}
+			h := newDecisionHarness(t, toolName)
+			err := h.service.answer.DriveUnrouted(context.Background(), tc.cont(h), nil)
+			if got := apperror.CodeOf(err); got != tc.want {
+				t.Fatalf("DriveUnrouted() error = %v (code %q), want %q", err, got, tc.want)
+			}
+
+			eventCh := make(chan runreq.WSStreamEvent, 64)
+			if err := h.service.answer.DriveUnrouted(context.Background(), tc.cont(h), eventCh); err != nil {
+				t.Fatalf("DriveUnrouted() with a stream error = %v, want the failure delivered in the stream", err)
+			}
+			close(eventCh)
+			var failed bool
+			for raw := range eventCh {
+				var ev native.StreamEvent
+				if json.Unmarshal(raw, &ev) == nil && ev.Type == native.EventError && ev.Code == string(tc.want) {
+					failed = true
+				}
+			}
+			if !failed {
+				t.Fatalf("stream carried no error event with code %q", tc.want)
+			}
+			if len(h.tool.calls()) != 0 || len(h.history.Persisted) != 0 {
+				t.Fatalf("an expired continuation ran the tool (%d calls) or wrote rows (%#v)", len(h.tool.calls()), h.history.Persisted)
+			}
+		})
+	}
+}
+
+func TestApprovalExecutionsWithoutFenceMarkNothing(t *testing.T) {
 	t.Parallel()
 	h := newDecisionHarness(t, planApprovalToolName)
-	approval, input := planApproval(toolapproval.StatusApproved)
-	cont := approvalContinuation(context.Background(), h, approval, input, true)
-	if _, err := cont.Setup(context.Background(), cont.Req); err != nil {
-		t.Fatalf("approval setup error = %v", err)
+	if err := plan.NewApprovalExecutions(h.queries).MarkExecuting(context.Background(), agenttest.LifecycleRunID, "tool-approval"); err != nil {
+		t.Fatalf("MarkExecuting() error = %v, want none for a run nobody fences", err)
 	}
 	if calls := h.queries.recorded(); len(calls) != 0 {
 		t.Fatalf("MarkSessionRunDecisionExecuting calls = %d, want 0 without a fence", len(calls))
-	}
-	if len(h.tool.calls()) != 1 {
-		t.Fatalf("tool calls = %d, want 1", len(h.tool.calls()))
 	}
 }
 
@@ -722,7 +746,7 @@ func TestPlanNativeRejectedApprovalStoresRejectionAsErrorResult(t *testing.T) {
 			approval, input := planApproval(toolapproval.StatusRejected)
 			input.Reason = tc.reason
 			cont := approvalContinuation(context.Background(), h, approval, input, true)
-			if _, err := cont.Setup(context.Background(), cont.Req); err != nil {
+			if _, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req); err != nil {
 				t.Fatalf("approval setup error = %v", err)
 			}
 			if len(h.tool.calls()) != 0 {
@@ -752,7 +776,7 @@ func TestPlanNativeContinuationReadsTheSessionsCompactionSummaries(t *testing.T)
 	h := newDecisionHarness(t, planApprovalToolName)
 	approval, input := planApproval(toolapproval.StatusRejected)
 	cont := approvalContinuation(context.Background(), h, approval, input, true)
-	if _, err := cont.Setup(context.Background(), cont.Req); err != nil {
+	if _, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req); err != nil {
 		t.Fatalf("approval setup error = %v", err)
 	}
 	want := db.ParseUUIDOrEmpty(agenttest.LifecycleSessionID)
@@ -804,7 +828,7 @@ func TestPlanNativeRejectedApprovalLimitsTheRejectionText(t *testing.T) {
 	approval, input := planApproval(toolapproval.StatusRejected)
 	input.Reason = "HEAD\n" + strings.Repeat("rejection detail ", 300) + "\nTAIL"
 	cont := approvalContinuation(context.Background(), h, approval, input, true)
-	if _, err := cont.Setup(context.Background(), cont.Req); err != nil {
+	if _, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req); err != nil {
 		t.Fatalf("approval setup error = %v", err)
 	}
 	rows := toolRows(h)
@@ -825,7 +849,7 @@ func TestPlanNativeApprovalWithUnexpectedStatusFailsBeforeStoring(t *testing.T) 
 	h := newDecisionHarness(t, planApprovalToolName)
 	approval, input := planApproval("pending")
 	cont := approvalContinuation(context.Background(), h, approval, input, true)
-	_, err := cont.Setup(context.Background(), cont.Req)
+	_, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req)
 	const want = `committed tool approval has unexpected status "pending"`
 	if err == nil || err.Error() != want {
 		t.Fatalf("approval setup error = %v, want %q", err, want)
@@ -842,7 +866,7 @@ func TestPlanNativeUserInputContinuationStoresAnswerAsSuccessfulLimitedResult(t 
 	answered := planAnswer("telegram", "im-chat-1")
 	answered.Result = map[string]any{"answers": []any{map[string]any{"text": large}}}
 	cont := userInputContinuation(context.Background(), h, answered, true)
-	if _, err := cont.Setup(context.Background(), cont.Req); err != nil {
+	if _, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req); err != nil {
 		t.Fatalf("user input setup error = %v", err)
 	}
 	rows := toolRows(h)
@@ -862,7 +886,7 @@ func TestPlanNativeUserInputContinuationStoresPlainAnswer(t *testing.T) {
 	t.Parallel()
 	h := newDecisionHarness(t, "ask_user")
 	cont := userInputContinuation(context.Background(), h, planAnswer("telegram", "im-chat-1"), true)
-	if _, err := cont.Setup(context.Background(), cont.Req); err != nil {
+	if _, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req); err != nil {
 		t.Fatalf("user input setup error = %v", err)
 	}
 	rows := toolRows(h)
@@ -881,7 +905,7 @@ func TestPlanNativeContinuationRequestFieldsMatchTheCommittedRequest(t *testing.
 		cont := build(h)
 		driver := cont.Req
 		driver.RunID = "driver-run-id"
-		plan, err := cont.Setup(context.Background(), driver)
+		plan, err := cont.Setup(fencedUnlessFenced(context.Background()), driver)
 		if err != nil {
 			t.Fatalf("setup error = %v", err)
 		}
@@ -974,7 +998,7 @@ func TestPlanNativeContinuationRejectsAnEmptyDecisionID(t *testing.T) {
 		approval, input := planApproval(toolapproval.StatusApproved)
 		approval.ID = " "
 		cont := approvalContinuation(context.Background(), h, approval, input, true)
-		_, err := cont.Setup(context.Background(), cont.Req)
+		_, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req)
 		const want = "committed tool approval response is missing its request"
 		if err == nil || err.Error() != want {
 			t.Fatalf("setup error = %v, want %q", err, want)
@@ -989,7 +1013,7 @@ func TestPlanNativeContinuationRejectsAnEmptyDecisionID(t *testing.T) {
 		answered := planAnswer("telegram", "im-chat-1")
 		answered.ID = ""
 		cont := userInputContinuation(context.Background(), h, answered, true)
-		_, err := cont.Setup(context.Background(), cont.Req)
+		_, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req)
 		const want = "committed user input response is missing its request"
 		if err == nil || err.Error() != want {
 			t.Fatalf("setup error = %v, want %q", err, want)
@@ -1027,7 +1051,7 @@ func TestPlanNativeContinuationNormalizesAWebReplyTargetToTheBot(t *testing.T) {
 				if cont.Req.ReplyTarget != tc.want {
 					t.Fatalf("cont.Req.ReplyTarget = %q, want %q", cont.Req.ReplyTarget, tc.want)
 				}
-				plan, err := cont.Setup(context.Background(), cont.Req)
+				plan, err := cont.Setup(fencedUnlessFenced(context.Background()), cont.Req)
 				if err != nil {
 					t.Fatalf("setup error = %v", err)
 				}
@@ -1059,7 +1083,7 @@ func TestPlanNativeContinuationKeepsDriverRunIDAndResolvedWorkspaceTarget(t *tes
 			}
 			driver := cont.Req
 			driver.RunID = "driver-run-id"
-			plan, err := cont.Setup(context.Background(), driver)
+			plan, err := cont.Setup(fencedUnlessFenced(context.Background()), driver)
 			if err != nil {
 				t.Fatalf("setup error = %v", err)
 			}

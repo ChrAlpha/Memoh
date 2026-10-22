@@ -324,36 +324,3 @@ func TestAgentFailureStreamEventExposesOnlyStablePublicContract(t *testing.T) {
 		}
 	})
 }
-
-func TestHasVisibleAgentStreamOutputIgnoresLifecycleOnlyEvents(t *testing.T) {
-	t.Parallel()
-
-	cases := []native.StreamEvent{
-		{Type: native.EventTextStart},
-		{Type: native.EventTextDelta, Delta: "  \n\t"},
-		{Type: native.EventTextEnd},
-		{Type: native.EventReasoningStart},
-		{Type: native.EventReasoningDelta, Delta: ""},
-		{Type: native.EventReasoningEnd},
-		{Type: native.EventAttachment},
-		{Type: native.EventAgentAbort},
-	}
-	for _, event := range cases {
-		if outcome.HasVisibleAgentStreamOutput(event) {
-			t.Fatalf("event %q unexpectedly counted as visible", event.Type)
-		}
-	}
-
-	visible := []native.StreamEvent{
-		{Type: native.EventTextDelta, Delta: "hello"},
-		{Type: native.EventReasoningDelta, Delta: "thinking"},
-		{Type: native.EventAttachment, Attachments: []native.FileAttachment{{Path: "/tmp/a.png"}}},
-		{Type: native.EventToolCallStart},
-		{Type: native.EventUserInputRequest},
-	}
-	for _, event := range visible {
-		if !outcome.HasVisibleAgentStreamOutput(event) {
-			t.Fatalf("event %q unexpectedly counted as invisible", event.Type)
-		}
-	}
-}
