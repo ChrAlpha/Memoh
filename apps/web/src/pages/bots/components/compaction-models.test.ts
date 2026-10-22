@@ -30,8 +30,11 @@ describe('filterCompactionModels', () => {
       { id: 'unknown-provider', client_type: 'mystery-client', enable: true },
     ]
 
+    // A model with no declared context window is offered: the resolver gives
+    // compaction a default window for it.
     expect(filterCompactionModels(models, providers).map(model => model.id)).toEqual([
       'chat-model',
+      'windowless-model',
       'image-name-tool-caller',
     ])
   })

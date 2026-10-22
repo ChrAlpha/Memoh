@@ -3,7 +3,6 @@ interface CompactionModelLike {
   provider_id?: string | null
   enable?: boolean
   config?: {
-    context_window?: number | null
     compatibilities?: string[] | null
   } | null
 }
@@ -75,11 +74,6 @@ export function filterCompactionModels<T extends CompactionModelLike>(
     if (!model.provider_id || !eligibleProviderIds.has(model.provider_id)) {
       return false
     }
-    if (isImageOnlyModel(model)) {
-      return false
-    }
-    // The resolver fails closed on models without a declared context window
-    // (the summary budget derives from it), so don't offer them.
-    return (model.config?.context_window ?? 0) > 0
+    return !isImageOnlyModel(model)
   })
 }
