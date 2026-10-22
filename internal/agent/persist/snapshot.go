@@ -62,8 +62,14 @@ func ExtractTerminalSnapshot(data []byte) (TerminalSnapshot, bool) {
 	}, true
 }
 
+// OutputMessages is the snapshot's messages as model messages, internal
+// feedback marked.
+func (s TerminalSnapshot) OutputMessages() []runreq.ModelMessage {
+	return runreq.SDKMessagesWithOrigins(s.SDKMessages, s.internalFeedbackIndexes)
+}
+
 func (w *Writer) TerminalSnapshotResult(ctx context.Context, req runreq.ChatRequest, rc runreq.ResolvedContext, snap TerminalSnapshot) ([]messagepkg.Message, error) {
-	outputMessages := runreq.SDKMessagesWithOrigins(snap.SDKMessages, snap.internalFeedbackIndexes)
+	outputMessages := snap.OutputMessages()
 	if snap.Failure.Code != "" && (!snap.VisibleOutput || !hasPersistableAssistantOutput(outputMessages)) {
 		return w.FailureRow(ctx, req, rc, snap.Failure, "")
 	}

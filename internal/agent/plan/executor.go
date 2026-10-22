@@ -2,10 +2,9 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
-
-	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
@@ -33,10 +32,15 @@ type nativeExecutor struct {
 	persist   *persist.Writer
 
 	// Written by execute, read by commit after execute returned.
-	terminal    *native.StreamEvent
-	snapshot    *persist.TerminalSnapshot
-	visible     bool
-	toolCalls   int
+	terminal  *native.StreamEvent
+	snapshot  *persist.TerminalSnapshot
+	visible   bool
+	toolCalls int
+	// text and usage are the run's result as the terminal event reports it,
+	// kept apart from the history write so a scheduled fire reads them
+	// whichever way the history was written.
+	text        string
+	usage       json.RawMessage
 	uncommitted persist.UncommittedStepText
 	// interrupted is the failure the step committer reported while the stream
 	// was still running.
@@ -98,6 +102,8 @@ func (e *nativeExecutor) observeTerminal(ev native.StreamEvent) {
 	}
 	snap.VisibleOutput = e.visible
 	e.snapshot = &snap
+	e.text = terminalText(snap)
+	e.usage = snap.Usage
 }
 
 // deferred reports whether the terminal event parked the run on a decision.
@@ -111,7 +117,7 @@ func (e *nativeExecutor) deferred() bool {
 // commit writes the ending's history: the failure row or the interrupted step
 // when the run failed, and the run's final messages in every case.
 func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
-	summary := drive.CommitSummary{ModelID: e.modelID()}
+	summary := drive.CommitSummary{ModelID: e.modelID(), Text: e.text, Usage: e.usage}
 	if row && f != nil {
 		persisted, err := e.recordFailure(ctx, *f, summary)
 		if err != nil {
@@ -149,8 +155,6 @@ func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row 
 		return summary, outcome.RuntimeHistoryError(err)
 	}
 	summary.Persisted = persisted
-	summary.Text = terminalText(snap)
-	summary.Usage = snap.Usage
 	summary.UsageTokens = persist.ExtractInputTokensFromUsage(snap.Usage)
 	return summary, nil
 }
@@ -188,20 +192,15 @@ func (e *nativeExecutor) modelID() string {
 	return e.rc.Model.ID
 }
 
-// terminalText is the assistant text the run's final snapshot carries. A
-// schedule fire reports it as the run's result; every other entry reads its
-// text from the projection.
+// terminalText is the text of the last assistant message the run's terminal
+// snapshot carries. A schedule fire reports it as the run's result; every other
+// entry reads its text from the projection.
 func terminalText(snap persist.TerminalSnapshot) string {
-	var builder strings.Builder
-	for _, msg := range snap.SDKMessages {
-		if msg.Role != sdk.MessageRoleAssistant {
-			continue
-		}
-		for _, part := range msg.Content {
-			if text, ok := part.(sdk.TextPart); ok {
-				builder.WriteString(text.Text)
-			}
+	messages := snap.OutputMessages()
+	for i := len(messages) - 1; i >= 0; i-- {
+		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "assistant") {
+			return strings.TrimSpace(messages[i].TextContent())
 		}
 	}
-	return builder.String()
+	return ""
 }

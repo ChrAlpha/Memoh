@@ -378,15 +378,21 @@ func TestTriggerScheduleRuntimeRejectsIncompleteTurn(t *testing.T) {
 }
 
 // A completed scheduled run reports the final assistant text and the run's
-// usage to the schedule's log, and its round is written to history as the
-// user's turn followed by the answer.
+// usage to the schedule's log, and its round is written to history by the step
+// committer as the user's turn followed by the answer. The run is fenced over a
+// store that persists steps, which is how every scheduled run is written.
 func TestTriggerScheduleReportsTheFinalTextAndUsage(t *testing.T) {
 	_, contextView := triggerLifecycleContextView(nil)
-	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess, contextView)
+	steps := &stepMessages{RecordingMessages: &agenttest.RecordingMessages{}}
+	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess, contextView,
+		withFixtureMessages(steps), driveRequestRuntime(t))
 
 	result, err := triggerDirectSchedule(t, fixture.service)
 	if err != nil || result.Status != "ok" {
 		t.Fatalf("TriggerSchedule() = %q, %v; want the run to complete", result.Status, err)
+	}
+	if steps.stepCalls() == 0 {
+		t.Fatal("no step was committed; the run did not go through the step committer")
 	}
 	if result.Text != directLifecycleResponse {
 		t.Fatalf("result.Text = %q, want the final assistant text %q", result.Text, directLifecycleResponse)
@@ -395,11 +401,15 @@ func TestTriggerScheduleReportsTheFinalTextAndUsage(t *testing.T) {
 		t.Fatal("result.UsageBytes is empty, want the run's usage payload")
 	}
 	var roles []string
-	for _, row := range fixture.messages.Persisted {
-		roles = append(roles, row.Role)
+	steps.mu.Lock()
+	for _, step := range steps.steps {
+		for _, m := range step.Messages {
+			roles = append(roles, m.Role)
+		}
 	}
+	steps.mu.Unlock()
 	if len(roles) != 2 || roles[0] != "user" || roles[1] != "assistant" {
-		t.Fatalf("persisted roles = %q, want user then assistant", roles)
+		t.Fatalf("committed roles = %q, want user then assistant", roles)
 	}
 }
 
