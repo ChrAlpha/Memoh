@@ -136,7 +136,7 @@ func TestPostgresCompactionEventEndsAtTheFirstPassThatFits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newBacklogFixture(t)
 			f.appendBacklog(6, 1600)
-			admit := func(_ context.Context, pass compaction.Pass) (bool, error) {
+			admit := func(context.Context, compaction.Pass) (bool, error) {
 				return int(f.summaries.Load()) == tc.fitsAt, nil
 			}
 			passes, err := f.fold(f.ctx, compaction.TriggerConfig{SummaryWindowTokens: 2400}, admit)
@@ -174,7 +174,7 @@ func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
 	for _, id := range []string{"old-0", "old-1", "input", "step-0", "outside", "step-1", "tail"} {
 		f.appendMessage(id, id+" "+strings.Repeat("x", 200))
 	}
-	var prompt string
+	var read strings.Builder
 	f.onSummary = func(body []byte) {
 		var request struct {
 			Messages []struct {
@@ -185,7 +185,7 @@ func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
 			t.Error(err)
 		}
 		for _, message := range request.Messages {
-			prompt += message.Content
+			read.WriteString(message.Content)
 		}
 	}
 	history := func(id string) turn.ContextMessageSource {
@@ -211,6 +211,7 @@ func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
 			t.Fatalf("%s was folded", id)
 		}
 	}
+	prompt := read.String()
 	order := []string{"old-1 ", "<kept>\nuser: [message_id: input]\n", "\ninput ", "</kept>", "step-0 "}
 	at := 0
 	for _, text := range order {

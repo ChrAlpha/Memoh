@@ -142,7 +142,7 @@ func (r entryRender) content(mm turn.ModelMessage) string {
 	// content-part array (see timeline.nativeToolRoleContent). A content-part
 	// tool-result, when present, still takes precedence below.
 	if strings.TrimSpace(mm.ToolCallID) != "" && !hasToolResultPart(parts) {
-		return r.toolResult(mm.Name, refs, 0, mm.Content)
+		return refToolResult(mm.Name, refs, 0, mm.Content)
 	}
 
 	var segs []string
@@ -162,7 +162,7 @@ func (r entryRender) content(mm turn.ModelMessage) string {
 			sawToolCallPart = true
 			segs = append(segs, toolCallMarker(p.ToolName, p.Input))
 		case isToolResultPartType(p.Type):
-			segs = append(segs, r.toolResult(p.ToolName, refs, results, p.Output, p.Result))
+			segs = append(segs, refToolResult(p.ToolName, refs, results, p.Output, p.Result))
 			results++
 		}
 	}
@@ -191,7 +191,9 @@ func (r entryRender) resultRefs(mm turn.ModelMessage) []string {
 	return refs
 }
 
-func (r entryRender) toolResult(name string, refs []string, index int, candidates ...json.RawMessage) string {
+// refToolResult renders the index-th tool result of an entry with its ref,
+// or plain when the entry has none.
+func refToolResult(name string, refs []string, index int, candidates ...json.RawMessage) string {
 	if index >= len(refs) {
 		return renderToolResult(candidates...)
 	}
