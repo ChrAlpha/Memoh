@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"sync"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -342,7 +343,7 @@ func (d *Driver) settleRun(
 	}
 	spec.Delivery.Settle()
 	terminal := d.Finish(runCtx, spec.Run, fromEnd(end, failure))
-	spec.Delivery.Ended(context.WithoutCancel(runCtx), RunEnded{
+	spec.Delivery.Ended(context.WithoutCancel(runCtx), agentapi.RunEnded{
 		State:     terminal.State,
 		ErrorCode: terminal.ErrorCode,
 		ErrorArgs: terminal.ErrorArgs,
@@ -433,7 +434,7 @@ func (*Driver) emitRunEvent(runCtx context.Context, pub *runPublisherSet, queue 
 	}
 	// The event still reaches the caller: whatever the subscribers saw, the
 	// caller that started this run is told how it ended.
-	queue.enqueue(RunEvent{Event: ev, Payload: payload})
+	queue.enqueue(agentapi.RunEvent{Event: ev, Payload: payload})
 	return publishErr
 }
 
@@ -477,7 +478,7 @@ func PublicRunFailure(f *outcome.RunFailure) error {
 // reportedRunAssets are the asset references the delivery end collected on the
 // caller's behalf, if it collects any. A delivery end that has none is not
 // asked for them.
-func reportedRunAssets(delivery RunDelivery) []runreq.OutboundAssetRef {
+func reportedRunAssets(delivery agentapi.RunDelivery) []runreq.OutboundAssetRef {
 	reporter, ok := delivery.(reportedAssetsSource)
 	if !ok {
 		return nil

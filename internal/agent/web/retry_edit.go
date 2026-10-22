@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -60,7 +61,7 @@ type EditLatestMessageInput struct {
 // RetrySpec is the run of a Web retry. The turn it replaces is resolved in
 // the run's setup: a target that is no longer the latest turn is the run's own
 // failure, reported to the caller like any other.
-func (r *Runner) RetrySpec(admission *Admission, input RetryLatestMessageInput, delivery drive.RunDelivery) drive.RunSpec {
+func (r *Runner) RetrySpec(admission *Admission, input RetryLatestMessageInput, delivery agentapi.RunDelivery) drive.RunSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	replace := &webReplacement{runner: r, reason: "retry", sessionID: sessionID, oldTurnID: targetTurnID}
@@ -123,7 +124,7 @@ func isPreflightUserMessageHookFailure(message messagepkg.Message) bool {
 
 // EditSpec is the run of a Web edit: the latest turn's request replaced by
 // new text, and the turn answered again.
-func (r *Runner) EditSpec(admission *Admission, input EditLatestMessageInput, delivery drive.RunDelivery) drive.RunSpec {
+func (r *Runner) EditSpec(admission *Admission, input EditLatestMessageInput, delivery agentapi.RunDelivery) drive.RunSpec {
 	sessionID := strings.TrimSpace(input.SessionID)
 	targetTurnID := strings.TrimSpace(input.TargetTurnID)
 	text := strings.TrimSpace(input.Text)

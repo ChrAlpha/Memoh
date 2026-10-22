@@ -12,6 +12,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -112,7 +113,7 @@ func testDriver(t *testing.T, messages messagepkg.Service) *drive.Driver {
 // does, and returns the failure it would be handed.
 func driveUnrouted(t *testing.T, driver *drive.Driver, req runreq.ChatRequest, plan drive.RunPlan, eventCh chan runreq.WSStreamEvent) error {
 	t.Helper()
-	var delivery drive.RunDelivery = drive.NoDelivery{}
+	var delivery agentapi.RunDelivery = drive.NoDelivery{}
 	if eventCh != nil {
 		delivery = drive.NewChannelDelivery(eventCh)
 	}

@@ -11,8 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
-	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/apperror"
 )
@@ -23,7 +22,7 @@ const (
 	runtimeContractRunID     = "run-runtime-contract"
 )
 
-func rawRuntimeContractEvent(t *testing.T, ev native.StreamEvent) runreq.WSStreamEvent {
+func rawRuntimeContractEvent(t *testing.T, ev native.StreamEvent) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(ev)
 	if err != nil {
@@ -32,9 +31,9 @@ func rawRuntimeContractEvent(t *testing.T, ev native.StreamEvent) runreq.WSStrea
 	return data
 }
 
-func richActiveRunWSContractScript(t *testing.T) []runreq.WSStreamEvent {
+func richActiveRunWSContractScript(t *testing.T) []json.RawMessage {
 	t.Helper()
-	return []runreq.WSStreamEvent{
+	return []json.RawMessage{
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentStart}),
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventReasoningDelta, Delta: "I need to inspect the workspace."}),
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "I will check the current state."}),
@@ -98,9 +97,9 @@ func richActiveRunWSContractScript(t *testing.T) []runreq.WSStreamEvent {
 	}
 }
 
-func interruptedRunWSContractScript(t *testing.T) []runreq.WSStreamEvent {
+func interruptedRunWSContractScript(t *testing.T) []json.RawMessage {
 	t.Helper()
-	return []runreq.WSStreamEvent{
+	return []json.RawMessage{
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventAgentStart}),
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventTextDelta, Delta: "partial output"}),
 		rawRuntimeContractEvent(t, native.StreamEvent{Type: native.EventError, Error: "runtime interrupted"}),
@@ -108,7 +107,7 @@ func interruptedRunWSContractScript(t *testing.T) []runreq.WSStreamEvent {
 	}
 }
 
-func collectRuntimeContractWSEvents(t *testing.T, script []runreq.WSStreamEvent, stopAt string) []map[string]any {
+func collectRuntimeContractWSEvents(t *testing.T, script []json.RawMessage, stopAt string) []map[string]any {
 	t.Helper()
 
 	closeWriter := make(chan struct{})
@@ -130,7 +129,7 @@ func collectRuntimeContractWSEvents(t *testing.T, script []runreq.WSStreamEvent,
 				handlerDone <- err
 				return
 			}
-			delivery.Deliver(r.Context(), drive.RunEvent{Event: event, Payload: payload})
+			delivery.Deliver(r.Context(), agentapi.RunEvent{Event: event, Payload: payload})
 		}
 
 		<-closeWriter

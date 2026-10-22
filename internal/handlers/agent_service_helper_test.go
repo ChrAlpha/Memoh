@@ -13,7 +13,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/agentapi"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -165,12 +164,12 @@ func (a inertAgent) AdmitWebRun(context.Context, web.AdmitInput) (*web.Admission
 	a.fail()
 	return nil, nil
 }
-func (a inertAgent) RunWebSend(*web.Admission, runreq.ChatRequest, drive.RunDelivery) { a.fail() }
-func (a inertAgent) RunWebRetry(*web.Admission, web.RetryLatestMessageInput, drive.RunDelivery) {
+func (a inertAgent) RunWebSend(*web.Admission, runreq.ChatRequest, agentapi.RunDelivery) { a.fail() }
+func (a inertAgent) RunWebRetry(*web.Admission, web.RetryLatestMessageInput, agentapi.RunDelivery) {
 	a.fail()
 }
 
-func (a inertAgent) RunWebEdit(*web.Admission, web.EditLatestMessageInput, drive.RunDelivery) {
+func (a inertAgent) RunWebEdit(*web.Admission, web.EditLatestMessageInput, agentapi.RunDelivery) {
 	a.fail()
 }
 

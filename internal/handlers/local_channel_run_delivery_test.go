@@ -6,17 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
-func deliveredRunEvent(t *testing.T, event native.StreamEvent) drive.RunEvent {
+func deliveredRunEvent(t *testing.T, event native.StreamEvent) agentapi.RunEvent {
 	t.Helper()
 	payload, err := json.Marshal(event)
 	if err != nil {
 		t.Fatalf("marshal event: %v", err)
 	}
-	return drive.RunEvent{Event: event, Payload: payload}
+	return agentapi.RunEvent{Event: event, Payload: payload}
 }
 
 // The initiating socket reads the run through its session subscription like
@@ -65,7 +65,7 @@ func TestWSRunDeliveryNamesTheFailureThePayloadPublished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivery.Deliver(context.Background(), drive.RunEvent{
+	delivery.Deliver(context.Background(), agentapi.RunEvent{
 		Event:   native.StreamEvent{Type: native.EventError, Error: "429 from upstream"},
 		Payload: public,
 	})
@@ -108,7 +108,7 @@ func TestWSRunDeliveryReleasesWhenTheRunEnds(t *testing.T) {
 	if released != 0 {
 		t.Fatalf("released %d times before the run ended", released)
 	}
-	delivery.Ended(context.Background(), drive.RunEnded{State: "completed"})
+	delivery.Ended(context.Background(), agentapi.RunEnded{State: "completed"})
 	if released != 1 {
 		t.Fatalf("released %d times, want once when the run ended", released)
 	}

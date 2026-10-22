@@ -299,7 +299,7 @@ func (r *Responder) DriveRouted(runCtx context.Context, command sessionruntime.C
 func (r *Responder) DriveUnrouted(ctx context.Context, cont Continuation, eventCh chan<- runreq.WSStreamEvent) error {
 	ctx, release := continuationContext(workspace.WithWorkspaceTarget(ctx, cont.Req.WorkspaceTargetID))
 	defer release()
-	var delivery drive.RunDelivery = drive.NoDelivery{}
+	var delivery agentapi.RunDelivery = drive.NoDelivery{}
 	if eventCh != nil {
 		delivery = drive.NewChannelDelivery(eventCh)
 	}

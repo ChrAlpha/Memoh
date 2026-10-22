@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -220,7 +221,7 @@ func (r *Runner) enqueueSend(ctx context.Context, in AdmitInput) (*Admission, er
 // RunSend executes an admitted Web send. The draft is still the
 // submitter's until execution starts: a failure before then writes nothing, so
 // the composer can hand it back without duplicating a turn.
-func (r *Runner) RunSend(admission *Admission, req runreq.ChatRequest, delivery drive.RunDelivery) {
+func (r *Runner) RunSend(admission *Admission, req runreq.ChatRequest, delivery agentapi.RunDelivery) {
 	spec := RunSpec(admission, req, delivery, outcome.InputHeld)
 	spec.Setup = func(ctx context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		return r.plan.ChatSetup(ctx, req, spec)
@@ -229,18 +230,18 @@ func (r *Runner) RunSend(admission *Admission, req runreq.ChatRequest, delivery 
 }
 
 // RunRetry executes an admitted retry of the session's latest turn.
-func (r *Runner) RunRetry(admission *Admission, input RetryLatestMessageInput, delivery drive.RunDelivery) {
+func (r *Runner) RunRetry(admission *Admission, input RetryLatestMessageInput, delivery agentapi.RunDelivery) {
 	r.Start(admission, r.RetrySpec(admission, input, delivery))
 }
 
 // RunEdit executes an admitted edit of the session's latest turn.
-func (r *Runner) RunEdit(admission *Admission, input EditLatestMessageInput, delivery drive.RunDelivery) {
+func (r *Runner) RunEdit(admission *Admission, input EditLatestMessageInput, delivery agentapi.RunDelivery) {
 	r.Start(admission, r.EditSpec(admission, input, delivery))
 }
 
 // RunSpec is the part of a Web run every Web entry shares: the run
 // admission named, and the request wired to it.
-func RunSpec(admission *Admission, req runreq.ChatRequest, delivery drive.RunDelivery, input outcome.InputOwnership) drive.RunSpec {
+func RunSpec(admission *Admission, req runreq.ChatRequest, delivery agentapi.RunDelivery, input outcome.InputOwnership) drive.RunSpec {
 	position := admission.TurnPosition
 	req.RunID = admission.RunID
 	req.RunHandle = admission.handle

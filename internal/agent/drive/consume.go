@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -158,7 +159,7 @@ func (d *Driver) consume(
 					d.refusePublication(pub, obs, abort, err)
 				}
 			}
-			queue.enqueue(RunEvent{Event: out, Payload: payload})
+			queue.enqueue(agentapi.RunEvent{Event: out, Payload: payload})
 		}
 	}
 }

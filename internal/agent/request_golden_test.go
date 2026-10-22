@@ -14,7 +14,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/decide"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -74,7 +73,7 @@ func driveIMStartTurn(t *testing.T) []sdk.Request {
 }
 
 // runWebReplacement admits a Web retry or edit and runs it to its end.
-func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*web.Admission, drive.RunDelivery)) {
+func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*web.Admission, agentapi.RunDelivery)) {
 	t.Helper()
 	admission, err := fixture.service.AdmitWebRun(context.Background(), web.AdmitInput{
 		BotID:        agenttest.LifecycleBotID,
@@ -96,7 +95,7 @@ func runWebReplacement(t *testing.T, fixture directLifecycleFixture, run func(*w
 func driveWebRetry(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t, driveRequestRuntime(t), withFixtureMessages(driveReplaceableHistory(t)))
-	runWebReplacement(t, fixture, func(admission *web.Admission, delivery drive.RunDelivery) {
+	runWebReplacement(t, fixture, func(admission *web.Admission, delivery agentapi.RunDelivery) {
 		fixture.service.RunWebRetry(admission, web.RetryLatestMessageInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,
@@ -110,7 +109,7 @@ func driveWebRetry(t *testing.T) []sdk.Request {
 func driveWebEdit(t *testing.T) []sdk.Request {
 	t.Helper()
 	fixture, recorder := newDriveRequestFixture(t, driveRequestRuntime(t), withFixtureMessages(driveReplaceableHistory(t)))
-	runWebReplacement(t, fixture, func(admission *web.Admission, delivery drive.RunDelivery) {
+	runWebReplacement(t, fixture, func(admission *web.Admission, delivery agentapi.RunDelivery) {
 		fixture.service.RunWebEdit(admission, web.EditLatestMessageInput{
 			BotID:        agenttest.LifecycleBotID,
 			SessionID:    agenttest.LifecycleSessionID,

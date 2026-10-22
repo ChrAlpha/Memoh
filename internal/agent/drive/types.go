@@ -3,6 +3,7 @@ package drive
 import (
 	"context"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -26,7 +27,7 @@ type RunSpec struct {
 	// entry closes over the spec it built, which predates the driver's wiring.
 	Setup func(ctx context.Context, req runreq.ChatRequest) (RunPlan, error)
 	// Delivery is the caller's end of the run's events.
-	Delivery RunDelivery
+	Delivery agentapi.RunDelivery
 	// Input says who holds the run's input, which is the one fact that decides
 	// whether a failure leaves a user message and a failure row.
 	Input outcome.InputOwnership

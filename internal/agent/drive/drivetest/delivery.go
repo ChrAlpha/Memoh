@@ -4,14 +4,14 @@ import (
 	"context"
 	"sync"
 
-	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 )
 
 // RecordingDelivery records what the driver handed it.
 type RecordingDelivery struct {
 	mu       sync.Mutex
-	events   []drive.RunEvent
-	ended    []drive.RunEnded
+	events   []agentapi.RunEvent
+	ended    []agentapi.RunEnded
 	settled  int
 	GoneAt   int // 1-based Deliver index after which the caller is gone
 	delivers int
@@ -21,7 +21,7 @@ type RecordingDelivery struct {
 
 // Deliver records the event, or reports the caller gone once GoneAt events
 // arrived.
-func (d *RecordingDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
+func (d *RecordingDelivery) Deliver(_ context.Context, ev agentapi.RunEvent) bool {
 	if d.Release != nil {
 		<-d.Release
 	}
@@ -43,7 +43,7 @@ func (d *RecordingDelivery) Settle() {
 }
 
 // Ended records how the run ended.
-func (d *RecordingDelivery) Ended(_ context.Context, end drive.RunEnded) {
+func (d *RecordingDelivery) Ended(_ context.Context, end agentapi.RunEnded) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.ended = append(d.ended, end)
@@ -51,8 +51,8 @@ func (d *RecordingDelivery) Ended(_ context.Context, end drive.RunEnded) {
 
 // Snapshot is what was delivered so far: the events, the endings and the
 // number of settlements.
-func (d *RecordingDelivery) Snapshot() ([]drive.RunEvent, []drive.RunEnded, int) {
+func (d *RecordingDelivery) Snapshot() ([]agentapi.RunEvent, []agentapi.RunEnded, int) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return append([]drive.RunEvent(nil), d.events...), append([]drive.RunEnded(nil), d.ended...), d.settled
+	return append([]agentapi.RunEvent(nil), d.events...), append([]agentapi.RunEnded(nil), d.ended...), d.settled
 }

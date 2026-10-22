@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 
-	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/agent/web"
@@ -18,17 +18,17 @@ func (s *Service) AdmitWebRun(ctx context.Context, in web.AdmitInput) (*web.Admi
 }
 
 // RunWebSend executes an admitted Web send.
-func (s *Service) RunWebSend(admission *web.Admission, req runreq.ChatRequest, delivery drive.RunDelivery) {
+func (s *Service) RunWebSend(admission *web.Admission, req runreq.ChatRequest, delivery agentapi.RunDelivery) {
 	s.web.RunSend(admission, req, delivery)
 }
 
 // RunWebRetry executes an admitted retry of the session's latest turn.
-func (s *Service) RunWebRetry(admission *web.Admission, input web.RetryLatestMessageInput, delivery drive.RunDelivery) {
+func (s *Service) RunWebRetry(admission *web.Admission, input web.RetryLatestMessageInput, delivery agentapi.RunDelivery) {
 	s.web.RunRetry(admission, input, delivery)
 }
 
 // RunWebEdit executes an admitted edit of the session's latest turn.
-func (s *Service) RunWebEdit(admission *web.Admission, input web.EditLatestMessageInput, delivery drive.RunDelivery) {
+func (s *Service) RunWebEdit(admission *web.Admission, input web.EditLatestMessageInput, delivery agentapi.RunDelivery) {
 	s.web.RunEdit(admission, input, delivery)
 }
 

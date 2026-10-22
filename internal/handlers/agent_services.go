@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -22,9 +21,9 @@ import (
 // or an edit, and to check what it carries.
 type webRunService interface {
 	AdmitWebRun(ctx context.Context, in web.AdmitInput) (*web.Admission, error)
-	RunWebSend(admission *web.Admission, req runreq.ChatRequest, delivery drive.RunDelivery)
-	RunWebRetry(admission *web.Admission, input web.RetryLatestMessageInput, delivery drive.RunDelivery)
-	RunWebEdit(admission *web.Admission, input web.EditLatestMessageInput, delivery drive.RunDelivery)
+	RunWebSend(admission *web.Admission, req runreq.ChatRequest, delivery agentapi.RunDelivery)
+	RunWebRetry(admission *web.Admission, input web.RetryLatestMessageInput, delivery agentapi.RunDelivery)
+	RunWebEdit(admission *web.Admission, input web.EditLatestMessageInput, delivery agentapi.RunDelivery)
 	PrepareRetryLatestTurnOperation(ctx context.Context, sessionID, turnID string) (string, error)
 	PrepareRetryRequestUserTurn(ctx context.Context, sessionID, requestMessageID string) (*chatview.UITurn, error)
 	PrepareEditLatestTurnOperation(ctx context.Context, sessionID, turnID string) (string, error)

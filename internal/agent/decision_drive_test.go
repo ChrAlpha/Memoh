@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/drive"
@@ -144,7 +145,7 @@ func TestDriveDecisionContinuationCallerLeavingIsAStop(t *testing.T) {
 // webEntrySpecs builds one spec per Web entry through the constructor the
 // entry itself uses, so the input ownership and the replacement under test are
 // the entry's own.
-func webEntrySpecs(svc *Service, admission *web.Admission, delivery drive.RunDelivery) map[string]drive.RunSpec {
+func webEntrySpecs(svc *Service, admission *web.Admission, delivery agentapi.RunDelivery) map[string]drive.RunSpec {
 	return map[string]drive.RunSpec{
 		"send": web.RunSpec(admission, runreq.ChatRequest{
 			BotID: "bot-1", ChatID: "bot-1", ThreadID: "session-1",

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/felinics/memoh/internal/agent/drive"
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
@@ -71,7 +71,7 @@ func newTurnRun(
 // Deliver implements RunDelivery. It reports false once the caller is gone,
 // which the run's own context ending is the only signal of: a caller that is
 // merely slow keeps its events.
-func (t *turnRun) Deliver(_ context.Context, ev drive.RunEvent) bool {
+func (t *turnRun) Deliver(_ context.Context, ev agentapi.RunEvent) bool {
 	if t.ctx.Err() != nil {
 		return false
 	}
@@ -103,7 +103,7 @@ func (t *turnRun) Settle() {
 
 // Ended implements RunDelivery. It reports the run's failure to the caller,
 // hands over the terminal record, and closes the event channels.
-func (t *turnRun) Ended(ctx context.Context, end drive.RunEnded) {
+func (t *turnRun) Ended(ctx context.Context, end agentapi.RunEnded) {
 	defer t.closeInject()
 
 	if end.Failure != nil {

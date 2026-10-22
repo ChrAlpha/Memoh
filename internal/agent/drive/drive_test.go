@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/drive/drivetest"
@@ -443,7 +444,7 @@ func TestDriveCarriesFailureArgsToEveryConsumer(t *testing.T) {
 		t.Fatalf("failure args = %#v, want the catalog args carried", result.Failure.Args)
 	}
 	events, ended, _ := delivery.Snapshot()
-	var failureEvent *drive.RunEvent
+	var failureEvent *agentapi.RunEvent
 	for i := range events {
 		if events[i].Event.Type == native.EventError {
 			failureEvent = &events[i]
@@ -962,7 +963,7 @@ func (d *reportedAssetsDelivery) ReportedAssets() []runreq.OutboundAssetRef {
 	return append([]runreq.OutboundAssetRef(nil), d.assets...)
 }
 
-func (d *reportedAssetsDelivery) Deliver(ctx context.Context, ev drive.RunEvent) bool {
+func (d *reportedAssetsDelivery) Deliver(ctx context.Context, ev agentapi.RunEvent) bool {
 	return d.RecordingDelivery.Deliver(ctx, ev)
 }
 

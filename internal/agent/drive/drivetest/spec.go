@@ -3,6 +3,7 @@ package drivetest
 import (
 	"context"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/outcome"
@@ -12,7 +13,7 @@ import (
 
 // ScheduledSpec is the schedule entry's spec over exec: an admitted run nobody
 // waits on, whose input is synthetic.
-func ScheduledSpec(exec drive.RunExecutor, delivery drive.RunDelivery) drive.RunSpec {
+func ScheduledSpec(exec drive.RunExecutor, delivery agentapi.RunDelivery) drive.RunSpec {
 	return drive.RunSpec{
 		Run: drive.AdmittedRun{
 			Handle: sessionruntime.RunHandle{

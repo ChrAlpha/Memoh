@@ -3,6 +3,8 @@ package drive
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/felinics/memoh/internal/agent/agentapi"
 )
 
 // ChannelDelivery hands a run's events to a caller that reads them as JSON
@@ -21,7 +23,7 @@ func NewChannelDelivery(ch chan<- json.RawMessage) ChannelDelivery {
 }
 
 // Deliver writes one event, or reports the caller gone once its context ends.
-func (d ChannelDelivery) Deliver(ctx context.Context, ev RunEvent) bool {
+func (d ChannelDelivery) Deliver(ctx context.Context, ev agentapi.RunEvent) bool {
 	select {
 	case d.ch <- ev.Payload:
 		return true
@@ -32,4 +34,4 @@ func (d ChannelDelivery) Deliver(ctx context.Context, ev RunEvent) bool {
 
 func (ChannelDelivery) Settle() {}
 
-func (ChannelDelivery) Ended(context.Context, RunEnded) {}
+func (ChannelDelivery) Ended(context.Context, agentapi.RunEnded) {}

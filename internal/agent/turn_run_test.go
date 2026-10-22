@@ -9,6 +9,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
@@ -35,7 +36,7 @@ func TestTurnRunDeliversMonotonicSequenceWithRunIdentity(t *testing.T) {
 	handle, _ := newTestTurnRun(context.Background())
 	for i := range 3 {
 		payload := json.RawMessage(`{"type":"text_delta","delta":"x"}`)
-		if !handle.Deliver(context.Background(), drive.RunEvent{
+		if !handle.Deliver(context.Background(), agentapi.RunEvent{
 			Event:   native.StreamEvent{Type: native.EventTextDelta},
 			Payload: payload,
 		}) {
@@ -43,7 +44,7 @@ func TestTurnRunDeliversMonotonicSequenceWithRunIdentity(t *testing.T) {
 		}
 	}
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{State: turn.RunStateCompleted})
+	handle.Ended(context.Background(), agentapi.RunEnded{State: turn.RunStateCompleted})
 
 	events, errs := drainTurn(t, handle)
 	if len(errs) != 0 {
@@ -68,9 +69,9 @@ func TestTurnRunEndsWithRunTerminalCarryingArgs(t *testing.T) {
 	t.Parallel()
 
 	handle, _ := newTestTurnRun(context.Background())
-	handle.Deliver(context.Background(), drive.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
+	handle.Deliver(context.Background(), agentapi.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{
+	handle.Ended(context.Background(), agentapi.RunEnded{
 		State:     turn.RunStateFailed,
 		ErrorCode: string(apperror.CodeRuntimeRunFailed),
 		ErrorArgs: map[string]string{"reason": "upstream refused"},
@@ -108,7 +109,7 @@ func TestTurnRunWithoutTerminalRecordSendsNoRunTerminal(t *testing.T) {
 
 	handle, _ := newTestTurnRun(context.Background())
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{})
+	handle.Ended(context.Background(), agentapi.RunEnded{})
 
 	events, errs := drainTurn(t, handle)
 	if len(events) != 0 || len(errs) != 0 {
@@ -124,10 +125,10 @@ func TestTurnRunSendsNoRunTerminalAfterTheCallerEndedIt(t *testing.T) {
 	t.Parallel()
 
 	handle, cancel := newTestTurnRun(context.Background())
-	handle.Deliver(context.Background(), drive.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
+	handle.Deliver(context.Background(), agentapi.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
 	cancel(outcome.ErrRunStopped)
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{State: turn.RunStateAborted})
+	handle.Ended(context.Background(), agentapi.RunEnded{State: turn.RunStateAborted})
 
 	events, _ := drainTurn(t, handle)
 	for _, event := range events {
@@ -145,11 +146,11 @@ func TestTurnRunDeliverReportsTheCallerGone(t *testing.T) {
 
 	handle, cancel := newTestTurnRun(context.Background())
 	cancel(outcome.ErrRunStopped)
-	if handle.Deliver(context.Background(), drive.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}}) {
+	if handle.Deliver(context.Background(), agentapi.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}}) {
 		t.Fatal("Deliver = true after the caller ended the run")
 	}
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{})
+	handle.Ended(context.Background(), agentapi.RunEnded{})
 	drainTurn(t, handle)
 }
 
@@ -193,7 +194,7 @@ func TestTurnRunInjectedMessageReachesTheRunThenIsRefused(t *testing.T) {
 	if err := handle.Inject(context.Background(), turn.InjectMessage{Text: "late"}); !errors.Is(err, errRunAlreadyFinished) {
 		t.Fatalf("Inject() after Settle = %v, want %v", err, errRunAlreadyFinished)
 	}
-	handle.Ended(context.Background(), drive.RunEnded{})
+	handle.Ended(context.Background(), agentapi.RunEnded{})
 	drainTurn(t, handle)
 }
 
@@ -237,7 +238,7 @@ func TestTurnRunTerminalSendGivesUpOnAStalledCaller(t *testing.T) {
 	go func() {
 		defer close(done)
 		handle.Settle()
-		handle.Ended(context.Background(), drive.RunEnded{State: turn.RunStateCompleted})
+		handle.Ended(context.Background(), agentapi.RunEnded{State: turn.RunStateCompleted})
 	}()
 	select {
 	case <-done:
@@ -252,9 +253,9 @@ func TestTurnRunStopEndsWithoutAFailure(t *testing.T) {
 	t.Parallel()
 
 	handle, _ := newTestTurnRun(context.Background())
-	handle.Deliver(context.Background(), drive.RunEvent{Event: native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndCanceled}})
+	handle.Deliver(context.Background(), agentapi.RunEvent{Event: native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndCanceled}})
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{State: turn.RunStateAborted})
+	handle.Ended(context.Background(), agentapi.RunEnded{State: turn.RunStateAborted})
 
 	events, errs := drainTurn(t, handle)
 	if len(errs) != 0 {
@@ -279,9 +280,9 @@ func TestTurnRunDeliversThePublicPayloadOnly(t *testing.T) {
 		Cause: errors.New(privateDetail),
 		Phase: outcome.PhaseExecution,
 	})
-	handle.Deliver(context.Background(), drive.RunEvent{Event: event, Payload: drive.MarshalRunEvent(event)})
+	handle.Deliver(context.Background(), agentapi.RunEvent{Event: event, Payload: drive.MarshalRunEvent(event)})
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{})
+	handle.Ended(context.Background(), agentapi.RunEnded{})
 
 	events, _ := drainTurn(t, handle)
 	payload := string(events[0].Payload)
@@ -309,7 +310,7 @@ func TestTurnRunSlowCallerKeepsTheRunGoing(t *testing.T) {
 	handle, _ := newTestTurnRun(context.Background())
 	start := time.Now()
 	handle.Settle()
-	handle.Ended(context.Background(), drive.RunEnded{State: turn.RunStateCompleted})
+	handle.Ended(context.Background(), agentapi.RunEnded{State: turn.RunStateCompleted})
 	if elapsed := time.Since(start); elapsed > terminalEventTimeout {
 		t.Fatalf("Ended took %s, want it bounded by the terminal send timeout", elapsed)
 	}
@@ -337,7 +338,7 @@ func TestTurnRunCancelUnblocksAFullEventBuffer(t *testing.T) {
 		go func() {
 			defer close(done)
 			for range 6 {
-				ok := handle.Deliver(context.Background(), drive.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
+				ok := handle.Deliver(context.Background(), agentapi.RunEvent{Event: native.StreamEvent{Type: native.EventTextDelta}})
 				delivered = append(delivered, ok)
 				if !ok {
 					return
@@ -363,7 +364,7 @@ func TestTurnRunCancelUnblocksAFullEventBuffer(t *testing.T) {
 			t.Fatalf("Deliver results = %v, want two accepted into the buffer, then the caller gone", delivered)
 		}
 		handle.Settle()
-		handle.Ended(context.Background(), drive.RunEnded{State: turn.RunStateAborted})
+		handle.Ended(context.Background(), agentapi.RunEnded{State: turn.RunStateAborted})
 		events, errs := drainTurn(t, handle)
 		if len(events) != 2 || len(errs) != 0 {
 			t.Fatalf("events = %d errors = %v, want the two buffered events and closed channels", len(events), errs)

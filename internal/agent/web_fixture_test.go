@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -54,8 +55,8 @@ const (
 // every event the run delivered and says when the run has ended.
 type webTestDelivery struct {
 	mu     sync.Mutex
-	events []drive.RunEvent
-	ended  drive.RunEnded
+	events []agentapi.RunEvent
+	ended  agentapi.RunEnded
 	done   chan struct{}
 }
 
@@ -63,7 +64,7 @@ func newWebTestDelivery() *webTestDelivery {
 	return &webTestDelivery{done: make(chan struct{})}
 }
 
-func (d *webTestDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
+func (d *webTestDelivery) Deliver(_ context.Context, ev agentapi.RunEvent) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.events = append(d.events, ev)
@@ -72,7 +73,7 @@ func (d *webTestDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
 
 func (*webTestDelivery) Settle() {}
 
-func (d *webTestDelivery) Ended(_ context.Context, end drive.RunEnded) {
+func (d *webTestDelivery) Ended(_ context.Context, end agentapi.RunEnded) {
 	d.mu.Lock()
 	d.ended = end
 	d.mu.Unlock()
@@ -80,7 +81,7 @@ func (d *webTestDelivery) Ended(_ context.Context, end drive.RunEnded) {
 }
 
 // wait returns once the run has ended, with what it delivered.
-func (d *webTestDelivery) wait(t *testing.T) ([]drive.RunEvent, drive.RunEnded) {
+func (d *webTestDelivery) wait(t *testing.T) ([]agentapi.RunEvent, agentapi.RunEnded) {
 	t.Helper()
 	select {
 	case <-d.done:
@@ -89,7 +90,7 @@ func (d *webTestDelivery) wait(t *testing.T) ([]drive.RunEvent, drive.RunEnded) 
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return append([]drive.RunEvent(nil), d.events...), d.ended
+	return append([]agentapi.RunEvent(nil), d.events...), d.ended
 }
 
 // payloads is what the run delivered as the stream of WSStreamEvent the
@@ -178,7 +179,7 @@ func admitWebTestRun(t *testing.T, svc *Service, invocationID string) *web.Admis
 }
 
 // webTestSpec is a Web send whose setup hands the driver exec.
-func webTestSpec(admission *web.Admission, delivery drive.RunDelivery, exec drive.RunExecutor) drive.RunSpec {
+func webTestSpec(admission *web.Admission, delivery agentapi.RunDelivery, exec drive.RunExecutor) drive.RunSpec {
 	spec := web.RunSpec(admission, runreq.ChatRequest{BotID: webTestBotID, ThreadID: webTestSessionID}, delivery, outcome.InputHeld)
 	spec.Setup = func(_ context.Context, req runreq.ChatRequest) (drive.RunPlan, error) {
 		return drive.RunPlan{Exec: exec, Req: req}, nil
@@ -949,7 +950,7 @@ type wsStepHistoryDelivery struct {
 	done          chan struct{}
 }
 
-func (d *wsStepHistoryDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
+func (d *wsStepHistoryDelivery) Deliver(_ context.Context, ev agentapi.RunEvent) bool {
 	event := ev.Event
 	d.events = append(d.events, string(event.Type))
 	if event.Type == native.EventTextDelta {
@@ -966,7 +967,7 @@ func (d *wsStepHistoryDelivery) Deliver(_ context.Context, ev drive.RunEvent) bo
 
 func (*wsStepHistoryDelivery) Settle() {}
 
-func (d *wsStepHistoryDelivery) Ended(context.Context, drive.RunEnded) { close(d.done) }
+func (d *wsStepHistoryDelivery) Ended(context.Context, agentapi.RunEnded) { close(d.done) }
 
 func (h wsStepHistoryHarness) read(t *testing.T, runID string) wsStepHistoryRun {
 	t.Helper()

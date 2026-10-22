@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/drive/drivetest"
@@ -76,14 +77,14 @@ type orderedDelivery struct {
 	clock *orderedRecorder
 }
 
-func (d *orderedDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
+func (d *orderedDelivery) Deliver(_ context.Context, ev agentapi.RunEvent) bool {
 	d.clock.record("delivered:" + string(ev.Event.Type))
 	return true
 }
 
 func (*orderedDelivery) Settle() {}
 
-func (*orderedDelivery) Ended(context.Context, drive.RunEnded) {}
+func (*orderedDelivery) Ended(context.Context, agentapi.RunEnded) {}
 
 type clockExecutor struct {
 	inner *drivetest.ScriptedExecutor
@@ -171,7 +172,7 @@ type blockingDelivery struct {
 	once  sync.Once
 }
 
-func (d *blockingDelivery) Deliver(_ context.Context, _ drive.RunEvent) bool {
+func (d *blockingDelivery) Deliver(_ context.Context, _ agentapi.RunEvent) bool {
 	d.once.Do(func() {})
 	<-d.block
 	return true
@@ -179,7 +180,7 @@ func (d *blockingDelivery) Deliver(_ context.Context, _ drive.RunEvent) bool {
 
 func (*blockingDelivery) Settle() {}
 
-func (*blockingDelivery) Ended(context.Context, drive.RunEnded) {}
+func (*blockingDelivery) Ended(context.Context, agentapi.RunEnded) {}
 
 // O4 — the delivery end leaving stops delivery, not publication: later events
 // and the terminal still reach the run's other subscribers.
@@ -525,11 +526,11 @@ func TestOrderSlowDeliveryEndUnderTheByteLimit(t *testing.T) {
 // pacedDelivery reads each event after a short pause.
 type pacedDelivery struct {
 	mu     sync.Mutex
-	events []drive.RunEvent
+	events []agentapi.RunEvent
 	per    time.Duration
 }
 
-func (d *pacedDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
+func (d *pacedDelivery) Deliver(_ context.Context, ev agentapi.RunEvent) bool {
 	time.Sleep(d.per)
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -545,19 +546,19 @@ func (d *pacedDelivery) count() int {
 
 func (*pacedDelivery) Settle() {}
 
-func (*pacedDelivery) Ended(context.Context, drive.RunEnded) {}
+func (*pacedDelivery) Ended(context.Context, agentapi.RunEnded) {}
 
 // gatedDelivery holds its first Deliver until block closes, then passes the
 // rest through, so a test can keep a caller behind a producer that runs ahead.
 type gatedDelivery struct {
 	mu      sync.Mutex
-	events  []drive.RunEvent
+	events  []agentapi.RunEvent
 	entered chan struct{}
 	block   chan struct{}
 	once    sync.Once
 }
 
-func (d *gatedDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
+func (d *gatedDelivery) Deliver(_ context.Context, ev agentapi.RunEvent) bool {
 	d.once.Do(func() {
 		close(d.entered)
 		<-d.block
@@ -568,12 +569,12 @@ func (d *gatedDelivery) Deliver(_ context.Context, ev drive.RunEvent) bool {
 	return true
 }
 
-func (d *gatedDelivery) snapshot() []drive.RunEvent {
+func (d *gatedDelivery) snapshot() []agentapi.RunEvent {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return append([]drive.RunEvent(nil), d.events...)
+	return append([]agentapi.RunEvent(nil), d.events...)
 }
 
 func (*gatedDelivery) Settle() {}
 
-func (*gatedDelivery) Ended(context.Context, drive.RunEnded) {}
+func (*gatedDelivery) Ended(context.Context, agentapi.RunEnded) {}
