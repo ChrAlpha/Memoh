@@ -15,6 +15,7 @@ import (
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -24,7 +25,7 @@ func TestPostgresNativeDecisionAcceptanceAndShutdownRecovery(t *testing.T) {
 	for _, scenario := range []string{"approved", "rejected", "answer", "aborted", "inline"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := t.Context()
-			pool := agenttest.OpenPostgres(t, ctx)
+			pool := dbtest.OpenPostgres(t, ctx)
 			botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 			q := sqlc.New(pool)
 			store := postgresstore.NewQueriesWithPool(pool, q)

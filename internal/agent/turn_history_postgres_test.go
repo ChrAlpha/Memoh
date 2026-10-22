@@ -18,6 +18,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -29,7 +30,7 @@ import (
 func newDriveHistoryFixture(t *testing.T, mode directLifecycleModelMode) (driveHistoryFixture, *pgxpool.Pool, string, string) {
 	t.Helper()
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	seedDirectLifecycleModel(t, ctx, pool)
 	queries := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))

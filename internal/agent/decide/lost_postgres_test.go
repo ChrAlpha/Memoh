@@ -16,6 +16,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -35,7 +36,7 @@ func (askWritePolicyProvider) ToolApprovalPolicy(context.Context, string) (toola
 // deciding identity and was never pending.
 func TestNonInteractiveApprovalIsRecordedAsSystemRejection(t *testing.T) {
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 
 	identityID := uuid.New()
@@ -107,7 +108,7 @@ func TestNonInteractiveApprovalIsRecordedAsSystemRejection(t *testing.T) {
 // request close; a newer run's pending decisions stay untouched.
 func TestLostRunCancelsApprovalAndAskUser(t *testing.T) {
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{

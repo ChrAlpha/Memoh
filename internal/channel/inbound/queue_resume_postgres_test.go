@@ -18,7 +18,6 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent"
 	"github.com/felinics/memoh/internal/agent/adapter/channelbusyqueue"
-	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -32,6 +31,7 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/contextview"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/models"
@@ -154,7 +154,7 @@ type resumeEnv struct {
 func newResumeEnv(t *testing.T) resumeEnv {
 	t.Helper()
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	env := resumeEnv{
 		pool: pool, queries: postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool)),
 		botID: uuid.NewString(), sessionID: uuid.NewString(), ownerID: uuid.NewString(),

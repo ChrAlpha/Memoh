@@ -38,6 +38,7 @@ import (
 	"github.com/felinics/memoh/internal/botbackup"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbpkg "github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -817,7 +818,7 @@ func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel, opts ...wsSt
 func newWSStepHistoryHarnessOn(t *testing.T, mode wsStepHistoryModel, backend sessionruntime.Backend, opts ...wsStepHistoryOption) wsStepHistoryHarness {
 	t.Helper()
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 
 	// History rows reference the model that produced them; the model itself

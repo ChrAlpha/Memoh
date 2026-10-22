@@ -34,6 +34,7 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/contextview"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/schedule"
@@ -522,7 +523,7 @@ func (q compactionQueries) ListMessageRefsByCompactID(ctx context.Context, id pg
 func compactionDriveSession(t *testing.T) (*agenttest.CompactionSession, directLifecycleFixture, *driveRequestRecorder) {
 	t.Helper()
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	compactionFixedSession(t, ctx, pool)
 	s := agenttest.NewCompactionSessionFor(t, ctx, pool, agenttest.LifecycleBotID, agenttest.LifecycleSessionID)
 

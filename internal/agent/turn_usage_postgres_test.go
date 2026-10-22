@@ -17,6 +17,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbpkg "github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/messageconv"
@@ -161,7 +162,7 @@ func (p providerUsageTurn) run(t *testing.T, ctx context.Context, messages *mess
 
 func newProviderUsageFixture(t *testing.T, ctx context.Context) (*dbsqlc.Queries, *messagepkg.DBService, string, string) {
 	t.Helper()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	queries := dbsqlc.New(pool)
 	return queries, messagepkg.NewService(nil, postgresstore.NewQueriesWithPool(pool, queries)), botID, sessionID

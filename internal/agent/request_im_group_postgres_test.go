@@ -12,6 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
@@ -26,7 +27,7 @@ func TestDriveIMGroupRowsFromPostgres(t *testing.T) {
 		t.Skip("PostgreSQL integration")
 	}
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	db := messagepkg.NewService(nil, postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool)))
 	at := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)

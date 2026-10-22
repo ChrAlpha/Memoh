@@ -31,6 +31,7 @@ import (
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/contextview"
 	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -341,7 +342,7 @@ const (
 func newDiscussEnv(t *testing.T, conversationType string) discussEnv {
 	t.Helper()
 	ctx := context.Background()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	seedDirectLifecycleModel(t, ctx, pool)
 	env := discussEnv{pool: pool, botID: botID, sessionID: sessionID, routeID: uuid.NewString()}

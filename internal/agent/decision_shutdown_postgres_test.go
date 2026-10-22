@@ -20,6 +20,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -39,7 +40,7 @@ func TestPostgresRedisDecisionSurvivesGracefulShutdown(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	defer cancel()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := agenttest.CreateSessionFixture(t, ctx, pool)
 	q := dbsqlc.New(pool)
 	store := postgresstore.NewQueriesWithPool(pool, q)

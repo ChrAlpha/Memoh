@@ -10,12 +10,12 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
-	"github.com/felinics/memoh/internal/agent/agenttest"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -114,7 +114,7 @@ func createApprovalAuthorityFixture(t *testing.T, ctx context.Context, pool *pgx
 // decision are answered by CanDecideToolApproval against real grant rows.
 func TestPostgresToolApprovalAuthority(t *testing.T) {
 	ctx := t.Context()
-	pool := agenttest.OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	fx := createApprovalAuthorityFixture(t, ctx, pool)
 	q := sqlc.New(pool)
 	store := postgresstore.NewQueriesWithPool(pool, q)

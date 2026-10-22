@@ -38,6 +38,7 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/contextview"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -233,7 +234,7 @@ func newBenchEnv(t *testing.T, clientType models.ClientType, opts benchOptions) 
 		e.discuss = newDiscussEnv(t, "group")
 		e.pool, e.botID, e.sessionID = e.discuss.pool, e.discuss.botID, e.discuss.sessionID
 	} else {
-		e.pool = agenttest.OpenPostgres(t, ctx)
+		e.pool = dbtest.OpenPostgres(t, ctx)
 		e.botID, e.sessionID = agenttest.CreateSessionFixture(t, ctx, e.pool)
 		seedDirectLifecycleModel(t, ctx, e.pool)
 	}

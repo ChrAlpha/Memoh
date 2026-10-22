@@ -18,6 +18,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/db/dbtest"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -108,7 +109,7 @@ type CompactionSession struct {
 func OpenCompactionSession(t *testing.T) *CompactionSession {
 	t.Helper()
 	ctx := context.Background()
-	pool := OpenPostgres(t, ctx)
+	pool := dbtest.OpenPostgres(t, ctx)
 	botID, sessionID := CreateSessionFixture(t, ctx, pool)
 	return NewCompactionSessionFor(t, ctx, pool, botID, sessionID)
 }
