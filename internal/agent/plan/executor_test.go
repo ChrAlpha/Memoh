@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -19,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/models"
@@ -265,5 +268,124 @@ func TestNativeExecutorCommitWithoutOutputWritesNothing(t *testing.T) {
 	}
 	if len(messages.Steps) != 0 || len(messages.Persisted) != 0 {
 		t.Fatalf("persisted steps %#v rows %#v, want nothing without output", messages.Steps, messages.Persisted)
+	}
+}
+
+// commitStreamer is a native runtime that commits one step through the run's
+// configured barrier and reports the failure as the runtime does: an error
+// event carrying the barrier's error, then an aborted terminal.
+type commitStreamer struct {
+	// ownershipLost commits the step under a context whose ownership was
+	// revoked.
+	ownershipLost bool
+}
+
+func (s commitStreamer) Stream(ctx context.Context, cfg native.RunConfig) <-chan native.StreamEvent {
+	if s.ownershipLost {
+		var cancel context.CancelCauseFunc
+		ctx, cancel = context.WithCancelCause(ctx)
+		cancel(sessionruntime.ErrRunOwnershipLost)
+	}
+	ch := make(chan native.StreamEvent, 8)
+	ch <- native.StreamEvent{Type: native.EventAgentStart}
+	record := &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("an answer")}}
+	if _, err := cfg.OnStepCommitted(ctx, 0, record); err != nil {
+		ch <- native.StreamEvent{Type: native.EventError, Code: string(apperror.CodeRuntimeRunFailed), Cause: fmt.Errorf("commit step 0: %w", err)}
+		ch <- native.StreamEvent{Type: native.EventAgentAbort, EndReason: event.EndFailed}
+	} else {
+		ch <- native.StreamEvent{Type: native.EventAgentEnd}
+	}
+	close(ch)
+	return ch
+}
+
+func driveCommitStep(t *testing.T, messages *agenttest.RecordingStepPersister) (drive.RunResult, []native.StreamEvent) {
+	t.Helper()
+	req := resumedRequest()
+	committer := testCommitter(t, messages, req)
+	var cfg native.RunConfig
+	persist.ConfigureNativeReasoningTiming(&cfg, persist.NewReasoningTimingTracker(time.Now), committer)
+	exec := &nativeExecutor{agent: commitStreamer{}, cfg: cfg, committer: committer}
+	eventCh := make(chan runreq.WSStreamEvent, 64)
+	result := testDriver(t, messages).Drive(context.Background(), drive.RunSpec{
+		Req:      req,
+		Delivery: drive.NewChannelDelivery(eventCh),
+		Input:    outcome.InputAccepted,
+		Setup: func(context.Context, runreq.ChatRequest) (drive.RunPlan, error) {
+			return drive.RunPlan{Exec: exec, Req: req}, nil
+		},
+	})
+	close(eventCh)
+	var events []native.StreamEvent
+	for raw := range eventCh {
+		var ev native.StreamEvent
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			t.Fatalf("decode delivered event %s: %v", raw, err)
+		}
+		events = append(events, ev)
+	}
+	return result, events
+}
+
+// A step the committer cannot write fails the run as a history write: one
+// failure is reported under that code, no failure row is written over the
+// history that could not be, and the terminal is not published.
+func TestNativeStepWriteFailureEndsTheRunAsHistoryInconsistent(t *testing.T) {
+	t.Parallel()
+
+	messages := &agenttest.RecordingStepPersister{
+		RecordingMessages: &agenttest.RecordingMessages{},
+		StepErr:           errors.New("history unavailable"),
+	}
+	result, events := driveCommitStep(t, messages)
+
+	if result.End != outcome.EndFailed || result.Failure == nil ||
+		result.Failure.Code != apperror.CodeSessionHistoryInconsistent || result.Failure.Phase != outcome.PhaseCommit {
+		t.Fatalf("result = %v %+v, want a failed commit phase named %s", result.End, result.Failure, apperror.CodeSessionHistoryInconsistent)
+	}
+	var failures int
+	for _, ev := range events {
+		if ev.IsTerminal() {
+			t.Fatalf("published terminal %#v after a failed history write", ev)
+		}
+		if ev.Type == native.EventError {
+			failures++
+			if ev.Code != string(apperror.CodeSessionHistoryInconsistent) {
+				t.Fatalf("error event code = %q, want %s", ev.Code, apperror.CodeSessionHistoryInconsistent)
+			}
+		}
+	}
+	if failures != 1 {
+		t.Fatalf("error events = %d in %#v, want exactly one", failures, events)
+	}
+	if len(messages.Steps) != 0 {
+		t.Fatalf("steps = %#v, want no failure row over a history that could not be written", messages.Steps)
+	}
+}
+
+// A step refused because the run's ownership was revoked is not taken as a
+// history failure: the runtime's failure event goes on to the run's failure
+// policy, which names a lost run from the run's own context.
+func TestNativeStepWriteAfterOwnershipLossIsNotAHistoryFailure(t *testing.T) {
+	t.Parallel()
+
+	messages := &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}
+	committer := testCommitter(t, messages, resumedRequest())
+	var cfg native.RunConfig
+	persist.ConfigureNativeReasoningTiming(&cfg, persist.NewReasoningTimingTracker(time.Now), committer)
+	exec := &nativeExecutor{agent: commitStreamer{ownershipLost: true}, cfg: cfg, committer: committer}
+
+	var emitted []native.StreamEvent
+	ending := exec.Execute(context.Background(), func(ev native.StreamEvent) { emitted = append(emitted, ev) })
+
+	if ending.Cause != nil || exec.stepErr != nil {
+		t.Fatalf("ending cause = %v, want none for a lost run", ending.Cause)
+	}
+	var reported bool
+	for _, ev := range emitted {
+		reported = reported || ev.Type == native.EventError
+	}
+	if !reported {
+		t.Fatalf("emitted %#v, want the runtime's failure event to pass through", emitted)
 	}
 }

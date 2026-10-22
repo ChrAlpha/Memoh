@@ -46,6 +46,9 @@ type StepCommitter struct {
 	// checkpointed means an interrupted step was written: the run already has
 	// a history row for the model call it stopped in.
 	checkpointed bool
+	// failure is the first error a step's write ended with, other than losing
+	// the run's ownership.
+	failure error
 }
 
 // NewStepCommitter is the committer of an admitted, fenced run, or nil when the
@@ -168,7 +171,8 @@ func (c *StepCommitter) interrupt(ctx context.Context, stepIndex int, record *st
 
 // persist writes one step. failure, when it names a code, is the failure that
 // ended the run on an interrupted step and is recorded on its assistant rows.
-func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step.Record, mode stepCommitMode, failure outcome.RunFailure) (native.StepDirective, error) {
+func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step.Record, mode stepCommitMode, failure outcome.RunFailure) (dir native.StepDirective, err error) {
+	defer func() { c.noteFailure(err) }()
 	interrupted := mode != stepCompleted
 	if c == nil || record == nil {
 		return native.StepDirective{}, errors.New("agent step is missing")
@@ -187,7 +191,6 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var dir native.StepDirective
 	fail := func(err error) (native.StepDirective, error) {
 		return native.StepDirective{}, err
 	}
@@ -225,10 +228,7 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 	}
 	opts = withOutputTruncatedNotice(opts, record, messages)
 	opts = opts.withContextLifecycleMetadata(c.writer.logger, storeReq, messages)
-	var (
-		inputs []messagepkg.PersistInput
-		err    error
-	)
+	var inputs []messagepkg.PersistInput
 	if len(messages) > 0 {
 		inputs, err = c.writer.buildPersistInputs(context.WithoutCancel(ctx), storeReq, messages, c.rc.Model.ID, opts)
 		if err != nil {
@@ -321,6 +321,30 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 		return fail(queueErr)
 	}
 	return dir, nil
+}
+
+// noteFailure keeps the first error a step's write ended with. Losing the
+// run's ownership is not one: another owner names that run's outcome.
+func (c *StepCommitter) noteFailure(err error) {
+	if c == nil || err == nil || outcome.OwnershipLost(err) {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.failure == nil {
+		c.failure = err
+	}
+}
+
+// StepFailure is the error the first step that could not be written ended
+// with, or nil.
+func (c *StepCommitter) StepFailure() error {
+	if c == nil {
+		return nil
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.failure
 }
 
 // stampSteerTurn files this step's injected steer input under the turn drawn

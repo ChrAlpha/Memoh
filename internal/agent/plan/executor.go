@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -37,8 +38,8 @@ type nativeExecutor struct {
 	// whichever way the history was written.
 	text  string
 	usage json.RawMessage
-	// interrupted is the failure the step committer reported while the stream
-	// was still running.
+	// stepErr is the failure the step committer reported while the stream was
+	// still running.
 	stepErr error
 }
 
@@ -57,6 +58,9 @@ func (e *nativeExecutor) Execute(ctx context.Context, emit func(native.StreamEve
 			e.observeTerminal(terminal)
 			continue
 		}
+		if e.takeStepFailure(ev) {
+			continue
+		}
 		emit(ev)
 	}
 	ending := drive.ExecEnding{
@@ -73,6 +77,24 @@ func (e *nativeExecutor) Execute(ctx context.Context, emit func(native.StreamEve
 		ending.Phase = outcome.PhaseCommit
 	}
 	return ending
+}
+
+// takeStepFailure keeps the failure event the runtime raised for a step the
+// committer could not write, instead of publishing it. The runtime knows only
+// that its commit callback failed; the run's failure policy names a history
+// write failure itself, under the commit phase, and the driver publishes that
+// name. An unrelated error event, or a step lost with the run's ownership, is
+// not taken.
+func (e *nativeExecutor) takeStepFailure(ev native.StreamEvent) bool {
+	if ev.Type != native.EventError || e.stepErr != nil {
+		return false
+	}
+	failure := e.committer.StepFailure()
+	if failure == nil || !errors.Is(ev.Cause, failure) {
+		return false
+	}
+	e.stepErr = failure
+	return true
 }
 
 // observeTerminal records the result the terminal event carries: the run's
@@ -100,6 +122,11 @@ func (e *nativeExecutor) deferred() bool {
 // when the run failed, and the run's final messages in every case.
 func (e *nativeExecutor) commit(ctx context.Context, f *outcome.RunFailure, row bool) (drive.CommitSummary, error) {
 	summary := drive.CommitSummary{ModelID: e.modelID(), Text: e.text, Usage: e.usage}
+	if e.stepErr != nil {
+		// The history has a gap the run cannot close: the ending's write fails
+		// with it, which keeps the terminal from being published.
+		return summary, outcome.RuntimeHistoryError(e.stepErr)
+	}
 	if row && f != nil {
 		persisted, err := e.committer.RecordFailure(ctx, e.uncommitted.String(), *f)
 		if err != nil {

@@ -175,10 +175,9 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 					return tt.resolve(ctx, fixture.service, req)
 				},
 			}, nil)
-			// A step the committer cannot write ends the run as the stream's own
-			// failure, which carries no history code.
-			if apperror.CodeOf(err) != apperror.CodeRuntimeRunFailed {
-				t.Fatalf("continuation error = %v, want the run's failure", err)
+			// A step the committer cannot write is a history write failure.
+			if apperror.CodeOf(err) != apperror.CodeSessionHistoryInconsistent {
+				t.Fatalf("continuation error = %v, want %s", err, apperror.CodeSessionHistoryInconsistent)
 			}
 			if messages.calls == 0 {
 				t.Fatal("test did not exercise unavailable assistant persistence")
@@ -187,7 +186,7 @@ func TestRuntimeOwnedDecisionContinuationsRetainLifecycleWithoutAssistantMetadat
 			// ended; this run was driven without one, so the test does.
 			fixture.service.lifecycle.ReconcileTerminal(ctx, sessionruntime.TerminalRun{
 				RunID: req.RunHandle.RunID, BotID: req.RunHandle.BotID, SessionID: req.RunHandle.SessionID,
-				FencingToken: req.RunHandle.FencingToken, State: "failed", ErrorCode: string(apperror.CodeRuntimeRunFailed), Applied: true,
+				FencingToken: req.RunHandle.FencingToken, State: "failed", ErrorCode: string(apperror.CodeSessionHistoryInconsistent), Applied: true,
 			})
 			assertDirectLifecycle(
 				t,
