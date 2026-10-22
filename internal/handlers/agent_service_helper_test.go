@@ -11,9 +11,9 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent"
 	"github.com/felinics/memoh/internal/agent/agentapi"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
@@ -84,7 +84,7 @@ type (
 		messagepkg.Service
 		messagepkg.AgentStepPersister
 	}
-	stubAgentSessions  struct{ runreq.SessionService }
+	stubAgentSessions  struct{ ports.SessionService }
 	denyAllPermissions struct{}
 )
 

@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -43,10 +44,10 @@ type Deps struct {
 	Persist *persist.Writer
 	// OutputMedia stores attachments that runs emit; without it an attachment
 	// keeps the path it arrived with.
-	OutputMedia OutputMediaStore
+	OutputMedia ports.OutputMediaStore
 	// OutputSpeech synthesizes spoken replies; without it a speech event is
 	// dropped.
-	OutputSpeech OutputSpeech
+	OutputSpeech ports.OutputSpeech
 	// StreamIdleTimeout is the model's silence window; zero keeps the default.
 	StreamIdleTimeout time.Duration
 	// StreamIdleTimeoutMax caps the window the reasoning effort scales it to;
@@ -61,8 +62,8 @@ type Driver struct {
 	events               EventSink
 	lifecycle            *lifecycle.Recorder
 	persist              *persist.Writer
-	outputMedia          OutputMediaStore
-	outputSpeech         OutputSpeech
+	outputMedia          ports.OutputMediaStore
+	outputSpeech         ports.OutputSpeech
 	streamIdleTimeout    time.Duration
 	streamIdleTimeoutMax time.Duration
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/runconfig"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/turn"
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/workdir"
@@ -34,7 +34,7 @@ func (f fixedWorkdirResolver) ResolveForSession(context.Context, string, string)
 }
 
 // workdirBoundHost is a Host whose session s1 is bound to the workdir.
-func workdirBoundHost(t *testing.T, resolved workdir.Resolved, targets runconfig.WorkspaceTargetResolver, permissions runreq.BotPermissionChecker) *Host {
+func workdirBoundHost(t *testing.T, resolved workdir.Resolved, targets ports.WorkspaceTargetResolver, permissions ports.BotPermissionChecker) *Host {
 	t.Helper()
 	sessions := &agenttest.Sessions{GetFn: func(_ context.Context, id string) (session.Thread, error) {
 		return session.Thread{ID: id, BotID: "bot-1", WorkdirID: "p1"}, nil

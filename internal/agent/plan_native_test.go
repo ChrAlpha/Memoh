@@ -15,6 +15,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/decide"
@@ -1104,7 +1105,7 @@ func (f fixedWorkdirResolver) ResolveForSession(context.Context, string, string)
 }
 
 // workdirBoundService is a Service whose session s1 is bound to the workdir.
-func workdirBoundService(t *testing.T, resolved workdir.Resolved, targets runconfig.WorkspaceTargetResolver, permissions runreq.BotPermissionChecker) *Service {
+func workdirBoundService(t *testing.T, resolved workdir.Resolved, targets ports.WorkspaceTargetResolver, permissions ports.BotPermissionChecker) *Service {
 	t.Helper()
 	return newTestService(t, Deps{
 		Sessions: &agenttest.Sessions{GetFn: func(_ context.Context, id string) (sessionpkg.Thread, error) {

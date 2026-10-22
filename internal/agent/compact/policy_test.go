@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -166,7 +167,7 @@ type fixture struct {
 	models   *models.Service
 	settings Settings
 	engine   Runner
-	sessions runreq.SessionService
+	sessions ports.SessionService
 }
 
 // rewire rebuilds the Compactor from the fixture's dependencies, as New does

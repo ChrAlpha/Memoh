@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/resume"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -47,7 +48,7 @@ func (p testResumeScopes) BindScope(ctx context.Context, scope string) context.C
 	return context.WithValue(ctx, resumeScopeKey{}, scope)
 }
 
-func (p testResumeScopes) ListScopePage(_ context.Context, after string, _ int32) (runreq.TeamScopePage, error) {
+func (p testResumeScopes) ListScopePage(_ context.Context, after string, _ int32) (ports.TeamScopePage, error) {
 	// One tenant per page exercises the worker's cross-page cursor.
 	for i, scope := range p.teams {
 		if after == "" || after == scope {
@@ -56,12 +57,12 @@ func (p testResumeScopes) ListScopePage(_ context.Context, after string, _ int32
 				index++
 			}
 			if index >= len(p.teams) {
-				return runreq.TeamScopePage{Complete: true}, nil
+				return ports.TeamScopePage{Complete: true}, nil
 			}
-			return runreq.TeamScopePage{Scopes: []string{p.teams[index]}, NextCursor: p.teams[index], Complete: index == len(p.teams)-1}, nil
+			return ports.TeamScopePage{Scopes: []string{p.teams[index]}, NextCursor: p.teams[index], Complete: index == len(p.teams)-1}, nil
 		}
 	}
-	return runreq.TeamScopePage{}, errors.New("unknown scope cursor")
+	return ports.TeamScopePage{}, errors.New("unknown scope cursor")
 }
 
 type tenantResumeQueries struct {
@@ -133,7 +134,7 @@ func TestResumeScopeBindingFailsClosed(t *testing.T) {
 	if _, err := startContinuation(context.WithValue(ctx, resumeScopeKey{}, uuid.NewString()), s, sqlc.SessionRun{TeamID: db.ParseUUIDOrEmpty(uuid.NewString())}); !errors.Is(err, runreq.ErrTeamScopeMismatch) {
 		t.Fatalf("cross-team row=%v", err)
 	}
-	if err := runreq.ValidateTeamScopePage(runreq.TeamScopePage{NextCursor: "same"}, "same"); err == nil {
+	if err := runreq.ValidateTeamScopePage(ports.TeamScopePage{NextCursor: "same"}, "same"); err == nil {
 		t.Fatal("non-advancing page accepted")
 	}
 }

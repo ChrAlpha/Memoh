@@ -13,13 +13,13 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/memory"
 	"github.com/felinics/memoh/internal/agent/persist"
 	"github.com/felinics/memoh/internal/agent/runconfig"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -57,11 +57,11 @@ type Deps struct {
 	// Store is the database port.
 	Store Store
 	// Sessions reads sessions and merges runtime metadata into them.
-	Sessions runreq.SessionService
+	Sessions ports.SessionService
 	// Messages persists the user message and decision rows of a turn.
 	Messages messagepkg.Service
 	// BotPermissions decides what an actor may do with a runtime session.
-	BotPermissions runreq.BotPermissionChecker
+	BotPermissions ports.BotPermissionChecker
 	// Admitter admits a runtime control as a run and declares that a turn's
 	// decisions are answered inline.
 	Admitter Admitter
@@ -97,9 +97,9 @@ type Deps struct {
 type Host struct {
 	logger      *slog.Logger
 	store       Store
-	sessions    runreq.SessionService
+	sessions    ports.SessionService
 	messages    messagepkg.Service
-	permissions runreq.BotPermissionChecker
+	permissions ports.BotPermissionChecker
 	admitter    Admitter
 	aborter     Aborter
 	runtime     *sessionruntime.Manager

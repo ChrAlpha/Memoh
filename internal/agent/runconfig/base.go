@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -258,7 +259,7 @@ func buildModelSelectionRequest(p baseParams, chatID string) runreq.ChatRequest 
 	}
 }
 
-func normalizeGatewaySkill(entry SkillEntry) (native.SkillEntry, bool) {
+func normalizeGatewaySkill(entry ports.SkillEntry) (native.SkillEntry, bool) {
 	name := strings.TrimSpace(entry.Name)
 	if name == "" {
 		return native.SkillEntry{}, false

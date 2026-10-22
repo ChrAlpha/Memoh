@@ -4,21 +4,7 @@ import (
 	"context"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
-	session "github.com/felinics/memoh/internal/chat/thread"
 )
-
-// BotPermissionChecker answers whether an account holds a permission on a bot.
-type BotPermissionChecker interface {
-	HasBotPermission(ctx context.Context, botID, accountID, permission string) (bool, error)
-}
-
-// SessionService is the interface the application service uses for session metadata updates.
-type SessionService interface {
-	Get(ctx context.Context, sessionID string) (session.Thread, error)
-	UpdateTitle(ctx context.Context, sessionID, title string) (session.Thread, error)
-	UpdateMetadata(ctx context.Context, sessionID string, metadata map[string]any) (session.Thread, error)
-	MergeRuntimeMetadata(ctx context.Context, sessionID, runtimeType string, delta map[string]any) (session.Thread, error)
-}
 
 // TurnAdmitter is the durable admission gate StartTurn depends on.
 //

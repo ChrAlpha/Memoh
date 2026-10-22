@@ -5,7 +5,7 @@ package channelidentity
 import (
 	"context"
 
-	"github.com/felinics/memoh/internal/agent/runconfig"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/channel"
 )
 
@@ -21,7 +21,7 @@ func NewSource(configs configSource) *Source {
 	return &Source{configs: configs}
 }
 
-func (s *Source) ListPlatformIdentities(ctx context.Context, botID string) ([]runconfig.PlatformIdentity, error) {
+func (s *Source) ListPlatformIdentities(ctx context.Context, botID string) ([]ports.PlatformIdentity, error) {
 	if s == nil || s.configs == nil {
 		return nil, nil
 	}
@@ -29,9 +29,9 @@ func (s *Source) ListPlatformIdentities(ctx context.Context, botID string) ([]ru
 	if err != nil {
 		return nil, err
 	}
-	identities := make([]runconfig.PlatformIdentity, 0, len(configs))
+	identities := make([]ports.PlatformIdentity, 0, len(configs))
 	for _, cfg := range configs {
-		identities = append(identities, runconfig.PlatformIdentity{
+		identities = append(identities, ports.PlatformIdentity{
 			ID:               cfg.ID,
 			Platform:         cfg.ChannelType.String(),
 			ExternalIdentity: cfg.ExternalIdentity,

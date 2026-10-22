@@ -3,12 +3,14 @@ package runconfig
 import (
 	"strings"
 	"testing"
+
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 )
 
 func TestPlatformIdentityPromptItemsRenderSortedEscapedXML(t *testing.T) {
 	t.Parallel()
 
-	configs := []PlatformIdentity{
+	configs := []ports.PlatformIdentity{
 		{
 			ID:               "tg-1",
 			Platform:         "telegram",
@@ -46,7 +48,7 @@ func TestPlatformIdentityPromptItemsRenderSortedEscapedXML(t *testing.T) {
 func TestBuildPlatformIdentityPromptItemsPreserveSortedIDs(t *testing.T) {
 	t.Parallel()
 
-	items := buildPlatformIdentityPromptItems([]PlatformIdentity{
+	items := buildPlatformIdentityPromptItems([]ports.PlatformIdentity{
 		{
 			ID:               "telegram-2",
 			Platform:         "telegram",
@@ -79,7 +81,7 @@ func TestBuildPlatformIdentityPromptItemsPreserveSortedIDs(t *testing.T) {
 func TestBuildPlatformIdentityLineNormalizesAttrs(t *testing.T) {
 	t.Parallel()
 
-	got := buildPlatformIdentityLine(PlatformIdentity{
+	got := buildPlatformIdentityLine(ports.PlatformIdentity{
 		Platform: "telegram",
 		SelfIdentity: map[string]any{
 			"123id":        7,
@@ -98,7 +100,7 @@ func TestBuildPlatformIdentityLineNormalizesAttrs(t *testing.T) {
 func TestBuildPlatformIdentitiesSectionSkipsEmptyConfigs(t *testing.T) {
 	t.Parallel()
 
-	got := buildPlatformIdentitiesSection([]PlatformIdentity{{
+	got := buildPlatformIdentitiesSection([]ports.PlatformIdentity{{
 		ID:       "local-1",
 		Platform: "local",
 	}})

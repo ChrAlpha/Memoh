@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/decide"
@@ -149,7 +150,7 @@ func withAllowedTeam(teamID string) testOption {
 }
 
 // withTeamScopes makes scopes the tenancy of the service's entry components.
-func withTeamScopes(scopes runreq.TeamScopes) testOption {
+func withTeamScopes(scopes ports.TeamScopes) testOption {
 	return withDeps(func(d *Deps) { d.TeamScopes = scopes })
 }
 

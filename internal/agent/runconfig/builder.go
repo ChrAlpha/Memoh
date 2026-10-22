@@ -15,12 +15,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/memory"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/transcript"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -58,7 +58,7 @@ type Deps struct {
 	// Models resolves model and provider configuration.
 	Models *models.Service
 	// Sessions reads session metadata.
-	Sessions runreq.SessionService
+	Sessions ports.SessionService
 	// Agent is the in-process model runtime, which supplies limits and the
 	// workspace bridge.
 	Agent *native.Agent
@@ -76,23 +76,23 @@ type Deps struct {
 	// Decider builds the handler a tool approval is decided through.
 	Decider *decide.Decider
 	// BotPermissions decides whether an account may reach a workspace target.
-	BotPermissions runreq.BotPermissionChecker
+	BotPermissions ports.BotPermissionChecker
 	// WorkspaceTargets resolves a request-scoped Computer.
-	WorkspaceTargets WorkspaceTargetResolver
+	WorkspaceTargets ports.WorkspaceTargetResolver
 
 	// Optional.
 
 	// Skills lists a bot's usable skills; without it requests carry none.
-	Skills SkillLoader
+	Skills ports.SkillLoader
 	// Assets inlines attachment content for the gateway; without it
 	// attachments keep their stored references.
-	Assets GatewayAssetLoader
+	Assets ports.GatewayAssetLoader
 	// PlatformIdentities supplies connected platform accounts for the system
 	// prompt; without it the prompt names none.
-	PlatformIdentities PlatformIdentitySource
+	PlatformIdentities ports.PlatformIdentitySource
 	// Workdirs resolves session workdir bindings; without it bindings are
 	// ignored.
-	Workdirs WorkdirResolver
+	Workdirs ports.WorkdirResolver
 	// Background supplies background task summaries; without it there are none.
 	Background *background.Manager
 	// HTTPClient carries model requests; without it a client that bounds
@@ -107,7 +107,7 @@ type Builder struct {
 	queries     Queries
 	credentials Credentials
 	models      *models.Service
-	sessions    runreq.SessionService
+	sessions    ports.SessionService
 	agent       *native.Agent
 	bot         *botenv.Env
 	transcript  *transcript.Reader
@@ -115,11 +115,11 @@ type Builder struct {
 	overview    *memory.Overview
 	compact     *compact.Compactor
 	decider     *decide.Decider
-	permissions runreq.BotPermissionChecker
-	targets     WorkspaceTargetResolver
-	skills      SkillLoader
-	assets      GatewayAssetLoader
-	identities  PlatformIdentitySource
+	permissions ports.BotPermissionChecker
+	targets     ports.WorkspaceTargetResolver
+	skills      ports.SkillLoader
+	assets      ports.GatewayAssetLoader
+	identities  ports.PlatformIdentitySource
 	workdirs    workdirBindings
 	background  *background.Manager
 	httpClient  *http.Client
@@ -194,11 +194,11 @@ var errAssetsNotConfigured = errors.New("gateway asset loader not configured")
 
 type noSkills struct{}
 
-func (noSkills) LoadSkills(context.Context, string) ([]SkillEntry, error) { return nil, nil }
+func (noSkills) LoadSkills(context.Context, string) ([]ports.SkillEntry, error) { return nil, nil }
 
 type noIdentities struct{}
 
-func (noIdentities) ListPlatformIdentities(context.Context, string) ([]PlatformIdentity, error) {
+func (noIdentities) ListPlatformIdentities(context.Context, string) ([]ports.PlatformIdentity, error) {
 	return nil, nil
 }
 

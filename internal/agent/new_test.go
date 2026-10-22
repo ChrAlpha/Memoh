@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/compact"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
@@ -59,7 +60,7 @@ type (
 		messagepkg.Service
 		messagepkg.AgentStepPersister
 	}
-	stubSessions struct{ runreq.SessionService }
+	stubSessions struct{ ports.SessionService }
 )
 
 type allowAllBotPermissions struct{}
@@ -162,8 +163,8 @@ func TestNewHandsTheCompactorNoRunnerWithoutCompaction(t *testing.T) {
 func TestNewDefaultsTeamScopesToTheAllowedTeam(t *testing.T) {
 	deps := testDeps(t)
 	deps.AllowedTeam = "team-x"
-	scopes := func() runreq.TeamScopes {
-		var got runreq.TeamScopes
+	scopes := func() ports.TeamScopes {
+		var got ports.TeamScopes
 		newTestService(t, deps, withPending(func(d *pending.Deps) { got = d.TeamScopes }))
 		return got
 	}

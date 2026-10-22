@@ -11,8 +11,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/activeprompt"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
-	"github.com/felinics/memoh/internal/agent/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	chatview "github.com/felinics/memoh/internal/agent/view"
@@ -59,7 +59,7 @@ type Deps struct {
 	// UserInput stores and resolves ask_user questions.
 	UserInput UserInputs
 	// BotPermissions decides whether an account may act on a bot.
-	BotPermissions runreq.BotPermissionChecker
+	BotPermissions ports.BotPermissionChecker
 	// ActivePrompts is where a response stream reattaches to the live prompt
 	// of an external agent.
 	ActivePrompts *activeprompt.Registry
@@ -76,7 +76,7 @@ type Decider struct {
 	sessions       Sessions
 	toolApproval   *toolapproval.Service
 	userInput      UserInputs
-	botPermissions runreq.BotPermissionChecker
+	botPermissions ports.BotPermissionChecker
 	activePrompts  *activeprompt.Registry
 	events         Events
 	limits         Limits

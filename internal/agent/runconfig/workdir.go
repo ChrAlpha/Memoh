@@ -5,7 +5,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/felinics/memoh/internal/agent/runreq"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/workdir"
 )
 
@@ -17,12 +17,6 @@ import (
 var ErrWorkspaceTargetWorkdirConflict = errors.New(
 	"this session is bound to a workdir; its workspace target cannot be changed")
 
-// WorkdirResolver is the slice of *workdir.Service the builder needs:
-// resolving a stored workdir binding to its target and directory.
-type WorkdirResolver interface {
-	ResolveForSession(ctx context.Context, botID, workdirID string) (workdir.Resolved, error)
-}
-
 // workdirBindings answers which workdir a session is bound to.
 type workdirBindings interface {
 	Binding(ctx context.Context, botID, sessionID string) (workdir.Resolved, bool, error)
@@ -32,8 +26,8 @@ type workdirBindings interface {
 // turn rather than degrade: silently dropping the binding would run the turn in
 // the wrong directory, the exact bug class workdir bindings exist to eliminate.
 type sessionWorkdirs struct {
-	sessions runreq.SessionService
-	workdirs WorkdirResolver
+	sessions ports.SessionService
+	workdirs ports.WorkdirResolver
 }
 
 func (w sessionWorkdirs) Binding(ctx context.Context, botID, sessionID string) (workdir.Resolved, bool, error) {

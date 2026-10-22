@@ -13,6 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/activeprompt"
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/agent/botenv"
@@ -96,7 +97,7 @@ type Deps struct {
 	// Messages persists and reads chat messages.
 	Messages messagepkg.Service
 	// Sessions reads and updates session metadata and titles.
-	Sessions runreq.SessionService
+	Sessions ports.SessionService
 	// Settings resolves per-bot settings.
 	Settings *settings.Service
 	// Accounts resolves the account behind a request.
@@ -110,9 +111,9 @@ type Deps struct {
 	// service's runtime callbacks on it.
 	SessionRuntime *sessionruntime.Manager
 	// BotPermissions decides whether an account may act on a bot.
-	BotPermissions runreq.BotPermissionChecker
+	BotPermissions ports.BotPermissionChecker
 	// WorkspaceTargets resolves a request-scoped Computer.
-	WorkspaceTargets runconfig.WorkspaceTargetResolver
+	WorkspaceTargets ports.WorkspaceTargetResolver
 	// ToolApproval stores and resolves tool approval decisions.
 	ToolApproval *toolapproval.Service
 	// UserInput stores and resolves user input decisions.
@@ -128,15 +129,15 @@ type Deps struct {
 	// Hooks runs user-defined hooks; without it no hook fires.
 	Hooks *hooks.Service
 	// Skills lists a bot's usable skills; without it requests carry none.
-	Skills runconfig.SkillLoader
+	Skills ports.SkillLoader
 	// Assets inlines attachment content for the gateway; without it attachments
 	// keep their stored references.
-	Assets runconfig.GatewayAssetLoader
+	Assets ports.GatewayAssetLoader
 	// PlatformIdentities supplies connected platform accounts for the system
 	// prompt; without it the prompt names none.
-	PlatformIdentities runconfig.PlatformIdentitySource
+	PlatformIdentities ports.PlatformIdentitySource
 	// Workdirs resolves session workdir bindings; without it bindings are ignored.
-	Workdirs runconfig.WorkdirResolver
+	Workdirs ports.WorkdirResolver
 	// Compaction runs context compaction; without it nothing is compacted.
 	Compaction *compaction.Service
 	// Background supplies background task summaries; without it there are none.
@@ -146,9 +147,9 @@ type Deps struct {
 	Events messageevent.Publisher
 	// OutputMedia stores attachments that runs emit; without it an attachment
 	// keeps the path it arrived with.
-	OutputMedia drive.OutputMediaStore
+	OutputMedia ports.OutputMediaStore
 	// OutputSpeech synthesizes spoken replies; without it a speech event is dropped.
-	OutputSpeech drive.OutputSpeech
+	OutputSpeech ports.OutputSpeech
 	// QueuedInputs is the durable queue for input that meets a busy session;
 	// without it such input is refused as busy.
 	QueuedInputs *sessionruntime.QueuedInputs
@@ -161,10 +162,10 @@ type Deps struct {
 	// interrupted run's continuation, a queued follow-up, an uncovered discuss
 	// batch), never before a turn the user starts directly; without it the
 	// workspace is always ready.
-	WorkspaceReadiness pending.WorkspaceReadiness
+	WorkspaceReadiness ports.WorkspaceReadiness
 	// TeamScopes is the tenancy provider of a hosted deployment; without it
 	// resume and the discuss sweep cover only AllowedTeam.
-	TeamScopes runreq.TeamScopes
+	TeamScopes ports.TeamScopes
 
 	// Configuration.
 

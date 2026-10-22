@@ -45,10 +45,6 @@ type Continuations interface {
 	Retire(ctx context.Context, c Continuation, cause error) error
 }
 
-// WorkspaceReadiness reports whether the workspace a run would start on can be
-// reached; the error says why not. targetID empty is the session's default.
-type WorkspaceReadiness func(ctx context.Context, botID, targetID string) error
-
 // readinessBound limits one readiness check, which holds the session while it
 // runs.
 const readinessBound = 3 * time.Second

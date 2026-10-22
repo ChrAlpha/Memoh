@@ -2,10 +2,12 @@ package runconfig
 
 import (
 	"testing"
+
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 )
 
 func TestNormalizeGatewaySkillPreservesPath(t *testing.T) {
-	got, ok := normalizeGatewaySkill(SkillEntry{
+	got, ok := normalizeGatewaySkill(ports.SkillEntry{
 		Name:        "pdf",
 		Description: "Read PDF instructions",
 		Content:     "Use a PDF-aware workflow.",

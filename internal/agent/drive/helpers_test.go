@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
@@ -15,8 +16,8 @@ import (
 type driverConfig struct {
 	events   drive.EventSink
 	messages messagepkg.Service
-	media    drive.OutputMediaStore
-	speech   drive.OutputSpeech
+	media    ports.OutputMediaStore
+	speech   ports.OutputSpeech
 	idle     time.Duration
 }
 
@@ -26,7 +27,7 @@ func withMessages(messages messagepkg.Service) driverOption {
 	return func(c *driverConfig) { c.messages = messages }
 }
 
-func withOutput(media drive.OutputMediaStore, speech drive.OutputSpeech) driverOption {
+func withOutput(media ports.OutputMediaStore, speech ports.OutputSpeech) driverOption {
 	return func(c *driverConfig) { c.media, c.speech = media, speech }
 }
 

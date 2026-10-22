@@ -8,6 +8,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/runreq"
 )
 
@@ -24,7 +25,7 @@ func (p fixedPermission) HasBotPermission(context.Context, string, string, strin
 	return p.allowed, p.err
 }
 
-func newRenewalContinuer(accounts Accounts, permission runreq.BotPermissionChecker) *Continuer {
+func newRenewalContinuer(accounts Accounts, permission ports.BotPermissionChecker) *Continuer {
 	return NewContinuer(ContinuerDeps{
 		Logger: slog.New(slog.DiscardHandler), Accounts: accounts, BotPermissions: permission,
 		Signer: admit.NewSigner("resume-secret"),

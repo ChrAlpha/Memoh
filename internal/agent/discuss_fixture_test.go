@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
@@ -780,16 +781,16 @@ func (*pagedScopes) CurrentScope(ctx context.Context) string {
 	return scope
 }
 
-func (p *pagedScopes) ListScopePage(_ context.Context, after string, _ int32) (runreq.TeamScopePage, error) {
+func (p *pagedScopes) ListScopePage(_ context.Context, after string, _ int32) (ports.TeamScopePage, error) {
 	next := 0
 	if after != "" {
 		n, err := strconv.Atoi(after)
 		if err != nil {
-			return runreq.TeamScopePage{}, err
+			return ports.TeamScopePage{}, err
 		}
 		next = n
 	}
-	page := runreq.TeamScopePage{Scopes: []string{p.scopes[next]}}
+	page := ports.TeamScopePage{Scopes: []string{p.scopes[next]}}
 	if next+1 >= len(p.scopes) {
 		page.Complete = true
 		return page, nil

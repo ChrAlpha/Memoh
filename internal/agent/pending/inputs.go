@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/botenv"
 	"github.com/felinics/memoh/internal/agent/drive"
 	"github.com/felinics/memoh/internal/agent/persist"
@@ -75,13 +76,13 @@ type Deps struct {
 	// Messages is the store those rows are written to.
 	Messages messagepkg.Service
 	// TeamScopes names the scopes the sweeps cover.
-	TeamScopes runreq.TeamScopes
+	TeamScopes ports.TeamScopes
 	// Continuations are the interrupted runs sessions are owed a continuation of.
 	Continuations Continuations
 	// WorkspaceReadiness is asked before work the system owes a session starts:
 	// a continuation, a queued follow-up batch, a discuss batch. A turn the user
 	// starts directly is not checked. Without it the workspace is always ready.
-	WorkspaceReadiness WorkspaceReadiness
+	WorkspaceReadiness ports.WorkspaceReadiness
 }
 
 // Inputs admits what waits on a session.
@@ -101,11 +102,11 @@ type Inputs struct {
 	bot         *botenv.Env
 	persist     *persist.Writer
 	messages    messagepkg.Service
-	teamScopes  runreq.TeamScopes
+	teamScopes  ports.TeamScopes
 	// continuations and readiness decide what the session is owed and whether
 	// it can start now.
 	continuations Continuations
-	readiness     WorkspaceReadiness
+	readiness     ports.WorkspaceReadiness
 	// sessions serializes the admission of what waits on one session.
 	sessions sessionLocks
 }

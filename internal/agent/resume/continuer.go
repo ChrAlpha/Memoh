@@ -18,6 +18,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/admit"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/decide"
 	"github.com/felinics/memoh/internal/agent/decision"
 	"github.com/felinics/memoh/internal/agent/drive"
@@ -60,7 +61,7 @@ type ContinuerDeps struct {
 	// Accounts validates the account behind a renewed credential.
 	Accounts Accounts
 	// BotPermissions decides whether that account may still chat with the bot.
-	BotPermissions runreq.BotPermissionChecker
+	BotPermissions ports.BotPermissionChecker
 	// Signer renews the credentials of a resumed run.
 	Signer *admit.Signer
 	// Admit admits the continuation.
@@ -74,7 +75,7 @@ type ContinuerDeps struct {
 	// Plan plans the continuation.
 	Plan *plan.Planner
 	// TeamScopes names the scope a continuation must run in.
-	TeamScopes runreq.TeamScopes
+	TeamScopes ports.TeamScopes
 }
 
 // Continuer implements pending.Continuations: it knows what an interrupted run
@@ -83,14 +84,14 @@ type Continuer struct {
 	logger      *slog.Logger
 	queries     ContinuerQueries
 	accounts    Accounts
-	permissions runreq.BotPermissionChecker
+	permissions ports.BotPermissionChecker
 	signer      *admit.Signer
 	admit       *admit.Admitter
 	decider     *decide.Decider
 	transcript  *transcript.Reader
 	driver      *drive.Driver
 	plan        *plan.Planner
-	teamScopes  runreq.TeamScopes
+	teamScopes  ports.TeamScopes
 	// slots holds a token for every continuation run in flight.
 	slots chan struct{}
 }

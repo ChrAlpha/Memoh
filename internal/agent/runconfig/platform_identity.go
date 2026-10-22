@@ -9,6 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	native "github.com/felinics/memoh/internal/agent/runtime/native"
 )
 
@@ -19,7 +20,7 @@ type identityAttr struct {
 	Value string
 }
 
-func buildPlatformIdentitiesSection(configs []PlatformIdentity) string {
+func buildPlatformIdentitiesSection(configs []ports.PlatformIdentity) string {
 	return buildPlatformIdentitiesSectionFromItems(buildPlatformIdentityPromptItems(configs))
 }
 
@@ -34,11 +35,11 @@ func buildPlatformIdentitiesSectionFromItems(items []native.SystemPromptItem) st
 	return platformIdentitiesIntro + "\n" + strings.Join(lines, "\n")
 }
 
-func buildPlatformIdentityPromptItems(configs []PlatformIdentity) []native.SystemPromptItem {
+func buildPlatformIdentityPromptItems(configs []ports.PlatformIdentity) []native.SystemPromptItem {
 	if len(configs) == 0 {
 		return nil
 	}
-	sorted := make([]PlatformIdentity, len(configs))
+	sorted := make([]ports.PlatformIdentity, len(configs))
 	copy(sorted, configs)
 	sort.Slice(sorted, func(i, j int) bool {
 		left := sorted[i]
@@ -63,7 +64,7 @@ func buildPlatformIdentityPromptItems(configs []PlatformIdentity) []native.Syste
 	return items
 }
 
-func buildPlatformIdentityLine(cfg PlatformIdentity) string {
+func buildPlatformIdentityLine(cfg ports.PlatformIdentity) string {
 	channelName := strings.TrimSpace(cfg.Platform)
 	if channelName == "" {
 		return ""

@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/agentapi"
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/event"
@@ -240,7 +241,7 @@ func persistedModelMessage(t *testing.T, content json.RawMessage) runreq.ModelMe
 // runtimeTypedSessions serves the session the fixture describes as one that runs
 // on runtimeType, which is the driver the test registered.
 type runtimeTypedSessions struct {
-	runreq.SessionService
+	ports.SessionService
 	runtimeType string
 }
 

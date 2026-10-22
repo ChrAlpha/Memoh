@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/agentapi/ports"
 	"github.com/felinics/memoh/internal/agent/pending"
 	"github.com/felinics/memoh/internal/agent/runreq"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -32,7 +33,7 @@ type ScannerDeps struct {
 	// whether and when the continuation starts.
 	Pending *pending.Inputs
 	// TeamScopes names the scopes the scanner covers.
-	TeamScopes runreq.TeamScopes
+	TeamScopes ports.TeamScopes
 }
 
 // Scanner finds the sessions owed a continuation and wakes pending for them.
@@ -42,7 +43,7 @@ type Scanner struct {
 	logger     *slog.Logger
 	queries    ScannerQueries
 	pending    *pending.Inputs
-	teamScopes runreq.TeamScopes
+	teamScopes ports.TeamScopes
 	stop       context.CancelFunc
 	done       chan struct{}
 }
@@ -102,7 +103,7 @@ func (s *Scanner) Stop() {
 // Scan is the cursor of a pass over the team scopes and their interrupted
 // runs. The zero value starts at the first scope.
 type Scan struct {
-	page        runreq.TeamScopePage
+	page        ports.TeamScopePage
 	loaded      bool
 	scopeCursor string
 	scopeIndex  int

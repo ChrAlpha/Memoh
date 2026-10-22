@@ -16,21 +16,6 @@ import (
 	"github.com/felinics/memoh/internal/media"
 )
 
-// OutputMediaStore ingests the files an agent's events point at, so the event
-// a subscriber receives names an asset it can fetch instead of a path only the
-// workspace knows.
-type OutputMediaStore interface {
-	IngestContainerFile(ctx context.Context, botID, path string) (media.Asset, error)
-	Ingest(ctx context.Context, in media.IngestInput) (media.Asset, error)
-}
-
-// OutputSpeech synthesizes the audio a speech event asks for. The composition
-// root adapts the audio service and the bot's configured speech model onto it.
-type OutputSpeech interface {
-	SpeechModelID(ctx context.Context, botID string) (string, error)
-	Synthesize(ctx context.Context, modelID, text string) (audio []byte, contentType string, err error)
-}
-
 // prepareRunEvent rewrites one event on its way from the runtime to the
 // subscribers. It runs for every entry, so an attachment or a spoken reply
 // looks the same whether the run started from Web, an IM message or a
