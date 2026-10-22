@@ -5148,6 +5148,142 @@ describe('chat-list store', () => {
       await expect(botTwoSend).resolves.toMatchObject({ ok: true })
     })
 
+  describe('switching bots while a turn is running', () => {
+    async function startRunOnBotOne() {
+      api.fetchBots.mockResolvedValue([
+        { id: 'bot-1', status: 'active', name: 'Bot 1' },
+        { id: 'bot-2', status: 'active', name: 'Bot 2' },
+      ])
+      api.fetchSessions.mockImplementation(async (botId: string) => ({
+        items: [{ id: `session-${botId}`, bot_id: botId, title: botId, type: 'chat' }],
+        nextCursor: null,
+      }))
+      h.sendUpdates = [runtime.started]
+      const store = useChatStore()
+      await store.selectBot('bot-1')
+      await store.selectSession('session-bot-1')
+      await flushPromises()
+      const sending = store.sendMessage('long task')
+      await flushPromises()
+      expect(store.streaming).toBe(true)
+      return { store, sending, runId: h.lastRunId }
+    }
+
+    async function returnToBotOne(store: ReturnType<typeof useChatStore>) {
+      await store.selectBot('bot-1')
+      await store.selectSession('session-bot-1')
+      await flushPromises()
+    }
+
+    it('leaves the run going on the server and resumes it on return', async () => {
+      const { store, sending, runId } = await startRunOnBotOne()
+
+      await store.selectBot('bot-2')
+      await flushPromises()
+      expect(h.abortedWSRuns).toEqual([])
+
+      await returnToBotOne(store)
+      expect(h.abortedWSRuns).toEqual([])
+      expect(store.streaming).toBe(true)
+
+      emitRuntime(runtime.completed, 'session-bot-1', runId)
+      await expect(sending).resolves.toMatchObject({ ok: true })
+      expect(store.streaming).toBe(false)
+    })
+
+    it('settles a run that finished while another bot was shown', async () => {
+      const { store, sending, runId } = await startRunOnBotOne()
+
+      await store.selectBot('bot-2')
+      await flushPromises()
+      publishRuntimeUpdate(() => {}, 'session-bot-1', runId, runtime.completed)
+
+      await returnToBotOne(store)
+      await expect(sending).resolves.toMatchObject({ ok: true })
+      expect(store.streaming).toBe(false)
+      expect(h.abortedWSRuns).toEqual([])
+    })
+
+    it('shows what the run produced while away once it stops to ask the user', async () => {
+      const { store, runId } = await startRunOnBotOne()
+      emitRuntime(
+        runtime.message({ id: 0, type: 'text', content: 'The story begins' }),
+        'session-bot-1',
+        runId,
+      )
+      await flushPromises()
+
+      await store.selectBot('bot-2')
+      await flushPromises()
+      const text: UIMessage = { id: 0, type: 'text', content: 'The story begins and goes on.' }
+      const askUser: UIMessage = {
+        id: 1,
+        type: 'tool',
+        name: 'ask_user',
+        tool_call_id: 'call-ask',
+        input: { questions: [{ text: 'Where next?', kind: 'single_select' }] },
+        running: false,
+        user_input: {
+          user_input_id: 'input-1',
+          short_id: 1,
+          status: 'pending',
+          can_respond: true,
+          questions: [{
+            id: 'q1',
+            text: 'Where next?',
+            kind: 'single_select',
+            options: [{ id: 'north', label: 'North' }, { id: 'south', label: 'South' }],
+          }],
+        },
+      }
+      const away = (update: RuntimeTestUpdate) =>
+        publishRuntimeUpdate(() => {}, 'session-bot-1', runId, update)
+      away(runtime.message(text))
+      away(runtime.message(askUser))
+      away({ kind: 'run', status: 'waiting_decision' })
+      // A run that stops to ask the user has already written its turn.
+      api.fetchMessagesUI.mockResolvedValue([
+        {
+          id: 'user-1',
+          turn_id: `turn-${runId}`,
+          role: 'user',
+          text: 'long task',
+          attachments: [],
+          timestamp: '2026-10-22T04:00:00.000Z',
+        },
+        {
+          id: 'assistant-1',
+          turn_id: `turn-${runId}`,
+          role: 'assistant',
+          messages: [text, askUser],
+          timestamp: '2026-10-22T04:00:01.000Z',
+        },
+      ])
+
+      await returnToBotOne(store)
+
+      expect(store.messages.at(-1)).toMatchObject({
+        role: 'assistant',
+        messages: [
+          { type: 'text', content: 'The story begins and goes on.' },
+          { type: 'tool', name: 'ask_user', running: false, user_input: { status: 'pending' } },
+        ],
+      })
+    })
+
+    it('still stops the run from the stop button after returning', async () => {
+      const { store, sending, runId } = await startRunOnBotOne()
+
+      await store.selectBot('bot-2')
+      await flushPromises()
+      await returnToBotOne(store)
+
+      store.abort()
+      await expect(sending).resolves.toMatchObject({ ok: false })
+      expect(h.abortedWSRuns).toEqual([runId])
+    })
+  })
+
   it('does not resurrect a deleted session when an older same-bot list refresh resolves late', async () => {
       api.fetchSessions.mockResolvedValueOnce({
         items: [

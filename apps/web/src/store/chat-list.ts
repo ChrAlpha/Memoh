@@ -446,8 +446,6 @@ export const useChatStore = defineStore('chat', () => {
     releasePreviousSession: (botId, targetSessionId) => {
       releaseHiddenSessionView(chatViews.getSession(botId, targetSessionId) ?? null)
     },
-    abort,
-    abortAllAssistantStreams,
     clearFsForBotSwitch,
     // Folder rows resolve through the remembered-session map, so dropping it
     // must drop the folders' paging state too, or a folder reads as empty.
