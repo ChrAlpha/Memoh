@@ -27,6 +27,7 @@ func TestCompactRejectsUnrenderedPipelineVersion(t *testing.T) {
 		t.Run(stream, func(t *testing.T) {
 			row := mkRow(t, "assistant", `{"role":"assistant","content":"`+strings.Repeat("visible text ", 200)+`"}`, 100)
 			trs := timeline.DecodeTurnResponseEntries([]messagepkg.Message{{ID: formatUUID(row.ID), Role: "assistant", Content: row.Content, CreatedAt: time.UnixMilli(100)}})
+			trs[0].ContentHash = historyfrag.MessageContentHash(historyfrag.DecodeStoredModelMessage(nil, formatUUID(row.ID), "assistant", row.Content))
 			rc := timeline.RenderedContext{{MessageID: "current-input", ReceivedAtMs: 200, Content: []timeline.RenderedContentPiece{{Type: "text", Text: "current input"}}}}
 			if stream == "rendered input" {
 				row.ExternalMessageID = pgtype.Text{String: "old-input", Valid: true}

@@ -52,6 +52,10 @@ func TestLoadTurnResponsesReadsProjectedSources(t *testing.T) {
 	if len(entries) != 1 || entries[0].SourceMessageID != "projected" {
 		t.Fatalf("turn responses = %#v, want the projected source only", entries)
 	}
+	projected := source.projected[0]
+	if want := historyfrag.MessageContentHash(historyfrag.DecodeStoredModelMessage(nil, projected.ID, projected.Role, projected.Content)); entries[0].ContentHash != want {
+		t.Fatalf("turn response content hash = %q, want the stored version %q", entries[0].ContentHash, want)
+	}
 }
 
 func TestPrepareHistoryContextDecodesUndecodedAdmissionMetadata(t *testing.T) {

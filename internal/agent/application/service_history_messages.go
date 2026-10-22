@@ -9,7 +9,9 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
 
@@ -96,7 +98,17 @@ func (s *Service) loadTurnResponses(ctx context.Context, sessionID string, conte
 	if err != nil {
 		return nil, err
 	}
-	return timeline.DecodeTurnResponseEntries(msgs), nil
+	entries := timeline.DecodeTurnResponseEntries(msgs)
+	stored := make(map[string]messagepkg.Message, len(msgs))
+	for _, msg := range msgs {
+		stored[msg.ID] = msg
+	}
+	for i := range entries {
+		if msg, ok := stored[entries[i].SourceMessageID]; ok {
+			entries[i].ContentHash = historyfrag.MessageContentHash(historyfrag.DecodeStoredModelMessage(nil, msg.ID, msg.Role, msg.Content))
+		}
+	}
+	return entries, nil
 }
 
 // historyLoadMaxBytes converts a token budget into the byte budget used for

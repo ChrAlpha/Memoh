@@ -17,7 +17,9 @@ type TurnResponseEntry struct {
 	Content         string          `json:"content"`
 	RawContent      json.RawMessage `json:"raw_content,omitempty"`
 	SourceMessageID string          `json:"source_message_id,omitempty"`
-	ContentHash     string          `json:"-"`
+	// ContentHash names the stored version the entry renders. The Agent
+	// loader sets it; a compaction refuses a source whose version changed.
+	ContentHash string `json:"-"`
 }
 
 // ContextMessage is a unified message for LLM context, produced by MergeContext.
