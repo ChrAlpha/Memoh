@@ -1,9 +1,15 @@
 package auth
 
 import (
+	"errors"
 	"strings"
 	"time"
 )
+
+// ErrRuntimeOwnerMissing reports credentials asked for an External Agent
+// session that has no runtime owner. Such a session acts for its owner alone,
+// so nobody else's account stands in for it.
+var ErrRuntimeOwnerMissing = errors.New("auth: external runtime session has no runtime owner")
 
 // RouteCredentials names who one channel turn answers and who it acts for.
 // The inbound path, the discuss admission and the queue all issue a turn's
@@ -34,10 +40,14 @@ type RouteCredentials struct {
 // The chat token routes replies back to the conversation and names the
 // participant. The session bearer is a user token for the account the session
 // acts for, falling back to the participant's own account, and then to the
-// chat token itself. Without a secret neither is issued.
+// chat token itself; an External Agent session has no fallback and is refused
+// without its runtime owner. Without a secret neither is issued.
 func IssueRouteCredentials(c RouteCredentials, secret string, ttl time.Duration) (chatToken, sessionBearer string, err error) {
 	if strings.TrimSpace(secret) == "" {
 		return "", "", nil
+	}
+	if c.ExternalRuntime && strings.TrimSpace(c.RuntimeOwnerUserID) == "" {
+		return "", "", ErrRuntimeOwnerMissing
 	}
 	if strings.TrimSpace(c.ReplyTarget) != "" {
 		chatToken, _, err = GenerateChatToken(ChatToken{

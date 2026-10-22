@@ -535,14 +535,16 @@ func (e *discussE2E) seed(ctx context.Context) {
 		INSERT INTO bot_channel_routes (id, bot_id, channel_type, external_conversation_id, conversation_type, default_reply_target)
 		VALUES ($1, $2, $3, $4, 'group', $4)
 	`, e.routeID, e.botID, e2ePlatform, e2eTarget)
-	runtime, runtimeMetadata := "model", `{}`
+	// An External Agent session records its owner as creating it does: in the
+	// owner column and in the runtime metadata.
+	runtime, runtimeMetadata, runtimeOwner := "model", `{}`, (*string)(nil)
 	if e.codex != nil {
-		runtime, runtimeMetadata = "codex", fmt.Sprintf(`{"runtime_owner_account_id":%q}`, e.ownerID)
+		runtime, runtimeMetadata, runtimeOwner = "codex", fmt.Sprintf(`{"runtime_owner_account_id":%q}`, e.ownerID), &e.ownerID
 	}
 	exec(`
-		INSERT INTO bot_sessions (id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver)
-		VALUES ($1, $2, $3, $4, 'discuss', 'discuss', $5, $6::jsonb, 'explicit', 'uncovered_events', 'auto_reject', 'shared', 'participants')
-	`, e.sessionID, e.botID, e.routeID, e2ePlatform, runtime, runtimeMetadata)
+		INSERT INTO bot_sessions (id, bot_id, route_id, channel_type, type, session_mode, runtime_type, runtime_metadata, runtime_owner_user_id, reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver)
+		VALUES ($1, $2, $3, $4, 'discuss', 'discuss', $5, $6::jsonb, $7::uuid, 'explicit', 'uncovered_events', 'auto_reject', 'shared', 'participants')
+	`, e.sessionID, e.botID, e.routeID, e2ePlatform, runtime, runtimeMetadata, runtimeOwner)
 	cleanupCtx := context.WithoutCancel(ctx)
 	e.t.Cleanup(func() {
 		_, _ = e.pool.Exec(cleanupCtx, "DELETE FROM bots WHERE id = $1", e.botID)

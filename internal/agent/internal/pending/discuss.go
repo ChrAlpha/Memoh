@@ -144,7 +144,14 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 		return DiscussSkipped, nil, nil
 	}
 
-	req, err := in.discussRequest(ctx, botID, sessionID, pgBotID, sess, head, externalRuntime)
+	runtimeOwner := ""
+	if externalRuntime {
+		runtimeOwner, err = in.runtimeOwner(ctx, pgSessionID, sess)
+		if err != nil {
+			return 0, nil, err
+		}
+	}
+	req, err := in.discussRequest(ctx, botID, sessionID, pgBotID, sess, runtimeOwner, head, externalRuntime)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -262,7 +269,7 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 // discussRequest is the request a discuss run executes: the session's route,
 // the participant who wrote the hw row, and credentials issued for them. The
 // input is the hw row itself, already in history.
-func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, pgBotID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow, head dbsqlc.ListDiscussPendingInputsRow, externalRuntime bool) (runreq.ChatRequest, error) {
+func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, pgBotID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow, runtimeOwner string, head dbsqlc.ListDiscussPendingInputsRow, externalRuntime bool) (runreq.ChatRequest, error) {
 	bot, err := in.queries.GetBotByID(ctx, pgBotID)
 	if err != nil {
 		return runreq.ChatRequest{}, fmt.Errorf("read discuss bot: %w", err)
@@ -293,7 +300,7 @@ func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, p
 		ChannelIdentityID:  senderID,
 		UserID:             boundUserID,
 		ExternalRuntime:    externalRuntime,
-		RuntimeOwnerUserID: sess.RuntimeOwnerAccountID,
+		RuntimeOwnerUserID: runtimeOwner,
 		BotOwnerUserID:     bot.OwnerUserID.String(),
 	})
 	if err != nil {
@@ -320,6 +327,24 @@ func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, p
 		req.ToolHTTPURL = external.ToolGatewayURLFromEnv(botID)
 	}
 	return req, nil
+}
+
+// runtimeOwner is the account the session acts for. A session that predates the
+// owner column has none until the first read adopts the one its metadata names;
+// one that still has none has no owner, and the credentials issued for it say
+// so rather than naming whoever wrote the last input.
+func (in *Inputs) runtimeOwner(ctx context.Context, sessionID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow) (string, error) {
+	if sess.RuntimeOwnerUserID.Valid {
+		return sess.RuntimeOwnerUserID.String(), nil
+	}
+	adopted, err := in.queries.AdoptSessionRuntimeOwnerFromMetadata(ctx, sessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("adopt discuss runtime owner: %w", err)
+	}
+	return adopted.String(), nil
 }
 
 // pendingInputs reads the external input past cover, oldest first.

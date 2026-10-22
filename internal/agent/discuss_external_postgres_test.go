@@ -64,9 +64,12 @@ func newExternalDiscuss(t *testing.T, env discussEnv) (*discussProcess, *recordi
 			}
 		}),
 	}, &discussStep{})
+	// The owner is recorded as creating the session does: in the owner column
+	// and in the runtime metadata.
 	if _, err := env.pool.Exec(context.Background(), `
-		UPDATE bot_sessions SET runtime_type = 'acp_agent', runtime_metadata = $2 WHERE id = $1
-	`, env.sessionID, `{"runtime_owner_account_id":"`+env.ownerID+`"}`); err != nil {
+		UPDATE bot_sessions SET runtime_type = 'acp_agent', runtime_metadata = $2, runtime_owner_user_id = $3
+		WHERE id = $1
+	`, env.sessionID, `{"runtime_owner_account_id":"`+env.ownerID+`"}`, env.ownerID); err != nil {
 		t.Fatal(err)
 	}
 	return proc, pool

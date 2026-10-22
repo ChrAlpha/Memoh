@@ -18,12 +18,14 @@ func main() {
 		runMigrate(os.Args[2:])
 	case "account":
 		runAccount(os.Args[2:])
+	case "backfill":
+		runBackfill(os.Args[2:])
 	case "version":
 		if err := runVersion(); err != nil {
 			os.Exit(1)
 		}
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: memoh-server <command>\n\nCommands:\n  serve     Start the server (default)\n  migrate   Run database migrations (up|down|version|force)\n  account   Local account recovery operations\n  version   Print version information\n")
+		fmt.Fprintf(os.Stderr, "Usage: memoh-server <command>\n\nCommands:\n  serve     Start the server (default)\n  migrate   Run database migrations (up|down|version|force)\n  account   Local account recovery operations\n  backfill  One-off fill of data written before a column existed (runtime-owner)\n  version   Print version information\n")
 		os.Exit(1)
 	}
 }

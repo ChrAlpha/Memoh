@@ -275,6 +275,10 @@ func TestCreateACPAgentSessionRunsValidationAndPersistsType(t *testing.T) {
 	if got := created.RuntimeMetadata["runtime_owner_account_id"]; got != "00000000-0000-0000-0000-000000000003" {
 		t.Fatalf("created runtime owner = %#v, want server owner", got)
 	}
+	// The owner column is written with the metadata keys, from the creator.
+	if got := queries.createParams.RuntimeOwnerUserID; !got.Valid || got.String() != "00000000-0000-0000-0000-000000000003" {
+		t.Fatalf("CreateSession runtime owner column = %v, want the creator", got)
+	}
 }
 
 func TestCreateACPAgentSessionDefaultsProjectPath(t *testing.T) {
@@ -360,6 +364,24 @@ func TestUpdateTypeAndMetadataACPAgentRunsPolicy(t *testing.T) {
 	}
 	if updated.RuntimeMetadata["runtime_owner_account_id"] != "00000000-0000-0000-0000-000000000003" {
 		t.Fatalf("updated runtime owner = %#v, want server owner", updated.RuntimeMetadata["runtime_owner_account_id"])
+	}
+	if got := queries.updateParams.RuntimeOwnerUserID; !got.Valid || got.String() != "00000000-0000-0000-0000-000000000003" {
+		t.Fatalf("UpdateSessionTypeAndMetadata runtime owner column = %v, want the owner the metadata carries", got)
+	}
+}
+
+// A model session has no runtime owner, whoever created it.
+func TestCreateModelSessionRecordsNoRuntimeOwner(t *testing.T) {
+	botID := "00000000-0000-0000-0000-000000000001"
+	queries := &createACPQueries{bot: sqlc.GetBotByIDRow{ID: mustPGUUID(botID)}}
+	svc := newACPTestService(queries)
+	if _, err := svc.Create(context.Background(), CreateInput{
+		BotID: botID, Type: TypeChat, Title: "chat", CreatedByUserID: "00000000-0000-0000-0000-000000000003",
+	}); err != nil {
+		t.Fatalf("Create(chat) error = %v", err)
+	}
+	if queries.createParams.RuntimeOwnerUserID.Valid {
+		t.Fatalf("CreateSession runtime owner column = %v, want none", queries.createParams.RuntimeOwnerUserID)
 	}
 }
 

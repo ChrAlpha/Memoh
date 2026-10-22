@@ -321,3 +321,38 @@ func TestRestoredSessionFactsFromArchives(t *testing.T) {
 		t.Fatalf("normalized mode facts = %+v, want the chat preset", facts)
 	}
 }
+
+// An External Agent session restored from an archive acts for the account that
+// restores it, whichever kind of runtime drives it: the archived owner may be
+// someone this server does not know. A session no runtime drives has no owner.
+func TestRestoredExternalSessionActsForTheRestoringAccount(t *testing.T) {
+	const archivedOwner = "00000000-0000-0000-0000-00000000000a"
+	const restoringUser = "00000000-0000-0000-0000-00000000000b"
+	archived := []byte(`{"runtime_owner_account_id":"` + archivedOwner + `","acp_agent_id":"codex"}`)
+
+	for _, runtimeType := range []string{"acp_agent", "codex", "claude-code", "grok-build"} {
+		t.Run(runtimeType, func(t *testing.T) {
+			metadata, runtimeMetadata, owner := restoredRuntimeOwner(runtimeType, archived, archived, restoringUser)
+			if !owner.Valid || owner.String() != restoringUser {
+				t.Fatalf("owner column = %v, want %s", owner, restoringUser)
+			}
+			for name, raw := range map[string][]byte{"metadata": metadata, "runtime metadata": runtimeMetadata} {
+				var decoded map[string]any
+				if err := json.Unmarshal(raw, &decoded); err != nil {
+					t.Fatal(err)
+				}
+				if decoded["runtime_owner_account_id"] != restoringUser {
+					t.Fatalf("%s owner = %v, want %s", name, decoded["runtime_owner_account_id"], restoringUser)
+				}
+				if decoded["acp_agent_id"] != "codex" {
+					t.Fatalf("%s lost the rest of the archived keys: %v", name, decoded)
+				}
+			}
+		})
+	}
+
+	metadata, _, owner := restoredRuntimeOwner("model", archived, archived, restoringUser)
+	if owner.Valid || string(metadata) != string(archived) {
+		t.Fatalf("model session restored with owner %v and metadata %s, want neither touched", owner, metadata)
+	}
+}

@@ -575,6 +575,8 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   runtime_config_epoch BIGINT NOT NULL DEFAULT 0,
   parent_session_id UUID REFERENCES bot_sessions(id) ON DELETE SET NULL,
   created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  -- The account an External Agent session acts for; NULL is no owner.
+  runtime_owner_user_id UUID,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   deleted_at TIMESTAMPTZ,
@@ -588,6 +590,7 @@ CREATE INDEX IF NOT EXISTS idx_bot_sessions_route_id ON bot_sessions(route_id);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_active ON bot_sessions(bot_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_parent ON bot_sessions(parent_session_id) WHERE parent_session_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_created_by_user_id ON bot_sessions(created_by_user_id) WHERE created_by_user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bot_sessions_runtime_owner_user_id ON bot_sessions(runtime_owner_user_id) WHERE runtime_owner_user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_created_by ON bot_sessions(bot_id, created_by_user_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_active_updated ON bot_sessions(bot_id, updated_at DESC, id DESC) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_bot_sessions_bot_mode_runtime_active_updated
@@ -1954,6 +1957,14 @@ ALTER TABLE public.bot_sessions
     FOREIGN KEY (team_id, created_by_user_id)
     REFERENCES public.team_members(team_id, user_id)
     ON DELETE SET NULL (created_by_user_id);
+-- team_members is under FORCE ROW LEVEL SECURITY: the reference is NOT VALID so
+-- it is never validated through a policy-scoped scan.
+ALTER TABLE public.bot_sessions
+    ADD CONSTRAINT bot_sessions_runtime_owner_user_id_fkey
+    FOREIGN KEY (team_id, runtime_owner_user_id)
+    REFERENCES public.team_members(team_id, user_id)
+    ON DELETE SET NULL (runtime_owner_user_id)
+    NOT VALID;
 ALTER TABLE public.bot_user_grants
     ADD CONSTRAINT bot_user_grants_created_by_user_id_fkey
     FOREIGN KEY (team_id, created_by_user_id)

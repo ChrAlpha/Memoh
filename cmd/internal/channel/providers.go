@@ -456,7 +456,13 @@ func inboundSessionResult(sess sessionpkg.Thread) inbound.SessionResult {
 	}
 }
 
+// sessionRuntimeOwnerAccountID is the account an External Agent session acts
+// for: the owner column, then, for a session that has not been read since the
+// column was added, the owner its metadata names.
 func sessionRuntimeOwnerAccountID(sess sessionpkg.Thread) string {
+	if sess.RuntimeOwnerUserID != "" {
+		return sess.RuntimeOwnerUserID
+	}
 	if value := runtimeMetadataString(sess.RuntimeMetadata, "runtime_owner_account_id"); value != "" {
 		return value
 	}

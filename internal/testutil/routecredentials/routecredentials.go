@@ -44,9 +44,10 @@ func (s Scenario) Want() (chat, session map[string]string) {
 	}
 	actor := s.BotOwnerUserID
 	if s.ExternalRuntime {
+		// An External Agent session acts for its runtime owner alone; a
+		// scenario without one has no credentials to compare.
 		actor = s.RuntimeOwnerUserID
-	}
-	if actor == "" {
+	} else if actor == "" {
 		actor = s.ParticipantUserID
 	}
 	if actor == "" {

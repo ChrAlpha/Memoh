@@ -1288,10 +1288,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		}
 		metadata := defaultJSONMap(item.Metadata)
 		runtimeMetadata := defaultJSONMap(item.RuntimeMetadata)
-		if runtimeType == sessionpkg.RuntimeACPAgent {
-			metadata = rebindRestoredRuntimeOwner(metadata, actorUserID)
-			runtimeMetadata = rebindRestoredRuntimeOwner(runtimeMetadata, actorUserID)
-		}
+		metadata, runtimeMetadata, runtimeOwner := restoredRuntimeOwner(runtimeType, metadata, runtimeMetadata, actorUserID)
 		// Remap the source workdir binding onto the recreated workdir. A
 		// missing map entry (remote workdir, or an import without workdirs)
 		// degrades the session to no workdir rather than tripping the FK.
@@ -1319,6 +1316,7 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 			Metadata:              metadata,
 			ParentSessionID:       parentSessionID,
 			CreatedByUserID:       optionalUUID(actorUserID),
+			RuntimeOwnerUserID:    runtimeOwner,
 			WorkdirID:             workdirID,
 		})
 		if err != nil {
@@ -2151,6 +2149,16 @@ func defaultJSONMap(raw []byte) []byte {
 		return []byte(`{}`)
 	}
 	return raw
+}
+
+// restoredRuntimeOwner makes an External Agent session act for the account that
+// restores it, not for whoever owned the archived one: the owner column and
+// both metadata keys name the restoring account. Any other session has no owner.
+func restoredRuntimeOwner(runtimeType string, metadata, runtimeMetadata []byte, actorUserID string) ([]byte, []byte, pgtype.UUID) {
+	if runtimeType != sessionpkg.RuntimeACPAgent && !sessionpkg.IsDirectRuntimeType(runtimeType) {
+		return metadata, runtimeMetadata, pgtype.UUID{}
+	}
+	return rebindRestoredRuntimeOwner(metadata, actorUserID), rebindRestoredRuntimeOwner(runtimeMetadata, actorUserID), optionalUUID(actorUserID)
 }
 
 func rebindRestoredRuntimeOwner(raw []byte, ownerUserID string) []byte {

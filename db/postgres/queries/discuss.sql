@@ -46,7 +46,7 @@ ORDER BY m.turn_position;
 -- discuss.
 SELECT
   s.runtime_type,
-  COALESCE(s.runtime_metadata->>'runtime_owner_account_id', '')::text AS runtime_owner_account_id,
+  s.runtime_owner_user_id,
   r.id AS route_id,
   r.channel_type,
   r.conversation_type,

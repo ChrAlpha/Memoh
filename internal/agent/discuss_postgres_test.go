@@ -299,9 +299,7 @@ func TestDiscussExternalRuntimeRunsOnlyWhenAddressed(t *testing.T) {
 	t.Run("group", func(t *testing.T) {
 		env := newDiscussEnv(t, "group")
 		alice := env.participant(t, false)
-		if _, err := env.pool.Exec(context.Background(), `UPDATE bot_sessions SET runtime_type = 'codex' WHERE id = $1`, env.sessionID); err != nil {
-			t.Fatal(err)
-		}
+		env.setRuntime(t, "codex")
 		proc := newDiscussProcess(t, env)
 		env.write(t, passiveInput{from: alice, externalID: "m1", text: "not for the bot"})
 		if outcome, _ := proc.admit(t, env); outcome != pending.DiscussSkipped {
@@ -323,9 +321,7 @@ func TestDiscussExternalRuntimeRunsOnlyWhenAddressed(t *testing.T) {
 	t.Run("private", func(t *testing.T) {
 		env := newDiscussEnv(t, "private")
 		alice := env.participant(t, false)
-		if _, err := env.pool.Exec(context.Background(), `UPDATE bot_sessions SET runtime_type = 'codex' WHERE id = $1`, env.sessionID); err != nil {
-			t.Fatal(err)
-		}
+		env.setRuntime(t, "codex")
 		proc := newDiscussProcess(t, env)
 		env.write(t, passiveInput{from: alice, externalID: "m1", text: "a direct message"})
 		outcome, done := proc.admit(t, env)

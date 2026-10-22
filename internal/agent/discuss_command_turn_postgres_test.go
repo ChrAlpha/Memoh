@@ -25,9 +25,7 @@ func TestDiscussCommandTurnAnswersItsMessageOnce(t *testing.T) {
 	for _, runtime := range []string{"model", "codex"} {
 		t.Run(runtime, func(t *testing.T) {
 			env := newDiscussEnv(t, "group")
-			if _, err := env.pool.Exec(context.Background(), `UPDATE bot_sessions SET runtime_type = $2 WHERE id = $1`, env.sessionID, runtime); err != nil {
-				t.Fatal(err)
-			}
+			env.setRuntime(t, runtime)
 			proc := newDiscussProcess(t, env, &discussStep{text: "all good"})
 			alice := env.participant(t, false)
 
@@ -59,9 +57,7 @@ func TestDiscussCommandTurnLeavesEarlierInputPending(t *testing.T) {
 		t.Skip("PostgreSQL integration")
 	}
 	env := newDiscussEnv(t, "group")
-	if _, err := env.pool.Exec(context.Background(), `UPDATE bot_sessions SET runtime_type = 'codex' WHERE id = $1`, env.sessionID); err != nil {
-		t.Fatal(err)
-	}
+	env.setRuntime(t, "codex")
 	proc := newDiscussProcess(t, env, &discussStep{text: "all good"}, &discussStep{})
 	alice := env.participant(t, false)
 	env.write(t, passiveInput{from: alice, externalID: "m1", text: "talking among ourselves"})

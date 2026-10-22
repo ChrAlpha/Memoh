@@ -288,6 +288,10 @@ func (s discussStore) GetDiscussSession(ctx context.Context, p dbsqlc.GetDiscuss
 	return s.pg.GetDiscussSession(ctx, p)
 }
 
+func (s discussStore) AdoptSessionRuntimeOwnerFromMetadata(ctx context.Context, sessionID pgtype.UUID) (pgtype.UUID, error) {
+	return s.pg.AdoptSessionRuntimeOwnerFromMetadata(ctx, sessionID)
+}
+
 func (s discussStore) ListUserIDsByChannelIdentity(ctx context.Context, id pgtype.UUID) ([]pgtype.UUID, error) {
 	return s.pg.ListUserIDsByChannelIdentity(ctx, id)
 }
@@ -364,6 +368,29 @@ func newDiscussEnv(t *testing.T, conversationType string) discussEnv {
 		t.Fatalf("make the session a discuss session: %v", err)
 	}
 	return env
+}
+
+// setRuntime makes the session run on runtimeType. A session an External Agent
+// runtime drives acts for an owner, recorded as creating the session does: in
+// the owner column and in both metadata keys.
+func (e discussEnv) setRuntime(t *testing.T, runtimeType string) {
+	t.Helper()
+	if runtimeType == "model" {
+		if _, err := e.pool.Exec(context.Background(), `UPDATE bot_sessions SET runtime_type = 'model' WHERE id = $1`, e.sessionID); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	if _, err := e.pool.Exec(context.Background(), `
+		UPDATE bot_sessions
+		SET runtime_type = $2,
+		    metadata = metadata || jsonb_build_object('runtime_owner_account_id', $3::text),
+		    runtime_metadata = runtime_metadata || jsonb_build_object('runtime_owner_account_id', $3::text),
+		    runtime_owner_user_id = $3::uuid
+		WHERE id = $1
+	`, e.sessionID, runtimeType, e.ownerID); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // discussParticipant is an external sender, optionally bound to an account.

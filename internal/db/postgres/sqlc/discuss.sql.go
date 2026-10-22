@@ -37,7 +37,7 @@ func (q *Queries) GetDiscussCoverPosition(ctx context.Context, arg GetDiscussCov
 const getDiscussSession = `-- name: GetDiscussSession :one
 SELECT
   s.runtime_type,
-  COALESCE(s.runtime_metadata->>'runtime_owner_account_id', '')::text AS runtime_owner_account_id,
+  s.runtime_owner_user_id,
   r.id AS route_id,
   r.channel_type,
   r.conversation_type,
@@ -57,12 +57,12 @@ type GetDiscussSessionParams struct {
 }
 
 type GetDiscussSessionRow struct {
-	RuntimeType           string      `json:"runtime_type"`
-	RuntimeOwnerAccountID string      `json:"runtime_owner_account_id"`
-	RouteID               pgtype.UUID `json:"route_id"`
-	ChannelType           pgtype.Text `json:"channel_type"`
-	ConversationType      pgtype.Text `json:"conversation_type"`
-	ReplyTarget           pgtype.Text `json:"reply_target"`
+	RuntimeType        string      `json:"runtime_type"`
+	RuntimeOwnerUserID pgtype.UUID `json:"runtime_owner_user_id"`
+	RouteID            pgtype.UUID `json:"route_id"`
+	ChannelType        pgtype.Text `json:"channel_type"`
+	ConversationType   pgtype.Text `json:"conversation_type"`
+	ReplyTarget        pgtype.Text `json:"reply_target"`
 }
 
 // What a discuss admission needs about the session: its runtime, the runtime
@@ -74,7 +74,7 @@ func (q *Queries) GetDiscussSession(ctx context.Context, arg GetDiscussSessionPa
 	var i GetDiscussSessionRow
 	err := row.Scan(
 		&i.RuntimeType,
-		&i.RuntimeOwnerAccountID,
+		&i.RuntimeOwnerUserID,
 		&i.RouteID,
 		&i.ChannelType,
 		&i.ConversationType,

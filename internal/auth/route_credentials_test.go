@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -72,10 +73,6 @@ func TestIssueRouteCredentialsSessionBearerActor(t *testing.T) {
 		{"model runtime acts for the bot owner", func(*RouteCredentials) {}, "user-owner"},
 		{"external runtime acts for the runtime owner", func(c *RouteCredentials) { c.ExternalRuntime = true }, "user-runtime"},
 		{"no owner falls back to the participant", func(c *RouteCredentials) { c.BotOwnerUserID = "" }, "user-sender"},
-		{"external runtime without owner falls back to the participant", func(c *RouteCredentials) {
-			c.ExternalRuntime = true
-			c.RuntimeOwnerUserID = ""
-		}, "user-sender"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -112,5 +109,19 @@ func TestIssueRouteCredentialsWithoutReplyTargetOrSecret(t *testing.T) {
 	chat, bearer, err := IssueRouteCredentials(routeTestBase, "", 5*time.Minute)
 	if err != nil || chat != "" || bearer != "" {
 		t.Fatalf("without secret: chat=%q bearer=%q err=%v, want nothing", chat, bearer, err)
+	}
+}
+
+// An External Agent session acts for its runtime owner alone. Without one no
+// credentials are issued: the participant who wrote the input is not the
+// session's owner, and acting as them would run the runtime with their
+// authority.
+func TestIssueRouteCredentialsRefusesAnExternalSessionWithoutItsOwner(t *testing.T) {
+	c := routeTestBase
+	c.ExternalRuntime = true
+	c.RuntimeOwnerUserID = " "
+	chat, bearer, err := IssueRouteCredentials(c, routeTestSecret, 5*time.Minute)
+	if !errors.Is(err, ErrRuntimeOwnerMissing) || chat != "" || bearer != "" {
+		t.Fatalf("IssueRouteCredentials() = %q, %q, %v; want nothing and ErrRuntimeOwnerMissing", chat, bearer, err)
 	}
 }

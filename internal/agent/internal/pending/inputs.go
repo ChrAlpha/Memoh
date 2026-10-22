@@ -28,6 +28,7 @@ import (
 // Queries is the database port of discuss admission.
 type Queries interface {
 	GetDiscussSession(context.Context, dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error)
+	AdoptSessionRuntimeOwnerFromMetadata(ctx context.Context, sessionID pgtype.UUID) (pgtype.UUID, error)
 	GetDiscussCoverPosition(context.Context, dbsqlc.GetDiscussCoverPositionParams) (int64, error)
 	ListDiscussPendingInputs(context.Context, dbsqlc.ListDiscussPendingInputsParams) ([]dbsqlc.ListDiscussPendingInputsRow, error)
 	ListDiscussSweepCandidates(context.Context, dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error)

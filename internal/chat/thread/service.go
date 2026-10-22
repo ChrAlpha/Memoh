@@ -58,9 +58,14 @@ type Thread struct {
 	Metadata        map[string]any `json:"metadata,omitempty"`
 	ParentThreadID  string         `json:"parent_session_id,omitempty"`
 	CreatedByUserID string         `json:"created_by_user_id,omitempty"`
-	WorkdirID       string         `json:"workdir_id,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	// RuntimeOwnerUserID is the account an External Agent session acts for,
+	// from the session's owner column; empty when the column is empty or the
+	// row was read without it. It is internal state, not part of the session
+	// API resource.
+	RuntimeOwnerUserID string    `json:"-"`
+	WorkdirID          string    `json:"workdir_id,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 	// Preferred* is the session's persisted (model, effort) pair (issue #879).
 	// Empty means "no memory"; the composer reseeds from it on open/repoint.
 	PreferredExternalModelID string         `json:"preferred_external_model_id,omitempty"`
@@ -420,6 +425,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error)
 		return Thread{}, fmt.Errorf("invalid created by user id: %w", err)
 	}
 	runtimeOwnerUserID := strings.TrimSpace(input.CreatedByUserID)
+	// An External Agent session acts for its creator; no other session has an
+	// owner to record.
+	pgRuntimeOwnerUserID := pgtype.UUID{}
 
 	channelType := pgtype.Text{}
 	if ct := canonicalChannelType(input.ChannelType); ct != "" {
@@ -445,6 +453,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error)
 	meta = desc.Metadata
 	runtimeMeta := desc.RuntimeMetadata
 	if desc.RuntimeType == RuntimeACPAgent {
+		pgRuntimeOwnerUserID = pgCreatedByUserID
 		meta = ApplyACPMetadataDefaults(meta)
 		runtimeMeta = ApplyACPMetadataDefaults(runtimeMeta)
 		meta = setACPRuntimeOwner(meta, runtimeOwnerUserID)
@@ -465,6 +474,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error)
 			return Thread{}, err
 		}
 	} else if IsDirectRuntimeType(desc.RuntimeType) {
+		pgRuntimeOwnerUserID = pgCreatedByUserID
 		meta = ApplyExternalMetadataDefaults(meta)
 		runtimeMeta = ApplyExternalMetadataDefaults(runtimeMeta)
 		meta = setACPRuntimeOwner(meta, runtimeOwnerUserID)
@@ -531,6 +541,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error)
 		Metadata:              metaBytes,
 		ParentSessionID:       pgParentSessionID,
 		CreatedByUserID:       pgCreatedByUserID,
+		RuntimeOwnerUserID:    pgRuntimeOwnerUserID,
 		WorkdirID:             pgWorkdirID,
 		// First-message pair (issue #879): degrade silently to NULL rather
 		// than fail creation on a slug reference or empty value.
@@ -771,6 +782,13 @@ func (s *Service) ForkFromAssistantTurn(ctx context.Context, input ForkFromAssis
 		}
 	}
 
+	// An External Agent session forks into one that belongs to the forker: the
+	// owner is the principal the fork's exec checks authorize against, so the
+	// source's owner is not inherited. Any other fork keeps what its source has.
+	forkRuntimeOwner := pgtype.UUID{}
+	if sourceRuntime := normalizeRuntimeType(sourceRow.RuntimeType, sourceRow.Type); sourceRuntime == RuntimeACPAgent || IsDirectRuntimeType(sourceRuntime) {
+		forkRuntimeOwner = pgCreatedByUserID
+	}
 	row, err := s.queries.ForkSessionFromAssistantTurn(ctx, sqlc.ForkSessionFromAssistantTurnParams{
 		SessionID:               pgSessionID,
 		BotID:                   pgBotID,
@@ -779,6 +797,7 @@ func (s *Service) ForkFromAssistantTurn(ctx context.Context, input ForkFromAssis
 		Metadata:                metaBytes,
 		RuntimeMetadataOverride: runtimeMetadataOverrideBytes,
 		CreatedByUserID:         pgCreatedByUserID,
+		RuntimeOwnerUserID:      forkRuntimeOwner,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1014,7 +1033,10 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 	existingRuntimeMeta := parseJSONMap(existing.RuntimeMetadata)
 	existingMeta := parseJSONMap(existing.Metadata)
 	if existingRuntime := normalizeRuntimeType(existing.RuntimeType, existing.Type); existingRuntime == RuntimeACPAgent || IsDirectRuntimeType(existingRuntime) {
-		existingRuntimeOwnerUserID := metadataString(existingRuntimeMeta, "runtime_owner_account_id")
+		existingRuntimeOwnerUserID := uuidText(existing.RuntimeOwnerUserID)
+		if existingRuntimeOwnerUserID == "" {
+			existingRuntimeOwnerUserID = metadataString(existingRuntimeMeta, "runtime_owner_account_id")
+		}
 		if existingRuntimeOwnerUserID == "" {
 			existingRuntimeOwnerUserID = metadataString(existingMeta, "runtime_owner_account_id")
 		}
@@ -1067,6 +1089,12 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 		return Thread{}, fmt.Errorf("marshal runtime metadata: %w", err)
 	}
 	facts := sessionfacts.Preset(desc.SessionMode)
+	// The column follows the owner the JSON keys were just written with. An
+	// owner that is not an account id leaves it as it was.
+	pgRuntimeOwnerUserID := pgtype.UUID{}
+	if desc.RuntimeType == RuntimeACPAgent || IsDirectRuntimeType(desc.RuntimeType) {
+		pgRuntimeOwnerUserID = dbpkg.ParseUUIDOrEmpty(runtimeOwnerUserID)
+	}
 	row, err := queries.UpdateSessionTypeAndMetadata(ctx, sqlc.UpdateSessionTypeAndMetadataParams{
 		ID:                    pgID,
 		Type:                  sessionType,
@@ -1079,6 +1107,7 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 		BotAgentID:            pgBotAgentID,
 		RuntimeMetadata:       runtimeMetaBytes,
 		Metadata:              metaBytes,
+		RuntimeOwnerUserID:    pgRuntimeOwnerUserID,
 	})
 	if err != nil {
 		return Thread{}, err
@@ -1640,6 +1669,7 @@ func toThread(row sqlc.BotSession) Thread {
 		Metadata:                 parseJSONMap(row.Metadata),
 		ParentThreadID:           parentID,
 		CreatedByUserID:          createdByUserID,
+		RuntimeOwnerUserID:       uuidText(row.RuntimeOwnerUserID),
 		WorkdirID:                workdirID,
 		CreatedAt:                row.CreatedAt.Time,
 		UpdatedAt:                row.UpdatedAt.Time,

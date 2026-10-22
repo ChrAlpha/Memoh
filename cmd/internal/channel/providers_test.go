@@ -48,6 +48,42 @@ func TestInboundSessionResultCarriesRecordedRuntimeDriver(t *testing.T) {
 	}
 }
 
+// The inbound path acts for the owner the session's column names; a session
+// not yet read since the column was added still has the owner its metadata
+// names, and clearing the history removes only the runtime metadata copy.
+func TestInboundSessionResultReadsTheRuntimeOwnerColumnThenMetadata(t *testing.T) {
+	for name, tc := range map[string]struct {
+		thread sessionpkg.Thread
+		want   string
+	}{
+		"column": {
+			thread: sessionpkg.Thread{
+				RuntimeOwnerUserID: "column-owner",
+				Metadata:           map[string]any{"runtime_owner_account_id": "metadata-owner"},
+			},
+			want: "column-owner",
+		},
+		"runtime metadata": {
+			thread: sessionpkg.Thread{
+				RuntimeMetadata: map[string]any{"runtime_owner_account_id": "runtime-owner"},
+				Metadata:        map[string]any{"runtime_owner_account_id": "metadata-owner"},
+			},
+			want: "runtime-owner",
+		},
+		"metadata after the history was cleared": {
+			thread: sessionpkg.Thread{Metadata: map[string]any{"runtime_owner_account_id": "metadata-owner"}},
+			want:   "metadata-owner",
+		},
+		"none": {thread: sessionpkg.Thread{}, want: ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := inboundSessionResult(tc.thread).RuntimeOwnerAccountID; got != tc.want {
+				t.Fatalf("runtime owner = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // What the inbound path routes a message by is the recorded trigger scope, so
 // the adapter has to carry it from the session to the processor.
 func TestInboundSessionResultCarriesRecordedTriggerScope(t *testing.T) {

@@ -2,7 +2,7 @@
 INSERT INTO bot_sessions (
   bot_id, bot_agent_id, route_id, channel_type, type, session_mode, runtime_type, visibility,
   reply_delivery, trigger_scope, decision_mode, audience, external_runtime_driver,
-  runtime_metadata, title, metadata, parent_session_id, created_by_user_id, workdir_id, preferred_chat_model_id, preferred_reasoning_effort
+  runtime_metadata, title, metadata, parent_session_id, created_by_user_id, runtime_owner_user_id, workdir_id, preferred_chat_model_id, preferred_reasoning_effort
 )
 VALUES (
   sqlc.arg(bot_id),
@@ -23,6 +23,7 @@ VALUES (
   sqlc.arg(metadata),
   sqlc.narg(parent_session_id)::uuid,
   sqlc.narg(created_by_user_id)::uuid,
+  sqlc.narg(runtime_owner_user_id)::uuid,
   sqlc.narg(workdir_id)::uuid,
   sqlc.narg(preferred_chat_model_id)::uuid,
   sqlc.narg(preferred_reasoning_effort)::text
@@ -138,6 +139,7 @@ created_session AS (
     metadata,
     next_turn_position,
     created_by_user_id,
+    runtime_owner_user_id,
     workdir_id,
     preferred_chat_model_id,
     preferred_reasoning_effort,
@@ -174,6 +176,9 @@ created_session AS (
     ),
     fp.next_turn_position_value,
     sqlc.narg(created_by_user_id)::uuid,
+    -- An external runtime fork belongs to its creator, who the caller names;
+    -- any other fork keeps what its source has.
+    COALESCE(sqlc.narg(runtime_owner_user_id)::uuid, fp.runtime_owner_user_id),
     -- A fork continues the source conversation, so it stays in the same
     -- workdir (and therefore the same working directory).
     fp.workdir_id,
@@ -529,6 +534,9 @@ SET type = sqlc.arg(type),
     bot_agent_id = sqlc.arg(bot_agent_id),
     runtime_metadata = sqlc.arg(runtime_metadata),
     metadata = sqlc.arg(metadata),
+    -- The owner is never cleared here: a session that stops being an external
+    -- runtime session keeps who it acted for, as its metadata does.
+    runtime_owner_user_id = COALESCE(sqlc.narg(runtime_owner_user_id)::uuid, runtime_owner_user_id),
     preferred_chat_model_id = CASE WHEN runtime_type IS DISTINCT FROM sqlc.arg(runtime_type) OR bot_agent_id IS DISTINCT FROM sqlc.arg(bot_agent_id)
       THEN NULL ELSE preferred_chat_model_id END,
     preferred_external_model_id = CASE WHEN runtime_type IS DISTINCT FROM sqlc.arg(runtime_type) OR bot_agent_id IS DISTINCT FROM sqlc.arg(bot_agent_id)
@@ -698,3 +706,38 @@ WHERE team_id = public.memoh_current_team_id()
   AND runtime_type = sqlc.arg(runtime_type)
   AND model_preference_revision IS NOT DISTINCT FROM sqlc.narg(expected_revision)::uuid
   AND deleted_at IS NULL;
+
+-- name: AdoptSessionRuntimeOwnerFromMetadata :one
+-- The runtime owner of a session that predates the owner column: the account
+-- its metadata names, when that account is still a member of the team. The
+-- first read that finds the column empty calls this, so the column is filled
+-- by use. No row means the metadata names nobody who can own the session.
+UPDATE bot_sessions s
+SET runtime_owner_user_id = m.user_id
+FROM team_members m
+WHERE s.team_id = public.memoh_current_team_id()
+  AND s.id = sqlc.arg(session_id)
+  AND s.runtime_owner_user_id IS NULL
+  AND m.team_id = s.team_id
+  AND m.user_id::text = s.metadata->>'runtime_owner_account_id'
+RETURNING s.runtime_owner_user_id;
+
+-- name: AdoptSessionRuntimeOwnersFromMetadata :execrows
+-- One batch of the background pass behind AdoptSessionRuntimeOwnerFromMetadata:
+-- sessions whose owner column is empty and whose metadata names a member of
+-- the team. A session it adopts no longer matches, so the pass repeats until a
+-- batch is empty, and running it again changes nothing.
+WITH batch AS (
+  SELECT s.id, m.user_id
+  FROM bot_sessions s
+  JOIN team_members m ON m.team_id = s.team_id AND m.user_id::text = s.metadata->>'runtime_owner_account_id'
+  WHERE s.team_id = public.memoh_current_team_id()
+    AND s.runtime_owner_user_id IS NULL
+  ORDER BY s.id
+  LIMIT sqlc.arg(batch_size)
+  FOR UPDATE OF s SKIP LOCKED
+)
+UPDATE bot_sessions s
+SET runtime_owner_user_id = batch.user_id
+FROM batch
+WHERE s.team_id = public.memoh_current_team_id() AND s.id = batch.id;
