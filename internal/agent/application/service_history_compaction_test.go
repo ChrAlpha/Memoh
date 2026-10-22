@@ -37,7 +37,9 @@ func TestReplaceCompactedHistoryRecordsPreservesOnlyRequiredSourceGroupAcrossRes
 	got := replaceCompactedHistoryRecordsWithService(records, contextfrag.Scope{}, func(historyfrag.HistoryRecord) (compaction.Artifact, bool) {
 		return terminal, true
 	})
-	want := []string{"<summary>\nrestacked\n</summary>", "a required", "a peer"}
+	// The required group stays raw before the rows the summary replaces, so
+	// the summary takes their place after it (turn.PlaceSummary).
+	want := []string{"a required", "a peer", "<summary>\nrestacked\n</summary>"}
 	if gotTexts := recordTexts(got); !reflect.DeepEqual(gotTexts, want) {
 		t.Fatalf("restacked required preservation = %#v, want %#v", gotTexts, want)
 	}
@@ -105,11 +107,13 @@ func TestReplaceCompactedHistoryRecordsFoldsFusedParentsAroundMustKeepIsland(t *
 		return resolveCatalogArtifact(catalog, recordArtifactOwner(record, scope), record)
 	})
 
-	wantIDs := []string{rollupID, "island-call", "island-result"}
+	// The island lies inside what the summary covers and stays raw, so it
+	// renders before the summary (turn.PlaceSummary).
+	wantIDs := []string{"island-call", "island-result", rollupID}
 	if gotIDs := recordSequenceIDs(got); !reflect.DeepEqual(gotIDs, wantIDs) {
 		t.Fatalf("fused-parent replacement ids = %#v, want %#v", gotIDs, wantIDs)
 	}
-	wantTexts := []string{"<summary>\nfused earlier context\n</summary>", "ask you something", "answered"}
+	wantTexts := []string{"ask you something", "answered", "<summary>\nfused earlier context\n</summary>"}
 	if gotTexts := recordTexts(got); !reflect.DeepEqual(gotTexts, wantTexts) {
 		t.Fatalf("fused-parent replacement texts = %#v, want %#v", gotTexts, wantTexts)
 	}
