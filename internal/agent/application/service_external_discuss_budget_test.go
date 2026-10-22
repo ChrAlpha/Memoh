@@ -107,9 +107,9 @@ func TestExternalDiscussOversizedBatchCompactsOlderInputOrFails(t *testing.T) {
 			if !errors.Is(err, native.ErrContextRecompose) || len(compactor.configs) != 1 {
 				t.Fatalf("older input must be compacted: err=%v compactions=%d", err, len(compactor.configs))
 			}
-			for _, source := range compactor.configs[0].ProtectedSources {
+			for _, source := range compactor.configs[0].Anchors {
 				if source.ID == "a" {
-					t.Fatalf("the oldest input was protected from compaction: %+v", compactor.configs[0].ProtectedSources)
+					t.Fatalf("the oldest input was protected from compaction: %+v", compactor.configs[0].Anchors)
 				}
 			}
 			continue

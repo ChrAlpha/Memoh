@@ -671,12 +671,27 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	code, requests := s.run(entry, loopInput, steps)
 	s.foreignAt = 0
 	if !entry.folds {
-		if f.summaries.Load() != summaries || (code != "" && code != "context.budget_unsatisfied") || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) || len(s.effects) > steps {
+		if f.summaries.Load() != summaries || code != "context.budget_unsatisfied" || len(s.effects) == 0 || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) || len(s.effects) >= steps {
 			t.Fatalf("outside the coverage set: code=%q summary_calls=%d effects=%v, want no fold, a bounded end and no replayed effect", code, f.summaries.Load()-summaries, s.effects)
 		}
+		var previous []string
+		for i, request := range requests {
+			messages := requestMessages(t, request)
+			if strings.Contains(request, "[tool result pruned") || len(messages) < len(previous) || !slices.Equal(previous, messages[:len(previous)]) {
+				t.Fatalf("request %d changed previously sent messages before failing closed", i+1)
+			}
+			previous = messages
+		}
 		t.Logf("code=%q provider_calls=%d effects=%d first_kept_in_last_request=%d", code, len(requests), len(s.effects), firstKept(requests[len(requests)-1], steps))
-		if code, _ := s.run(entry, "NEXT_ROUND_QUESTION", 0); code != "" {
+		code, next := s.run(entry, "NEXT_ROUND_QUESTION", 0)
+		if code != "" {
 			t.Fatalf("next turn after the loop failed with %s", code)
+		}
+		if len(s.effects) != 0 || len(next) != 1 {
+			t.Fatalf("next turn: effects=%v requests=%d, want one answer without replaying effects", s.effects, len(next))
+		}
+		if entry.name == "discuss" && (f.summaries.Load() == summaries || strings.Count(next[0], loopInput) != 1 || strings.Count(next[0], "NEXT_ROUND_QUESTION") != 1) {
+			t.Fatal("Discuss must compact completed steps while retaining both unanswered inputs verbatim")
 		}
 		return
 	}

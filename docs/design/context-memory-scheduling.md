@@ -159,7 +159,7 @@ so compaction persistently triggers later than budget pressure implies.
   `compaction_model_id` columns, the derived soft/hard/target thresholds, and
   `[agent] sync_compaction` were removed (CM-CMP-001/003).
 - `[agent]` TOML: `tool_output_max_bytes`, `tool_output_max_lines`,
-  `system_files_max_bytes`, `context_loop_reselect` (`internal/config/config.go`).
+  `system_files_max_bytes` (`internal/config/config.go`).
   There is **no server-side context-size or admission knob today**.
 - `[session_runtime]` TOML: `state_ttl` (default 24 h) is the only retention bound on
   session snapshots, and it never evicts active runs.
@@ -203,7 +203,9 @@ drop history, current input, or summaries to make it fit. It compacts once
   large, the run MUST fail with the stable `context.budget_unsatisfied` code.
 
 Both failures are bounded: no provider call, no partial send, and the triggering
-input stays unconsumed. Input that composition cannot carry (Channel admission
+input stays unconsumed. Inside a run the same holds for every step request: a tool
+result is bounded once, when the tool returns, and no later request prunes, stubs,
+or drops it. Input that composition cannot carry (Channel admission
 records it as omitted) MUST be compacted by that request, or the run fails; it is
 never silently skipped. Bounded reads (CM-ADM-001) still limit what a request loads,
 but a compaction reads every uncompacted row inside the request's time window, loaded
@@ -282,9 +284,10 @@ event per pending request:
   passes before it stay committed. Armed runs never fall back to step dropping or
   512-byte result placeholders.
 - Web, IM, trigger, follow-up and decision continuations are armed through shared
-  native binding when they have durable ownership. Retry/edit, Discuss, subagent and
-  external runtime execution retain their separate capability boundaries and are not
-  covered by the in-run trigger point.
+  native binding when they have durable ownership. Retry/edit, Discuss and subagents
+  retain their separate capability boundaries: their step requests only grow, and a
+  request that does not fit ends with `context.budget_unsatisfied`. External runtimes
+  own their context.
 
 ### CM-CMP-002: Oversized sessions recover on their next request
 
@@ -550,6 +553,15 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
 - [x] Rows inside the time window stay candidates when a byte-bounded view
       slides past them — CM-ADM-002
 - [x] In-run compaction for durable native tool loops under the same rule — CM-CMP-001
+- [x] Remove the step selector's in-run pruning, dropping, and rescue, and the
+      `context_loop_reselect` rollout switch: a step request only grows, and a
+      tool result is bounded once when produced, at 32 KiB by default
+      (MEMOH-132, MEMOH-133) — CM-ADM-002
+- [ ] In-run compaction for Discuss, whose steps are stored only when the run
+      ends — CM-CMP-001
+- [ ] In-run compaction for retried and edited turns, whose replacement rows stay
+      hidden until the run ends, and for subagents, which keep their own
+      committer — CM-CMP-001
 - [ ] Candidate view beyond the 24-hour pipeline window — CM-ADM-002
 
 ### PR 3 (P1) — Bounded replay + pipeline cache eviction
@@ -645,7 +657,10 @@ They complement but never replace black-box acceptance.
 | summary density | histories of different densities | Summary length follows the content; a valid summary within the stated bound continues without another compaction | CM-CMP-001 |
 | compaction failure | summarizer error / no reduction / still too large / unreadable item | `context.budget_unsatisfied`; no provider call; input unconsumed; a committed summary stays, nothing else changes | CM-CMP-001, CM-ADM-002 |
 | compaction latency | request over budget | Outcome, passes, and duration recorded per compaction | CM-CMP-003 |
-| long tool loop | in-run growth past budget | Same rule inside the run | CM-CMP-001 |
+| long tool loop | in-run growth past budget, from web, IM, a queued follow-up, a decision continuation, and a schedule fire | The run folds eligible sources into one rolling summary and continues; requests between events only grow, every tool result reaches the provider as stored, and each effect runs once; the next turn reads the summary back | CM-CMP-001 |
+| full prefix, first step | history before the run fills the request after one step | The run folds that history at the first boundary and continues | CM-CMP-001 |
+| long tool loop, fold cannot help | summarizer unavailable, or kept rows leave no room for a summary | `context.budget_unsatisfied` (or `context.protected_overflow`); committed steps stay, nothing is replayed; the next turn can recover before dispatch | CM-CMP-001, CM-ADM-002 |
+| long tool loop outside the set | retry, edit, Discuss, subagent | No in-run fold; requests only grow, and the first step request that does not fit ends with `context.budget_unsatisfied` without replaying an effect | CM-CMP-001, CM-ADM-002 |
 | ACP long thread | Discuss ACP, oversized history | Prompt built within budget; no unbounded `Query` | CM-ADM-001 |
 | replay at scale | cold start with 5k events | Paginated loads; frontier skips covered payloads; bounded replay memory | CM-RPL-001/002 |
 | cache pressure | many concurrent sessions | Evictions occur; evicted sessions recover via replay; resident bytes bounded | CM-CCH-001 |

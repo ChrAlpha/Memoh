@@ -36,6 +36,11 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 	cfg.ProtectedSources = compactionProtectedSources(req)
 	if anchors := req.compactionAnchors(); len(anchors) > 0 {
 		cfg.Anchors, cfg.ProtectedSources = anchors, req.continuationTail
+	} else if len(req.discussCurrentSources) > 0 {
+		// Discuss admission budgets the retained inputs separately. Keep each
+		// input in place without pinning completed tool steps from a failed run
+		// that follow an older, still-unanswered input.
+		cfg.Anchors, cfg.ProtectedSources = cfg.ProtectedSources, nil
 	}
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
 	// The byte budget bounds what a request loads, not what its history is:

@@ -80,7 +80,7 @@ func TestDiscussRecoveryCarriesCurrentSourcesEvenWithoutMaterializedMessages(t *
 		t.Fatalf("recovery did not run: %v", err)
 	}
 	cfg := runner.configs[0]
-	if len(cfg.ProtectedSources) != 1 || cfg.ProtectedSources[0].ID != "b" || cfg.HistoryBudgetTokens != 900 {
+	if len(cfg.Anchors) != 1 || cfg.Anchors[0].ID != "b" || len(cfg.ProtectedSources) != 0 || cfg.HistoryBudgetTokens != 900 {
 		t.Fatalf("Channel overflow must protect only the newest input and compact older input: %+v", cfg)
 	}
 }

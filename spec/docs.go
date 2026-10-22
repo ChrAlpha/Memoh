@@ -20280,8 +20280,6 @@ const docTemplate = `{
                 "native_image",
                 "skills_catalog",
                 "hook_context",
-                "injected_message",
-                "background_summary",
                 "runtime_context",
                 "memory_recall",
                 "conversation_summary"
@@ -20299,8 +20297,6 @@ const docTemplate = `{
                 "KindNativeImage",
                 "KindSkillsCatalog",
                 "KindHookContext",
-                "KindInjectedMessage",
-                "KindBackgroundSummary",
                 "KindRuntimeContext",
                 "KindMemoryRecall",
                 "KindConversationSummary"
@@ -20363,9 +20359,6 @@ const docTemplate = `{
                     "$ref": "#/definitions/contextfrag.ManifestCounts"
                 },
                 "final_input_hash": {
-                    "type": "string"
-                },
-                "loop_selection_mode": {
                     "type": "string"
                 },
                 "memory_recall": {
@@ -20517,8 +20510,6 @@ const docTemplate = `{
             "enum": [
                 "before_model_call_hook",
                 "background_summary",
-                "mid_task_prune",
-                "loop_step_reselection",
                 "injected_message",
                 "context_view_fallback",
                 "context_budget_failure",
@@ -20535,8 +20526,6 @@ const docTemplate = `{
             "x-enum-varnames": [
                 "MutationBeforeModelCallHook",
                 "MutationBackgroundSummary",
-                "MutationMidTaskPrune",
-                "MutationLoopStepReselection",
                 "MutationInjectedMessage",
                 "MutationContextViewFallback",
                 "MutationContextBudgetFailure",
@@ -20696,28 +20685,10 @@ const docTemplate = `{
                 "attempt": {
                     "type": "integer"
                 },
-                "drop_reasons": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "integer"
-                    }
-                },
-                "dropped": {
-                    "type": "integer"
-                },
                 "post_prepare_input_hash": {
                     "type": "string"
                 },
-                "reselection_applied": {
-                    "type": "boolean"
-                },
-                "reselection_outcome": {
-                    "type": "string"
-                },
                 "step_index": {
-                    "type": "integer"
-                },
-                "truncated": {
                     "type": "integer"
                 }
             }

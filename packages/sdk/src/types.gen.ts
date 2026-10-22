@@ -1198,7 +1198,7 @@ export type ContextfragContextRef = {
     version?: number;
 };
 
-export type ContextfragKind = 'system_prompt' | 'system_policy' | 'bot_identity' | 'workspace_instruction' | 'platform_identity' | 'tool_usage' | 'conversation_event' | 'current_user_message' | 'attachment_ref' | 'native_image' | 'skills_catalog' | 'hook_context' | 'injected_message' | 'background_summary' | 'runtime_context' | 'memory_recall' | 'conversation_summary';
+export type ContextfragKind = 'system_prompt' | 'system_policy' | 'bot_identity' | 'workspace_instruction' | 'platform_identity' | 'tool_usage' | 'conversation_event' | 'current_user_message' | 'attachment_ref' | 'native_image' | 'skills_catalog' | 'hook_context' | 'runtime_context' | 'memory_recall' | 'conversation_summary';
 
 export type ContextfragKindBreakdown = {
     fragments?: number;
@@ -1219,7 +1219,6 @@ export type ContextfragLifecycleSnapshot = {
     client_type?: string;
     counts?: ContextfragManifestCounts;
     final_input_hash?: string;
-    loop_selection_mode?: string;
     memory_recall?: ContextfragMemoryRecallTrace;
     model?: string;
     mutations?: Array<ContextfragMutationRecord>;
@@ -1267,7 +1266,7 @@ export type ContextfragMemoryRecallTrace = {
     retrieval_mode?: string;
 };
 
-export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'renderer_prune' | 'mid_stream_retry' | 'current_input_omitted' | 'current_input_images_omitted' | 'run_abort_observed' | 'context_switch';
+export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'renderer_prune' | 'mid_stream_retry' | 'current_input_omitted' | 'current_input_images_omitted' | 'run_abort_observed' | 'context_switch';
 
 export type ContextfragMutationRecord = {
     detail?: string;
@@ -1315,15 +1314,8 @@ export type ContextfragSlot = 'system' | 'before_history' | 'history' | 'after_h
 
 export type ContextfragStepSnapshot = {
     attempt?: number;
-    drop_reasons?: {
-        [key: string]: number;
-    };
-    dropped?: number;
     post_prepare_input_hash?: string;
-    reselection_applied?: boolean;
-    reselection_outcome?: string;
     step_index?: number;
-    truncated?: number;
 };
 
 export type ContextfragToolDefAccounting = {

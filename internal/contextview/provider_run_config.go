@@ -468,7 +468,6 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
-	cfg.ContextStepReselector = SelectProviderStepMessages
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}
@@ -541,8 +540,7 @@ func providerBudgetAuditConfig(
 
 // providerViewFallback assembles the legacy payload when the context view
 // cannot. It is an assembly path, not a budget-disabled path: the budget plan
-// and step reselection stay in force so every dispatch still meets the final
-// envelope check.
+// stays in force so every dispatch still meets the final envelope check.
 func providerViewFallback(
 	logger *slog.Logger,
 	cfg agentpkg.RunConfig,
@@ -574,7 +572,6 @@ func providerViewFallback(
 	cfg.ContextManifest = manifest
 	cfg.ContextCachePlan = plan
 	cfg.ContextMutations = ledger
-	cfg.ContextStepReselector = SelectProviderStepMessages
 	if cfg.ContextLifecycle != nil {
 		cfg.ContextLifecycle.SetManifest(manifest)
 	}

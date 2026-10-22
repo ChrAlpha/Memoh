@@ -113,12 +113,11 @@ func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolve
 	}
 	committer.bindContinuation(cfg)
 	// A run that persists its steps compacts in place when a step's request
-	// no longer fits, and is never trimmed by step reselection. A retry or an
-	// edit replays history before its cutoff, which no fold matches.
+	// no longer fits. A retry or edit replays history before its cutoff,
+	// which no fold matches.
 	if committer != nil && s.compactionService != nil && s.settingsService != nil &&
 		req.TurnReplacement == nil && strings.TrimSpace(req.HistoryCutoffBeforeMessageID) == "" {
 		cfg.SwitchContext = s.switchContext(req, committer, cfg.CurrentModelUUID)
-		cfg.ContextStepReselector = nil
 	}
 	return committer
 }
