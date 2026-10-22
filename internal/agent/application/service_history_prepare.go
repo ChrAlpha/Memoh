@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -17,13 +19,37 @@ type preparedHistoryContext struct {
 	viewFrom       time.Time
 }
 
+// prepareHistoryContext loads the history a request renders. Its window
+// folds the rows a summary replaced, so the rows the summary does not cover,
+// such as an earlier input kept beside it, stay inside the budget. An edit or
+// retry renders history before its cutoff, where a summary that reaches past
+// the cutoff does not render, so its window does not fold; nor does a window
+// in which a folded group's summary turns out not to render.
 func (s *Service) prepareHistoryContext(
 	ctx context.Context,
 	req ChatRequest,
 	fallback historyfrag.ScopeFallback,
 	contextTokenBudget int,
 ) (preparedHistoryContext, error) {
-	loaded, err := s.loadHistoryRecords(ctx, fallback, req.ThreadID, defaultMaxContextMinutes, contextTokenBudget)
+	fold := strings.TrimSpace(req.HistoryCutoffBeforeMessageID) == ""
+	prepared, err := s.prepareHistoryWindow(ctx, req, fallback, contextTokenBudget, fold)
+	if fold && errors.Is(err, errSummaryNotRendered) {
+		if s.logger != nil {
+			s.logger.WarnContext(ctx, "history window reloaded without folding", slog.String("session_id", req.ThreadID), slog.Any("error", err))
+		}
+		return s.prepareHistoryWindow(ctx, req, fallback, contextTokenBudget, false)
+	}
+	return prepared, err
+}
+
+func (s *Service) prepareHistoryWindow(
+	ctx context.Context,
+	req ChatRequest,
+	fallback historyfrag.ScopeFallback,
+	contextTokenBudget int,
+	fold bool,
+) (preparedHistoryContext, error) {
+	loaded, err := s.loadHistoryRecords(ctx, fallback, req.ThreadID, defaultMaxContextMinutes, contextTokenBudget, fold)
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}

@@ -76,8 +76,9 @@ func FromDBMessageWithLogger(log *slog.Logger, msg messagepkg.Message, fallback 
 		Platform:                strings.TrimSpace(msg.Platform),
 		SourceReplyToMessageID:  strings.TrimSpace(msg.SourceReplyToMessageID),
 
-		CompactID: strings.TrimSpace(msg.CompactID),
-		CreatedAt: msg.CreatedAt,
+		CompactID:  strings.TrimSpace(msg.CompactID),
+		Summarized: msg.Summarized,
+		CreatedAt:  msg.CreatedAt,
 
 		UsageInputTokens:  inputTokens,
 		UsageOutputTokens: outputTokens,

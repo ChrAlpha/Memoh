@@ -1881,9 +1881,12 @@ ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_a
 -- Byte-budgeted variant of ListActiveMessagesSinceBySession (CM-ADM-001):
 -- rows are admitted newest-first until their running content byte total
 -- crosses max_bytes (the crossing row is kept, so the newest row always
--- loads), then returned in ascending order. Only content is budgeted: full
--- rows, metadata included, still load, so callers that need content alone
--- use ListTurnResponseSourcesSinceBySessionWithinBytes.
+-- loads), then returned in ascending order. With fold_summarized, rows a
+-- usable summary of the session's current epoch replaced cost nothing, and
+-- only the newest of each compact group loads, marked summarized, to place
+-- that summary. Only content is budgeted: full rows, metadata included,
+-- still load, so callers that need content alone use
+-- ListTurnResponseSourcesSinceBySessionWithinBytes.
 SELECT
   ranked.id,
   ranked.bot_id,
@@ -1904,7 +1907,8 @@ SELECT
   ranked.created_at,
   ranked.sender_display_name,
   ranked.sender_avatar_url,
-  ranked.platform
+  ranked.platform,
+  ranked.summarized
 FROM (
   SELECT
     m.id,
@@ -1929,18 +1933,33 @@ FROM (
     ci.display_name AS sender_display_name,
     ci.avatar_url AS sender_avatar_url,
     s.channel_type AS platform,
-    (SUM(octet_length(m.content::text)) OVER (
+    (c.id IS NOT NULL)::boolean AS summarized,
+    ROW_NUMBER() OVER (
+      PARTITION BY c.id
       ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-    ) - octet_length(m.content::text))::BIGINT AS preceding_bytes
+    ) AS summarized_rank,
+    (SUM(CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END) OVER (
+      ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    ) - CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END)::BIGINT AS preceding_bytes
   FROM bot_visible_history_messages m
   LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
   LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN bot_history_message_compacts c
+    ON sqlc.arg(fold_summarized)::boolean
+   AND c.team_id = public.memoh_current_team_id()
+   AND c.id = m.compact_id
+   AND c.bot_id = m.bot_id
+   AND c.session_id = s.id
+   AND c.compaction_epoch = s.compaction_epoch
+   AND c.status = 'ok'
+   AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.created_at >= sqlc.arg(created_at)
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
+  AND (NOT ranked.summarized OR ranked.summarized_rank = 1)
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
 
 -- name: ListActiveMessagesSinceWithinBytes :many

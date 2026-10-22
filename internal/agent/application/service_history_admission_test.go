@@ -24,7 +24,7 @@ type turnResponseSourceMessageService struct {
 	err       error
 }
 
-func (s *turnResponseSourceMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
+func (s *turnResponseSourceMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64, bool) ([]messagepkg.Message, error) {
 	return s.full, nil
 }
 

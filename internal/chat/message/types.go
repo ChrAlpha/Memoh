@@ -83,6 +83,9 @@ type Message struct {
 	EventID        string          `json:"event_id,omitempty"`
 	DisplayContent string          `json:"display_content,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
+	// Summarized marks a row loaded to place the compaction summary that
+	// replaced it; the window left out the rest of its compact group.
+	Summarized bool `json:"-"`
 }
 
 type HistoryTurn struct {
@@ -254,7 +257,9 @@ type Service interface {
 	// ListActiveSinceBySessionWithinBytes is the byte-budgeted variant of
 	// ListActiveSinceBySession (CM-ADM-001), same admission semantics and
 	// undecoded metadata as ListActiveSinceWithinBytes, scoped to one session.
-	ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error)
+	// With foldSummarized, rows a usable compaction summary replaced cost
+	// nothing and only the newest of each compact group loads, Summarized.
+	ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64, foldSummarized bool) ([]Message, error)
 	// ListTurnResponseSourcesSinceBySessionWithinBytes is the same window as
 	// ListActiveSinceBySessionWithinBytes projected to what turn-response
 	// composition reads: ID, role, content, created_at, and Metadata holding

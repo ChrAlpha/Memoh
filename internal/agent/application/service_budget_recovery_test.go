@@ -44,7 +44,7 @@ type recoveryHistoryService struct {
 	err      error
 }
 
-func (s *recoveryHistoryService) ListActiveSinceBySessionWithinBytes(_ context.Context, _ string, _ time.Time, maxBytes int64) ([]messagepkg.Message, error) {
+func (s *recoveryHistoryService) ListActiveSinceBySessionWithinBytes(_ context.Context, _ string, _ time.Time, maxBytes int64, _ bool) ([]messagepkg.Message, error) {
 	s.loads++
 	s.maxBytes = maxBytes
 	return append([]messagepkg.Message(nil), s.messages...), s.err
@@ -258,8 +258,8 @@ type triggerRecoveryMessages struct {
 	history *recoveryHistoryService
 }
 
-func (m triggerRecoveryMessages) ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]messagepkg.Message, error) {
-	return m.history.ListActiveSinceBySessionWithinBytes(ctx, sessionID, since, maxBytes)
+func (m triggerRecoveryMessages) ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64, fold bool) ([]messagepkg.Message, error) {
+	return m.history.ListActiveSinceBySessionWithinBytes(ctx, sessionID, since, maxBytes, fold)
 }
 
 func TestTriggeredBudgetRecoveryPausesIdleUntilProviderDispatch(t *testing.T) {

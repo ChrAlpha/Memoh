@@ -206,7 +206,7 @@ func (s *Service) replaceCompactedMessages(ctx context.Context, sessionID string
 		return nil, err
 	}
 	if len(frontier.Artifacts) == 0 {
-		return messages, nil
+		return messages, requireSummariesRendered(messages, func(historyfrag.HistoryRecord) (compaction.Artifact, bool) { return compaction.Artifact{}, false })
 	}
 	owner := compaction.ArtifactOwner{BotID: scope.BotID, SessionID: sessionID, SessionIDKnown: true}
 	catalog := compaction.NewArtifactCatalog()
@@ -222,12 +222,32 @@ func (s *Service) replaceCompactedMessages(ctx context.Context, sessionID string
 		}
 		return artifact, true
 	}
+	if err := requireSummariesRendered(messages, resolve); err != nil {
+		return nil, err
+	}
 	messages = replaceCompactedHistoryRecordsWithService(messages, scope, resolve)
 	sessionSummaries := summaryRecordsFromArtifacts(missingCompactionArtifacts(messages, frontier.Artifacts, blocked, boundary), scope)
 	if len(sessionSummaries) > 0 {
 		messages = mergeMissingCompactionSummaries(messages, sessionSummaries)
 	}
 	return s.refreshCompactedSummaryCoverage(ctx, messages, resolve), nil
+}
+
+// errSummaryNotRendered reports a Summarized row whose summary does not
+// render in the request: the window left out the rest of its compact group,
+// so the caller loads the window again without folding.
+var errSummaryNotRendered = errors.New("history: a folded compact group's summary does not render")
+
+func requireSummariesRendered(messages []historyfrag.HistoryRecord, resolve func(historyfrag.HistoryRecord) (compaction.Artifact, bool)) error {
+	for _, record := range messages {
+		if !record.Summarized {
+			continue
+		}
+		if artifact, ok := resolve(record); !ok || strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("%w: compact %s", errSummaryNotRendered, record.CompactID)
+		}
+	}
+	return nil
 }
 
 // missingCompactionArtifacts filters the active frontier down to summaries not
