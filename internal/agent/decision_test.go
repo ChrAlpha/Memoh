@@ -17,7 +17,7 @@ import (
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/drivetest"
+	"github.com/felinics/memoh/internal/agent/drive/drivetest"
 	"github.com/felinics/memoh/internal/agent/lifecycle"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"

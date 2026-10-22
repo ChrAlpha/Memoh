@@ -9,7 +9,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/drivetest"
+	"github.com/felinics/memoh/internal/agent/drive/drivetest"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"

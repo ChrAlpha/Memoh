@@ -18,7 +18,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/agenttest"
 	"github.com/felinics/memoh/internal/agent/answer"
 	"github.com/felinics/memoh/internal/agent/drive"
-	"github.com/felinics/memoh/internal/agent/drivetest"
+	"github.com/felinics/memoh/internal/agent/drive/drivetest"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/outcome"
 	"github.com/felinics/memoh/internal/agent/runreq"

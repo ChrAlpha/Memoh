@@ -172,7 +172,7 @@ func orchestrationDirs() []string {
 // part of the file set the orchestration rules cover.
 var testSupportDirs = []string{
 	agentParent + "/agenttest",
-	agentParent + "/drivetest",
+	agentParent + "/drive/drivetest",
 }
 
 // parentFiles lists the Go files directly in internal/agent.
