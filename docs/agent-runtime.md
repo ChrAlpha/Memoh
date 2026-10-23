@@ -66,6 +66,38 @@ RC versions are checked against their persisted event cursors. Restart replay ke
 the complete event chain for newer edits, including edits received before compaction
 started. Artifact commit additionally verifies the full durable source hash.
 
+A thread's history has no time window. It is one rolling summary, a compaction
+frontier, and the raw rows kept before the frontier: what lies before the
+frontier reaches a request as the summary or as a kept row, and what lies after
+it stays raw. Kept rows are a run's inputs and steers, which the summarizer
+reads but never claims, so a run that folds its own earlier steps leaves
+`[input, summary, latest steps]`; once the run is over the input is an ordinary
+candidate and the next compaction folds it. Compaction folds the summary and
+the oldest complete foldable units into a new summary; committing it moves the
+frontier, and a pass that cannot read everything at once repeats that step.
+The frontier is not stored apart from the summaries: it is what the usable
+summaries of the current epoch cover, so it moves only when a summary commits,
+and neither a byte window nor a cutoff moves it.
+
+A load starts at the oldest visible row no usable summary replaces
+(`GetSessionHistoryAnchor`): the frontier, or the oldest kept row if one
+precedes it, or the newest row when every row is summarized. Chat and
+turn-response loads read newest-first within the byte budget from there; rows a
+summary replaced cost no budget, so a load costs what is unsummarized, not the
+thread's length. A thread whose history predates this has no summary yet, so
+its first over-budget turn folds its whole backlog once.
+
+An edit or retry renders the history as it stood at its cutoff: rows before the
+cutoff, folded only by the summaries that end before it, with the summary a
+later one superseded active again (`ArtifactProjection.LoadSessionBefore`).
+That is the frontier the replacement leaves: hiding or replacing a turn whose
+rows a summary of the current epoch covers calls `memoh_rewind_compaction`,
+which moves the session to a new epoch and carries every summary that ends
+before the turn into it. Only the summaries that reach the turn are retired,
+so a retry after in-run compaction refolds from the previous summary rather
+than from the start of the thread. Deleting rows, adding an asset to a stored
+row and clearing history still retire every summary of the epoch.
+
 Rendered artifacts, candidate payloads and claim verification use bounded reads.
 In-run recovery does not load the raw history span or reread ancestor summaries;
 legacy artifacts without exact coverage fail explicitly. Owner fencing, claim
