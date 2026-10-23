@@ -62,6 +62,18 @@ func TestTimelineArtifactsSkipsUnusableArtifacts(t *testing.T) {
 	}
 }
 
+// A floor lists none of the sources it leaves out; its floor time replaces
+// them instead.
+func TestTimelineArtifactsProjectsAFloor(t *testing.T) {
+	projected := TimelineArtifacts([]Artifact{
+		{ID: "floor", Summary: "40 earlier messages are left out", AnchorStartMs: 1000, AnchorEndMs: 2500, FloorMs: 2500, FloorNotice: "40 earlier messages are left out"},
+		{ID: "legacy-empty-coverage", Summary: "cannot replace anything"},
+	})
+	if len(projected) != 1 || projected[0].ID != "floor" || projected[0].FloorMs != 2500 || projected[0].AnchorEndMs != 2500 || len(projected[0].Sources) != 0 {
+		t.Fatalf("projected = %+v, want only the floor, by its floor time", projected)
+	}
+}
+
 func TestTimelineRollupKeepsAnEditItsParentNeverCovered(t *testing.T) {
 	for _, versioned := range []bool{false, true} {
 		t.Run(fmt.Sprintf("event_cursor=%v", versioned), func(t *testing.T) {

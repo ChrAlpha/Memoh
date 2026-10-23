@@ -440,3 +440,31 @@ func TestComposeContextWithArtifactsRendersUncoveredSourcesInsideTheSpanBeforeTh
 		t.Fatalf("composed %q, want %q", got, want)
 	}
 }
+
+// A floor leaves every source received or created up to it out of the
+// context, listed or not, and its summary opens what is left.
+func TestComposeContextWithArtifactsLeavesOutWhatLiesUnderTheFloor(t *testing.T) {
+	rc := RenderedContext{
+		textSegment("m-under", 1000, "under the floor"),
+		textSegment("m-at", 2000, "at the floor"),
+		textSegment("m-above", 3000, "above the floor"),
+	}
+	trs := []TurnResponseEntry{assistantTR(1500, "reply under the floor"), assistantTR(3500, "reply above the floor")}
+	artifacts := []CompactionArtifact{{ID: "floor", Summary: "2 earlier messages are left out", AnchorEndMs: 2000, FloorMs: 2000}}
+
+	composed := ComposeContextWithArtifacts(rc, trs, artifacts)
+	want := []string{
+		"user:<summary>\n2 earlier messages are left out\n</summary>",
+		"user:above the floor",
+		"assistant:reply above the floor",
+	}
+	if composed == nil || !reflect.DeepEqual(messageTexts(composed.Messages), want) {
+		t.Fatalf("messages = %#v, want %#v", composed, want)
+	}
+	if got := aboveCompactionFloor(rc, artifacts); len(got) != 1 || got[0].MessageID != "m-above" {
+		t.Fatalf("above floor = %+v, want only the segment received after it", got)
+	}
+	if got := aboveCompactionFloor(rc, []CompactionArtifact{{ID: "blank", FloorMs: 2000}}); len(got) != len(rc) {
+		t.Fatalf("an unusable artifact's floor left out %d segments", len(rc)-len(got))
+	}
+}

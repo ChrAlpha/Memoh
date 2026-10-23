@@ -33,11 +33,12 @@ func (s TimelineArtifactSource) ActiveCompactionArtifacts(ctx context.Context, b
 // Artifacts without a trustworthy summary or coverage must not swallow their
 // original sources, and legacy artifacts without any coverage cannot replace
 // anything — injecting them would duplicate the history they summarize — so
-// both are omitted entirely.
+// both are omitted entirely. A floor lists nothing it leaves out: its floor
+// time is what replaces those sources.
 func TimelineArtifacts(artifacts []Artifact) []timeline.CompactionArtifact {
 	projected := make([]timeline.CompactionArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		if artifact.CoverageMalformed || len(artifact.Coverage) == 0 || strings.TrimSpace(artifact.Summary) == "" {
+		if artifact.CoverageMalformed || len(artifact.Coverage) == 0 && artifact.FloorMs == 0 || strings.TrimSpace(artifact.Summary) == "" {
 			continue
 		}
 		sources := make([]timeline.CompactionSource, 0, len(artifact.Coverage))
@@ -58,6 +59,7 @@ func TimelineArtifacts(artifacts []Artifact) []timeline.CompactionArtifact {
 			ID:             artifact.ID,
 			Summary:        artifact.Summary,
 			AnchorEndMs:    artifact.AnchorEndMs,
+			FloorMs:        artifact.FloorMs,
 			CoverageAsOfMs: coverageAsOfMs,
 			Sources:        sources,
 		})

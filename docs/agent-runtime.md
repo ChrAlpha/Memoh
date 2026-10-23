@@ -85,8 +85,24 @@ A load starts at the oldest visible row no usable summary replaces
 precedes it, or the newest row when every row is summarized. Chat and
 turn-response loads read newest-first within the byte budget from there; rows a
 summary replaced cost no budget, so a load costs what is unsummarized, not the
-thread's length. A thread whose history predates this has no summary yet, so
-its first over-budget turn folds its whole backlog once.
+thread's length.
+
+A thread whose history predates rolling summaries can hold far more unsummarized
+history than any of its requests read. An event that names no view first stands
+such a history on a floor when no active summary stands on one (`placeFloor`):
+it keeps what the thread's last request read, at least the history budget, and
+every turn after it, or the history budget back from the newest turn when no
+request has been answered yet. Every older turn is left out of the request
+without being summarized, and the floor never reaches the rows the request keeps
+or an edit's cutoff. The floor is a summary of its own that claims those rows
+without listing them and opens with a notice of how many messages it left out,
+from when to when; the event's passes then fold only what is above it. Every
+summary that folds a floored one stands on the same floor and opens with the
+same notice, which the summarizer neither reads nor writes. A rewind to before
+the floor retires it like any summary that reaches the changed turn, and the
+next event sets another floor if the history before the rewind needs one.
+Discuss and pipeline composition, and event replay, leave out what lies under
+the floor.
 
 An edit or retry renders the history as it stood at its cutoff: rows before the
 cutoff, folded only by the summaries that end before it, with the summary a

@@ -80,6 +80,8 @@ SET status = $2,
     coverage = $8,
     anchor_start_ms = $9,
     anchor_end_ms = $10,
+    floor_ms = $11,
+    floor_notice = $12,
     completed_at = now()
 FROM locked_compact locked
 WHERE compact.team_id = public.memoh_current_team_id()
@@ -111,6 +113,7 @@ WHERE compact.team_id = public.memoh_current_team_id()
 RETURNING compact.id, compact.bot_id, compact.session_id, compact.status, compact.summary,
           compact.message_count, compact.error_message, compact.usage, compact.model_id,
           compact.artifact_version, compact.coverage, compact.anchor_start_ms, compact.anchor_end_ms,
+          compact.floor_ms, compact.floor_notice,
           compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at,
           compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id
 `
@@ -126,6 +129,8 @@ type CompleteCompactionLogParams struct {
 	Coverage      []byte      `json:"coverage"`
 	AnchorStartMs int64       `json:"anchor_start_ms"`
 	AnchorEndMs   int64       `json:"anchor_end_ms"`
+	FloorMs       int64       `json:"floor_ms"`
+	FloorNotice   string      `json:"floor_notice"`
 }
 
 func (q *Queries) CompleteCompactionLog(ctx context.Context, arg CompleteCompactionLogParams) (BotHistoryMessageCompact, error) {
@@ -140,6 +145,8 @@ func (q *Queries) CompleteCompactionLog(ctx context.Context, arg CompleteCompact
 		arg.Coverage,
 		arg.AnchorStartMs,
 		arg.AnchorEndMs,
+		arg.FloorMs,
+		arg.FloorNotice,
 	)
 	var i BotHistoryMessageCompact
 	err := row.Scan(
@@ -156,6 +163,8 @@ func (q *Queries) CompleteCompactionLog(ctx context.Context, arg CompleteCompact
 		&i.Coverage,
 		&i.AnchorStartMs,
 		&i.AnchorEndMs,
+		&i.FloorMs,
+		&i.FloorNotice,
 		&i.ArtifactLevel,
 		&i.ParentIds,
 		&i.SupersededBy,
@@ -173,7 +182,7 @@ WITH target_compact AS MATERIALIZED (
   SELECT compact.id, compact.session_id, compact.team_id
   FROM bot_history_message_compacts compact
   WHERE compact.team_id = public.memoh_current_team_id()
-    AND compact.id = $12
+    AND compact.id = $14
     AND compact.status = 'pending'
 ),
 owner_session AS MATERIALIZED (
@@ -211,7 +220,7 @@ locked_parents AS MATERIALIZED (
    AND owner.compaction_epoch = target.compaction_epoch
   WHERE parent.team_id = public.memoh_current_team_id()
     AND $1::text = 'ok'
-    AND parent.id = ANY($11::uuid[])
+    AND parent.id = ANY($13::uuid[])
     AND parent.bot_id = target.bot_id
     AND parent.session_id = target.session_id
     AND parent.compaction_epoch = owner.compaction_epoch
@@ -242,7 +251,7 @@ eligible_completion AS MATERIALIZED (
        AND (
          SELECT count(*)
          FROM locked_parents
-       ) = CARDINALITY($11::uuid[])
+       ) = CARDINALITY($13::uuid[])
      )
 ),
 superseded_parents AS (
@@ -277,8 +286,10 @@ SET status = $1,
     coverage = $7,
     anchor_start_ms = $8,
     anchor_end_ms = $9,
-    artifact_level = $10,
-    parent_ids = $11::uuid[],
+    floor_ms = $10,
+    floor_notice = $11,
+    artifact_level = $12,
+    parent_ids = $13::uuid[],
     completed_at = now()
 FROM eligible_completion eligible
 CROSS JOIN superseded_parent_count parent_count
@@ -288,11 +299,12 @@ WHERE compact.team_id = public.memoh_current_team_id()
   AND compact.status = 'pending'
   AND (
     $1::text <> 'ok'
-    OR parent_count.value = CARDINALITY($11::uuid[])
+    OR parent_count.value = CARDINALITY($13::uuid[])
   )
 RETURNING compact.id, compact.bot_id, compact.session_id, compact.status, compact.summary,
           compact.message_count, compact.error_message, compact.usage, compact.model_id,
           compact.artifact_version, compact.coverage, compact.anchor_start_ms, compact.anchor_end_ms,
+          compact.floor_ms, compact.floor_notice,
           compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at,
           compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id
 `
@@ -307,6 +319,8 @@ type CompleteCompactionRollupParams struct {
 	Coverage      []byte        `json:"coverage"`
 	AnchorStartMs int64         `json:"anchor_start_ms"`
 	AnchorEndMs   int64         `json:"anchor_end_ms"`
+	FloorMs       int64         `json:"floor_ms"`
+	FloorNotice   string        `json:"floor_notice"`
 	Level         int32         `json:"level"`
 	Parents       []pgtype.UUID `json:"parents"`
 	ID            pgtype.UUID   `json:"id"`
@@ -323,6 +337,8 @@ func (q *Queries) CompleteCompactionRollup(ctx context.Context, arg CompleteComp
 		arg.Coverage,
 		arg.AnchorStartMs,
 		arg.AnchorEndMs,
+		arg.FloorMs,
+		arg.FloorNotice,
 		arg.Level,
 		arg.Parents,
 		arg.ID,
@@ -342,6 +358,8 @@ func (q *Queries) CompleteCompactionRollup(ctx context.Context, arg CompleteComp
 		&i.Coverage,
 		&i.AnchorStartMs,
 		&i.AnchorEndMs,
+		&i.FloorMs,
+		&i.FloorNotice,
 		&i.ArtifactLevel,
 		&i.ParentIds,
 		&i.SupersededBy,
@@ -379,7 +397,8 @@ INSERT INTO bot_history_message_compacts (bot_id, session_id, compaction_epoch, 
 SELECT $1, owner_session.id, owner_session.compaction_epoch, owner_session.team_id
 FROM owner_session
 RETURNING id, bot_id, session_id, status, summary, message_count, error_message, usage, model_id,
-          artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, parent_ids,
+          artifact_version, coverage, anchor_start_ms, anchor_end_ms, floor_ms, floor_notice,
+          artifact_level, parent_ids,
           superseded_by, superseded_at, compaction_epoch, started_at, completed_at, team_id
 `
 
@@ -406,6 +425,8 @@ func (q *Queries) CreateCompactionLog(ctx context.Context, arg CreateCompactionL
 		&i.Coverage,
 		&i.AnchorStartMs,
 		&i.AnchorEndMs,
+		&i.FloorMs,
+		&i.FloorNotice,
 		&i.ArtifactLevel,
 		&i.ParentIds,
 		&i.SupersededBy,
@@ -419,7 +440,7 @@ func (q *Queries) CreateCompactionLog(ctx context.Context, arg CreateCompactionL
 }
 
 const getActiveCompactionArtifactWithinBytes = `-- name: GetActiveCompactionArtifactWithinBytes :one
-SELECT compact.id, compact.bot_id, compact.session_id, compact.status, compact.summary, compact.message_count, compact.error_message, compact.usage, compact.model_id, compact.artifact_version, compact.coverage, compact.anchor_start_ms, compact.anchor_end_ms, compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at, compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id
+SELECT compact.id, compact.bot_id, compact.session_id, compact.status, compact.summary, compact.message_count, compact.error_message, compact.usage, compact.model_id, compact.artifact_version, compact.coverage, compact.anchor_start_ms, compact.anchor_end_ms, compact.floor_ms, compact.floor_notice, compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at, compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id
 FROM bot_history_message_compacts compact
 JOIN bot_sessions owner_session
   ON owner_session.id = compact.session_id
@@ -466,6 +487,8 @@ func (q *Queries) GetActiveCompactionArtifactWithinBytes(ctx context.Context, ar
 		&i.Coverage,
 		&i.AnchorStartMs,
 		&i.AnchorEndMs,
+		&i.FloorMs,
+		&i.FloorNotice,
 		&i.ArtifactLevel,
 		&i.ParentIds,
 		&i.SupersededBy,
@@ -480,7 +503,8 @@ func (q *Queries) GetActiveCompactionArtifactWithinBytes(ctx context.Context, ar
 
 const getCompactionLogByID = `-- name: GetCompactionLogByID :one
 SELECT id, bot_id, session_id, status, summary, message_count, error_message, usage, model_id,
-       artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, parent_ids,
+       artifact_version, coverage, anchor_start_ms, anchor_end_ms, floor_ms, floor_notice,
+       artifact_level, parent_ids,
        superseded_by, superseded_at, compaction_epoch, started_at, completed_at, team_id
 FROM bot_history_message_compacts compact
 WHERE compact.team_id = public.memoh_current_team_id()
@@ -515,6 +539,8 @@ func (q *Queries) GetCompactionLogByID(ctx context.Context, id pgtype.UUID) (Bot
 		&i.Coverage,
 		&i.AnchorStartMs,
 		&i.AnchorEndMs,
+		&i.FloorMs,
+		&i.FloorNotice,
 		&i.ArtifactLevel,
 		&i.ParentIds,
 		&i.SupersededBy,
@@ -529,7 +555,8 @@ func (q *Queries) GetCompactionLogByID(ctx context.Context, id pgtype.UUID) (Bot
 
 const listCompactionArtifactLineageBySession = `-- name: ListCompactionArtifactLineageBySession :many
 SELECT c.id, c.bot_id, c.session_id, c.status, c.summary, c.message_count, c.error_message, c.usage, c.model_id,
-       c.artifact_version, c.coverage, c.anchor_start_ms, c.anchor_end_ms, c.artifact_level, c.parent_ids,
+       c.artifact_version, c.coverage, c.anchor_start_ms, c.anchor_end_ms, c.floor_ms, c.floor_notice,
+       c.artifact_level, c.parent_ids,
        c.superseded_by, c.superseded_at, c.compaction_epoch, c.started_at, c.completed_at, c.team_id
 FROM bot_history_message_compacts c
 JOIN bot_sessions owner_session
@@ -578,6 +605,8 @@ func (q *Queries) ListCompactionArtifactLineageBySession(ctx context.Context, id
 			&i.Coverage,
 			&i.AnchorStartMs,
 			&i.AnchorEndMs,
+			&i.FloorMs,
+			&i.FloorNotice,
 			&i.ArtifactLevel,
 			&i.ParentIds,
 			&i.SupersededBy,
@@ -650,7 +679,8 @@ func (q *Queries) ListCompactionArtifactParentIDsBySuccessor(ctx context.Context
 
 const listCompactionLogsByBot = `-- name: ListCompactionLogsByBot :many
 SELECT id, bot_id, session_id, status, summary, message_count, error_message, usage, model_id,
-       artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, parent_ids,
+       artifact_version, coverage, anchor_start_ms, anchor_end_ms, floor_ms, floor_notice,
+       artifact_level, parent_ids,
        superseded_by, superseded_at, compaction_epoch, started_at, completed_at, team_id
 FROM bot_history_message_compacts
 WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
@@ -687,6 +717,8 @@ func (q *Queries) ListCompactionLogsByBot(ctx context.Context, arg ListCompactio
 			&i.Coverage,
 			&i.AnchorStartMs,
 			&i.AnchorEndMs,
+			&i.FloorMs,
+			&i.FloorNotice,
 			&i.ArtifactLevel,
 			&i.ParentIds,
 			&i.SupersededBy,

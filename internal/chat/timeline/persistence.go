@@ -165,6 +165,7 @@ func (s *EventStore) loadEvents(ctx context.Context, botID, sessionID string, ar
 	rows := make([]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow, 0, defaultReplayPageSize)
 	params := sqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams{
 		SessionID:               pgSessionID,
+		FloorMs:                 compactionFloor(artifacts),
 		CoveredExternalMessages: encodedCoverage,
 		CoveredEventCursors:     encodedCursors,
 		MaxBytes:                remaining,

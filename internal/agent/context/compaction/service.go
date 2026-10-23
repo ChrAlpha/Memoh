@@ -137,10 +137,13 @@ func (s *Service) publishActivity(botID string) {
 // summary. A pass folds as much as one summarizer call can read and commits
 // it; the event passes again only while candidates are left that the call
 // could not read. An edit or retry's event first rewinds the session to
-// before the turn it replaces, as the replacement's first step does. It
-// returns the passes it committed: none when there was nothing to fold or the
-// session's compaction was already in flight. A failed pass ends the event
-// with an *EventError and leaves the passes before it committed.
+// before the turn it replaces, as the replacement's first step does. An event
+// that names no view first stands a history no summary has reached on a
+// floor, so it folds only what the thread's requests could still read. It
+// returns the passes it committed, the floor's first: none when there was
+// nothing to fold or the session's compaction was already in flight. A failed
+// pass ends the event with an *EventError and leaves the passes before it
+// committed.
 func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
 	run, ok := s.beginSessionCompaction(cfg.SessionID)
 	if !ok {
@@ -194,6 +197,16 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 	}
 
 	var passes []Pass
+	if cfg.View == nil {
+		floor, placed, err := s.placeFloor(ctx, botUUID, sessionUUID, cfg)
+		if err != nil {
+			compactErr = err
+			return nil, err
+		}
+		if placed {
+			passes = append(passes, floor)
+		}
+	}
 	for {
 		pass, folded, err := s.doCompaction(ctx, botUUID, sessionUUID, cfg)
 		if err != nil {

@@ -267,7 +267,7 @@ func resolveCatalogArtifact(catalog *compaction.ArtifactCatalog, owner compactio
 	if compactID := strings.TrimSpace(record.CompactID); compactID != "" {
 		if artifact, ok := catalog.Resolve(owner, compactID); ok {
 			isSummary := record.SourceKind == historyfrag.SourceCompactionLog && record.Kind == contextfrag.KindConversationSummary
-			if isSummary || (!artifact.CoverageMalformed && len(artifact.Coverage) == 0) || artifact.CoversRecord(record) {
+			if isSummary || (!artifact.CoverageMalformed && len(artifact.Coverage) == 0) || artifact.CoversRecord(record) || artifact.OmitsRecord(record) {
 				return artifact, true
 			}
 		}
@@ -293,7 +293,9 @@ func conflictingArtifactIDs(catalog *compaction.ArtifactCatalog, messages []hist
 			blocked[artifact.ID] = struct{}{}
 		}
 		if compactID := strings.TrimSpace(record.CompactID); compactID != "" {
-			check(catalog.Resolve(owner, compactID))
+			if artifact, ok := catalog.Resolve(owner, compactID); !ok || !artifact.OmitsRecord(record) {
+				check(artifact, ok)
+			}
 		}
 		check(catalog.ResolveCoverageIdentity(owner, record.Ref))
 	}
@@ -356,7 +358,7 @@ func summaryRecordsFromArtifacts(artifacts []compaction.Artifact, scope contextf
 
 // refreshCompactedSummaryCoverage backfills legacy summaries that predate
 // persisted artifact coverage. New artifacts already carry immutable refs and
-// avoid this per-summary query.
+// avoid this per-summary query; a floor lists none of the rows it leaves out.
 func (s *Service) refreshCompactedSummaryCoverage(ctx context.Context, messages []historyfrag.HistoryRecord, resolve func(historyfrag.HistoryRecord) (compaction.Artifact, bool)) []historyfrag.HistoryRecord {
 	if s.queries == nil {
 		return messages
@@ -366,7 +368,7 @@ func (s *Service) refreshCompactedSummaryCoverage(ctx context.Context, messages 
 		if record.SourceKind != historyfrag.SourceCompactionLog || record.Kind != contextfrag.KindConversationSummary {
 			continue
 		}
-		if artifact, ok := resolve(*record); ok && len(artifact.Coverage) > 0 {
+		if artifact, ok := resolve(*record); ok && (len(artifact.Coverage) > 0 || artifact.FloorMs > 0) {
 			continue
 		}
 		compactID, err := db.ParseUUID(record.CompactID)

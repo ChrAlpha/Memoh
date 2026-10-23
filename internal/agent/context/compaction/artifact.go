@@ -26,6 +26,10 @@ type CoveredSource struct {
 	EventCursor            int64                  `json:"event_cursor,omitempty"`
 }
 
+// Artifact is one persisted compaction summary. FloorMs, when set, is the
+// floor it stands on: the rows its lineage claimed up to then are left out of
+// the request unsummarized, and Coverage does not list them. FloorNotice
+// opens Summary and says so.
 type Artifact struct {
 	ID                string
 	BotID             string
@@ -36,6 +40,8 @@ type Artifact struct {
 	Coverage          []CoveredSource
 	AnchorStartMs     int64
 	AnchorEndMs       int64
+	FloorMs           int64
+	FloorNotice       string
 	Level             int
 	ParentIDs         []string
 	SupersededBy      string
@@ -72,6 +78,29 @@ func (a Artifact) HistoryRecord(scope contextfrag.Scope) historyfrag.HistoryReco
 	return record
 }
 
+// OmitsRecord reports whether a row the summary's lineage claimed lies under
+// its floor, which leaves the row out of the request without listing it.
+func (a Artifact) OmitsRecord(record historyfrag.HistoryRecord) bool {
+	return a.FloorMs > 0 && !record.CreatedAt.IsZero() && record.CreatedAt.UnixMilli() <= a.FloorMs
+}
+
+// SummaryBody is the summary without the floor notice that opens it: what a
+// summarizer folding it reads.
+func (a Artifact) SummaryBody() string {
+	return strings.TrimSpace(strings.TrimPrefix(a.Summary, a.FloorNotice))
+}
+
+// withFloorNotice opens a summary with the notice of the floor it stands on.
+func withFloorNotice(notice, summary string) string {
+	if notice == "" {
+		return summary
+	}
+	if summary == "" {
+		return notice
+	}
+	return notice + "\n\n" + summary
+}
+
 func (a Artifact) CoversRecord(record historyfrag.HistoryRecord) bool {
 	createdAtMs := int64(0)
 	if !record.CreatedAt.IsZero() {
@@ -92,6 +121,8 @@ type artifactMetadata struct {
 	Coverage      []byte
 	AnchorStartMs int64
 	AnchorEndMs   int64
+	FloorMs       int64
+	FloorNotice   string
 }
 
 func artifactMetadataFor(items []CompactionCandidate, ids []pgtype.UUID) (artifactMetadata, error) {
@@ -132,6 +163,9 @@ func artifactMetadataFor(items []CompactionCandidate, ids []pgtype.UUID) (artifa
 	return metadata, nil
 }
 
+// rollupArtifactMetadata is what a summary folding parents covers: their
+// coverage and current's, on the highest floor any of them stands on. A
+// floor's anchors span the rows it left out, which no coverage lists.
 func rollupArtifactMetadata(parents []Artifact, current artifactMetadata) (artifactMetadata, error) {
 	currentCoverage, err := DecodeArtifactCoverage(current.Coverage)
 	if err != nil {
@@ -139,7 +173,7 @@ func rollupArtifactMetadata(parents []Artifact, current artifactMetadata) (artif
 	}
 	covered := make([]CoveredSource, 0, len(currentCoverage))
 	for _, parent := range parents {
-		if len(parent.Coverage) == 0 {
+		if len(parent.Coverage) == 0 && parent.FloorMs == 0 {
 			return artifactMetadata{}, fmt.Errorf("%w: artifact_id=%s", errIncompleteAbsorbedCoverage, parent.ID)
 		}
 		for _, source := range parent.Coverage {
@@ -169,7 +203,27 @@ func rollupArtifactMetadata(parents []Artifact, current artifactMetadata) (artif
 		metadata.AnchorStartMs = covered[0].CreatedAtMs
 		metadata.AnchorEndMs = covered[len(covered)-1].CreatedAtMs
 	}
+	metadata.FloorMs, metadata.FloorNotice = standingFloor(parents)
+	for _, parent := range parents {
+		if parent.FloorMs > 0 && (metadata.AnchorStartMs == 0 || parent.AnchorStartMs < metadata.AnchorStartMs) {
+			metadata.AnchorStartMs = parent.AnchorStartMs
+		}
+	}
+	metadata.AnchorEndMs = max(metadata.AnchorEndMs, metadata.FloorMs)
 	return metadata, nil
+}
+
+// standingFloor is the highest floor any of parents stands on: the floor a
+// summary folding them stands on, and the notice that opens it.
+func standingFloor(parents []Artifact) (int64, string) {
+	var floorMs int64
+	var notice string
+	for _, parent := range parents {
+		if parent.FloorMs > floorMs {
+			floorMs, notice = parent.FloorMs, parent.FloorNotice
+		}
+	}
+	return floorMs, notice
 }
 
 func DecodeArtifactCoverage(raw []byte) ([]CoveredSource, error) {

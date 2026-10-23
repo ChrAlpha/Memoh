@@ -2069,6 +2069,133 @@ func (q *Queries) DeleteMessagesByIDs(ctx context.Context, ids []pgtype.UUID) er
 	return err
 }
 
+const getCompactionFloorTurn = `-- name: GetCompactionFloorTurn :one
+WITH owner_session AS MATERIALIZED (
+  SELECT s.id, s.compaction_epoch
+  FROM bot_sessions s
+  WHERE s.team_id = public.memoh_current_team_id()
+    AND s.id = $2
+), last_request AS MATERIALIZED (
+  SELECT COALESCE((m.usage->>'inputTokens')::bigint, 0)::bigint AS input_tokens, m.turn_position
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $2
+    AND m.role = 'assistant'
+    AND m.usage IS NOT NULL
+    AND ($3::timestamptz IS NULL OR m.created_at < $3::timestamptz)
+  ORDER BY m.created_at DESC
+  LIMIT 1
+), protected_rows AS MATERIALIZED (
+  SELECT MIN(m.turn_position) AS turn_position, MIN(m.created_at) AS created_at
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $2
+    AND (m.id = ANY($4::uuid[])
+      OR m.source_message_id = ANY($5::text[]))
+), horizon AS MATERIALIZED (
+  SELECT LEAST(
+    $3::timestamptz,
+    (SELECT created_at FROM protected_rows),
+    (
+      SELECT to_timestamp(MIN(e.received_at_ms) / 1000.0)
+      FROM bot_session_events e
+      WHERE e.team_id = public.memoh_current_team_id()
+        AND e.session_id = $2
+        AND e.external_message_id = ANY($5::text[])
+    )
+  ) AS created_at
+), candidate_turns AS MATERIALIZED (
+  SELECT
+    m.turn_position,
+    COALESCE(SUM(octet_length(m.content::text)) FILTER (
+      WHERE h.created_at IS NULL OR m.created_at < h.created_at
+    ), 0)::BIGINT AS content_bytes,
+    bool_or(h.created_at IS NOT NULL AND m.created_at >= h.created_at) AS late
+  FROM bot_visible_history_messages m
+  JOIN owner_session s ON s.id = m.session_id
+  CROSS JOIN horizon h
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $2
+    AND m.turn_id IS NOT NULL
+    AND m.turn_position IS NOT NULL
+    AND m.turn_message_seq IS NOT NULL
+    AND (m.compact_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM bot_history_message_compacts c
+      WHERE c.team_id = public.memoh_current_team_id()
+        AND c.id = m.compact_id
+        AND c.bot_id = m.bot_id
+        AND c.session_id = s.id
+        AND c.compaction_epoch = s.compaction_epoch
+        AND (
+          (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
+          OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
+        )
+    ))
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  GROUP BY m.turn_position
+), ranked_turns AS MATERIALIZED (
+  SELECT
+    t.turn_position,
+    COALESCE(SUM(t.content_bytes) OVER (
+      ORDER BY t.turn_position DESC
+      ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+    ), 0)::BIGINT AS newer_bytes
+  FROM candidate_turns t
+  WHERE t.turn_position <= COALESCE((SELECT turn_position FROM last_request), 9223372036854775807)
+), kept AS MATERIALIZED (
+  SELECT GREATEST(
+    $6::bigint,
+    COALESCE((SELECT input_tokens FROM last_request), 0)
+  )::BIGINT AS tokens
+)
+SELECT r.turn_position::BIGINT AS floor_turn_position, k.tokens AS kept_tokens
+FROM ranked_turns r
+CROSS JOIN kept k
+WHERE r.newer_bytes > k.tokens * $1::bigint
+  AND r.turn_position < COALESCE((SELECT turn_position FROM protected_rows), 9223372036854775807)
+  AND r.turn_position < COALESCE((SELECT MIN(t.turn_position) FROM candidate_turns t WHERE t.late), 9223372036854775807)
+ORDER BY r.turn_position DESC
+LIMIT 1
+`
+
+type GetCompactionFloorTurnParams struct {
+	BytesPerToken               int64              `json:"bytes_per_token"`
+	SessionID                   pgtype.UUID        `json:"session_id"`
+	CreatedBefore               pgtype.Timestamptz `json:"created_before"`
+	ProtectedMessageIds         []pgtype.UUID      `json:"protected_message_ids"`
+	ProtectedExternalMessageIds []string           `json:"protected_external_message_ids"`
+	HistoryBudgetTokens         int64              `json:"history_budget_tokens"`
+}
+
+type GetCompactionFloorTurnRow struct {
+	FloorTurnPosition int64 `json:"floor_turn_position"`
+	KeptTokens        int64 `json:"kept_tokens"`
+}
+
+// The newest turn a compaction floor leaves out; no row when the candidates
+// need none. The floor keeps what the session's last request read and every
+// turn after it: the input tokens of the newest assistant row before
+// created_before, and at least history_budget_tokens, at bytes_per_token of
+// content as a history load counts it, back from that row's turn, or from the
+// newest turn when no request has been answered. Every older candidate turn
+// is left out. A floor stays below the turns of the protected rows and
+// inbound messages, and below every turn holding a candidate created at or
+// after the earliest of them or created_before, so it leaves out whole turns
+// from before what the request keeps.
+func (q *Queries) GetCompactionFloorTurn(ctx context.Context, arg GetCompactionFloorTurnParams) (GetCompactionFloorTurnRow, error) {
+	row := q.db.QueryRow(ctx, getCompactionFloorTurn,
+		arg.BytesPerToken,
+		arg.SessionID,
+		arg.CreatedBefore,
+		arg.ProtectedMessageIds,
+		arg.ProtectedExternalMessageIds,
+		arg.HistoryBudgetTokens,
+	)
+	var i GetCompactionFloorTurnRow
+	err := row.Scan(&i.FloorTurnPosition, &i.KeptTokens)
+	return i, err
+}
+
 const getHistoryTurnByID = `-- name: GetHistoryTurnByID :one
 WITH target AS (
   SELECT m.turn_id, m.session_id, m.turn_position
@@ -6318,6 +6445,111 @@ func (q *Queries) MarkMessagesCompacted(ctx context.Context, arg MarkMessagesCom
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const markMessagesOmitted = `-- name: MarkMessagesOmitted :one
+WITH target_compact AS MATERIALIZED (
+  SELECT compact.id, compact.bot_id, compact.session_id
+  FROM bot_history_message_compacts compact
+  WHERE compact.team_id = public.memoh_current_team_id()
+    AND compact.id = $1
+), owner_session AS MATERIALIZED (
+  SELECT session.id, session.bot_id, session.compaction_epoch
+  FROM bot_sessions session
+  JOIN target_compact target
+    ON target.session_id = session.id
+   AND target.bot_id = session.bot_id
+  WHERE session.team_id = public.memoh_current_team_id()
+  FOR UPDATE OF session
+), locked_target AS MATERIALIZED (
+  SELECT compact.id, compact.bot_id, compact.session_id
+  FROM bot_history_message_compacts compact
+  JOIN owner_session owner
+    ON owner.id = compact.session_id
+   AND owner.bot_id = compact.bot_id
+   AND owner.compaction_epoch = compact.compaction_epoch
+  WHERE compact.team_id = public.memoh_current_team_id()
+    AND compact.id = $1
+    AND compact.status = 'pending'
+  FOR UPDATE OF compact
+), omitted_rows AS MATERIALIZED (
+  SELECT m.id, m.compact_id
+  FROM bot_history_messages m
+  JOIN locked_target target
+    ON target.session_id = m.session_id
+   AND target.bot_id = m.bot_id
+  JOIN owner_session owner ON owner.id = m.session_id
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.turn_visible = true
+    AND m.turn_id IS NOT NULL
+    AND m.turn_position IS NOT NULL
+    AND m.turn_message_seq IS NOT NULL
+    AND m.turn_position <= $2::bigint
+    AND ($3::timestamptz IS NULL OR m.created_at < $3::timestamptz)
+    AND (m.compact_id IS NULL OR NOT EXISTS (
+      SELECT 1 FROM bot_history_message_compacts c
+      WHERE c.team_id = public.memoh_current_team_id()
+        AND c.id = m.compact_id
+        AND c.bot_id = m.bot_id
+        AND c.session_id = owner.id
+        AND c.compaction_epoch = owner.compaction_epoch
+        AND (
+          (c.status = 'ok' AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL)
+          OR (c.status = 'pending' AND c.started_at > now() - INTERVAL '15 minutes')
+        )
+    ))
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  ORDER BY m.id
+  FOR UPDATE OF m
+), reclaimed_claims AS (
+  UPDATE bot_history_message_compacts claim
+  SET status = 'error',
+      error_message = 'source lease reclaimed',
+      completed_at = now()
+  WHERE claim.team_id = public.memoh_current_team_id()
+    AND claim.id IN (SELECT o.compact_id FROM omitted_rows o WHERE o.compact_id IS NOT NULL)
+    AND claim.status = 'pending'
+  RETURNING claim.id
+), omitted AS (
+  UPDATE bot_history_messages message
+  SET compact_id = target.id
+  FROM omitted_rows o,
+       locked_target target
+  WHERE message.team_id = public.memoh_current_team_id()
+    AND message.id = o.id
+  RETURNING message.created_at
+)
+SELECT
+  COUNT(*)::BIGINT AS omitted_count,
+  MIN(omitted.created_at)::timestamptz AS first_created_at,
+  MAX(omitted.created_at)::timestamptz AS last_created_at
+FROM omitted
+`
+
+type MarkMessagesOmittedParams struct {
+	CompactID     pgtype.UUID        `json:"compact_id"`
+	TurnPosition  int64              `json:"turn_position"`
+	CreatedBefore pgtype.Timestamptz `json:"created_before"`
+}
+
+type MarkMessagesOmittedRow struct {
+	OmittedCount   int64              `json:"omitted_count"`
+	FirstCreatedAt pgtype.Timestamptz `json:"first_created_at"`
+	LastCreatedAt  pgtype.Timestamptz `json:"last_created_at"`
+}
+
+// A compaction floor's pending attempt claims every candidate row before
+// created_before in the turns up to turn_position, which no summary it
+// writes reads: they stay claimed, so they are no longer candidates and a
+// history load starts after them. It takes the same locks as
+// MarkMessagesCompacted, session first, reclaims the stale attempts whose
+// rows it takes, and reports how many rows it claimed and when the first and
+// the last of them was created.
+func (q *Queries) MarkMessagesOmitted(ctx context.Context, arg MarkMessagesOmittedParams) (MarkMessagesOmittedRow, error) {
+	row := q.db.QueryRow(ctx, markMessagesOmitted, arg.CompactID, arg.TurnPosition, arg.CreatedBefore)
+	var i MarkMessagesOmittedRow
+	err := row.Scan(&i.OmittedCount, &i.FirstCreatedAt, &i.LastCreatedAt)
+	return i, err
 }
 
 const measureActiveMessagesBySession = `-- name: MeasureActiveMessagesBySession :one

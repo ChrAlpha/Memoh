@@ -73,7 +73,7 @@ func (s *Service) compactionParents(ctx context.Context, cfg TriggerConfig, maxB
 		if err != nil || artifact.CoverageMalformed || !artifactMatchesOwner(artifact, owner) {
 			return nil, failed(ReasonStaleSource, fmt.Errorf("invalid rendered artifact %s: %w", source.ID, errStaleSource))
 		}
-		if len(artifact.Coverage) == 0 {
+		if len(artifact.Coverage) == 0 && artifact.FloorMs == 0 {
 			return nil, failed(ReasonInputOverflow, fmt.Errorf("%w: artifact_id=%s", errIncompleteAbsorbedCoverage, source.ID))
 		}
 		// The loader already validated this immutable artifact's lineage when

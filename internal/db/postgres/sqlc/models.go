@@ -321,6 +321,8 @@ type BotHistoryMessageCompact struct {
 	Coverage        []byte             `json:"coverage"`
 	AnchorStartMs   int64              `json:"anchor_start_ms"`
 	AnchorEndMs     int64              `json:"anchor_end_ms"`
+	FloorMs         int64              `json:"floor_ms"`
+	FloorNotice     string             `json:"floor_notice"`
 	ArtifactLevel   int32              `json:"artifact_level"`
 	ParentIds       []pgtype.UUID      `json:"parent_ids"`
 	SupersededBy    pgtype.UUID        `json:"superseded_by"`

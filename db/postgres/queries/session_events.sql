@@ -36,6 +36,8 @@ ORDER BY received_at_ms ASC, created_at ASC, id ASC;
 -- Covered message/edit payloads are excluded in SQL before event_data reaches
 -- the process. If a covered message has a post-frontier mutation, its complete
 -- event chain remains eligible so edit projection still has its base node.
+-- Events received up to floor_ms lie under the frontier's floor: the request
+-- leaves them out unsummarized, so replay never reads them.
 WITH post_coverage_ids AS MATERIALIZED (
   SELECT DISTINCT changed.external_message_id
   FROM bot_session_events changed
@@ -61,6 +63,7 @@ WITH post_coverage_ids AS MATERIALIZED (
     ON changed.external_message_id = event.external_message_id
   WHERE event.team_id = public.memoh_current_team_id()
     AND event.session_id = sqlc.arg(session_id)
+    AND event.received_at_ms > sqlc.arg(floor_ms)::BIGINT
     AND (
       NOT sqlc.arg(has_cursor)::boolean
       OR (event.received_at_ms, event.created_at, event.id) < (

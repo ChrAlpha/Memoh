@@ -163,11 +163,7 @@ func artifactFromDBRow(row sqlc.BotHistoryMessageCompact) (Artifact, error) {
 		return Artifact{}, errors.New("compaction artifact: id is required")
 	}
 	coverage, coverageErr := DecodeArtifactCoverage(row.Coverage)
-	coverageMalformed := coverageErr != nil
-	if !coverageMalformed && len(coverage) > 0 {
-		coverageMalformed = row.AnchorStartMs != coverage[0].CreatedAtMs ||
-			row.AnchorEndMs != coverage[len(coverage)-1].CreatedAtMs
-	}
+	coverageMalformed := coverageErr != nil || !anchorsMatchCoverage(row, coverage)
 	version := int(row.ArtifactVersion)
 	if version == 0 {
 		version = ArtifactVersion
@@ -188,6 +184,8 @@ func artifactFromDBRow(row sqlc.BotHistoryMessageCompact) (Artifact, error) {
 		Coverage:          coverage,
 		AnchorStartMs:     row.AnchorStartMs,
 		AnchorEndMs:       row.AnchorEndMs,
+		FloorMs:           row.FloorMs,
+		FloorNotice:       row.FloorNotice,
 		Level:             int(row.ArtifactLevel),
 		ParentIDs:         parentIDs,
 		SupersededBy:      formatUUID(row.SupersededBy),
@@ -195,6 +193,24 @@ func artifactFromDBRow(row sqlc.BotHistoryMessageCompact) (Artifact, error) {
 		StartedAt:         pgTime(row.StartedAt.Time, row.StartedAt.Valid),
 		CoverageMalformed: coverageMalformed,
 	}, nil
+}
+
+// anchorsMatchCoverage reports whether an artifact's anchors span exactly
+// what it covers: its coverage and, on a floor, every row up to the floor
+// from the oldest one it left out.
+func anchorsMatchCoverage(row sqlc.BotHistoryMessageCompact, coverage []CoveredSource) bool {
+	if row.FloorMs <= 0 {
+		return len(coverage) == 0 ||
+			row.AnchorStartMs == coverage[0].CreatedAtMs && row.AnchorEndMs == coverage[len(coverage)-1].CreatedAtMs
+	}
+	end := row.FloorMs
+	if len(coverage) > 0 {
+		if row.AnchorStartMs > coverage[0].CreatedAtMs {
+			return false
+		}
+		end = max(end, coverage[len(coverage)-1].CreatedAtMs)
+	}
+	return row.AnchorStartMs > 0 && row.AnchorStartMs <= row.FloorMs && row.AnchorEndMs == end
 }
 
 func pgTime(value time.Time, valid bool) time.Time {

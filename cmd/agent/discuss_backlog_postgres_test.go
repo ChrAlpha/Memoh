@@ -326,8 +326,10 @@ func TestPostgresDiscussBacklogOverBudgetIsAnsweredAndNextRoundContinues(t *test
 }
 
 // A backlog the summarizer cannot reduce fails explicitly without a provider
-// call or consuming the batch; once the summarizer is back, the next message
-// is answered.
+// call or consuming the batch. The floor under what no request could read is
+// set before any summarizer call and stands; the failed summary leaves the
+// rest raw. Once the summarizer is back, the next message is answered on a
+// summary that stands on the floor.
 func TestPostgresDiscussBacklogSummarizerFailureFailsExplicitly(t *testing.T) {
 	f := newBacklogFixture(t)
 	f.failSummary.Store(true)
@@ -335,14 +337,19 @@ func TestPostgresDiscussBacklogSummarizerFailureFailsExplicitly(t *testing.T) {
 	if code := f.trigger(); code != "context.budget_unsatisfied" || f.modelCalls.Load() != 0 {
 		t.Fatalf("code=%q provider_calls=%d, want budget_unsatisfied before any provider call", code, f.modelCalls.Load())
 	}
-	if raw, compacted := f.backlogRows(); raw != 12 || compacted != 0 {
-		t.Fatalf("failed summaries changed history: raw=%d compacted=%d", raw, compacted)
+	raw, omitted := f.backlogRows()
+	if _, oldest := f.backlogRowsPrefixed("backlog-0"); raw == 0 || omitted == 0 || raw+omitted != 12 || oldest != 1 {
+		t.Fatalf("raw=%d omitted=%d oldest omitted=%d, want the floor under the oldest rows and the rest raw", raw, omitted, oldest)
+	}
+	var summarized int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_message_compacts WHERE session_id=$1 AND status='ok' AND (floor_ms = 0 OR summary <> floor_notice)`, f.sessionID).Scan(&summarized); err != nil || summarized != 0 {
+		t.Fatalf("summaries committed while the summarizer failed = %d (%v)", summarized, err)
 	}
 	f.failSummary.Store(false)
 	f.appendMessage("next-round", "next-round small message")
 	request := f.answer("next round", "next-round small message")
-	if !strings.Contains(request, "Earlier backlog summarized.") {
-		t.Fatal("the recovered round did not summarize the backlog")
+	if !strings.Contains(request, "Earlier backlog summarized.") || !strings.Contains(request, fmt.Sprintf("%d earlier messages of this conversation", omitted)) {
+		t.Fatal("the recovered round did not answer on a summary standing on the floor")
 	}
 }
 
