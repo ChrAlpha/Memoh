@@ -557,6 +557,9 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   next_turn_position BIGINT NOT NULL DEFAULT 1,
   compaction_epoch BIGINT NOT NULL DEFAULT 0,
+  -- history_horizon_at is where the session's agent history begins: older
+  -- rows are neither loaded nor compacted. NULL = the whole session. See 0170.
+  history_horizon_at TIMESTAMPTZ,
   runtime_fencing_token BIGINT NOT NULL DEFAULT 0 CHECK (runtime_fencing_token >= 0),
   runtime_reset_token UUID,
   runtime_reset_expires_at TIMESTAMPTZ,
@@ -2288,6 +2291,16 @@ CREATE INDEX IF NOT EXISTS idx_user_input_run
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_run
     ON public.bot_history_messages (team_id, run_id)
     WHERE run_id IS NOT NULL;
+
+-- Visible rows no compaction has claimed, by session and age: a history load
+-- finds the oldest one it must read without walking the summarized rows.
+CREATE INDEX IF NOT EXISTS idx_bot_history_messages_session_uncompacted
+    ON public.bot_history_messages (team_id, session_id, created_at)
+    WHERE compact_id IS NULL
+      AND turn_visible = true
+      AND turn_id IS NOT NULL
+      AND turn_position IS NOT NULL
+      AND turn_message_seq IS NOT NULL;
 
 -- Bot-scoped Connect-It bindings. Provider credentials and short-lived MCP
 -- session tokens remain in Connect-It; Memoh stores only the durable

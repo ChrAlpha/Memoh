@@ -128,7 +128,8 @@ created_session AS (
     workdir_id,
     preferred_chat_model_id,
     preferred_reasoning_effort,
-    preferred_external_model_id
+    preferred_external_model_id,
+    history_horizon_at
   )
   SELECT
     fp.bot_id,
@@ -163,7 +164,10 @@ created_session AS (
     -- same way on open.
     fp.preferred_chat_model_id,
     fp.preferred_reasoning_effort,
-    fp.preferred_external_model_id
+    fp.preferred_external_model_id,
+    -- The copied rows keep their creation times, so the fork's history
+    -- begins where the source's does.
+    fp.history_horizon_at
   FROM fork_plan fp
   CROSS JOIN prepared_metadata pm
   RETURNING *

@@ -126,7 +126,7 @@ type StartTurnCommand struct {
 	// without materializing or forwarding the rejected context.
 	DiscussContextTokens int
 	// DiscussViewFromMs is when the oldest context entry Channel loaded was
-	// received. Compaction reads from here or the time window, if earlier.
+	// received. Compaction reads from here or the history horizon, if earlier.
 	DiscussViewFromMs        int64
 	DiscussRecoveryExhausted bool
 	DiscussContextOverflow   bool

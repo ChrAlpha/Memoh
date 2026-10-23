@@ -175,6 +175,40 @@ func TestPostgresForkFromAssistantTurnCopiesVisibleTurns(t *testing.T) {
 	}
 }
 
+func TestPostgresForkFromAssistantTurnKeepsTheHistoryHorizon(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresSessionTestTx(t, ctx)
+	setupPostgresSessionForkFixtures(t, ctx, tx)
+	horizon := time.Now().UTC().Add(-3 * time.Minute).Truncate(time.Microsecond)
+	if _, err := tx.Exec(ctx, `UPDATE bot_sessions SET history_horizon_at = $2 WHERE id = $1`, postgresSessionTestSessionID, horizon); err != nil {
+		t.Fatalf("set source horizon: %v", err)
+	}
+
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)), nil)
+	fork, err := svc.ForkFromAssistantTurn(ctx, ForkFromAssistantInput{
+		BotID:           postgresSessionTestBotID,
+		ThreadID:        postgresSessionTestSessionID,
+		TurnID:          postgresSessionTestTurn2ID,
+		Title:           "Forked",
+		CreatedByUserID: postgresSessionTestUserID,
+	})
+	if err != nil {
+		t.Fatalf("fork assistant turn: %v", err)
+	}
+	// The copied rows keep their creation times: a fork without the source's
+	// horizon would load, and compact, history the source no longer shows.
+	if !fork.HistoryHorizonAt.Equal(horizon) {
+		t.Fatalf("fork horizon = %v, want the source's %v", fork.HistoryHorizonAt, horizon)
+	}
+	reloaded, err := svc.Get(ctx, fork.ID)
+	if err != nil {
+		t.Fatalf("get fork: %v", err)
+	}
+	if !reloaded.HistoryHorizonAt.Equal(horizon) {
+		t.Fatalf("stored fork horizon = %v, want %v", reloaded.HistoryHorizonAt, horizon)
+	}
+}
+
 func TestPostgresCreateSubagentStoresForkContextAsHiddenHistory(t *testing.T) {
 	ctx := context.Background()
 	tx := beginPostgresSessionTestTx(t, ctx)

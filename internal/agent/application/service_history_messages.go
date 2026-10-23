@@ -83,18 +83,23 @@ func (s *Service) loadTimelineArtifacts(ctx context.Context, botID, sessionID st
 	return compaction.NewTimelineArtifactSource(s.queries).ActiveCompactionArtifacts(ctx, botID, sessionID)
 }
 
-// loadTurnResponses loads recent assistant/tool messages from bot_history_messages
-// for use as the TR stream in pipeline-based context assembly. The load is
-// byte-budgeted on the database side (CM-ADM-001): rows are admitted
-// newest-first within the context budget and projected to content, so a
-// dense 24-hour window, or legacy lifecycle metadata on its rows, can never
-// materialize more than the budget's worth of payload.
+// loadTurnResponses loads assistant/tool messages of the thread's history,
+// from the oldest one a summary does not replace (historyLoadFrom), for use
+// as the TR stream in pipeline-based context assembly; the frontier's
+// artifacts stand for the older ones. The load is byte-budgeted on the
+// database side (CM-ADM-001): rows are admitted newest-first within the
+// context budget and projected to content, so a long history, or legacy
+// lifecycle metadata on its rows, can never materialize more than the
+// budget's worth of payload.
 func (s *Service) loadTurnResponses(ctx context.Context, sessionID string, contextTokenBudget int) ([]timeline.TurnResponseEntry, error) {
 	if s.messageService == nil {
 		return nil, nil
 	}
-	since := time.Now().UTC().Add(-24 * time.Hour)
-	msgs, err := s.messageService.ListTurnResponseSourcesSinceBySessionWithinBytes(ctx, sessionID, since, s.historyLoadMaxBytes(contextTokenBudget))
+	from, err := s.historyLoadFrom(ctx, sessionID, false)
+	if err != nil {
+		return nil, err
+	}
+	msgs, err := s.messageService.ListTurnResponseSourcesSinceBySessionWithinBytes(ctx, sessionID, from, s.historyLoadMaxBytes(contextTokenBudget))
 	if err != nil {
 		return nil, err
 	}

@@ -69,6 +69,10 @@ type Thread struct {
 	RouteMetadata            map[string]any `json:"route_metadata,omitempty"`
 	RouteConversationType    string         `json:"route_conversation_type,omitempty"`
 	Visibility               Visibility     `json:"-"`
+	// HistoryHorizonAt is where the thread's agent history begins: older rows
+	// are neither loaded into a request nor compacted. Zero means the whole
+	// thread. Internal state, not part of the session API resource.
+	HistoryHorizonAt time.Time `json:"-"`
 } // @name session.Session
 
 // The runtime vocabulary is owned by runtimekind (a leaf package shared with
@@ -1620,6 +1624,7 @@ func toThread(row sqlc.BotSession) Thread {
 		ModelPreferenceRevision:  uuidText(row.ModelPreferenceRevision),
 		PreferredChatModelID:     prefModelID,
 		PreferredReasoningEffort: prefEffort,
+		HistoryHorizonAt:         row.HistoryHorizonAt.Time,
 	}
 }
 

@@ -32,6 +32,7 @@ import (
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/channel/discuss"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/contextview"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -168,6 +169,7 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	f.agent = native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)})
 	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, f.agent, time.UTC, time.Minute)
 	service.SetSessionRuntime(manager)
+	service.SetSessionService(session.NewService(logger, queries, nil))
 	service.SetCompactionService(compaction.NewService(logger, queries))
 	service.SetContextAbsoluteMaxTokens(16000)
 	f.service = service

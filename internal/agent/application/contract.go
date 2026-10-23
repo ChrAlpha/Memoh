@@ -19,7 +19,7 @@ type ChatRequest struct {
 	discussContextTokens     int
 	discussRecoveryExhausted bool
 	// historyViewFrom is when the oldest history row this request loaded was
-	// created; compaction reads from here or the time window, if earlier.
+	// created; compaction reads from here or the history horizon, if earlier.
 	historyViewFrom time.Time
 	// inputInHistory marks a continuation, whose input is already a history
 	// row budgeted with the rest of the history.

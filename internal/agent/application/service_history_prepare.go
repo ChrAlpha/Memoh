@@ -49,7 +49,8 @@ func (s *Service) prepareHistoryWindow(
 	contextTokenBudget int,
 	fold bool,
 ) (preparedHistoryContext, error) {
-	loaded, err := s.loadHistoryRecords(ctx, fallback, req.ThreadID, defaultMaxContextMinutes, contextTokenBudget, fold)
+	cutoff := strings.TrimSpace(req.HistoryCutoffBeforeMessageID) != ""
+	loaded, err := s.loadHistoryRecords(ctx, fallback, req.ThreadID, contextTokenBudget, fold, cutoff)
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}

@@ -2496,6 +2496,77 @@ func (q *Queries) GetRunHistoryTurnRequestMessageID(ctx context.Context, arg Get
 	return id, err
 }
 
+const getSessionUnsummarizedFrom = `-- name: GetSessionUnsummarizedFrom :one
+WITH unusable_compacts AS MATERIALIZED (
+  SELECT c.id
+  FROM bot_sessions s
+  JOIN bot_history_message_compacts c
+    ON c.team_id = public.memoh_current_team_id()
+   AND c.bot_id = s.bot_id
+   AND c.session_id = s.id
+  WHERE s.team_id = public.memoh_current_team_id()
+    AND s.id = $1
+    AND NOT (
+      c.compaction_epoch = s.compaction_epoch
+      AND c.status = 'ok'
+      AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
+    )
+)
+SELECT COALESCE(LEAST(
+  (
+    SELECT m.created_at
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $1
+      AND m.compact_id IS NULL
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND m.created_at >= $2
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    ORDER BY m.created_at ASC
+    LIMIT 1
+  ),
+  (
+    SELECT MIN(m.created_at)
+    FROM unusable_compacts u
+    JOIN bot_visible_history_messages m
+      ON m.team_id = public.memoh_current_team_id()
+     AND m.compact_id = u.id
+    WHERE m.session_id = $1
+      AND m.created_at >= $2
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  )
+), (
+  SELECT MAX(m.created_at)
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $1
+    AND m.created_at >= $2
+))::timestamptz AS unsummarized_from
+`
+
+type GetSessionUnsummarizedFromParams struct {
+	SessionID pgtype.UUID        `json:"session_id"`
+	Horizon   pgtype.Timestamptz `json:"horizon"`
+}
+
+// The creation time of the oldest visible row from horizon on that no usable
+// summary of the session's current epoch replaces: a row never compacted, or
+// one whose compact is pending, failed, empty or from an earlier epoch. Every
+// older row is summarized, so a history load can start here instead of at the
+// horizon and read only what is not. When every row is summarized it is the
+// newest row, which places the summary; NULL for a session without rows. The
+// uncompacted branch walks its partial index from horizon; the other reads
+// only the rows of the session's unusable compacts, usually none.
+func (q *Queries) GetSessionUnsummarizedFrom(ctx context.Context, arg GetSessionUnsummarizedFromParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, getSessionUnsummarizedFrom, arg.SessionID, arg.Horizon)
+	var unsummarized_from pgtype.Timestamptz
+	err := row.Scan(&unsummarized_from)
+	return unsummarized_from, err
+}
+
 const getTurnAgentTurnID = `-- name: GetTurnAgentTurnID :one
 SELECT COALESCE(message.metadata->>'agent_turn_id', '')::text AS agent_turn_id
 FROM bot_history_messages message

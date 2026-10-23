@@ -338,6 +338,10 @@ type reconcileOutcomeQueries struct {
 	projectionsSwept chan struct{}
 }
 
+func (*reconcileOutcomeQueries) GetSessionUnsummarizedFrom(context.Context, sqlc.GetSessionUnsummarizedFromParams) (pgtype.Timestamptz, error) {
+	return pgtype.Timestamptz{}, nil
+}
+
 func (*reconcileOutcomeQueries) SupportsTransactions() bool { return true }
 
 func (*reconcileOutcomeQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {

@@ -36,6 +36,10 @@ func (*recoveryHistoryQueries) ListCompactionArtifactLineageBySession(context.Co
 	return nil, nil
 }
 
+func (*recoveryHistoryQueries) GetSessionUnsummarizedFrom(context.Context, sqlc.GetSessionUnsummarizedFromParams) (pgtype.Timestamptz, error) {
+	return pgtype.Timestamptz{}, nil
+}
+
 type recoveryHistoryService struct {
 	messagepkg.Service
 	messages []messagepkg.Message

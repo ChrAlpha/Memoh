@@ -286,6 +286,7 @@ type Queries interface {
 	GetSearchProviderByID(ctx context.Context, id pgtype.UUID) (dbsqlc.SearchProvider, error)
 	GetSearchProviderByName(ctx context.Context, name string) (dbsqlc.SearchProvider, error)
 	GetSessionByID(ctx context.Context, id pgtype.UUID) (dbsqlc.BotSession, error)
+	GetSessionUnsummarizedFrom(ctx context.Context, arg dbsqlc.GetSessionUnsummarizedFromParams) (pgtype.Timestamptz, error)
 	GetTurnAgentTurnID(ctx context.Context, arg dbsqlc.GetTurnAgentTurnIDParams) (string, error)
 	SetRoundAgentTurnID(ctx context.Context, arg dbsqlc.SetRoundAgentTurnIDParams) (int64, error)
 	LockSessionForCommitReconciliation(ctx context.Context, arg dbsqlc.LockSessionForCommitReconciliationParams) (pgtype.UUID, error)

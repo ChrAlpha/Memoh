@@ -390,6 +390,10 @@ type recordingCompactionLogQueries struct {
 	listErr   error
 }
 
+func (*recordingCompactionLogQueries) GetSessionUnsummarizedFrom(context.Context, sqlc.GetSessionUnsummarizedFromParams) (pgtype.Timestamptz, error) {
+	return pgtype.Timestamptz{}, nil
+}
+
 func (q *recordingCompactionLogQueries) GetCompactionLogByID(_ context.Context, compactID pgtype.UUID) (sqlc.BotHistoryMessageCompact, error) {
 	q.getCalls = append(q.getCalls, compactID)
 	return q.byID[compactID], nil

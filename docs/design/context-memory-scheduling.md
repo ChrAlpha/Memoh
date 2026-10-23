@@ -208,10 +208,13 @@ result is bounded once, when the tool returns, and no later request prunes, stub
 or drops it. Input that composition cannot carry (Channel admission
 records it as omitted) MUST be compacted by that request, or the run fails; it is
 never silently skipped. Bounded reads (CM-ADM-001) still limit what a request loads,
-but a compaction reads every uncompacted row inside the request's time window, loaded
-or not: rows that slid out of a byte-bounded view while turns failed are folded,
-never skipped. Only history older than both the loaded view and the time window is
-outside that request.
+but a compaction reads every uncompacted row from the thread's history horizon on,
+loaded or not: rows that slid out of a byte-bounded view are folded, never skipped.
+History does not age out by time. The horizon is a stored point on the thread, empty
+for a thread created since it was introduced; a thread that existed before keeps the
+start its 24-hour window had at that moment, so its first compaction does not fold
+history the agent had long stopped seeing. A fork keeps its source's horizon. Only
+history older than both the loaded view and the horizon is outside that request.
 
 ### CM-ADM-003: A missing source fails the request
 
@@ -550,7 +553,7 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       active modes, the compaction barrier, `/compact`, the HTTP endpoint, and the
       four per-bot compaction settings — CM-CMP-002/003
 - [x] Compaction logs outcome, passes, and duration — CM-CMP-003, CM-OBS-001
-- [x] Rows inside the time window stay candidates when a byte-bounded view
+- [x] Rows from the history horizon on stay candidates when a byte-bounded view
       slides past them — CM-ADM-002
 - [x] In-run compaction for durable native tool loops under the same rule — CM-CMP-001
 - [x] Remove the step selector's in-run pruning, dropping, and rescue, and the
@@ -567,7 +570,11 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       the compaction epoch that step moves — CM-CMP-001
 - [ ] In-run compaction for subagents, which keep their own committer —
       CM-CMP-001
-- [ ] Candidate view beyond the 24-hour pipeline window — CM-ADM-002
+- [x] Thread history begins at a stored horizon instead of 24 hours before each
+      request: compaction candidates start there, so uncompacted history is
+      summarized rather than dropped, and chat loads start at the oldest row no
+      usable summary replaces, so their cost follows what is unsummarized —
+      CM-ADM-001/002
 
 ### PR 3 (P1) — Bounded replay + pipeline cache eviction
 

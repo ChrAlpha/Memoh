@@ -66,6 +66,16 @@ RC versions are checked against their persisted event cursors. Restart replay ke
 the complete event chain for newer edits, including edits received before compaction
 started. Artifact commit additionally verifies the full durable source hash.
 
+A thread's history begins at its horizon (`bot_sessions.history_horizon_at`;
+empty means the whole thread), not at a time window before each request.
+Compaction folds every uncompacted row from the horizon on, so history leaves a
+request only by being summarized. Chat loads read newest-first within the byte
+budget from the oldest row no usable summary replaces
+(`GetSessionUnsummarizedFrom`); the frontier supplies the summaries of
+everything older, so a load costs what is unsummarized, not the thread's length.
+A load cut before a message (edit, retry) reads from the horizon, because the
+cutoff can split a summary whose rows before it then render raw.
+
 Rendered artifacts, candidate payloads and claim verification use bounded reads.
 In-run recovery does not load the raw history span or reread ancestor summaries;
 legacy artifacts without exact coverage fail explicitly. Owner fencing, claim

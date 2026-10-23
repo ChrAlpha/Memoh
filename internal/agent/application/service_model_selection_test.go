@@ -430,6 +430,12 @@ type modelSelectionFakeQueries struct {
 	session sqlc.BotSession
 }
 
+// GetSessionUnsummarizedFrom reports no start, so history loads read from
+// the thread's horizon.
+func (*modelSelectionFakeQueries) GetSessionUnsummarizedFrom(context.Context, sqlc.GetSessionUnsummarizedFromParams) (pgtype.Timestamptz, error) {
+	return pgtype.Timestamptz{}, nil
+}
+
 // GetSessionByID returns the configured row (zero row by default: no
 // persisted model preference). Kept out of the embedded store so a
 // preference read can never panic on the nil interface.

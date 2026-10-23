@@ -54,9 +54,9 @@ import (
 	"github.com/felinics/memoh/internal/workspace"
 )
 
-const (
-	defaultMaxContextMinutes = 24 * 60
-)
+// sessionlessHistoryWindow bounds the bot-scoped history a request without a
+// thread loads. Thread history begins at the thread's horizon instead.
+const sessionlessHistoryWindow = 24 * time.Hour
 
 // SkillEntry represents a skill loaded from the container.
 type SkillEntry struct {

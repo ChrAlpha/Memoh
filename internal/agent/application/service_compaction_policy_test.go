@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/settings"
@@ -115,34 +117,47 @@ func TestCompactForBudgetStopsCandidatesAtTheRequestCutoff(t *testing.T) {
 	}
 }
 
-func TestCompactForBudgetReadsCandidatesFromTheContextWindow(t *testing.T) {
+func TestCompactForBudgetReadsCandidatesFromTheHistoryHorizon(t *testing.T) {
 	t.Parallel()
 
-	service, runner := newControllerPolicyService(t)
-	window := time.Duration(defaultMaxContextMinutes) * time.Minute
-	older := time.Now().UTC().Add(-2 * window)
+	horizon := time.UnixMilli(1_700_000_000_000).UTC()
 	for _, tc := range []struct {
 		name     string
+		horizon  time.Time
 		viewFrom time.Time
+		want     time.Time
 	}{
-		{"a view that slid inside the window", time.Now().UTC()},
-		{"a view older than the window", older},
-		{"no loaded view", time.Time{}},
+		{"a thread with no horizon", time.Time{}, horizon.Add(time.Hour), time.Time{}},
+		{"a view inside the horizon", horizon, horizon.Add(time.Hour), horizon},
+		{"a view older than the horizon", horizon, horizon.Add(-time.Hour), horizon.Add(-time.Hour)},
+		{"no loaded view", horizon, time.Time{}, horizon},
 	} {
-		start := time.Now().UTC()
+		service, runner := newControllerPolicyService(t)
+		service.sessionService = &fakeBackgroundSessionService{getFn: func(_ context.Context, sessionID string) (session.Thread, error) {
+			if sessionID != syncCompactThreadID {
+				return session.Thread{}, fmt.Errorf("unexpected session %q", sessionID)
+			}
+			return session.Thread{ID: sessionID, HistoryHorizonAt: tc.horizon}, nil
+		}}
 		req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, historyViewFrom: tc.viewFrom}
 		if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil {
 			t.Fatalf("%s: %v", tc.name, err)
 		}
-		from := runner.configs[len(runner.configs)-1].CandidatesFrom
-		if tc.viewFrom.Equal(older) {
-			if !from.Equal(older) {
-				t.Fatalf("%s: candidates_from=%v, want the view start", tc.name, from)
-			}
-			continue
+		if from := runner.configs[len(runner.configs)-1].CandidatesFrom; !from.Equal(tc.want) {
+			t.Fatalf("%s: candidates_from=%v, want %v", tc.name, from, tc.want)
 		}
-		if from.Before(start.Add(-window)) || from.After(time.Now().UTC().Add(-window)) {
-			t.Fatalf("%s: candidates_from=%v, want the window start", tc.name, from)
-		}
+	}
+}
+
+func TestCompactForBudgetFailsWhenTheHistoryHorizonDoesNotLoad(t *testing.T) {
+	t.Parallel()
+
+	service, runner := newControllerPolicyService(t)
+	service.sessionService = &fakeBackgroundSessionService{getFn: func(context.Context, string) (session.Thread, error) {
+		return session.Thread{}, errors.New("session store unavailable")
+	}}
+	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID}
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err == nil || len(runner.configs) != 0 {
+		t.Fatalf("err=%v runs=%d, want the request to fail before compacting the whole thread", err, len(runner.configs))
 	}
 }

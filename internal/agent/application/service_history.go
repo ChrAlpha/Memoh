@@ -8,11 +8,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
@@ -112,23 +116,31 @@ func (s *Service) currentWorkspaceContextMessage(ctx context.Context, req ChatRe
 	return &message
 }
 
-// loadHistoryRecords loads the recent history window. The load is
-// byte-budgeted on the database side (CM-ADM-001): rows are admitted
-// newest-first within contextTokenBudget (the absolute cap when the budget
-// is unset), so the time window alone never bounds process memory. A folded
-// session window spends no budget on rows a summary replaced and loads one
-// Summarized row per compact group to place it.
-func (s *Service) loadHistoryRecords(ctx context.Context, fallback historyfrag.ScopeFallback, sessionID string, maxContextMinutes, contextTokenBudget int, fold bool) ([]historyfrag.HistoryRecord, error) {
+// loadHistoryRecords loads the thread's history from its horizon on. The load
+// is byte-budgeted on the database side (CM-ADM-001): rows are admitted
+// newest-first within contextTokenBudget (the absolute cap when the budget is
+// unset), so the history's length never bounds process memory. Rows the
+// budget leaves out stay compaction candidates; nothing ages out by time. It
+// reads from the oldest row a summary does not replace (historyLoadFrom), so
+// its cost follows what is unsummarized, not the thread's length. A folded
+// load spends no budget on rows a summary replaced and loads one Summarized
+// row per compact group to place it. cutoff marks a load an edit or retry
+// cuts before a message.
+func (s *Service) loadHistoryRecords(ctx context.Context, fallback historyfrag.ScopeFallback, sessionID string, contextTokenBudget int, fold, cutoff bool) ([]historyfrag.HistoryRecord, error) {
 	if s.messageService == nil {
 		return nil, nil
 	}
-	since := time.Now().UTC().Add(-time.Duration(maxContextMinutes) * time.Minute)
 	maxBytes := s.historyLoadMaxBytes(contextTokenBudget)
 	var msgs []messagepkg.Message
 	var err error
 	if strings.TrimSpace(sessionID) != "" {
-		msgs, err = s.messageService.ListActiveSinceBySessionWithinBytes(ctx, sessionID, since, maxBytes, fold)
+		var from time.Time
+		if from, err = s.historyLoadFrom(ctx, sessionID, cutoff); err != nil {
+			return nil, err
+		}
+		msgs, err = s.messageService.ListActiveSinceBySessionWithinBytes(ctx, sessionID, from, maxBytes, fold)
 	} else {
+		since := time.Now().UTC().Add(-sessionlessHistoryWindow)
 		msgs, err = s.messageService.ListActiveSinceWithinBytes(ctx, fallback.ChatID, since, maxBytes)
 	}
 	if err != nil {
@@ -146,6 +158,47 @@ func (s *Service) loadHistoryRecords(ctx context.Context, fallback historyfrag.S
 		result = append(result, record)
 	}
 	return result, nil
+}
+
+// historyHorizon reports where a thread's agent history begins; zero means
+// the whole thread.
+func (s *Service) historyHorizon(ctx context.Context, sessionID string) (time.Time, error) {
+	if s.sessionService == nil || strings.TrimSpace(sessionID) == "" {
+		return time.Time{}, nil
+	}
+	thread, err := s.sessionService.Get(ctx, sessionID)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("load history horizon: %w", err)
+	}
+	return thread.HistoryHorizonAt, nil
+}
+
+// historyLoadFrom reports where a load of the thread's history starts: the
+// oldest row from its horizon on that no usable summary replaces. Every older
+// row is summarized and reaches the request as its summary, which the
+// frontier supplies, so starting there renders the same history. A load cut
+// before a message starts at the horizon instead: the cutoff can split a
+// summary, and the split rows before it then render raw.
+func (s *Service) historyLoadFrom(ctx context.Context, sessionID string, cutoff bool) (time.Time, error) {
+	horizon, err := s.historyHorizon(ctx, sessionID)
+	if err != nil || cutoff || s.queries == nil {
+		return horizon, err
+	}
+	pgSessionID, err := db.ParseUUID(sessionID)
+	if err != nil {
+		return time.Time{}, err
+	}
+	from, err := s.queries.GetSessionUnsummarizedFrom(ctx, sqlc.GetSessionUnsummarizedFromParams{
+		SessionID: pgSessionID,
+		Horizon:   pgtype.Timestamptz{Time: horizon, Valid: true},
+	})
+	if err != nil {
+		return time.Time{}, fmt.Errorf("load unsummarized history start: %w", err)
+	}
+	if !from.Valid {
+		return horizon, nil
+	}
+	return from.Time, nil
 }
 
 func historyScopeFallbackFromChatRequest(req ChatRequest) historyfrag.ScopeFallback {
