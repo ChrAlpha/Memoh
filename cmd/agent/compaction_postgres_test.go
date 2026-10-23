@@ -125,6 +125,53 @@ func TestPostgresCompactionStopsAtTheCutoff(t *testing.T) {
 	}
 }
 
+// An edit or retry that compacts before its first step commits folds onto the
+// summaries its replacement keeps. The replaced turn's run wrote a summary
+// that reaches past the cutoff; the event first rewinds the session to before
+// the turn, as the replacement will, so the summary that ends before it is
+// active again and the turn's rows are left raw for the attempt to replace.
+func TestPostgresCompactionRewindsTheReplacedTurnBeforeFolding(t *testing.T) {
+	f := newBacklogFixture(t)
+	base := time.Now().Add(-time.Hour)
+	f.persistHistory("early-", 4, 400, base)
+	early, err := f.fold(f.ctx, compaction.TriggerConfig{})
+	if err != nil || len(early) != 1 {
+		t.Fatalf("fold the early history: passes=%+v err=%v", early, err)
+	}
+	f.persistHistory("later-", 4, 400, base.Add(10*time.Second))
+	f.persistHistory("replaced-", 2, 400, base.Add(20*time.Second))
+	var turnID string
+	var turnStart time.Time
+	if err := f.pool.QueryRow(f.ctx, `SELECT turn_id::text, created_at FROM bot_history_messages WHERE session_id=$1 AND source_message_id='replaced-0'`, f.sessionID).Scan(&turnID, &turnStart); err != nil {
+		t.Fatal(err)
+	}
+	// The replaced turn's run folded its own rows with everything before them.
+	if spanning, err := f.fold(f.ctx, compaction.TriggerConfig{}); err != nil || len(spanning) != 1 {
+		t.Fatalf("fold the replaced turn: passes=%+v err=%v", spanning, err)
+	}
+
+	passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesBefore: turnStart, ReplacedTurnID: turnID})
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("passes=%+v err=%v, want the edit's event to fold once the replaced turn is rewound", passes, err)
+	}
+	if absorbed := passes[0].Absorbed; len(absorbed) != 1 || absorbed[0] != early[0].ArtifactID {
+		t.Fatalf("absorbed=%v, want only the summary that ends before the turn (%s)", absorbed, early[0].ArtifactID)
+	}
+	if folded := foldedRows(passes...); len(folded) != 4 {
+		t.Fatalf("folded %d rows, want the 4 rows between the earlier summary and the turn", len(folded))
+	}
+	var raw int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages h
+		JOIN bot_sessions s ON s.id = h.session_id
+		LEFT JOIN bot_history_message_compacts c ON c.id = h.compact_id AND c.compaction_epoch = s.compaction_epoch AND c.status = 'ok'
+		WHERE h.session_id = $1 AND h.source_message_id LIKE 'replaced-%' AND c.id IS NULL`, f.sessionID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != 2 {
+		t.Fatalf("replaced turn rows left raw = %d, want 2", raw)
+	}
+}
+
 // An event folds the whole backlog. A pass folds what one summarizer call can
 // read, and the event passes again only for what that call could not: each
 // further pass folds the summary before it with the next rows, so the event

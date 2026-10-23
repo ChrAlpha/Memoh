@@ -32,7 +32,8 @@ folds what its request renders: the history before its cutoff and the steps of
 the attempt its first step selected. A retry renders its input from the request
 it replaces, which that step hides; from then on the copy the step wrote is the
 input the event keeps in place. When the replaced turn had compacted in place,
-the same step moves the session to a new compaction epoch, so the attempt folds
+the same step moves the session to a new compaction epoch, or the attempt's
+first compaction does when it needs one before that step, so the attempt folds
 the history before the cutoff into a summary of its own. Subagent and external
 runtimes have separate ownership and remain outside this capability.
 
@@ -95,9 +96,11 @@ rows a summary of the current epoch covers calls `memoh_rewind_compaction`,
 which moves the session to a new epoch and carries every summary that ends
 before the turn into it. Only the summaries that reach the turn are retired,
 so a retry after in-run compaction refolds from the previous summary rather
-than from the start of the thread. Deleting a row, or adding an asset to one,
-that a summary of the current epoch covers rewinds from that row; only clearing
-history retires every summary of the epoch.
+than from the start of the thread. An edit or retry that must compact before
+its first step commits rewinds the same way first (`RewindCompactionBeforeTurn`),
+so its fold builds on the summaries the replacement keeps. Deleting a row, or
+adding an asset to one, that a summary of the current epoch covers rewinds from
+that row; only clearing history retires every summary of the epoch.
 
 Rendered artifacts, candidate payloads and claim verification use bounded reads.
 In-run recovery does not load the raw history span or reread ancestor summaries;

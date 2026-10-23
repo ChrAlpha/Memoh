@@ -6715,6 +6715,54 @@ func (q *Queries) ReplaceHistoryTurn(ctx context.Context, arg ReplaceHistoryTurn
 	return i, err
 }
 
+const rewindCompactionBeforeTurn = `-- name: RewindCompactionBeforeTurn :one
+WITH owner_session AS MATERIALIZED (
+  SELECT session.id, session.bot_id, session.compaction_epoch
+  FROM bot_sessions session
+  WHERE session.team_id = public.memoh_current_team_id()
+    AND session.id = $1
+    AND session.bot_id = $2
+  FOR UPDATE
+), replaced_turn AS MATERIALIZED (
+  SELECT MIN(message.created_at) AS started_at,
+    bool_or(compact.id IS NOT NULL) AS covered
+  FROM bot_history_messages message
+  JOIN owner_session owner ON owner.id = message.session_id
+  LEFT JOIN bot_history_message_compacts compact
+    ON compact.id = message.compact_id
+   AND compact.team_id = public.memoh_current_team_id()
+   AND compact.bot_id = owner.bot_id
+   AND compact.session_id = owner.id
+   AND compact.compaction_epoch = owner.compaction_epoch
+  WHERE message.team_id = public.memoh_current_team_id()
+    AND message.turn_id = $3
+)
+SELECT COALESCE((
+  SELECT public.memoh_rewind_compaction(owner.id, turn.started_at)
+  FROM replaced_turn turn
+  WHERE turn.covered
+), false)::boolean AS rewound
+FROM owner_session owner
+`
+
+type RewindCompactionBeforeTurnParams struct {
+	SessionID pgtype.UUID `json:"session_id"`
+	BotID     pgtype.UUID `json:"bot_id"`
+	TurnID    pgtype.UUID `json:"turn_id"`
+}
+
+// A retry or edit that compacts before its first step commits rewinds the
+// session as SelectBoundHistoryTurnReplacement will when that step selects
+// it: once a summary of the current epoch covers a row of the replaced turn,
+// the summaries that end before the turn move to the new epoch and the ones
+// that reach it retire. It reports whether it rewound.
+func (q *Queries) RewindCompactionBeforeTurn(ctx context.Context, arg RewindCompactionBeforeTurnParams) (bool, error) {
+	row := q.db.QueryRow(ctx, rewindCompactionBeforeTurn, arg.SessionID, arg.BotID, arg.TurnID)
+	var rewound bool
+	err := row.Scan(&rewound)
+	return rewound, err
+}
+
 const searchMessages = `-- name: SearchMessages :many
 SELECT
   m.id,

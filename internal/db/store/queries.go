@@ -505,6 +505,7 @@ type Queries interface {
 	UpdateUserInputPromptMessage(ctx context.Context, arg dbsqlc.UpdateUserInputPromptMessageParams) (dbsqlc.UserInputRequest, error)
 	UpdateUserInputToolResultMessage(ctx context.Context, arg dbsqlc.UpdateUserInputToolResultMessageParams) (dbsqlc.UserInputRequest, error)
 	ReplaceHistoryTurn(ctx context.Context, arg dbsqlc.ReplaceHistoryTurnParams) (dbsqlc.ReplaceHistoryTurnRow, error)
+	RewindCompactionBeforeTurn(ctx context.Context, arg dbsqlc.RewindCompactionBeforeTurnParams) (bool, error)
 	SupersedeHistoryTurn(ctx context.Context, arg dbsqlc.SupersedeHistoryTurnParams) (HistoryTurn, error)
 	UpdateUserProviderOAuthState(ctx context.Context, arg dbsqlc.UpdateUserProviderOAuthStateParams) error
 	UpsertAccountByUsername(ctx context.Context, arg dbsqlc.UpsertAccountByUsernameParams) (dbsqlc.UpsertAccountByUsernameRow, error)

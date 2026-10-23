@@ -338,6 +338,35 @@ func failed(reason Reason, err error) error {
 	return &EventError{Reason: reason, Err: err}
 }
 
+// rewindReplacedTurn moves the session to where an edit or retry's
+// replacement leaves it, in a transaction fenced by the caller's runtime
+// ownership. The request renders the history before its cutoff, folded only
+// by the summaries that end before it; a summary the replaced run wrote
+// reaches past the cutoff, so a pass that read it as a parent could commit no
+// summary the request renders.
+func (s *Service) rewindReplacedTurn(ctx context.Context, botUUID, sessionUUID pgtype.UUID, cfg TriggerConfig) error {
+	turnUUID, err := db.ParseUUID(cfg.ReplacedTurnID)
+	if err != nil {
+		return err
+	}
+	var rewound bool
+	if _, err := s.inSession(ctx, cfg, func(q dbstore.Queries) error {
+		rewound, err = q.RewindCompactionBeforeTurn(ctx, sqlc.RewindCompactionBeforeTurnParams{
+			SessionID: sessionUUID, BotID: botUUID, TurnID: turnUUID,
+		})
+		return err
+	}); err != nil {
+		return staleSource(err)
+	}
+	if rewound {
+		s.logger.InfoContext(ctx, "compaction: rewound the summaries that reach the replaced turn",
+			slog.String("session_id", cfg.SessionID),
+			slog.String("turn_id", cfg.ReplacedTurnID),
+		)
+	}
+	return nil
+}
+
 // claim records the attempt and marks the rows it folds, in one fenced
 // transaction when the caller holds runtime ownership. A claim another
 // writer got first, or a session whose compaction epoch moved, is a stale

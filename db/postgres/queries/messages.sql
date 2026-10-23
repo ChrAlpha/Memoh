@@ -1224,6 +1224,40 @@ SELECT replacement.turn_id FROM replacement
 WHERE EXISTS (SELECT 1 FROM hidden)
   AND (SELECT COUNT(*) FROM rewound) >= 0;
 
+-- name: RewindCompactionBeforeTurn :one
+-- A retry or edit that compacts before its first step commits rewinds the
+-- session as SelectBoundHistoryTurnReplacement will when that step selects
+-- it: once a summary of the current epoch covers a row of the replaced turn,
+-- the summaries that end before the turn move to the new epoch and the ones
+-- that reach it retire. It reports whether it rewound.
+WITH owner_session AS MATERIALIZED (
+  SELECT session.id, session.bot_id, session.compaction_epoch
+  FROM bot_sessions session
+  WHERE session.team_id = public.memoh_current_team_id()
+    AND session.id = sqlc.arg(session_id)
+    AND session.bot_id = sqlc.arg(bot_id)
+  FOR UPDATE
+), replaced_turn AS MATERIALIZED (
+  SELECT MIN(message.created_at) AS started_at,
+    bool_or(compact.id IS NOT NULL) AS covered
+  FROM bot_history_messages message
+  JOIN owner_session owner ON owner.id = message.session_id
+  LEFT JOIN bot_history_message_compacts compact
+    ON compact.id = message.compact_id
+   AND compact.team_id = public.memoh_current_team_id()
+   AND compact.bot_id = owner.bot_id
+   AND compact.session_id = owner.id
+   AND compact.compaction_epoch = owner.compaction_epoch
+  WHERE message.team_id = public.memoh_current_team_id()
+    AND message.turn_id = sqlc.arg(turn_id)
+)
+SELECT COALESCE((
+  SELECT public.memoh_rewind_compaction(owner.id, turn.started_at)
+  FROM replaced_turn turn
+  WHERE turn.covered
+), false)::boolean AS rewound
+FROM owner_session owner;
+
 -- name: GetRunHistoryTurnRequestMessageID :one
 -- Resolve the most recent applied input of this run, including steer turns.
 SELECT request.id

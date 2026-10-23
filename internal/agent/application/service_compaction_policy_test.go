@@ -98,16 +98,22 @@ func (s *cutoffMessageService) GetByIDBySession(_ context.Context, _, messageID 
 	return messagepkg.Message{ID: messageID, CreatedAt: s.created}, nil
 }
 
-func TestCompactForBudgetStopsCandidatesAtTheRequestCutoff(t *testing.T) {
+func TestCompactForBudgetBoundsAnEditByItsCutoffAndReplacedTurn(t *testing.T) {
 	t.Parallel()
 
 	service, runner := newControllerPolicyService(t)
 	created := time.UnixMilli(1_700_000_000_000).UTC()
 	service.messageService = &cutoffMessageService{created: created}
-	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, HistoryCutoffBeforeMessageID: "edited"}
+	req := ChatRequest{
+		BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, HistoryCutoffBeforeMessageID: "edited",
+		TurnReplacement: &messagepkg.TurnReplacement{OldTurnID: "replaced-turn", ReplacementTurnID: "edit-turn"},
+	}
 
 	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 1 || !runner.configs[0].CandidatesBefore.Equal(created) {
 		t.Fatalf("err=%v configs=%+v, want candidates bounded by the edited message", err, runner.configs)
+	}
+	if got := runner.configs[0].ReplacedTurnID; got != "replaced-turn" {
+		t.Fatalf("replaced turn = %q, want the turn the edit replaces rewound before folding", got)
 	}
 	req.HistoryCutoffBeforeMessageID = "missing"
 	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err == nil || len(runner.configs) != 1 {

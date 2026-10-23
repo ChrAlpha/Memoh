@@ -2,6 +2,7 @@ package message
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -15,8 +16,9 @@ import (
 
 // Replacing or hiding a turn, deleting a row of it or linking an asset to one
 // rewinds the session's compaction to before the change instead of discarding
-// it: the summaries that end before the change move to the new epoch, the one
-// a retired summary superseded is active again, and its rows stay summarized.
+// it, and so does an edit or retry that compacts before its first step: the
+// summaries that end before the change move to the new epoch, the one a
+// retired summary superseded is active again, and its rows stay summarized.
 // Only the summaries that reach the change, and unfinished attempts, are
 // retired.
 func TestPostgresHistoryMutationsRewindCompaction(t *testing.T) {
@@ -80,6 +82,16 @@ func TestPostgresHistoryMutationsRewindCompaction(t *testing.T) {
 			})
 			return err
 		}, keepsRequest: true},
+		{name: "compact before a replacement's first step", keepsRequest: true, mutate: func(ctx context.Context, tx pgx.Tx, _ rewindFixture, turn HistoryTurn) error {
+			rewound, err := dbsqlc.New(tx).RewindCompactionBeforeTurn(ctx, dbsqlc.RewindCompactionBeforeTurnParams{
+				SessionID: mustTestUUID(t, postgresMessageTestSessionID), BotID: mustTestUUID(t, postgresMessageTestBotID),
+				TurnID: mustTestUUID(t, turn.ID),
+			})
+			if err == nil && !rewound {
+				err = errors.New("a summary covers the turn, but the session was not rewound")
+			}
+			return err
+		}},
 		{name: "delete a row", keepsRequest: true, mutate: func(ctx context.Context, tx pgx.Tx, f rewindFixture, _ HistoryTurn) error {
 			return dbsqlc.New(tx).DeleteMessagesByIDs(ctx, []pgtype.UUID{mustTestUUID(t, f.latestAnswer)})
 		}},
