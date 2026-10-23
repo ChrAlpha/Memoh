@@ -450,31 +450,10 @@ func inboundSessionResult(sess sessionpkg.Thread) inbound.SessionResult {
 		Type:                  sess.Type,
 		Mode:                  sess.SessionMode,
 		Runtime:               sess.RuntimeType,
-		RuntimeOwnerAccountID: sessionRuntimeOwnerAccountID(sess),
+		RuntimeOwnerAccountID: sess.RuntimeOwnerUserID,
 		ExternalRuntimeDriver: sess.Facts.ExternalRuntimeDriver,
 		TriggerScope:          sess.Facts.TriggerScope,
 	}
-}
-
-// sessionRuntimeOwnerAccountID is the account an External Agent session acts
-// for: the owner column, then, for a session that has not been read since the
-// column was added, the owner its metadata names.
-func sessionRuntimeOwnerAccountID(sess sessionpkg.Thread) string {
-	if sess.RuntimeOwnerUserID != "" {
-		return sess.RuntimeOwnerUserID
-	}
-	if value := runtimeMetadataString(sess.RuntimeMetadata, "runtime_owner_account_id"); value != "" {
-		return value
-	}
-	return runtimeMetadataString(sess.Metadata, "runtime_owner_account_id")
-}
-
-func runtimeMetadataString(metadata map[string]any, key string) string {
-	if metadata == nil {
-		return ""
-	}
-	value, _ := metadata[key].(string)
-	return strings.TrimSpace(value)
 }
 
 type settingsIMDisplayOptions struct {

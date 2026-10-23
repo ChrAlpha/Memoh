@@ -49,9 +49,8 @@ func TestInboundSessionResultCarriesRecordedRuntimeDriver(t *testing.T) {
 }
 
 // The inbound path acts for the owner the session's column names; a session
-// not yet read since the column was added still has the owner its metadata
-// names, and clearing the history removes only the runtime metadata copy.
-func TestInboundSessionResultReadsTheRuntimeOwnerColumnThenMetadata(t *testing.T) {
+// whose column is empty has none, whatever its metadata still says.
+func TestInboundSessionResultReadsOnlyTheRuntimeOwnerColumn(t *testing.T) {
 	for name, tc := range map[string]struct {
 		thread sessionpkg.Thread
 		want   string
@@ -63,16 +62,16 @@ func TestInboundSessionResultReadsTheRuntimeOwnerColumnThenMetadata(t *testing.T
 			},
 			want: "column-owner",
 		},
-		"runtime metadata": {
+		"runtime metadata only": {
 			thread: sessionpkg.Thread{
 				RuntimeMetadata: map[string]any{"runtime_owner_account_id": "runtime-owner"},
 				Metadata:        map[string]any{"runtime_owner_account_id": "metadata-owner"},
 			},
-			want: "runtime-owner",
+			want: "",
 		},
-		"metadata after the history was cleared": {
+		"metadata only": {
 			thread: sessionpkg.Thread{Metadata: map[string]any{"runtime_owner_account_id": "metadata-owner"}},
-			want:   "metadata-owner",
+			want:   "",
 		},
 		"none": {thread: sessionpkg.Thread{}, want: ""},
 	} {

@@ -145,11 +145,8 @@ func (in *Inputs) admitDiscuss(ctx context.Context, botID, sessionID string) (Di
 	}
 
 	runtimeOwner := ""
-	if externalRuntime {
-		runtimeOwner, err = in.runtimeOwner(ctx, pgSessionID, sess)
-		if err != nil {
-			return 0, nil, err
-		}
+	if externalRuntime && sess.RuntimeOwnerUserID.Valid {
+		runtimeOwner = sess.RuntimeOwnerUserID.String()
 	}
 	req, err := in.discussRequest(ctx, botID, sessionID, pgBotID, sess, runtimeOwner, head, externalRuntime)
 	if err != nil {
@@ -327,24 +324,6 @@ func (in *Inputs) discussRequest(ctx context.Context, botID, sessionID string, p
 		req.ToolHTTPURL = external.ToolGatewayURLFromEnv(botID)
 	}
 	return req, nil
-}
-
-// runtimeOwner is the account the session acts for. A session that predates the
-// owner column has none until the first read adopts the one its metadata names;
-// one that still has none has no owner, and the credentials issued for it say
-// so rather than naming whoever wrote the last input.
-func (in *Inputs) runtimeOwner(ctx context.Context, sessionID pgtype.UUID, sess dbsqlc.GetDiscussSessionRow) (string, error) {
-	if sess.RuntimeOwnerUserID.Valid {
-		return sess.RuntimeOwnerUserID.String(), nil
-	}
-	adopted, err := in.queries.AdoptSessionRuntimeOwnerFromMetadata(ctx, sessionID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("adopt discuss runtime owner: %w", err)
-	}
-	return adopted.String(), nil
 }
 
 // pendingInputs reads the external input past cover, oldest first.

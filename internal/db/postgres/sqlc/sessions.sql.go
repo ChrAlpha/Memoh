@@ -35,58 +35,6 @@ func (q *Queries) ActivateSessionRuntimeFence(ctx context.Context, arg ActivateS
 	return runtime_fencing_token, err
 }
 
-const adoptSessionRuntimeOwnerFromMetadata = `-- name: AdoptSessionRuntimeOwnerFromMetadata :one
-UPDATE bot_sessions s
-SET runtime_owner_user_id = m.user_id
-FROM team_members m
-WHERE s.team_id = public.memoh_current_team_id()
-  AND s.id = $1
-  AND s.runtime_owner_user_id IS NULL
-  AND m.team_id = s.team_id
-  AND m.user_id::text = s.metadata->>'runtime_owner_account_id'
-RETURNING s.runtime_owner_user_id
-`
-
-// The runtime owner of a session that predates the owner column: the account
-// its metadata names, when that account is still a member of the team. The
-// first read that finds the column empty calls this, so the column is filled
-// by use. No row means the metadata names nobody who can own the session.
-func (q *Queries) AdoptSessionRuntimeOwnerFromMetadata(ctx context.Context, sessionID pgtype.UUID) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, adoptSessionRuntimeOwnerFromMetadata, sessionID)
-	var runtime_owner_user_id pgtype.UUID
-	err := row.Scan(&runtime_owner_user_id)
-	return runtime_owner_user_id, err
-}
-
-const adoptSessionRuntimeOwnersFromMetadata = `-- name: AdoptSessionRuntimeOwnersFromMetadata :execrows
-WITH batch AS (
-  SELECT s.id, m.user_id
-  FROM bot_sessions s
-  JOIN team_members m ON m.team_id = s.team_id AND m.user_id::text = s.metadata->>'runtime_owner_account_id'
-  WHERE s.team_id = public.memoh_current_team_id()
-    AND s.runtime_owner_user_id IS NULL
-  ORDER BY s.id
-  LIMIT $1
-  FOR UPDATE OF s SKIP LOCKED
-)
-UPDATE bot_sessions s
-SET runtime_owner_user_id = batch.user_id
-FROM batch
-WHERE s.team_id = public.memoh_current_team_id() AND s.id = batch.id
-`
-
-// One batch of the background pass behind AdoptSessionRuntimeOwnerFromMetadata:
-// sessions whose owner column is empty and whose metadata names a member of
-// the team. A session it adopts no longer matches, so the pass repeats until a
-// batch is empty, and running it again changes nothing.
-func (q *Queries) AdoptSessionRuntimeOwnersFromMetadata(ctx context.Context, batchSize int32) (int64, error) {
-	result, err := q.db.Exec(ctx, adoptSessionRuntimeOwnersFromMetadata, batchSize)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const compareAndSetSessionModelPreference = `-- name: CompareAndSetSessionModelPreference :execrows
 UPDATE bot_sessions
 SET preferred_chat_model_id = $1::uuid,

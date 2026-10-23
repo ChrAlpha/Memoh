@@ -29,7 +29,6 @@ type Queries interface {
 	GetDiscussCoverPosition(context.Context, dbsqlc.GetDiscussCoverPositionParams) (int64, error)
 	ListDiscussPendingInputs(context.Context, dbsqlc.ListDiscussPendingInputsParams) ([]dbsqlc.ListDiscussPendingInputsRow, error)
 	GetDiscussSession(context.Context, dbsqlc.GetDiscussSessionParams) (dbsqlc.GetDiscussSessionRow, error)
-	AdoptSessionRuntimeOwnerFromMetadata(ctx context.Context, sessionID pgtype.UUID) (pgtype.UUID, error)
 	ListDiscussSweepCandidates(context.Context, dbsqlc.ListDiscussSweepCandidatesParams) ([]dbsqlc.ListDiscussSweepCandidatesRow, error)
 	SaveSessionRunResumeContext(context.Context, dbsqlc.SaveSessionRunResumeContextParams) (int64, error)
 	AcceptSessionRunDecisionContinuation(context.Context, dbsqlc.AcceptSessionRunDecisionContinuationParams) (dbsqlc.SessionRun, error)

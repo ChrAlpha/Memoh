@@ -288,10 +288,6 @@ func (s discussStore) GetDiscussSession(ctx context.Context, p dbsqlc.GetDiscuss
 	return s.pg.GetDiscussSession(ctx, p)
 }
 
-func (s discussStore) AdoptSessionRuntimeOwnerFromMetadata(ctx context.Context, sessionID pgtype.UUID) (pgtype.UUID, error) {
-	return s.pg.AdoptSessionRuntimeOwnerFromMetadata(ctx, sessionID)
-}
-
 func (s discussStore) ListUserIDsByChannelIdentity(ctx context.Context, id pgtype.UUID) ([]pgtype.UUID, error) {
 	return s.pg.ListUserIDsByChannelIdentity(ctx, id)
 }

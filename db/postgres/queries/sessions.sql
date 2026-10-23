@@ -706,38 +706,3 @@ WHERE team_id = public.memoh_current_team_id()
   AND runtime_type = sqlc.arg(runtime_type)
   AND model_preference_revision IS NOT DISTINCT FROM sqlc.narg(expected_revision)::uuid
   AND deleted_at IS NULL;
-
--- name: AdoptSessionRuntimeOwnerFromMetadata :one
--- The runtime owner of a session that predates the owner column: the account
--- its metadata names, when that account is still a member of the team. The
--- first read that finds the column empty calls this, so the column is filled
--- by use. No row means the metadata names nobody who can own the session.
-UPDATE bot_sessions s
-SET runtime_owner_user_id = m.user_id
-FROM team_members m
-WHERE s.team_id = public.memoh_current_team_id()
-  AND s.id = sqlc.arg(session_id)
-  AND s.runtime_owner_user_id IS NULL
-  AND m.team_id = s.team_id
-  AND m.user_id::text = s.metadata->>'runtime_owner_account_id'
-RETURNING s.runtime_owner_user_id;
-
--- name: AdoptSessionRuntimeOwnersFromMetadata :execrows
--- One batch of the background pass behind AdoptSessionRuntimeOwnerFromMetadata:
--- sessions whose owner column is empty and whose metadata names a member of
--- the team. A session it adopts no longer matches, so the pass repeats until a
--- batch is empty, and running it again changes nothing.
-WITH batch AS (
-  SELECT s.id, m.user_id
-  FROM bot_sessions s
-  JOIN team_members m ON m.team_id = s.team_id AND m.user_id::text = s.metadata->>'runtime_owner_account_id'
-  WHERE s.team_id = public.memoh_current_team_id()
-    AND s.runtime_owner_user_id IS NULL
-  ORDER BY s.id
-  LIMIT sqlc.arg(batch_size)
-  FOR UPDATE OF s SKIP LOCKED
-)
-UPDATE bot_sessions s
-SET runtime_owner_user_id = batch.user_id
-FROM batch
-WHERE s.team_id = public.memoh_current_team_id() AND s.id = batch.id;
