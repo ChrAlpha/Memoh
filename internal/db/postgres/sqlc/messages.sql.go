@@ -2039,28 +2039,31 @@ deleted AS (
   USING target_messages target
   WHERE message.team_id = public.memoh_current_team_id()
     AND message.id = target.id
-  RETURNING message.session_id, message.compact_id
+  RETURNING message.session_id, message.compact_id, message.created_at
 ),
-compaction_epoch_bump AS (
-  UPDATE bot_sessions session
-  SET compaction_epoch = session.compaction_epoch + 1
-  WHERE session.team_id = public.memoh_current_team_id()
-    AND EXISTS (
-    SELECT 1
+compaction_rewind AS (
+  SELECT public.memoh_rewind_compaction(covered.session_id, covered.created_at) AS done
+  FROM (
+    SELECT changed.session_id, MIN(changed.created_at) AS created_at
     FROM deleted changed
+    JOIN bot_sessions session
+      ON session.id = changed.session_id
+     AND session.team_id = public.memoh_current_team_id()
     JOIN bot_history_message_compacts compact
       ON compact.id = changed.compact_id
      AND compact.team_id = public.memoh_current_team_id()
-    WHERE changed.session_id = session.id
-      AND compact.bot_id = session.bot_id
+    WHERE compact.bot_id = session.bot_id
       AND compact.session_id = session.id
       AND compact.compaction_epoch = session.compaction_epoch
-  )
-  RETURNING session.id
+    GROUP BY changed.session_id
+  ) covered
 )
-SELECT (SELECT count(*) FROM deleted) + (SELECT count(*) * 0 FROM compaction_epoch_bump)
+SELECT (SELECT count(*) FROM deleted) + (SELECT count(*) * 0 FROM compaction_rewind)
 `
 
+// Deleting rows a summary of the current epoch covers rewinds the session's
+// compaction to the earliest of them: the summaries that end before it move
+// to the new epoch, the ones that reach it retire.
 func (q *Queries) DeleteMessagesByIDs(ctx context.Context, ids []pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteMessagesByIDs, ids)
 	return err

@@ -95,8 +95,9 @@ rows a summary of the current epoch covers calls `memoh_rewind_compaction`,
 which moves the session to a new epoch and carries every summary that ends
 before the turn into it. Only the summaries that reach the turn are retired,
 so a retry after in-run compaction refolds from the previous summary rather
-than from the start of the thread. Deleting rows, adding an asset to a stored
-row and clearing history still retire every summary of the epoch.
+than from the start of the thread. Deleting a row, or adding an asset to one,
+that a summary of the current epoch covers rewinds from that row; only clearing
+history retires every summary of the epoch.
 
 Rendered artifacts, candidate payloads and claim verification use bounded reads.
 In-run recovery does not load the raw history span or reread ancestor summaries;

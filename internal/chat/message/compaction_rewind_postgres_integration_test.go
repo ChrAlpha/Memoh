@@ -13,11 +13,12 @@ import (
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
 
-// Replacing or hiding a turn rewinds the session's compaction to before the
-// turn instead of discarding it: the summaries that end before the turn move
-// to the new epoch, the one a retired summary superseded is active again,
-// and its rows stay summarized. Only the summaries that reach the turn, and
-// unfinished attempts, are retired.
+// Replacing or hiding a turn, deleting a row of it or linking an asset to one
+// rewinds the session's compaction to before the change instead of discarding
+// it: the summaries that end before the change move to the new epoch, the one
+// a retired summary superseded is active again, and its rows stay summarized.
+// Only the summaries that reach the change, and unfinished attempts, are
+// retired.
 func TestPostgresHistoryMutationsRewindCompaction(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -79,8 +80,21 @@ func TestPostgresHistoryMutationsRewindCompaction(t *testing.T) {
 			})
 			return err
 		}, keepsRequest: true},
+		{name: "delete a row", keepsRequest: true, mutate: func(ctx context.Context, tx pgx.Tx, f rewindFixture, _ HistoryTurn) error {
+			return dbsqlc.New(tx).DeleteMessagesByIDs(ctx, []pgtype.UUID{mustTestUUID(t, f.latestAnswer)})
+		}},
+		{name: "link an asset", keepsRequest: true, mutate: func(ctx context.Context, tx pgx.Tx, f rewindFixture, _ HistoryTurn) error {
+			_, err := dbsqlc.New(tx).CreateMessageAsset(ctx, dbsqlc.CreateMessageAssetParams{
+				MessageID: mustTestUUID(t, f.latestAnswer), Role: "attachment", ContentHash: "sha256:rewind-asset",
+				Name: "note.txt", Metadata: []byte("{}"),
+			})
+			return err
+		}},
 		{name: "hide an earlier turn", early: true, mutate: func(ctx context.Context, tx pgx.Tx, _ rewindFixture, turn HistoryTurn) error {
 			return dbsqlc.New(tx).HideMessagesByHistoryTurn(ctx, mustTestUUID(t, turn.ID))
+		}},
+		{name: "delete an earlier row", early: true, mutate: func(ctx context.Context, tx pgx.Tx, f rewindFixture, _ HistoryTurn) error {
+			return dbsqlc.New(tx).DeleteMessagesByIDs(ctx, []pgtype.UUID{mustTestUUID(t, f.earlierAnswer)})
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,10 +162,10 @@ func TestPostgresHistoryMutationsRewindCompaction(t *testing.T) {
 }
 
 type rewindFixture struct {
-	earlier, latest                          HistoryTurn
-	latestRequest                            string
-	earlierEnd                               time.Time
-	earlierSummary, rolling, pending, failed string
+	earlier, latest                            HistoryTurn
+	latestRequest, earlierAnswer, latestAnswer string
+	earlierEnd                                 time.Time
+	earlierSummary, rolling, pending, failed   string
 }
 
 // setupRewindFixture persists two turns. The earlier summary covers the
@@ -180,6 +194,7 @@ func setupRewindFixture(t *testing.T, ctx context.Context, tx pgx.Tx) rewindFixt
 	}
 	f := rewindFixture{
 		earlier: earlier, latest: latest, latestRequest: latestUser.ID,
+		earlierAnswer: earlierAssistant.ID, latestAnswer: latestAssistant.ID,
 		earlierEnd:     at(2),
 		earlierSummary: compact("ok", "earlier summary", at(1), at(2)),
 		rolling:        compact("ok", "rolling summary", at(1), at(4)),
