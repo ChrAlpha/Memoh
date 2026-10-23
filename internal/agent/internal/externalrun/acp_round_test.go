@@ -20,13 +20,12 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-func TestACPTerminalStreamEventFallsBackToTranscriptEvents(t *testing.T) {
+func TestACPTerminalStreamEventCarriesTranscriptAndUsage(t *testing.T) {
 	t.Parallel()
 
-	ev := runtimeTerminalStreamEvent(native.EventEnd, acpagent.DriverPromptResult(acpclient.PromptResult{
-		Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "from transcript"}},
-		Usage:  &sdk.Usage{InputTokens: 2, OutputTokens: 4, TotalTokens: 6},
-	}, "codex"))
+	ev := runtimeTerminalStreamEvent(native.EventEnd, acpagent.DriverPromptResult(withTranscriptOutput(acpclient.PromptResult{
+		Usage: &sdk.Usage{InputTokens: 2, OutputTokens: 4, TotalTokens: 6},
+	}, event.StreamEvent{Type: event.TextDelta, Delta: "from transcript"}), "codex"))
 
 	if ev.Type != native.EventEnd {
 		t.Fatalf("terminal event type = %s, want %s", ev.Type, native.EventEnd)
@@ -109,25 +108,22 @@ func TestPersistACPRoundStoresACPEventsAsNativeToolMessages(t *testing.T) {
 		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "inspect"},
 		"codex",
 		"/data/app",
-		withTranscriptOutput(acpclient.PromptResult{
-			Events: []event.StreamEvent{
-				{Type: event.TextDelta, Delta: "Before"},
-				{
-					Type:       event.ToolCallStart,
-					ToolCallID: "read-1",
-					ToolName:   "read",
-					Input:      map[string]any{"path": "README.md"},
-				},
-				{
-					Type:       event.ToolCallEnd,
-					ToolCallID: "read-1",
-					ToolName:   "read",
-					Result:     map[string]any{"ok": true},
-				},
-				{Type: event.TextDelta, Delta: "After"},
+		withTranscriptOutput(acpclient.PromptResult{StopReason: "end_turn"}, []event.StreamEvent{
+			{Type: event.TextDelta, Delta: "Before"},
+			{
+				Type:       event.ToolCallStart,
+				ToolCallID: "read-1",
+				ToolName:   "read",
+				Input:      map[string]any{"path": "README.md"},
 			},
-			StopReason: "end_turn",
-		}),
+			{
+				Type:       event.ToolCallEnd,
+				ToolCallID: "read-1",
+				ToolName:   "read",
+				Result:     map[string]any{"ok": true},
+			},
+			{Type: event.TextDelta, Delta: "After"},
+		}...),
 		nil,
 		true,
 		nil,
@@ -193,14 +189,12 @@ func TestPersistACPRoundAttachesLifecycleOnlyToFinalAssistant(t *testing.T) {
 		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "inspect"},
 		"codex",
 		"/data/app",
-		withTranscriptOutput(acpclient.PromptResult{
-			Events: []event.StreamEvent{
-				{Type: event.TextDelta, Delta: "Before"},
-				{Type: event.ToolCallStart, ToolCallID: "read-1", ToolName: "read"},
-				{Type: event.ToolCallEnd, ToolCallID: "read-1", ToolName: "read", Result: map[string]any{"ok": true}},
-				{Type: event.TextDelta, Delta: "After"},
-			},
-		}),
+		withTranscriptOutput(acpclient.PromptResult{}, []event.StreamEvent{
+			{Type: event.TextDelta, Delta: "Before"},
+			{Type: event.ToolCallStart, ToolCallID: "read-1", ToolName: "read"},
+			{Type: event.ToolCallEnd, ToolCallID: "read-1", ToolName: "read", Result: map[string]any{"ok": true}},
+			{Type: event.TextDelta, Delta: "After"},
+		}...),
 		nil,
 		true,
 		holder,
@@ -231,13 +225,10 @@ func TestPersistACPRoundStoresACPThoughtsAsReasoningParts(t *testing.T) {
 		runreq.ChatRequest{BotID: "bot-1", ThreadID: "session-1", Query: "inspect"},
 		"codex",
 		"/data/app",
-		withTranscriptOutput(acpclient.PromptResult{
-			Events: []event.StreamEvent{
-				{Type: event.ReasoningDelta, Delta: "I should inspect first."},
-				{Type: event.TextDelta, Delta: "Done"},
-			},
-			StopReason: "end_turn",
-		}),
+		withTranscriptOutput(acpclient.PromptResult{StopReason: "end_turn"}, []event.StreamEvent{
+			{Type: event.ReasoningDelta, Delta: "I should inspect first."},
+			{Type: event.TextDelta, Delta: "Done"},
+		}...),
 		nil,
 		true,
 		nil,
@@ -354,8 +345,8 @@ func externalRoundFailure(promptErr error) *outcome.RunFailure {
 }
 
 // withTranscriptOutput fills PromptResult.Output from streamed events.
-func withTranscriptOutput(result acpclient.PromptResult) acpclient.PromptResult {
-	result.Output = acpclient.TranscriptFromEvents(result.Events, result.Text)
+func withTranscriptOutput(result acpclient.PromptResult, events ...event.StreamEvent) acpclient.PromptResult {
+	result.Output = acpclient.TranscriptFromEvents(events, result.Text)
 	return result
 }
 

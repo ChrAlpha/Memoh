@@ -211,11 +211,11 @@ func TestWebSendRoutesACPRuntimeSessionToACPPool(t *testing.T) {
 
 	messages := &agenttest.RecordingMessages{}
 	pool := &recordingACPPrompter{
-		result: acpclient.PromptResult{
+		result: withTranscriptOutput(acpclient.PromptResult{
 			Text:       "done from codex",
 			StopReason: "end_turn",
 			Usage:      &sdk.Usage{InputTokens: 3, OutputTokens: 5, TotalTokens: 8},
-		},
+		}),
 	}
 	resolver := newTestService(t, Deps{
 		Messages:       messages,
@@ -327,10 +327,10 @@ func TestWebSendRoutesDiscussACPAgentSessionToACPPool(t *testing.T) {
 	t.Parallel()
 
 	pool := &recordingACPPrompter{
-		result: acpclient.PromptResult{
+		result: withTranscriptOutput(acpclient.PromptResult{
 			Text:       "done from codex",
 			StopReason: "end_turn",
-		},
+		}),
 	}
 	resolver := newTestService(t, Deps{
 		Messages:       &agenttest.RecordingMessages{},
@@ -569,9 +569,7 @@ func TestWebSendPersistsACPUserInputProjectionOnceBeforePromptReturns(t *testing
 	}
 	messages := &agenttest.RecordingMessages{}
 	pool := &recordingACPPrompter{
-		result: withTranscriptOutput(acpclient.PromptResult{
-			Events: streamed,
-		}),
+		result:       withTranscriptOutput(acpclient.PromptResult{}, streamed...),
 		streamEvents: streamed,
 		afterEvents: func() {
 			if len(messages.Persisted) != 2 {
@@ -746,7 +744,7 @@ func TestWebSendPersistsACPSubmittedUserInputResult(t *testing.T) {
 	}
 	messages := &agenttest.RecordingMessages{}
 	pool := &recordingACPPrompter{
-		result:       withTranscriptOutput(acpclient.PromptResult{Events: streamed}),
+		result:       withTranscriptOutput(acpclient.PromptResult{}, streamed...),
 		streamEvents: streamed,
 	}
 	resolver := newTestService(t, Deps{
@@ -868,7 +866,7 @@ func TestWebSendPersistsACPApprovalProjectionOnce(t *testing.T) {
 	}
 	messages := &agenttest.RecordingMessages{}
 	pool := &recordingACPPrompter{
-		result:       withTranscriptOutput(acpclient.PromptResult{Events: streamed}),
+		result:       withTranscriptOutput(acpclient.PromptResult{}, streamed...),
 		streamEvents: streamed,
 	}
 	resolver := newTestService(t, Deps{
@@ -1170,9 +1168,7 @@ func TestStreamACPAgentWSUserStopRecordsNoFailure(t *testing.T) {
 		promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
 			close(started)
 			<-ctx.Done()
-			return withTranscriptOutput(acpclient.PromptResult{
-				Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "partial answer"}},
-			}), context.Canceled
+			return withTranscriptOutput(acpclient.PromptResult{}, event.StreamEvent{Type: event.TextDelta, Delta: "partial answer"}), context.Canceled
 		},
 	}
 	resolver := newTestService(t, Deps{
@@ -1250,9 +1246,7 @@ func TestStreamACPAgentWSStopRacingCompletionEndsAsAbort(t *testing.T) {
 			close(started)
 			<-ctx.Done()
 			// The prompt finishes in the instant the run is stopped.
-			return withTranscriptOutput(acpclient.PromptResult{
-				Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "done"}},
-			}), nil
+			return withTranscriptOutput(acpclient.PromptResult{}, event.StreamEvent{Type: event.TextDelta, Delta: "done"}), nil
 		},
 	}
 	resolver := newTestService(t, Deps{
@@ -1409,9 +1403,7 @@ func TestStreamACPAgentWSSuccessStoresMemory(t *testing.T) {
 	registry := memprovider.NewRegistry(slog.New(slog.DiscardHandler))
 	registry.Register(agenttest.MemoryProviderID, memory)
 	pool := &recordingACPPrompter{
-		result: withTranscriptOutput(acpclient.PromptResult{
-			Events: []event.StreamEvent{{Type: event.TextDelta, Delta: "done"}},
-		}),
+		result: withTranscriptOutput(acpclient.PromptResult{}, event.StreamEvent{Type: event.TextDelta, Delta: "done"}),
 	}
 	resolver := newTestService(t, Deps{
 		Messages:       messages,
@@ -1537,8 +1529,8 @@ func toolCallMetadataStatus(call sdk.ToolCallPart, key string) string {
 	return status
 }
 
-func withTranscriptOutput(result acpclient.PromptResult) acpclient.PromptResult {
-	result.Output = acpclient.TranscriptFromEvents(result.Events, result.Text)
+func withTranscriptOutput(result acpclient.PromptResult, events ...event.StreamEvent) acpclient.PromptResult {
+	result.Output = acpclient.TranscriptFromEvents(events, result.Text)
 	return result
 }
 

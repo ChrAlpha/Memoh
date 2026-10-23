@@ -13,27 +13,25 @@ import (
 func TestACPResultOutputMessagesPersistsUserInputMetadata(t *testing.T) {
 	t.Parallel()
 
-	output := transcriptModelMessages(acpclient.PromptResult{
-		Events: []event.StreamEvent{
-			{
-				Type:       event.ToolCallStart,
-				ToolCallID: "mcp-http-call-1",
-				ToolName:   "ask_user",
-				Input:      map[string]any{"questions": []any{map[string]any{"text": "Which plan?", "kind": "single_select"}}},
-			},
-			{
-				Type:        event.UserInputRequest,
-				ToolCallID:  "mcp-http-call-1",
-				ToolName:    "ask_user",
-				UserInputID: "input-1",
-				ShortID:     3,
-				Status:      "pending",
-				Metadata: map[string]any{
-					"ui_payload": map[string]any{
-						"version": 2,
-						"questions": []any{
-							map[string]any{"id": "q1", "text": "Which plan?", "kind": "single_select"},
-						},
+	output := transcriptModelMessages([]event.StreamEvent{
+		{
+			Type:       event.ToolCallStart,
+			ToolCallID: "mcp-http-call-1",
+			ToolName:   "ask_user",
+			Input:      map[string]any{"questions": []any{map[string]any{"text": "Which plan?", "kind": "single_select"}}},
+		},
+		{
+			Type:        event.UserInputRequest,
+			ToolCallID:  "mcp-http-call-1",
+			ToolName:    "ask_user",
+			UserInputID: "input-1",
+			ShortID:     3,
+			Status:      "pending",
+			Metadata: map[string]any{
+				"ui_payload": map[string]any{
+					"version": 2,
+					"questions": []any{
+						map[string]any{"id": "q1", "text": "Which plan?", "kind": "single_select"},
 					},
 				},
 			},
@@ -68,22 +66,20 @@ func TestACPResultOutputMessagesPersistsUserInputMetadata(t *testing.T) {
 func TestACPResultOutputMessagesPersistsToolApprovalMetadata(t *testing.T) {
 	t.Parallel()
 
-	output := transcriptModelMessages(acpclient.PromptResult{
-		Events: []event.StreamEvent{
-			{
-				Type:       event.ToolCallStart,
-				ToolCallID: "write-1",
-				ToolName:   "write",
-				Input:      map[string]any{"path": "/data/review.txt"},
-			},
-			{
-				Type:       event.ToolApprovalRequest,
-				ToolCallID: "write-1",
-				ToolName:   "write",
-				ApprovalID: "approval-1",
-				ShortID:    4,
-				Status:     toolapproval.StatusPending,
-			},
+	output := transcriptModelMessages([]event.StreamEvent{
+		{
+			Type:       event.ToolCallStart,
+			ToolCallID: "write-1",
+			ToolName:   "write",
+			Input:      map[string]any{"path": "/data/review.txt"},
+		},
+		{
+			Type:       event.ToolApprovalRequest,
+			ToolCallID: "write-1",
+			ToolName:   "write",
+			ApprovalID: "approval-1",
+			ShortID:    4,
+			Status:     toolapproval.StatusPending,
 		},
 	})
 	if len(output) != 1 || output[0].Role != "assistant" {
@@ -115,30 +111,28 @@ func TestACPResultOutputMessagesPersistsToolApprovalMetadata(t *testing.T) {
 func TestACPResultOutputMessagesPersistsResolvedToolApprovalMetadata(t *testing.T) {
 	t.Parallel()
 
-	output := transcriptModelMessages(acpclient.PromptResult{
-		Events: []event.StreamEvent{
-			{
-				Type:       event.ToolCallStart,
-				ToolCallID: "write-1",
-				ToolName:   "write",
-				Input:      map[string]any{"path": "/data/review.txt"},
-			},
-			{
-				Type:       event.ToolApprovalRequest,
-				ToolCallID: "write-1",
-				ToolName:   "write",
-				ApprovalID: "approval-1",
-				ShortID:    4,
-				Status:     toolapproval.StatusPending,
-			},
-			{
-				Type:       event.ToolApprovalRequest,
-				ToolCallID: "write-1",
-				ToolName:   "write",
-				ApprovalID: "approval-1",
-				ShortID:    4,
-				Status:     toolapproval.StatusApproved,
-			},
+	output := transcriptModelMessages([]event.StreamEvent{
+		{
+			Type:       event.ToolCallStart,
+			ToolCallID: "write-1",
+			ToolName:   "write",
+			Input:      map[string]any{"path": "/data/review.txt"},
+		},
+		{
+			Type:       event.ToolApprovalRequest,
+			ToolCallID: "write-1",
+			ToolName:   "write",
+			ApprovalID: "approval-1",
+			ShortID:    4,
+			Status:     toolapproval.StatusPending,
+		},
+		{
+			Type:       event.ToolApprovalRequest,
+			ToolCallID: "write-1",
+			ToolName:   "write",
+			ApprovalID: "approval-1",
+			ShortID:    4,
+			Status:     toolapproval.StatusApproved,
 		},
 	})
 	if len(output) != 1 || output[0].Role != "assistant" {
@@ -167,23 +161,21 @@ func TestACPResultOutputMessagesPersistsResolvedToolApprovalMetadata(t *testing.
 func TestACPResultOutputMessagesMergesApprovalBeforeToolStart(t *testing.T) {
 	t.Parallel()
 
-	output := transcriptModelMessages(acpclient.PromptResult{
-		Events: []event.StreamEvent{
-			{
-				Type:       event.ToolApprovalRequest,
-				ToolCallID: "exec-1",
-				ToolName:   "exec",
-				Input:      map[string]any{"command": "pwd"},
-				ApprovalID: "approval-1",
-				ShortID:    1,
-				Status:     toolapproval.StatusPending,
-			},
-			{
-				Type:       event.ToolCallStart,
-				ToolCallID: "exec-1",
-				ToolName:   "exec",
-				Input:      map[string]any{"command": "pwd"},
-			},
+	output := transcriptModelMessages([]event.StreamEvent{
+		{
+			Type:       event.ToolApprovalRequest,
+			ToolCallID: "exec-1",
+			ToolName:   "exec",
+			Input:      map[string]any{"command": "pwd"},
+			ApprovalID: "approval-1",
+			ShortID:    1,
+			Status:     toolapproval.StatusPending,
+		},
+		{
+			Type:       event.ToolCallStart,
+			ToolCallID: "exec-1",
+			ToolName:   "exec",
+			Input:      map[string]any{"command": "pwd"},
 		},
 	})
 	if len(output) != 1 || output[0].Role != "assistant" {
@@ -210,8 +202,8 @@ func TestACPResultOutputMessagesMergesApprovalBeforeToolStart(t *testing.T) {
 }
 
 // transcriptModelMessages builds model messages from streamed ACP events.
-func transcriptModelMessages(result acpclient.PromptResult) []runreq.ModelMessage {
-	output := runreq.SDKMessagesToModelMessages(acpclient.TranscriptFromEvents(result.Events, result.Text))
+func transcriptModelMessages(events []event.StreamEvent) []runreq.ModelMessage {
+	output := runreq.SDKMessagesToModelMessages(acpclient.TranscriptFromEvents(events, ""))
 	if len(output) == 0 {
 		return []runreq.ModelMessage{{Role: "assistant", Content: runreq.NewTextContent("")}}
 	}

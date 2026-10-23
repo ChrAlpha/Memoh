@@ -387,7 +387,7 @@ func TestACPCommitUnknownResolutionMatrix(t *testing.T) {
 		pool := &recordingACPPrompter{promptFn: func(ctx context.Context, _ acpagent.PromptInput) (acpclient.PromptResult, error) {
 			close(started)
 			<-ctx.Done()
-			return acpclient.PromptResult{Text: "partial"}, context.Cause(ctx)
+			return withTranscriptOutput(acpclient.PromptResult{Text: "partial"}), context.Cause(ctx)
 		}}
 		service := newACPLifecycleService(t, pool, messages, &agenttest.RecordingLifecycleStore{}, withDeps(func(d *Deps) { d.Queries = &reconcileOutcomeQueries{} }))
 		eventCh := make(chan runreq.WSStreamEvent, 16)
