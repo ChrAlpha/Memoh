@@ -193,6 +193,21 @@ continuations use the same phase-aware application watchdog:
   watchdog while its synchronous compaction runs; the model window restarts
   when recovery returns. Cancellation and execution budgets still apply.
 
+Conversation messages only append between compaction events. A tool result is
+bounded once, when the tool returns (`tool_output_max_bytes`, 32 KiB by default, and
+`tool_output_max_lines`, keeping its head and tail), and every later request
+carries it as stored. No run prunes, stubs, or drops a stored conversation message
+it already sent. Dynamic background-task snapshots and before-model hooks keep
+their existing refresh behavior.
+When the next call does not fit, a run armed for in-run compaction folds its
+eligible sources into the rolling summary. Any other run, or an event that
+cannot make the call fit, ends with `context.budget_unsatisfied` or
+`context.protected_overflow`.
+
+After a Discuss run stops over budget, the next turn keeps its retained,
+unanswered inputs as anchors. Completed tool steps between those inputs can
+be compacted before dispatch; retaining an input does not pin every later step.
+
 Schedules expose `max_run_seconds` (default 3600, range 300–86400), independently
 of the selected runtime. Every fire uses its existing log UUID for turn admission,
 so repeated fires targeting the same session remain distinct. The execution

@@ -13,6 +13,23 @@ import (
 	"github.com/felinics/memoh/internal/models"
 )
 
+func imageUserMessage(size int, extra ...sdk.MessagePart) sdk.Message {
+	parts := append([]sdk.MessagePart{sdk.ImagePart{
+		Image:     "data:image/png;base64," + strings.Repeat("A", size),
+		MediaType: "image/png",
+	}}, extra...)
+	return sdk.Message{Role: sdk.MessageRoleUser, Content: parts}
+}
+
+func fileUserMessage(size int, extra ...sdk.MessagePart) sdk.Message {
+	parts := append([]sdk.MessagePart{sdk.FilePart{
+		Data:      strings.Repeat("A", size),
+		MediaType: "application/pdf",
+		Filename:  "report.pdf",
+	}}, extra...)
+	return sdk.Message{Role: sdk.MessageRoleUser, Content: parts}
+}
+
 type namedEnvelopeProbeProvider struct {
 	*envelopeProbeProvider
 	name string

@@ -620,7 +620,7 @@
       "upstream_unavailable": "Connect-It 暂时无法完成请求，请稍后重试。"
     },
     "context": {
-      "budget_unsatisfied": "压缩较早的历史后，当前请求仍放不进模型上下文窗口，本次运行已停止。可重试、缩短请求、开始新对话，或改用上下文窗口更大的模型。",
+      "budget_unsatisfied": "当前请求放不进模型上下文窗口，本次运行已停止。可重试、缩短请求、开始新对话，或改用上下文窗口更大的模型。",
       "protected_overflow": "必要的上下文内容超出了模型上下文预算。请缩短请求，或改用上下文窗口更大的模型。"
     },
     "context_lifecycle": {

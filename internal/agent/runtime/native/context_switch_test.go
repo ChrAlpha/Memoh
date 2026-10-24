@@ -65,8 +65,7 @@ func switchRequest() ([]sdk.Message, []MessageProvenance) {
 }
 
 // armedRun is a run armed with event that has committed the latest step of
-// switchRequest, with a step reselector that must never run, and an
-// allowance only the request spliced to keep fits in.
+// switchRequest, with an allowance only the request spliced to keep fits in.
 func armedRun(t *testing.T, messages []sdk.Message, provenance []MessageProvenance, keep []int, event func(context.Context, ContextSwitch) (string, error)) (RunConfig, *error) {
 	t.Helper()
 	var failure error
@@ -75,12 +74,8 @@ func armedRun(t *testing.T, messages []sdk.Message, provenance []MessageProvenan
 		kept = append(kept, messages[i])
 	}
 	cfg := RunConfig{
-		ContextMutations: contextfrag.NewMutationLedger(),
-		ContextManifest:  contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: contextfrag.ProviderEnvelopeTokens("", append(kept, sdk.UserMessage("<summary>\nnew\n")), nil) + 8}},
-		ContextStepReselector: func(context.Context, ContextStepSelectionInput) ContextStepSelectionResult {
-			t.Error("an armed run reselected its steps")
-			return ContextStepSelectionResult{}
-		},
+		ContextMutations:  contextfrag.NewMutationLedger(),
+		ContextManifest:   contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: contextfrag.ProviderEnvelopeTokens("", append(kept, sdk.UserMessage("<summary>\nnew\n")), nil) + 8}},
 		SwitchContext:     event,
 		ContextProvenance: provenance,
 	}
@@ -91,7 +86,7 @@ func armedRun(t *testing.T, messages []sdk.Message, provenance []MessageProvenan
 }
 
 func prepareArmed(cfg RunConfig, messages []sdk.Message) *sdk.Request {
-	return prepareProviderAttempt(context.Background(), cfg, newProviderAttemptHandoff(cfg), LoopReselectActive, false, 6, 2, nil,
+	return prepareProviderAttempt(context.Background(), cfg, newProviderAttemptHandoff(cfg), false, 6, 2, nil,
 		&sdk.Request{Messages: append([]sdk.Message(nil), messages...)})
 }
 

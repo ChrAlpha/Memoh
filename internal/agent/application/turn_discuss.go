@@ -28,7 +28,7 @@ import (
 type turnRuntimeHooks struct {
 	streamChat       func(context.Context, ChatRequest) (<-chan StreamChunk, <-chan error)
 	streamAgent      func(context.Context, native.RunConfig) <-chan native.StreamEvent
-	resolveRunConfig func(context.Context, string, string, string, string, string, string, string) (ResolveRunConfigResult, error)
+	resolveRunConfig func(context.Context, RunConfigRequest) (ResolveRunConfigResult, error)
 	inlineImages     func(context.Context, string, []timeline.ImageAttachmentRef) [][]sdk.ImagePart
 	storeRound       func(context.Context, string, string, string, string, string, []sdk.Message, string, *contextfrag.LifecycleHolder) error
 }
@@ -149,9 +149,17 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 		h.cancel()
 	}()
 
-	resolved, err := s.resolveDiscussRunConfig(ctx,
-		cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID,
-		cmd.CurrentChannel, cmd.ReplyTarget, cmd.ConversationType, cmd.SessionToken)
+	// A Discuss batch speaks for the group rather than one account, so no user
+	// scopes its config; every step of the turn resolves the same way.
+	resolved, err := s.resolveDiscussRunConfig(ctx, RunConfigRequest{
+		BotID:             cmd.BotID,
+		SessionID:         cmd.ThreadID,
+		ChannelIdentityID: cmd.SourceChannelIdentityID,
+		CurrentPlatform:   cmd.CurrentChannel,
+		ReplyTarget:       cmd.ReplyTarget,
+		ConversationType:  cmd.ConversationType,
+		ChatToken:         cmd.SessionToken,
+	})
 	if err != nil {
 		h.emitErr(err)
 		return
@@ -685,32 +693,11 @@ func (s *Service) discussRuntimeConfigured() bool {
 	return s.agent != nil
 }
 
-func (s *Service) resolveDiscussRunConfig(
-	ctx context.Context,
-	botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string,
-) (ResolveRunConfigResult, error) {
+func (s *Service) resolveDiscussRunConfig(ctx context.Context, req RunConfigRequest) (ResolveRunConfigResult, error) {
 	if s.turnHooks != nil && s.turnHooks.resolveRunConfig != nil {
-		return s.turnHooks.resolveRunConfig(
-			ctx,
-			botID,
-			sessionID,
-			channelIdentityID,
-			currentPlatform,
-			replyTarget,
-			conversationType,
-			chatToken,
-		)
+		return s.turnHooks.resolveRunConfig(ctx, req)
 	}
-	return s.ResolveRunConfig(
-		ctx,
-		botID,
-		sessionID,
-		channelIdentityID,
-		currentPlatform,
-		replyTarget,
-		conversationType,
-		chatToken,
-	)
+	return s.ResolveRunConfig(ctx, req)
 }
 
 func (s *Service) inlineDiscussImages(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) [][]sdk.ImagePart {

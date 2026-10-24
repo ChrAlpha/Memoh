@@ -208,7 +208,7 @@ func TestContextBudgetErrorsHaveStableCatalogContracts(t *testing.T) {
 		code   Code
 		detail string
 	}{
-		{CodeContextBudgetUnsatisfied, "Summarizing earlier history did not make this request fit the model context window, so the run stopped. Try again, shorten the request, start a new conversation, or switch to a model with a larger context window."},
+		{CodeContextBudgetUnsatisfied, "This request does not fit the model context window, so the run stopped. Try again, shorten the request, start a new conversation, or switch to a model with a larger context window."},
 		{CodeContextProtectedOverflow, "Required context exceeds the model context budget. Shorten the request, or switch to a model with a larger context window."},
 	} {
 		definition, ok := Lookup(tt.code)

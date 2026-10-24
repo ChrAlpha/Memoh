@@ -77,7 +77,7 @@ type fakeDiscussService struct {
 	storeFn        func() error
 }
 
-func (f *fakeDiscussService) ResolveRunConfig(_ context.Context, _, _, _, _, _, _, _ string) (ResolveRunConfigResult, error) {
+func (f *fakeDiscussService) ResolveRunConfig(context.Context, RunConfigRequest) (ResolveRunConfigResult, error) {
 	return f.resolveResult, nil
 }
 
@@ -103,7 +103,7 @@ type testAgentStreamer interface {
 }
 
 type testDiscussService interface {
-	ResolveRunConfig(context.Context, string, string, string, string, string, string, string) (ResolveRunConfigResult, error)
+	ResolveRunConfig(context.Context, RunConfigRequest) (ResolveRunConfigResult, error)
 	InlineImageAttachments(context.Context, string, []timeline.ImageAttachmentRef) [][]sdk.ImagePart
 	StoreRound(context.Context, string, string, string, string, string, []sdk.Message, string, *contextfrag.LifecycleHolder) error
 }
@@ -124,9 +124,9 @@ func configureDiscussLifecycle(service *Service) (*lifecycleTurnAdmitter, *recor
 	runtime := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
 	store := &recordingContextLifecycleStore{}
 	resolve := service.turnHooks.resolveRunConfig
-	service.turnHooks.resolveRunConfig = func(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string) (ResolveRunConfigResult, error) {
-		resolved, err := resolve(ctx, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken)
-		resolved.RunConfig.Identity = native.SessionContext{BotID: botID, SessionID: sessionID}
+	service.turnHooks.resolveRunConfig = func(ctx context.Context, req RunConfigRequest) (ResolveRunConfigResult, error) {
+		resolved, err := resolve(ctx, req)
+		resolved.RunConfig.Identity = native.SessionContext{BotID: req.BotID, SessionID: req.SessionID}
 		return resolved, err
 	}
 	service.sessionRuntime = runtime

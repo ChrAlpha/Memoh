@@ -1251,11 +1251,29 @@ func buildModelSelectionRequest(p baseRunConfigParams, chatID string) ChatReques
 	}
 }
 
+// RunConfigRequest names the run a config is resolved for: the account it
+// acts for and where its output goes.
+type RunConfigRequest struct {
+	BotID     string
+	SessionID string
+	// UserID is the account the run acts for. It scopes user settings such as
+	// the timezone in the system prompt, so a resumed run must pass the user
+	// its run was admitted for, not whoever resumed it.
+	UserID            string
+	ChannelIdentityID string
+	CurrentPlatform   string
+	ReplyTarget       string
+	ConversationType  string
+	ChatToken         string //nolint:gosec // session credential material, not a hardcoded secret
+}
+
 // ResolveRunConfig builds a complete RunConfig (model, system prompt, tools,
 // identity) for a bot+session without loading messages or requiring a query.
 // The caller is responsible for filling RunConfig.Messages.
-// Used by discuss turns to reuse the service's model, tools, and prompt pipeline.
-func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string) (ResolveRunConfigResult, error) {
+// It serves runs that do not start from a ChatRequest: resumed decisions and
+// Discuss turns.
+func (s *Service) ResolveRunConfig(ctx context.Context, req RunConfigRequest) (ResolveRunConfigResult, error) {
+	botID, sessionID := req.BotID, req.SessionID
 	if strings.TrimSpace(botID) == "" {
 		return ResolveRunConfigResult{}, errors.New("bot id is required")
 	}
@@ -1270,11 +1288,11 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 				BotID:             botID,
 				ChatID:            botID,
 				SessionID:         sessionID,
-				ChannelIdentityID: strings.TrimSpace(channelIdentityID),
-				CurrentPlatform:   currentPlatform,
-				ReplyTarget:       strings.TrimSpace(replyTarget),
-				ConversationType:  strings.TrimSpace(conversationType),
-				SessionToken:      chatToken,
+				ChannelIdentityID: strings.TrimSpace(req.ChannelIdentityID),
+				CurrentPlatform:   req.CurrentPlatform,
+				ReplyTarget:       strings.TrimSpace(req.ReplyTarget),
+				ConversationType:  strings.TrimSpace(req.ConversationType),
+				SessionToken:      req.ChatToken,
 			},
 		}
 		return ResolveRunConfigResult{
@@ -1292,11 +1310,12 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 	cfg, chatModel, _, err := s.buildBaseRunConfig(ctx, baseRunConfigParams{
 		BotID:              botID,
 		SessionID:          sessionID,
-		ChannelIdentityID:  channelIdentityID,
-		CurrentPlatform:    currentPlatform,
-		ReplyTarget:        replyTarget,
-		ConversationType:   conversationType,
-		SessionToken:       chatToken,
+		UserID:             strings.TrimSpace(req.UserID),
+		ChannelIdentityID:  req.ChannelIdentityID,
+		CurrentPlatform:    req.CurrentPlatform,
+		ReplyTarget:        req.ReplyTarget,
+		ConversationType:   req.ConversationType,
+		SessionToken:       req.ChatToken,
 		SessionType:        sessionType,
 		SessionPrefModelID: sessionPrefModelID,
 		SessionPrefEffort:  sessionPrefEffort,

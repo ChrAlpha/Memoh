@@ -375,19 +375,6 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	handoff := newProviderAttemptHandoff(cfg)
 	sdkTools = canonicalizeProviderToolSchemas(sdkTools)
 	cfg.ContextMutations.SetModelInfo(modelID(cfg.Model), models.ResolveClientType(cfg.Model))
-	loopReselectMode := a.LoopReselectMode()
-	if loopReselectMode == LoopReselectOff {
-		cfg.ContextStepReselector = nil
-	}
-	switch {
-	case cfg.ContextStepReselector == nil:
-		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionLegacyPrune)
-	case loopReselectMode == LoopReselectShadow:
-		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnlyShadow)
-	default:
-		cfg.ContextMutations.SetLoopSelectionMode(contextfrag.LoopSelectionSuffixOnly)
-	}
-
 	plan := cfg.ContextCachePlan
 	providerAttemptPrefixCount := len(cfg.Messages)
 	if cfg.initialProviderPrefixSet {
@@ -418,7 +405,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	if toolDefErr != nil {
 		return generateDispatch{}, toolDefErr
 	}
-	initialParams := prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, 0, providerRefs, &sdk.Request{
+	initialParams := prepareProviderAttempt(ctx, cfg, handoff, systemPrepended, initialProviderMessageCount, 0, providerRefs, &sdk.Request{
 		System: system, Messages: messages, Tools: toolDefs,
 	})
 	system = initialParams.System
@@ -478,7 +465,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 			return nil
 		}
 		defer func() { prepareIndex++ }()
-		return prepareProviderAttempt(ctx, cfg, handoff, loopReselectMode, systemPrepended, initialProviderMessageCount, prepareIndex+1, cfg.dynamicInputs.pendingRefs(), p)
+		return prepareProviderAttempt(ctx, cfg, handoff, systemPrepended, initialProviderMessageCount, prepareIndex+1, cfg.dynamicInputs.pendingRefs(), p)
 	}
 
 	if key := models.PromptCacheKey(cfg.Model, cfg.PromptCacheTTL, cfg.Identity.SessionID); key != "" {

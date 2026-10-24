@@ -50,7 +50,7 @@ const (
 	DefaultBaseImage             = DefaultWorkspaceImage
 	DefaultWorkspaceMirrorImage  = "memoh.cn/memohai/workspace:debian-latest"
 	DefaultTimezone              = "UTC"
-	DefaultAgentToolOutputBytes  = 64 * 1024
+	DefaultAgentToolOutputBytes  = 32 * 1024
 	DefaultAgentToolOutputLines  = 2000
 	DefaultAgentSystemFilesBytes = 32 * 1024
 
@@ -364,10 +364,9 @@ type AuthConfig struct {
 }
 
 type AgentConfig struct {
-	ToolOutputMaxBytes  int    `toml:"tool_output_max_bytes"`
-	ToolOutputMaxLines  int    `toml:"tool_output_max_lines"`
-	SystemFilesMaxBytes int    `toml:"system_files_max_bytes"`
-	ContextLoopReselect string `toml:"context_loop_reselect"`
+	ToolOutputMaxBytes  int `toml:"tool_output_max_bytes"`
+	ToolOutputMaxLines  int `toml:"tool_output_max_lines"`
+	SystemFilesMaxBytes int `toml:"system_files_max_bytes"`
 	// ContextAbsoluteMaxTokens is the server-wide context admission cap
 	// (CM-ADM-001): the effective per-turn budget is
 	// min(model context window − reserve, this cap), and the cap alone when
@@ -383,27 +382,6 @@ func (c AgentConfig) EffectiveContextAbsoluteMaxTokens() int {
 		return c.ContextAbsoluteMaxTokens
 	}
 	return contextfrag.DefaultAbsoluteCapTokens
-}
-
-const (
-	ContextLoopReselectModeActive = "active"
-	ContextLoopReselectModeShadow = "shadow"
-	ContextLoopReselectModeOff    = "off"
-)
-
-// EffectiveContextLoopReselectMode normalizes the configured in-loop context
-// step reselector rollout mode. Empty defaults to active. recognized is false
-// when a non-empty value does not match active/shadow/off.
-func (c AgentConfig) EffectiveContextLoopReselectMode() (mode string, recognized bool) {
-	value := strings.TrimSpace(strings.ToLower(c.ContextLoopReselect))
-	switch value {
-	case "":
-		return ContextLoopReselectModeActive, true
-	case ContextLoopReselectModeActive, ContextLoopReselectModeShadow, ContextLoopReselectModeOff:
-		return value, true
-	default:
-		return ContextLoopReselectModeActive, false
-	}
 }
 
 const (

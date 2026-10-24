@@ -24,6 +24,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -166,7 +167,11 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 	t.Cleanup(func() { _ = manager.Close() })
 	f.manager = manager
 	f.agent = native.New(native.Deps{Logger: logger, ContextViewApplier: contextview.ProviderRunConfigApplier(logger)})
-	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), nil, f.agent, time.UTC, time.Minute)
+	accountStore, err := postgresstore.New(f.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := application.NewService(logger, models.NewService(logger, queries), queries, f.messages, settings.NewService(logger, queries, nil, nil), accounts.NewService(logger, accountStore), f.agent, time.UTC, time.Minute)
 	service.SetSessionRuntime(manager)
 	service.SetCompactionService(compaction.NewService(logger, queries))
 	service.SetContextAbsoluteMaxTokens(16000)

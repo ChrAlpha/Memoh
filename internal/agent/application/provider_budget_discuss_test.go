@@ -197,11 +197,11 @@ func TestDiscussProviderBudgetRecoveryCompactsOlderBatchBehindFittingSuffix(t *t
 	}
 	cfg := compactor.configs[0]
 	protected := map[string]bool{}
-	for _, source := range cfg.ProtectedSources {
+	for _, source := range cfg.Anchors {
 		protected[source.ID] = true
 	}
-	if !protected["m4"] || !protected["m3"] || protected["m1"] || cfg.HistoryBudgetTokens <= 0 || cfg.HistoryBudgetTokens >= 998 {
-		t.Fatalf("protected=%v history_budget=%d; the newest input and its fitting suffix stay raw, older input is compacted, protected cost is counted once", protected, cfg.HistoryBudgetTokens)
+	if !protected["m4"] || !protected["m3"] || protected["m1"] || len(cfg.ProtectedSources) != 0 || cfg.HistoryBudgetTokens <= 0 || cfg.HistoryBudgetTokens >= 998 {
+		t.Fatalf("anchors=%v protected_tail=%v history_budget=%d; retained inputs stay raw at their own positions and their cost is counted once", protected, cfg.ProtectedSources, cfg.HistoryBudgetTokens)
 	}
 }
 

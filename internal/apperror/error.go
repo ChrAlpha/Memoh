@@ -579,7 +579,7 @@ var catalog = map[Code]Definition{
 	},
 	CodeContextBudgetUnsatisfied: {
 		HTTPStatus: http.StatusUnprocessableEntity,
-		Detail:     "Summarizing earlier history did not make this request fit the model context window, so the run stopped. Try again, shorten the request, start a new conversation, or switch to a model with a larger context window.",
+		Detail:     "This request does not fit the model context window, so the run stopped. Try again, shorten the request, start a new conversation, or switch to a model with a larger context window.",
 	},
 	CodeContextProtectedOverflow: {
 		HTTPStatus: http.StatusUnprocessableEntity,

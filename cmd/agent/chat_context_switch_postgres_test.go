@@ -97,8 +97,10 @@ type effectLoop struct {
 	downFrom            int32
 	// resultBytes sizes each effect's result; zero keeps the default.
 	resultBytes int
-	effects     []int
-	requests    []string
+	// userID is the account the runs act for; empty sends them for none.
+	userID   string
+	effects  []int
+	requests []string
 }
 
 type approveExec struct{}
@@ -257,7 +259,7 @@ func (s *effectLoop) run(entry runEntry, text string, steps int) (string, []stri
 
 func (s *effectLoop) command(text string) turn.StartTurnCommand {
 	f := s.f
-	return turn.StartTurnCommand{TeamID: f.cfg.TeamID, Mode: turn.ModeChat, BotID: f.botID, ChatID: f.botID, ThreadID: f.sessionID, Query: text, CurrentChannel: "local"}
+	return turn.StartTurnCommand{TeamID: f.cfg.TeamID, Mode: turn.ModeChat, BotID: f.botID, ChatID: f.botID, ThreadID: f.sessionID, UserID: s.userID, Query: text, CurrentChannel: "local"}
 }
 
 // chat runs one turn from the web UI, or from an IM channel whose message
@@ -495,6 +497,7 @@ var inRunScenarios = []inRunScenario{
 	{name: "long-loop", run: longLoopScenario},
 	{name: "decision-after-progress", run: decisionAfterProgressScenario},
 	{name: "decision-full-summary", run: decisionFullSummaryScenario},
+	{name: "decision-keeps-prompt", run: decisionKeepsPromptScenario},
 }
 
 // TestPostgresInRunCompactionByEntry runs every headline scenario through
@@ -524,6 +527,37 @@ func decisionAfterProgressScenario(t *testing.T, entry runEntry, s *effectLoop) 
 	}
 	if s.f.summaries.Load() == 0 || strings.Count(requests[3], loopInput) != 1 || !strings.Contains(requests[3], "DECISION_RESULT_KEEP"+strings.Repeat("x", 9000)) {
 		t.Fatal("resumed request must compact earlier progress and retain its input and approved result")
+	}
+}
+
+// A run resumed by a decision keeps the system prompt of its first request:
+// the continuation acts for the account the run was admitted for, not for
+// nobody, so a user timezone the bot does not override survives the decision
+// and every request of the run keeps the same prefix.
+func decisionKeepsPromptScenario(t *testing.T, entry runEntry, s *effectLoop) {
+	f := s.f
+	if _, err := f.pool.Exec(f.ctx, `UPDATE users SET timezone='Asia/Shanghai' WHERE id=$1`, f.ownerUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(f.ctx, `UPDATE bots SET timezone=NULL WHERE id=$1`, f.botID); err != nil {
+		t.Fatal(err)
+	}
+	// A server always records each run's admitted intent; it signs it with the
+	// JWT secret, which the fixture otherwise leaves unset.
+	f.service.SetResumeSecret("decision-keeps-prompt")
+	s.userID, s.decisionAfter = f.ownerUserID, 1
+	code, requests := s.run(entry, loopInput, 2)
+	if code != "" || !slices.Equal(s.effects, []int{1, 2}) || len(requests) < 4 {
+		t.Fatalf("resume: code=%q effects=%v requests=%d, want both effects around the decision", code, s.effects, len(requests))
+	}
+	system := requestMessages(t, requests[0])[0]
+	if !strings.Contains(system, "Timezone: Asia/Shanghai") {
+		t.Fatalf("first request does not carry the requester's timezone: %.200s", system)
+	}
+	for i, request := range requests[1:] {
+		if got := requestMessages(t, request)[0]; got != system {
+			t.Fatalf("request %d rewrote the system prompt the run started with", i+2)
+		}
 	}
 }
 
@@ -671,12 +705,27 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	code, requests := s.run(entry, loopInput, steps)
 	s.foreignAt = 0
 	if !entry.folds {
-		if f.summaries.Load() != summaries || (code != "" && code != "context.budget_unsatisfied") || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) || len(s.effects) > steps {
+		if f.summaries.Load() != summaries || code != "context.budget_unsatisfied" || len(s.effects) == 0 || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) || len(s.effects) >= steps {
 			t.Fatalf("outside the coverage set: code=%q summary_calls=%d effects=%v, want no fold, a bounded end and no replayed effect", code, f.summaries.Load()-summaries, s.effects)
 		}
+		var previous []string
+		for i, request := range requests {
+			messages := requestMessages(t, request)
+			if strings.Contains(request, "[tool result pruned") || len(messages) < len(previous) || !slices.Equal(previous, messages[:len(previous)]) {
+				t.Fatalf("request %d changed previously sent messages before failing closed", i+1)
+			}
+			previous = messages
+		}
 		t.Logf("code=%q provider_calls=%d effects=%d first_kept_in_last_request=%d", code, len(requests), len(s.effects), firstKept(requests[len(requests)-1], steps))
-		if code, _ := s.run(entry, "NEXT_ROUND_QUESTION", 0); code != "" {
+		code, next := s.run(entry, "NEXT_ROUND_QUESTION", 0)
+		if code != "" {
 			t.Fatalf("next turn after the loop failed with %s", code)
+		}
+		if len(s.effects) != 0 || len(next) != 1 {
+			t.Fatalf("next turn: effects=%v requests=%d, want one answer without replaying effects", s.effects, len(next))
+		}
+		if entry.name == "discuss" && (f.summaries.Load() == summaries || strings.Count(next[0], loopInput) != 1 || strings.Count(next[0], "NEXT_ROUND_QUESTION") != 1) {
+			t.Fatal("Discuss must compact completed steps while retaining both unanswered inputs verbatim")
 		}
 		return
 	}

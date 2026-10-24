@@ -28,7 +28,7 @@ func buildErrorFragsFirstConfig(messages []sdk.Message, window int) agentpkg.Run
 	}
 }
 
-func TestApplyProviderRunConfigFallbackCarriesBudgetPlanAndStepReselector(t *testing.T) {
+func TestApplyProviderRunConfigFallbackCarriesBudgetPlan(t *testing.T) {
 	t.Parallel()
 
 	out, err := ProviderRunConfigApplier(nil)(context.Background(), buildErrorFragsFirstConfig([]sdk.Message{sdk.UserMessage("legacy message")}, 100_000))
@@ -45,9 +45,6 @@ func TestApplyProviderRunConfigFallbackCarriesBudgetPlanAndStepReselector(t *tes
 	}
 	if plan.ActualSystemCost != 0 || plan.HistoryBudget != 0 {
 		t.Fatalf("fallback plan = %+v, want the failed build's system and history figures cleared", plan)
-	}
-	if out.ContextStepReselector == nil {
-		t.Fatal("fallback assembly must keep step reselection; it is an assembly path, not a budget-disabled path")
 	}
 	if out.ContextMutations == nil {
 		t.Fatal("fallback lost the mutation ledger")
