@@ -147,7 +147,7 @@ func TestSummaryAtItsStatedLimitFitsItsRoom(t *testing.T) {
 	t.Parallel()
 
 	for room := minSummaryTokens; room <= 6200; room += 7 {
-		limit := summaryOutputLimit("", room, 1<<20)
+		limit := summaryOutputLimit(room, 1<<20)
 		if replay := summaryReplayTokens(strings.Repeat("x", limit*contextfrag.EstimateBytesPerToken)); replay > room {
 			t.Fatalf("room %d: a summary of the stated %d tokens replays as %d", room, limit, replay)
 		}

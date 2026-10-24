@@ -56,14 +56,10 @@ type CompactionSource struct {
 // separate so later restacks can supersede only the ranges they actually cover.
 // AnchorEndMs is when the last source it covers was created: the summary
 // renders right after that source, whether or not the source is loaded.
-// FloorMs, when set, is the floor the summary stands on: every source
-// received or created up to it is left out of the context, which Sources do
-// not list.
 type CompactionArtifact struct {
 	ID             string             `json:"id"`
 	Summary        string             `json:"summary"`
 	AnchorEndMs    int64              `json:"anchor_end_ms,omitempty"`
-	FloorMs        int64              `json:"floor_ms,omitempty"`
 	CoverageAsOfMs int64              `json:"coverage_as_of_ms,omitempty"`
 	Sources        []CompactionSource `json:"sources,omitempty"`
 }
@@ -71,27 +67,6 @@ type CompactionArtifact struct {
 // ActiveRenderedContext removes only segments covered by usable artifacts.
 func ActiveRenderedContext(rc RenderedContext, artifacts []CompactionArtifact) RenderedContext {
 	return filterCoveredRenderedContext(rc, coveredExternalMessages(artifacts))
-}
-
-// aboveCompactionFloor keeps the segments received after the floor the
-// usable artifacts stand on; the context leaves out everything under it.
-func aboveCompactionFloor(rc RenderedContext, artifacts []CompactionArtifact) RenderedContext {
-	floor := compactionFloor(artifacts)
-	if floor <= 0 {
-		return rc
-	}
-	return slices.DeleteFunc(slices.Clone(rc), func(segment RenderedSegment) bool { return segment.ReceivedAtMs <= floor })
-}
-
-// compactionFloor is the highest floor a usable artifact stands on.
-func compactionFloor(artifacts []CompactionArtifact) int64 {
-	floor := int64(0)
-	for _, artifact := range artifacts {
-		if artifact.usable() {
-			floor = max(floor, artifact.FloorMs)
-		}
-	}
-	return floor
 }
 
 const earliestMergeTime int64 = -1 << 63
@@ -246,12 +221,7 @@ func ComposeContextWithArtifacts(rc RenderedContext, trs []TurnResponseEntry, ar
 // composeMergeEntries builds the ordered merge-entry list for composition.
 // Entries hold references into rc/trs plus small summary strings; nothing
 // large is materialized here, so admission can measure before it selects.
-// Sources under the artifacts' floor are left out.
 func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, artifacts []CompactionArtifact) []mergeEntry {
-	rc = aboveCompactionFloor(rc, artifacts)
-	if floor := compactionFloor(artifacts); floor > 0 {
-		trs = slices.DeleteFunc(slices.Clone(trs), func(tr TurnResponseEntry) bool { return tr.RequestedAtMs <= floor })
-	}
 	byExternal, byHistory := map[string]int{}, map[string]int{}
 	externalCoverage := make(map[string]externalMessageCoverage)
 	for i, artifact := range artifacts {

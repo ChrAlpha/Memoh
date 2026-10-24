@@ -107,12 +107,6 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 	for i := range 6 {
 		appendMessage(fmt.Sprintf("old-%d", i), "user", strings.Repeat("history ", 1000), false)
 	}
-	// The run that consumed the old history read all of it, so no floor
-	// leaves any of it out: the first round must fold it all.
-	appendMessage("old-answer", "assistant", "old history answered", true)
-	if _, err := pool.Exec(ctx, `UPDATE bot_history_messages SET usage='{"inputTokens":16000}' WHERE session_id=$1 AND source_message_id='old-answer'`, sessionID); err != nil {
-		t.Fatal(err)
-	}
 	after = timeline.ConsumedDiscussCursor(rc)
 	if err := cursors.UpsertDiscussCursor(ctx, sessionID, "default", "", "", after); err != nil {
 		t.Fatal(err)

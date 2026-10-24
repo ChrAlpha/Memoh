@@ -998,8 +998,6 @@ CREATE TABLE IF NOT EXISTS bot_history_message_compacts (
   coverage JSONB NOT NULL DEFAULT '[]'::jsonb,
   anchor_start_ms BIGINT NOT NULL DEFAULT 0,
   anchor_end_ms BIGINT NOT NULL DEFAULT 0,
-  floor_ms BIGINT NOT NULL DEFAULT 0,
-  floor_notice TEXT NOT NULL DEFAULT '',
   artifact_level INTEGER NOT NULL DEFAULT 0,
   parent_ids UUID[] NOT NULL DEFAULT '{}'::uuid[],
   superseded_by UUID REFERENCES bot_history_message_compacts(id) ON DELETE SET NULL,

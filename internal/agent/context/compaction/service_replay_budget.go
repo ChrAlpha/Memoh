@@ -100,13 +100,12 @@ func messageReplayTokens(message CompactionCandidate) int {
 
 // summaryOutputLimit is the longest summary, in tokens, the prompt may ask
 // for: one that long, with a token to spare for rounding, still fits
-// replayBudget as the request carries it, after the floor notice that opens
-// it.
-func summaryOutputLimit(notice string, replayBudget, modelLimit int) int {
+// replayBudget as the request carries it.
+func summaryOutputLimit(replayBudget, modelLimit int) int {
 	low, high := 0, min(modelLimit, replayBudget)
 	for low < high {
 		mid := (low + high + 1) / 2
-		if summaryReplayTokens(withFloorNotice(notice, strings.Repeat("x", (mid+1)*contextfrag.EstimateBytesPerToken))) <= replayBudget {
+		if summaryReplayTokens(strings.Repeat("x", (mid+1)*contextfrag.EstimateBytesPerToken)) <= replayBudget {
 			low = mid
 		} else {
 			high = mid - 1

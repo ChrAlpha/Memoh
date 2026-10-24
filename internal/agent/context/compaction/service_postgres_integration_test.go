@@ -73,12 +73,7 @@ func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		input := messagepkg.PersistInput{BotID: botID, SessionID: sessionID, Role: role, Content: content}
-		if i == rows-1 {
-			// The last request read every row, so no floor leaves any out.
-			input.Usage = []byte(`{"inputTokens":60000}`)
-		}
-		if _, err := messages.Persist(ctx, input); err != nil {
+		if _, err := messages.Persist(ctx, messagepkg.PersistInput{BotID: botID, SessionID: sessionID, Role: role, Content: content}); err != nil {
 			t.Fatalf("persist row %d: %v", i, err)
 		}
 	}

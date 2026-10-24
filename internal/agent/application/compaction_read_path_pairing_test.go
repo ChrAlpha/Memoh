@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
@@ -65,10 +64,6 @@ func (*pairingQueries) ListCompactionLogsBySession(context.Context, pgtype.UUID)
 
 func (*pairingQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
 	return nil, nil
-}
-
-func (*pairingQueries) GetCompactionFloorTurn(context.Context, sqlc.GetCompactionFloorTurnParams) (sqlc.GetCompactionFloorTurnRow, error) {
-	return sqlc.GetCompactionFloorTurnRow{}, pgx.ErrNoRows
 }
 
 func (*pairingQueries) ListMessageAssetsBatch(context.Context, []pgtype.UUID) ([]sqlc.ListMessageAssetsBatchRow, error) {

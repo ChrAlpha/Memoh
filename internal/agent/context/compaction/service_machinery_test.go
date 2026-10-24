@@ -116,12 +116,6 @@ type fakeQueries struct {
 	// each one asked for.
 	onRewind func()
 	rewinds  []sqlc.RewindCompactionBeforeTurnParams
-	// floorTurn, when set, is the floor the session needs; omitted is what
-	// claiming it marks. floorArgs and omitArgs record each call.
-	floorTurn *sqlc.GetCompactionFloorTurnRow
-	floorArgs []sqlc.GetCompactionFloorTurnParams
-	omitted   sqlc.MarkMessagesOmittedRow
-	omitArgs  []sqlc.MarkMessagesOmittedParams
 
 	created         bool
 	createArg       sqlc.CreateCompactionLogParams
@@ -148,19 +142,6 @@ func (f *fakeQueries) RewindCompactionBeforeTurn(_ context.Context, arg sqlc.Rew
 	}
 	f.onRewind()
 	return true, nil
-}
-
-func (f *fakeQueries) GetCompactionFloorTurn(_ context.Context, arg sqlc.GetCompactionFloorTurnParams) (sqlc.GetCompactionFloorTurnRow, error) {
-	f.floorArgs = append(f.floorArgs, arg)
-	if f.floorTurn == nil {
-		return sqlc.GetCompactionFloorTurnRow{}, pgx.ErrNoRows
-	}
-	return *f.floorTurn, nil
-}
-
-func (f *fakeQueries) MarkMessagesOmitted(_ context.Context, arg sqlc.MarkMessagesOmittedParams) (sqlc.MarkMessagesOmittedRow, error) {
-	f.omitArgs = append(f.omitArgs, arg)
-	return f.omitted, nil
 }
 
 func (f *fakeQueries) BackfillCompactionArtifactCoverage(_ context.Context, arg sqlc.BackfillCompactionArtifactCoverageParams) error {

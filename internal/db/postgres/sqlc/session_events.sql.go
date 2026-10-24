@@ -252,13 +252,12 @@ WITH post_coverage_ids AS MATERIALIZED (
     ON changed.external_message_id = event.external_message_id
   WHERE event.team_id = public.memoh_current_team_id()
     AND event.session_id = $1
-    AND event.received_at_ms > $4::BIGINT
     AND (
-      NOT $5::boolean
+      NOT $4::boolean
       OR (event.received_at_ms, event.created_at, event.id) < (
-        $6::BIGINT,
-        $7::TIMESTAMPTZ,
-        $8::UUID
+        $5::BIGINT,
+        $6::TIMESTAMPTZ,
+        $7::UUID
       )
     )
     AND (
@@ -276,9 +275,9 @@ WITH post_coverage_ids AS MATERIALIZED (
 ), admitted AS MATERIALIZED (
   SELECT id, received_at_ms, created_at, payload_bytes, cumulative_bytes
   FROM ranked
-  WHERE cumulative_bytes <= $9::BIGINT
+  WHERE cumulative_bytes <= $8::BIGINT
   ORDER BY received_at_ms DESC, created_at DESC, id DESC
-  LIMIT $10
+  LIMIT $9
 )
 SELECT
   event.id,
@@ -302,7 +301,6 @@ type ListSessionEventsBySessionPageBeforeWithinBytesParams struct {
 	SessionID               pgtype.UUID        `json:"session_id"`
 	CoveredExternalMessages []byte             `json:"covered_external_messages"`
 	CoveredEventCursors     []byte             `json:"covered_event_cursors"`
-	FloorMs                 int64              `json:"floor_ms"`
 	HasCursor               bool               `json:"has_cursor"`
 	BeforeReceivedAtMs      int64              `json:"before_received_at_ms"`
 	BeforeCreatedAt         pgtype.Timestamptz `json:"before_created_at"`
@@ -330,14 +328,11 @@ type ListSessionEventsBySessionPageBeforeWithinBytesRow struct {
 // Covered message/edit payloads are excluded in SQL before event_data reaches
 // the process. If a covered message has a post-frontier mutation, its complete
 // event chain remains eligible so edit projection still has its base node.
-// Events received up to floor_ms lie under the frontier's floor: the request
-// leaves them out unsummarized, so replay never reads them.
 func (q *Queries) ListSessionEventsBySessionPageBeforeWithinBytes(ctx context.Context, arg ListSessionEventsBySessionPageBeforeWithinBytesParams) ([]ListSessionEventsBySessionPageBeforeWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listSessionEventsBySessionPageBeforeWithinBytes,
 		arg.SessionID,
 		arg.CoveredExternalMessages,
 		arg.CoveredEventCursors,
-		arg.FloorMs,
 		arg.HasCursor,
 		arg.BeforeReceivedAtMs,
 		arg.BeforeCreatedAt,

@@ -312,9 +312,6 @@ func (r *loadedLineageResolver) resolve(id string) loadedLineageResolution {
 		if lineageCoverageMissing(parent) {
 			return r.finish(id, loadedLineageResolution{issue: issue(LineageIssueMissingDerivedCoverage, parent.ID, "")})
 		}
-		if parent.FloorMs > current.FloorMs {
-			return r.finish(id, loadedLineageResolution{issue: issue(LineageIssueCoverageMismatch, current.ID, parentID)})
-		}
 		parentCoverage = append(parentCoverage, parent.Coverage...)
 	}
 	if !coverageIncludes(current.Coverage, parentCoverage) {
@@ -356,12 +353,9 @@ func validateSupersessionMarker(artifact Artifact) (LineageIssue, bool) {
 	return LineageIssue{}, false
 }
 
-// lineageCoverageMissing reports a summary in a lineage that lists nothing it
-// covers and stands on no floor: a legacy summary, whose rows no successor
-// can prove it covers.
 func lineageCoverageMissing(artifact Artifact) bool {
 	participatesInLineage := len(artifact.ParentIDs) > 0 || artifact.SupersededBy != ""
-	return participatesInLineage && len(artifact.Coverage) == 0 && artifact.FloorMs == 0
+	return participatesInLineage && len(artifact.Coverage) == 0
 }
 
 func artifactCoverageMalformed(artifact Artifact) bool {

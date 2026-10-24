@@ -94,67 +94,6 @@ func TestPostgresCompactionFoldsALegacySummaryIntoOne(t *testing.T) {
 	}
 }
 
-// A thread whose backlog predates rolling summaries is folded from a floor.
-// The event first leaves the turns before what the last request read out of
-// the request unsummarized, behind a notice, and then folds only what that
-// request read and what came after it. The summarizer reads neither the rows
-// under the floor nor the notice; the summary opens with the notice, and the
-// next request carries the notice and the summary in place of the backlog.
-func TestPostgresCompactionStandsALegacyBacklogOnAFloor(t *testing.T) {
-	f := newBacklogFixture(t)
-	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_sessions SET type='chat', channel_type='local' WHERE id=$1`, f.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	unread := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
-	f.persistHistory("unread-", 40, 400, unread)
-	f.persistHistory("read-", 8, 400, time.Now().Add(-time.Hour))
-	f.persistHistory("new-", 4, 400, time.Now().Add(-30*time.Minute))
-	// The last request answered the newest read- turn and read 750 tokens:
-	// the 3000 bytes back from it end in the oldest read- turn.
-	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET usage='{"inputTokens":750}' WHERE session_id=$1 AND source_message_id='read-7'`, f.sessionID); err != nil {
-		t.Fatal(err)
-	}
-	var read strings.Builder
-	f.onSummary = func(body []byte) { read.Write(body) }
-
-	passes, err := f.fold(f.ctx, compaction.TriggerConfig{HistoryBudgetTokens: 500})
-	if err != nil || len(passes) != 2 {
-		t.Fatalf("passes=%+v err=%v, want a floor and one pass", passes, err)
-	}
-	floor, pass := passes[0], passes[1]
-	notice := "40 earlier messages of this conversation, from 2026-09-01 08:00 UTC, are left out of this context and were not summarized."
-	if floor.Summary != notice || len(floor.Covered) != 0 || len(floor.Absorbed) != 0 || !floor.More {
-		t.Fatalf("floor=%+v, want a pass that leaves the unread turns out behind %q", floor, notice)
-	}
-	if !slices.Equal(pass.Absorbed, []string{floor.ArtifactID}) || len(foldedRows(pass)) != 12 || pass.More {
-		t.Fatalf("pass absorbed=%v folded=%d more=%t, want the floor and the 12 rows above it folded", pass.Absorbed, len(foldedRows(pass)), pass.More)
-	}
-	prompt := read.String()
-	if !strings.Contains(prompt, "read-0 ") || !strings.Contains(prompt, "new-3 ") || strings.Contains(prompt, "unread-") || strings.Contains(prompt, "earlier messages of this conversation") {
-		t.Fatalf("the summarizer read %d bytes, want the rows above the floor and neither the rows under it nor its notice", len(prompt))
-	}
-	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
-	frontier, err := compaction.NewArtifactProjection(queries).LoadActiveSession(f.ctx, compaction.ArtifactOwner{BotID: f.botID, SessionID: f.sessionID, SessionIDKnown: true})
-	if err != nil || len(frontier.Issues) != 0 || len(frontier.Artifacts) != 1 {
-		t.Fatalf("frontier=%+v err=%v, want one active summary and no lineage issue", frontier, err)
-	}
-	active := frontier.Artifacts[0]
-	if active.ID != pass.ArtifactID || active.FloorMs != unread.Add(39*time.Second).UnixMilli() || active.Summary != notice+"\n\nEarlier backlog summarized." {
-		t.Fatalf("active summary %s floor=%d summary=%q, want the pass on the floor opening with its notice", active.ID, active.FloorMs, active.Summary)
-	}
-	if raw, omitted := f.backlogRowsPrefixed("unread-"); raw != 0 || omitted != 40 {
-		t.Fatalf("unread rows raw=%d omitted=%d, want all of them under the floor", raw, omitted)
-	}
-
-	if code := f.sendChat("", "next question"); code != "" {
-		t.Fatalf("the turn after the floor failed with %s", code)
-	}
-	request, _ := f.lastRequest.Load().(string)
-	if strings.Count(request, notice) != 1 || strings.Count(request, "Earlier backlog summarized.") != 1 || strings.Contains(request, "read-0 ") || strings.Contains(request, "unread-") {
-		t.Fatalf("the next request carried notice=%d summary=%d, want each once in place of the backlog", strings.Count(request, notice), strings.Count(request, "Earlier backlog summarized."))
-	}
-}
-
 // Compaction summarizes the thread's history however old it is, but an edit
 // or retry compacts only the history before its cutoff: rows after it stay
 // raw instead of being folded into a summary the request then carries.

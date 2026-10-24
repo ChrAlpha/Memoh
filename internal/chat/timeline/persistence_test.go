@@ -193,19 +193,3 @@ func TestLoadEventsForReplayPassesFrontierAndRestoresChronologicalOrder(t *testi
 		t.Fatalf("coverage = %#v", coverage)
 	}
 }
-
-func TestLoadEventsForReplayLeavesOutWhatLiesUnderTheFloor(t *testing.T) {
-	t.Parallel()
-	queries := &fakeEventQueries{}
-	store := NewEventStore(slog.New(slog.DiscardHandler), queries)
-	store.SetReplayArtifactProvider(staticReplayArtifacts{
-		{ID: "floor", Summary: "left out", FloorMs: 9},
-		{ID: "blank", FloorMs: 40},
-	})
-	if _, err := store.LoadEventsForReplay(context.Background(), "77777777-7777-7777-7777-777777777777", "66666666-6666-6666-6666-666666666666"); err != nil {
-		t.Fatalf("LoadEventsForReplay() error = %v", err)
-	}
-	if len(queries.replayParams) != 1 || queries.replayParams[0].FloorMs != 9 {
-		t.Fatalf("replay params = %+v, want the usable artifact's floor", queries.replayParams)
-	}
-}

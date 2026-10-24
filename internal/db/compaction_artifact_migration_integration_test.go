@@ -186,15 +186,6 @@ INSERT INTO bot_history_messages (
 	if _, err := tx.Exec(ctx, up0109); err != nil {
 		t.Fatalf("reapply 0109 up (idempotency): %v", err)
 	}
-	up0172 := readEmbeddedMigration(t, "postgres/migrations/0172_compaction_floor.up.sql")
-	if _, err := tx.Exec(ctx, up0172); err != nil {
-		t.Fatalf("apply 0172 up: %v", err)
-	}
-	if _, err := tx.Exec(ctx, up0172); err != nil {
-		t.Fatalf("reapply 0172 up (idempotency): %v", err)
-	}
-	assertColumnExists(t, ctx, tx, schema, "bot_history_message_compacts", "floor_ms", true)
-	assertColumnExists(t, ctx, tx, schema, "bot_history_message_compacts", "floor_notice", true)
 	assertIndexExists(t, ctx, tx, "idx_compacts_owner_epoch", true)
 	assertForeignKeyDeleteAction(t, ctx, tx, "bot_history_message_compacts", "bot_history_message_compacts_session_id_fkey", "c")
 	assertCompactionEpoch(t, ctx, tx, "bot_sessions", sessionID, 0)
@@ -323,13 +314,6 @@ VALUES ($1, $2, $3, 'ok', 'cross-owner artifact')
 	}
 	assertRowCount(t, ctx, tx, "bot_history_message_compacts", 0)
 	assertCompactionEpoch(t, ctx, tx, "bot_sessions", clearedSessionID, 2)
-
-	down0172 := readEmbeddedMigration(t, "postgres/migrations/0172_compaction_floor.down.sql")
-	if _, err := tx.Exec(ctx, down0172); err != nil {
-		t.Fatalf("apply 0172 down: %v", err)
-	}
-	assertColumnExists(t, ctx, tx, schema, "bot_history_message_compacts", "floor_ms", false)
-	assertColumnExists(t, ctx, tx, schema, "bot_history_message_compacts", "floor_notice", false)
 
 	down0109 := readEmbeddedMigration(t, "postgres/migrations/0109_compaction_epoch.down.sql")
 	if _, err := tx.Exec(ctx, down0109); err != nil {

@@ -15,7 +15,7 @@ type Pass struct {
 	Summary    string
 	// Covered names each row the summary folds, by history ID and, when the
 	// row has one, by external ID. Absorbed names the earlier summaries it
-	// folds. A floor names neither: it leaves rows out without folding them.
+	// folds.
 	Covered  []turn.ContextMessageSource
 	Absorbed []string
 	// More reports candidates left that the pass could not read; the event
