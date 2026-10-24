@@ -14014,6 +14014,60 @@ const docTemplate = `{
                 }
             }
         },
+        "/providers/catalog/models": {
+            "get": {
+                "description": "Fetch, validate and normalize models.dev metadata on the server without changing stored models",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Preview a public provider model catalog",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "models.dev provider ID",
+                        "name": "source",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Memoh client protocol",
+                        "name": "client_type",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/modelcatalog.Response"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/providers/count": {
             "get": {
                 "description": "Get the total count of providers",
@@ -14334,6 +14388,70 @@ const docTemplate = `{
                     },
                     "500": {
                         "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/providers/{id}/import-catalog-models": {
+            "post": {
+                "description": "Resolve the stored provider's models.dev source and normalize its catalog on the server",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "providers"
+                ],
+                "summary": "Import a provider's public model catalog",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Provider ID (UUID)",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Models to preserve from a preceding manual creation",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/providers.ImportCatalogModelsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/providers.ImportModelsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
                         "schema": {
                             "$ref": "#/definitions/server.Problem"
                         }
@@ -19680,6 +19798,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "channel_identity_id": {
+                    "type": "string"
+                },
+                "excluded_target": {
+                    "description": "ExcludedTarget is checked after platform target resolution, before publication.",
                     "type": "string"
                 },
                 "message": {
@@ -25861,6 +25983,63 @@ const docTemplate = `{
                 }
             }
         },
+        "modelcatalog.Info": {
+            "type": "object",
+            "properties": {
+                "checked_at": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "stale": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "modelcatalog.Model": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "$ref": "#/definitions/models.ModelConfig"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "$ref": "#/definitions/models.ModelType"
+                }
+            }
+        },
+        "modelcatalog.Response": {
+            "type": "object",
+            "properties": {
+                "checked_at": {
+                    "type": "string"
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/modelcatalog.Model"
+                    }
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "source": {
+                    "type": "string"
+                },
+                "stale": {
+                    "type": "boolean"
+                }
+            }
+        },
         "models.AddRequest": {
             "type": "object",
             "properties": {
@@ -26270,6 +26449,17 @@ const docTemplate = `{
                 }
             }
         },
+        "providers.ImportCatalogModelsRequest": {
+            "type": "object",
+            "properties": {
+                "skip_model_ids": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "providers.ImportModelsRequest": {
             "type": "object",
             "properties": {
@@ -26284,6 +26474,9 @@ const docTemplate = `{
         "providers.ImportModelsResponse": {
             "type": "object",
             "properties": {
+                "catalog": {
+                    "$ref": "#/definitions/modelcatalog.Info"
+                },
                 "created": {
                     "type": "integer"
                 },
