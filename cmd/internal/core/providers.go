@@ -1191,7 +1191,7 @@ func provideToolProviders(log *slog.Logger, channelRuntime channel.Runtime, regi
 		agenttools.NewVideoGenProvider(log, settingsService, videoService, bgManager, manager, config.DefaultDataMount),
 		agenttools.NewFederationProvider(log, connectorSource),
 		agenttools.NewFederationProvider(log, fedSource),
-		agenttools.NewHistoryProvider(log, historySessions, messageService, queries),
+		agenttools.NewHistoryProvider(log, historySessions, messageService, queries, agentLimitsFromConfig(cfg.Agent).ToolOutputLimit()),
 	}
 }
 
