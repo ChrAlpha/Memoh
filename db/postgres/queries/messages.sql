@@ -1,4 +1,7 @@
 -- name: CreateMessage :one
+-- A message is created now unless created_at says otherwise: a restore keeps
+-- each message's original time, in step with the session events restored
+-- beside it.
 INSERT INTO bot_history_messages (
   bot_id,
   session_id,
@@ -15,7 +18,8 @@ INSERT INTO bot_history_messages (
   model_id,
   event_id,
   display_text,
-  run_id
+  run_id,
+  created_at
 )
 VALUES (
   sqlc.arg(bot_id),
@@ -33,7 +37,8 @@ VALUES (
   sqlc.narg(model_id)::uuid,
   sqlc.narg(event_id)::uuid,
   sqlc.narg(display_text)::text,
-  sqlc.narg(run_id)::uuid
+  sqlc.narg(run_id)::uuid,
+  COALESCE(sqlc.narg(created_at)::timestamptz, now())
 )
 RETURNING
   id,

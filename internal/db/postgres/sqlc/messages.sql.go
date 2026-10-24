@@ -950,7 +950,8 @@ INSERT INTO bot_history_messages (
   model_id,
   event_id,
   display_text,
-  run_id
+  run_id,
+  created_at
 )
 VALUES (
   $1,
@@ -968,7 +969,8 @@ VALUES (
   $13::uuid,
   $14::uuid,
   $15::text,
-  $16::uuid
+  $16::uuid,
+  COALESCE($17::timestamptz, now())
 )
 RETURNING
   id,
@@ -990,22 +992,23 @@ RETURNING
 `
 
 type CreateMessageParams struct {
-	BotID                   pgtype.UUID `json:"bot_id"`
-	SessionID               pgtype.UUID `json:"session_id"`
-	SenderChannelIdentityID pgtype.UUID `json:"sender_channel_identity_id"`
-	SenderUserID            pgtype.UUID `json:"sender_user_id"`
-	ExternalMessageID       pgtype.Text `json:"external_message_id"`
-	SourceReplyToMessageID  pgtype.Text `json:"source_reply_to_message_id"`
-	Role                    string      `json:"role"`
-	Content                 []byte      `json:"content"`
-	Metadata                []byte      `json:"metadata"`
-	Usage                   []byte      `json:"usage"`
-	SessionMode             string      `json:"session_mode"`
-	RuntimeType             string      `json:"runtime_type"`
-	ModelID                 pgtype.UUID `json:"model_id"`
-	EventID                 pgtype.UUID `json:"event_id"`
-	DisplayText             pgtype.Text `json:"display_text"`
-	RunID                   pgtype.UUID `json:"run_id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	SessionMode             string             `json:"session_mode"`
+	RuntimeType             string             `json:"runtime_type"`
+	ModelID                 pgtype.UUID        `json:"model_id"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	RunID                   pgtype.UUID        `json:"run_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 }
 
 type CreateMessageRow struct {
@@ -1027,6 +1030,9 @@ type CreateMessageRow struct {
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 }
 
+// A message is created now unless created_at says otherwise: a restore keeps
+// each message's original time, in step with the session events restored
+// beside it.
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (CreateMessageRow, error) {
 	row := q.db.QueryRow(ctx, createMessage,
 		arg.BotID,
@@ -1045,6 +1051,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (C
 		arg.EventID,
 		arg.DisplayText,
 		arg.RunID,
+		arg.CreatedAt,
 	)
 	var i CreateMessageRow
 	err := row.Scan(

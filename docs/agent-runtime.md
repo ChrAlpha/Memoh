@@ -119,7 +119,9 @@ of the fork over the copies of its rows; a summary without persisted coverage
 stays behind and its copies read raw. A fork that copies history past the
 source's origin takes that origin. One cut before it, or from a session without
 one, gets an origin placed for the copy with the source's budget, so a fork's
-first request needs no summary either.
+first request needs no summary either. An import restores each message at its
+original time and places origins for the sessions it restores; it restores no
+summaries.
 
 An edit or retry renders the history as it stood at its cutoff: rows before the
 cutoff, folded only by the summaries that end before it, with the summary a
