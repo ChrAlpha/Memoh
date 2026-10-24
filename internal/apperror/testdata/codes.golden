@@ -154,6 +154,7 @@ mcp.oauth_client_id_required	400
 mcp.oauth_discovery_failed	502
 mcp.oauth_not_discovered	409
 media.asset_not_found	404
+media.reference_unavailable	422
 memory.compact_unsupported	501
 message.not_found	404
 model.not_found	404
@@ -237,6 +238,7 @@ session_runtime.turn_not_latest	409
 settings.reasoning_effort_invalid	400
 settings.reasoning_options_unavailable	503
 skill.builtin_read_only	409
+skill.directory_shared	409
 skill.name_invalid	400
 skill.name_taken	409
 skill.not_found	404

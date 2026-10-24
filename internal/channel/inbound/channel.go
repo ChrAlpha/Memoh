@@ -1154,6 +1154,7 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 	p.activeStreams.Store(streamKey, streamCancel)
 	defer p.activeStreams.Delete(streamKey)
 
+	publicationStart := time.Now()
 	handle, startErr := p.startTurnWithBusyRetry(streamCtx, cmd)
 	if startErr != nil {
 		if errors.Is(startErr, turn.ErrDuplicateTurn) {
@@ -1351,7 +1352,9 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return nil
 	}
 
-	if outMessage, ok := assistantReply(finalMessages, desc.Capabilities, sentTexts); ok {
+	outMessage, hasReply := assistantReply(finalMessages, desc.Capabilities, sentTexts)
+	outMessage, hasReply = p.bindRunMedia(ctx, msg.Channel, finalMessages, outMessage, hasReply, sessionID, handle.RunID(), publicationStart.Add(-time.Minute), identity.BotID)
+	if hasReply {
 		if outMessage.Reply == nil && sourceMessageID != "" {
 			outMessage.Reply = &channel.ReplyRef{
 				Target:    target,
@@ -3762,20 +3765,21 @@ func splitFirstCommandField(text string) (head, tail string) {
 }
 
 func (p *ChannelInboundProcessor) streamToolApprovalCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, _ string, approvalRunner ToolApprovalRunner, input turn.ToolApprovalResponse) error {
-	return p.streamContinuationCommand(ctx, msg, sender, identity, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
+	return p.streamContinuationCommand(ctx, msg, sender, identity, input.ThreadID, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
 		return approvalRunner.RespondToolApproval(runCtx, input, eventCh)
 	})
 }
 
 func (p *ChannelInboundProcessor) streamUserInputResponseCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, _ string, userInputRunner UserInputRunner, input turn.UserInputResponse) error {
-	return p.streamContinuationCommand(ctx, msg, sender, identity, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
+	return p.streamContinuationCommand(ctx, msg, sender, identity, input.ThreadID, func(runCtx context.Context, eventCh chan<- json.RawMessage) error {
 		return userInputRunner.RespondUserInput(runCtx, input, eventCh)
 	})
 }
 
 type streamContinuationFunc func(context.Context, chan<- json.RawMessage) error
 
-func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, run streamContinuationFunc) error {
+func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context, msg channel.InboundMessage, sender channel.StreamReplySender, identity InboundIdentity, sessionID string, run streamContinuationFunc) error {
+	publicationStart := time.Now()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	target := strings.TrimSpace(msg.ReplyTarget)
@@ -3904,7 +3908,9 @@ func (p *ChannelInboundProcessor) streamContinuationCommand(ctx context.Context,
 	sentTexts, suppressReplies := collectMessageToolContext(p.registry, finalMessages, msg.Channel, target)
 	if !suppressReplies {
 		capabilities := channel.ChannelCapabilities{Text: true, Markdown: true, Reply: true}
-		if outMessage, ok := assistantReply(finalMessages, capabilities, sentTexts); ok {
+		outMessage, ok := assistantReply(finalMessages, capabilities, sentTexts)
+		outMessage, ok = p.bindRunMedia(ctx, msg.Channel, finalMessages, outMessage, ok, sessionID, "", publicationStart.Add(-time.Minute), identity.BotID)
+		if ok {
 			if outMessage.Reply == nil && sourceMessageID != "" {
 				outMessage.Reply = &channel.ReplyRef{Target: target, MessageID: sourceMessageID}
 			}

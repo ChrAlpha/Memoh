@@ -108,6 +108,7 @@
     "restore": "接続を復元",
     "existingDescription": "「{name}」でコマンドを実行し、元の認証情報でバックグラウンド接続を復元してください。コンピューターの記録と Bot の権限は保持されます。",
     "commandLabel": "接続コマンド",
+    "platformLabel": "OS",
     "commandDescription": "接続先に Node.js 20+ を入れ、ターミナルで次のコマンドを実行してください。",
     "waiting": "コンピューターの接続を待っています…",
     "finish": "完了"
@@ -321,7 +322,8 @@
       "oauth_not_discovered": "先にこの接続の OAuth 検出を実行してください。"
     },
     "media": {
-      "asset_not_found": "このファイルは存在しなくなりました。必要な場合は再度アップロードしてください。"
+      "asset_not_found": "このファイルは存在しなくなりました。必要な場合は再度アップロードしてください。",
+      "reference_unavailable": "ファイルを共有できませんでした。Agent に再生成または再共有を依頼してください。"
     },
     "memory": {
       "compact_unsupported": "選択中の Memory Provider は Memory の圧縮に対応していません。Bot の Memory 設定で、圧縮に対応した Provider に切り替えてください。"
@@ -441,6 +443,7 @@
     },
     "skill": {
       "builtin_read_only": "Memoh 組み込みの Skill はシステムによって管理されているため、編集または削除できません。",
+      "directory_shared": "この Skill のフォルダには他の Skill も含まれているため、ここでは名前の変更や削除ができません。ファイルからこの SKILL.md を削除してください。",
       "name_invalid": "Skill の YAML frontmatter に有効な名前が必要です。",
       "name_taken": "同じ名前の Skill がすでに存在します。別の名前を使用してください。",
       "not_found": "このスキルが見つかりません。一覧を更新してからやり直してください。",

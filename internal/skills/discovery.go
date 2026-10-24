@@ -2,10 +2,12 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"path"
 	"slices"
 	"strings"
 
+	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
@@ -119,4 +121,56 @@ func discoverManagedSkillRoots(ctx context.Context, client fileClient) (userRoot
 		}
 	}
 	return userRoots, registryRoots
+}
+
+// HoldsNamespacedSkills reports whether skillDir, a flat /data/skills/<name>
+// Skill directory, is also a Skill namespace: discovery walks every directory
+// below ManagedDirPath as one, so <name>/<app>/<skill>/SKILL.md entries there
+// (the user compatibility directory, an installed Registry) are other Skills.
+// Renaming or deleting skillDir as one Skill would take them along. A missing
+// directory holds nothing.
+//
+// This guards a layout ambiguity rather than resolving it: remove it once
+// namespaced Skills live under a prefix that no Skill name can take.
+func HoldsNamespacedSkills(ctx context.Context, client fileClient, skillDir string) (bool, error) {
+	skillDir = path.Clean(strings.TrimSpace(skillDir))
+	if path.Dir(skillDir) != ManagedDirPath {
+		return false, nil
+	}
+	apps, err := client.ListDirAll(ctx, skillDir, false)
+	if errors.Is(err, bridge.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, appEntry := range apps {
+		if !appEntry.GetIsDir() {
+			continue
+		}
+		appDir := path.Join(skillDir, path.Base(appEntry.GetPath()))
+		skills, err := client.ListDirAll(ctx, appDir, false)
+		if err != nil {
+			return false, err
+		}
+		for _, skillEntry := range skills {
+			if !skillEntry.GetIsDir() {
+				continue
+			}
+			nestedDir := path.Join(appDir, path.Base(skillEntry.GetPath()))
+			if !IsNamespacedSkillPath(path.Join(nestedDir, "SKILL.md")) {
+				continue
+			}
+			files, err := client.ListDirAll(ctx, nestedDir, false)
+			if err != nil {
+				return false, err
+			}
+			for _, file := range files {
+				if !file.GetIsDir() && path.Base(file.GetPath()) == "SKILL.md" {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
@@ -689,7 +690,7 @@ func (f *fakeClient) ListDirAll(_ context.Context, p string, _ bool) ([]*pb.File
 	}
 	items, ok := f.listings[p]
 	if !ok {
-		return nil, io.EOF
+		return nil, bridge.ErrNotFound
 	}
 	return items, nil
 }

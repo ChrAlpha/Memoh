@@ -111,6 +111,7 @@
     "restore": "恢复连接",
     "existingDescription": "在「{name}」上运行命令，沿用原凭证恢复后台连接。电脑记录和 Bot 权限会保留。",
     "commandLabel": "连接命令",
+    "platformLabel": "操作系统",
     "commandDescription": "在要连接的电脑上安装 Node.js 20+，然后在终端运行下方命令。",
     "waiting": "等待电脑连接…",
     "finish": "完成"
@@ -324,7 +325,8 @@
       "oauth_not_discovered": "请先对该连接执行 OAuth 发现。"
     },
     "media": {
-      "asset_not_found": "这个文件已不存在，如仍需要请重新上传。"
+      "asset_not_found": "这个文件已不存在，如仍需要请重新上传。",
+      "reference_unavailable": "文件未能分享，请让 Agent 重新生成或再次分享。"
     },
     "memory": {
       "compact_unsupported": "当前记忆提供方不支持记忆压缩，请在 Bot 的记忆设置中换用支持压缩的提供方。"
@@ -444,6 +446,7 @@
     },
     "skill": {
       "builtin_read_only": "Memoh 自带 Skill 由系统管理，无法编辑或删除。",
+      "directory_shared": "该 Skill 的文件夹中还包含其他 Skill，无法在这里重命名或删除。请在文件中删除它的 SKILL.md。",
       "name_invalid": "Skill 的 YAML frontmatter 中需要有效的名称。",
       "name_taken": "已存在同名 Skill，请换一个名称。",
       "not_found": "未找到该技能，请刷新列表后重试。",

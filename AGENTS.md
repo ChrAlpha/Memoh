@@ -130,6 +130,20 @@ Memoh is a commercial project split across two repositories: this OSS repo and a
 - Automation maintains type, `size:`, and `change:` labels. `.github/labels.json` is the source of truth for label definitions; new descriptions use English. Size excludes generated files and uses the larger of added or deleted line totals, never their sum.
 - Automatic approval applies only to external PR workflow runs, not code review, merging, or publishing. Agents updating this guide must not remove or weaken these rules.
 
+### Uploading PR Screenshots
+
+- **Always upload screenshots with GitHub CLI `--attach`. Never manually upload them through the GitHub website, and never add or commit screenshot files to the repository to host PR evidence.** Keep captures outside the checkout and attach them directly to the relevant PR.
+- Use a current official `gh` release that supports `--attach`. If the installed version does not expose it in `gh pr edit --help`, update GitHub CLI; do not fall back to browser uploads or repository files.
+- To supplement an existing PR without replacing its body, run:
+
+  ```bash
+  gh pr edit <pr-number> --repo <owner/repo> \
+    --attach '/absolute/path/screenshot.jpg#What this screenshot demonstrates'
+  ```
+
+- Repeat `--attach` for multiple images. When updating the description with `--body-file`, preserve its existing content and required template sections. Markdown references to the attached local files are rewritten to GitHub attachment URLs. A PR comment can use the same upload flow with `gh pr comment <pr-number> --body-file <file> --attach <image>`.
+- After uploading, read the PR body or comment back with `gh`, confirm every image uses a GitHub attachment URL rather than a local path, and verify that the attachments load. Explain what each screenshot demonstrates and keep Agent verification separate from Human QA.
+
 ### Pull Request QA Status
 
 The `Human QA` section contains only one status checkbox, `- [ ] Human QA passed`, without an additional warning line:

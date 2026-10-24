@@ -21,6 +21,31 @@ type continuationTurnRequestMessageResolver interface {
 	GetRunTurnRequestMessageID(context.Context, string, string, string) (string, error)
 }
 
+// runRequesterUserID is the account the run was admitted for, read from the
+// execution intent every fenced run records with its admission (the same
+// record a restart resumes from). A decision continuation rebuilds the run's
+// config for this account rather than for whoever decided, so user-scoped
+// prompt inputs such as the timezone stay those of the run's first request and
+// every request of the run keeps the same prefix. A run admitted for no
+// account, or one that recorded no intent, yields "".
+func (s *Service) runRequesterUserID(ctx context.Context, runID string) (string, error) {
+	if s == nil || s.queries == nil || strings.TrimSpace(runID) == "" {
+		return "", nil
+	}
+	row, err := s.queries.GetSessionRun(ctx, db.ParseUUIDOrEmpty(runID))
+	if err != nil {
+		return "", fmt.Errorf("load run admission: %w", err)
+	}
+	admitted, err := decodeRunAdmission(row.InputJson)
+	if err != nil {
+		return "", fmt.Errorf("decode run admission: %w", err)
+	}
+	if admitted.Resume == nil {
+		return "", nil
+	}
+	return strings.TrimSpace(admitted.Resume.UserID), nil
+}
+
 func (s *Service) continuationTurnRequestMessageID(ctx context.Context, sessionID string, runHandle sessionruntime.RunHandle) (string, error) {
 	turnID := strings.TrimSpace(runHandle.TurnID)
 	if turnID == "" || s == nil || s.messageService == nil {

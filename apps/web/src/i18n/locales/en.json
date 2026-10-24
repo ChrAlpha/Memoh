@@ -111,6 +111,7 @@
     "restore": "Reconnect",
     "existingDescription": "Run the command on “{name}” to restore its background connection with its original credentials. Its computer record and Bot permissions are preserved.",
     "commandLabel": "Connection command",
+    "platformLabel": "Operating system",
     "commandDescription": "Install Node.js 20+ on that computer and run this in a terminal.",
     "waiting": "Waiting for the computer to connect…",
     "finish": "Done"
@@ -324,7 +325,8 @@
       "oauth_not_discovered": "Run OAuth discovery for this connection first."
     },
     "media": {
-      "asset_not_found": "This file no longer exists. Upload it again if you still need it."
+      "asset_not_found": "This file no longer exists. Upload it again if you still need it.",
+      "reference_unavailable": "This file could not be shared. Ask the agent to recreate or share it again."
     },
     "memory": {
       "compact_unsupported": "The selected memory provider does not support memory compaction. Choose a provider that supports it in the bot's memory settings."
@@ -444,6 +446,7 @@
     },
     "skill": {
       "builtin_read_only": "Built-in Skills are managed by Memoh and cannot be edited or deleted.",
+      "directory_shared": "This Skill's folder also holds other Skills, so it cannot be renamed or deleted here. Remove its SKILL.md in Files instead.",
       "name_invalid": "The Skill needs a valid name in its YAML frontmatter.",
       "name_taken": "A Skill with this name already exists. Choose a different name.",
       "not_found": "This Skill was not found. Refresh the list and try again.",

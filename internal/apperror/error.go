@@ -42,6 +42,7 @@ const (
 	CodeSettingsReasoningUnavailable             Code = "settings.reasoning_options_unavailable"
 	CodeContextBudgetUnsatisfied                 Code = "context.budget_unsatisfied"
 	CodeContextProtectedOverflow                 Code = "context.protected_overflow"
+	CodeMediaReferenceUnavailable                Code = "media.reference_unavailable"
 	CodeWorkspaceUnreachable                     Code = "workspace.unreachable"
 	CodeWorkspaceTemplateBootstrapFailed         Code = "workspace.template_bootstrap_failed"
 	CodeWorkspaceDisplayClipboardFailed          Code = "workspace.display_clipboard_failed"
@@ -83,6 +84,7 @@ const (
 	CodeSkillRegistryReadOnly                    Code = "skill.registry_read_only"
 	CodeSkillNameInvalid                         Code = "skill.name_invalid"
 	CodeSkillNotFound                            Code = "skill.not_found"
+	CodeSkillDirectoryShared                     Code = "skill.directory_shared"
 	CodeTTSTextTooLong                           Code = "tts.text_too_long"
 	CodeTTSModelNotConfigured                    Code = "tts.model_not_configured"
 	CodeWorkspaceArchiveInvalid                  Code = "workspace.archive_invalid"
@@ -583,6 +585,7 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusUnprocessableEntity,
 		Detail:     "Required context exceeds the model context budget. Shorten the request, or switch to a model with a larger context window.",
 	},
+	CodeMediaReferenceUnavailable: {HTTPStatus: http.StatusUnprocessableEntity, Detail: "This file could not be shared. Ask the agent to recreate or share it again."},
 	CodeWorkspaceUnreachable: {
 		HTTPStatus: http.StatusServiceUnavailable,
 		Detail:     "The workspace could not be reached.",
@@ -767,6 +770,10 @@ var catalog = map[Code]Definition{
 	CodeSkillNotFound: {
 		HTTPStatus: http.StatusNotFound,
 		Detail:     "This Skill was not found. Refresh the list and try again.",
+	},
+	CodeSkillDirectoryShared: {
+		HTTPStatus: http.StatusConflict,
+		Detail:     "This Skill's folder also holds other Skills, so it cannot be renamed or deleted as one Skill.",
 	},
 	CodeTTSTextTooLong: {
 		HTTPStatus:  http.StatusBadRequest,

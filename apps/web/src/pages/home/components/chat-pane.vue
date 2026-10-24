@@ -230,7 +230,6 @@
             : 'inset-x-0 bottom-0 pt-2',
           { invisible: composerPlacementPending },
         ]"
-        :style="composerLiftPx > 0 ? { bottom: `${composerLiftPx}px` } : undefined"
       >
         <!-- Opaque backdrop, bottom-anchored, rising only to the box's widest point
              (its vertical centre). The box is solid and sits above the messages, so
@@ -385,33 +384,33 @@
                         </span>
                       </CommandItem>
                     </CommandGroup>
-                    <CommandSeparator
-                      v-if="visibleSlashQuickActions.length && (visibleRuntimeAgentCommands.length || visibleSlashSkills.length)"
-                    />
-                    <CommandGroup
-                      v-if="visibleRuntimeAgentCommands.length"
-                      :heading="$t('chat.slash.agentCommands')"
+                    <template
+                      v-for="(group, index) in runtimeCommandGroups"
+                      :key="group.id"
                     >
-                      <CommandItem
-                        v-for="command in visibleRuntimeAgentCommands"
-                        :key="command.name"
-                        :value="`/${command.name}`"
-                        @select="selectRuntimeCommand(command)"
-                      >
-                        <span class="min-w-0 flex-1">
-                          <span class="block truncate text-control">/{{ command.name }}</span>
-                          <span
-                            v-if="command.description"
-                            class="block truncate text-caption text-muted-foreground"
-                          >{{ command.description }}</span>
-                          <span
-                            v-if="command.input_hint"
-                            class="block truncate text-caption text-muted-foreground"
-                          >{{ $t('chat.slash.agentCommandInputHint', { hint: command.input_hint }) }}</span>
-                        </span>
-                      </CommandItem>
-                    </CommandGroup>
-                    <CommandSeparator v-if="visibleRuntimeAgentCommands.length && visibleSlashSkills.length" />
+                      <CommandSeparator v-if="index > 0 || visibleSlashQuickActions.length" />
+                      <CommandGroup :heading="group.heading">
+                        <CommandItem
+                          v-for="command in group.commands"
+                          :key="command.name"
+                          :value="`/${command.name}`"
+                          @select="selectRuntimeCommand(command)"
+                        >
+                          <span class="min-w-0 flex-1">
+                            <span class="block truncate text-control">/{{ command.name }}</span>
+                            <span
+                              v-if="command.description"
+                              class="block truncate text-caption text-muted-foreground"
+                            >{{ command.description }}</span>
+                            <span
+                              v-if="command.input_hint"
+                              class="block truncate text-caption text-muted-foreground"
+                            >{{ $t('chat.slash.agentCommandInputHint', { hint: command.input_hint }) }}</span>
+                          </span>
+                        </CommandItem>
+                      </CommandGroup>
+                    </template>
+                    <CommandSeparator v-if="visibleSlashSkills.length && (visibleSlashQuickActions.length || runtimeCommandGroups.length)" />
                     <CommandGroup
                       v-if="visibleSlashSkills.length"
                       :heading="$t('chat.slash.skills')"
@@ -1355,7 +1354,6 @@ import { captureChatPaneSendContext, clearComposerPairDraft, composerRestoreForS
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
 import { useAgentModelCatalog } from '@/composables/useAgentModelCatalog'
-import { useVirtualKeyboard } from '@/composables/useVirtualKeyboard'
 import { isACPAgentConfigured } from '@/utils/acp'
 import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, isDirectBotAgentRuntime, normalizeBotAgentRuntime } from '@/utils/bot-agent'
 import { UserFacingError, isApiErrorCode, parseMemohError, resolveApiErrorMessage } from '@/utils/api-error'
@@ -2169,6 +2167,7 @@ const runtimeControls = useRuntimeControls({
   sessionId: computed(() => paneTarget.value.sessionId),
   visible: computed(() => isVisible.value && activeUsesExternalAgentComposer.value),
   draftAgentId: computed(() => activeIsPendingExternalAgent.value && !activeUsesACPRuntime.value ? activeBotAgentID.value : ''),
+  draftWorkdirId: computed(() => activeIsPendingExternalAgent.value && !activeUsesACPRuntime.value ? runtimeProject.value?.id ?? '' : ''),
 })
 // Only a ChatGPT sign-in has usage windows; an API-key Codex Agent is billed per token.
 const codexUsageAgentId = computed(() => {
@@ -2212,9 +2211,11 @@ function dismissCodexUsageNotice() {
 }
 const rawRuntimeControlSnapshot = computed(() => activeIsPendingExternalAgent.value && activeUsesACPRuntime.value ? pendingRuntimeControls.value : runtimeControls.controls.value)
 const runtimeControlSnapshot = computed(() => localizeRuntimeControls(rawRuntimeControlSnapshot.value, runtimeText))
-const composerRuntimeCommands = computed(() =>
-  activeIsPendingExternalAgent.value && !activeUsesACPRuntime.value ? [] : runtimeControlSnapshot.value?.commands ?? [],
-)
+// A draft creates its session on send; read and operation commands need one first.
+const composerRuntimeCommands = computed(() => {
+  const commands = runtimeControlSnapshot.value?.commands ?? []
+  return activeIsPendingExternalAgent.value && !activeUsesACPRuntime.value ? commands.filter(command => command.kind === 'turn') : commands
+})
 const runtimeModes = computed(() => runtimeControlSnapshot.value?.modes?.available_modes ?? [])
 const runtimeModeLabel = computed(() => t(runtimeControlSnapshot.value?.modes?.kind === 'permission' ? 'chat.permissionMode' : 'chat.sessionMode'))
 const currentRuntimeModeId = computed(() =>
@@ -2289,6 +2290,10 @@ const runtimeModeDisabled = computed(() => activeChatReadOnly.value || streaming
 const visibleRuntimeAgentCommands = computed(() =>
   visibleRuntimeCommands(composerRuntimeCommands.value, slashQuery.value).filter(command => command.name !== 'goal' || !goalCommandAvailable.value),
 )
+const runtimeCommandGroups = computed(() => [
+  { id: 'commands', heading: t('chat.slash.agentCommands'), commands: visibleRuntimeAgentCommands.value.filter(command => !command.skill) },
+  { id: 'skills', heading: t('chat.slash.skills'), commands: visibleRuntimeAgentCommands.value.filter(command => command.skill) },
+].filter(group => group.commands.length))
 const slashPanelHasResults = computed(() =>
   visibleSlashQuickActions.value.length > 0
   || visibleRuntimeAgentCommands.value.length > 0
@@ -3767,18 +3772,10 @@ const composerPreviewBox = useComposerPreviewBox(textareaEl, () => composerPrevi
 const dockEl = useTemplateRef<InstanceType<typeof ComposerDock>>('dockEl')
 const { height: dockHeight } = useElementSize(() => dockEl.value?.$el ?? null)
 const dockMaskHeight = computed(() => dockEl.value?.maskHeight ?? `${COMPOSER_MASK_BELOW_PX}px`)
-
-// Virtual-keyboard lift (iOS Safari; Android lifts via the resized layout
-// viewport instead — see useVirtualKeyboard). The whole dock container rises
-// by the keyboard height, and the message column's bottom padding grows by
-// the same amount so follow-mode keeps the last message clear of the lifted
-// composer. While the model picker is open its search field may itself hold
-// focus: lifting then would yank the trigger out from under the popover and
-// fight iOS's own scroll-to-caret, so the lift is suppressed until the picker
-// closes (the plus menu has no focusable input and never hits this).
-const virtualKeyboardHeight = useVirtualKeyboard()
-const composerLiftPx = computed(() => (modelPopoverOpen.value ? 0 : virtualKeyboardHeight.value))
-const messagesBottomPad = computed(() => `${dockHeight.value + COMPOSER_MASK_BELOW_PX + 24 + composerLiftPx.value}px`)
+// No software-keyboard term: the browser itself moves the app out from under
+// the keyboard (Android resizes the page, iOS pans it), so the dock stays at
+// the pane's bottom and this padding only has to clear the dock.
+const messagesBottomPad = computed(() => `${dockHeight.value + COMPOSER_MASK_BELOW_PX + 24}px`)
 
 // The textarea belongs to the pane, so when the dock hands the input slot
 // back after ask_user is resolved or canceled, it emits and we focus here.
