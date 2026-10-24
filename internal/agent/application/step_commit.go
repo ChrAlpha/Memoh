@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
@@ -49,6 +51,10 @@ type agentStepCommitter struct {
 	// checkpointed means an interrupted step was written: the run already has
 	// a history row for the model call it stopped in.
 	checkpointed bool
+	// retriedRequest is the request row a retry renders as its input, and
+	// requestCopy the row its first step copied it to.
+	retriedRequest string
+	requestCopy    string
 }
 
 func (s *Service) newAgentStepCommitter(ctx context.Context, req ChatRequest, rc resolvedContext) *agentStepCommitter {
@@ -113,10 +119,10 @@ func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolve
 	}
 	committer.bindContinuation(cfg)
 	// A run that persists its steps compacts in place when a step's request
-	// no longer fits. A retry or edit replays history before its cutoff,
-	// which no fold matches.
-	if committer != nil && s.compactionService != nil && s.settingsService != nil &&
-		req.TurnReplacement == nil && strings.TrimSpace(req.HistoryCutoffBeforeMessageID) == "" {
+	// no longer fits. A retry or edit folds what its request renders like
+	// any other run: the history before its cutoff, and the steps of the
+	// attempt its first step selected.
+	if committer != nil && s.compactionService != nil && s.settingsService != nil {
 		cfg.SwitchContext = s.switchContext(req, committer, cfg.CurrentModelUUID)
 	}
 	return committer
@@ -272,8 +278,20 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 			return fail(err)
 		}
 	}
+	// Rows a Discuss run writes before its answer are context for later runs,
+	// not proof that it consumed the batch it answers: the run can still fail
+	// after them. The answer, a completed step that calls no tool, is.
+	discussStep := c.req.SessionType == sessionpkg.TypeDiscuss && (mode != stepCompleted || classifyQueueStep(record) != queueStepFinal)
 	for i := range inputs {
 		inputs[i].TurnRequestMessageID = c.turnRequestMessageID
+		if discussStep {
+			metadata := maps.Clone(inputs[i].Metadata)
+			if metadata == nil {
+				metadata = make(map[string]any, 1)
+			}
+			metadata[messagepkg.DiscussStepMetadataKey] = true
+			inputs[i].Metadata = metadata
+		}
 	}
 	steerIndex := c.stampSteerTurn(inputs)
 	agentStep := messagepkg.AgentStep{RunID: c.req.RunID, Messages: inputs, Interrupted: interrupted}
@@ -329,16 +347,29 @@ func (c *agentStepCommitter) persist(ctx context.Context, stepIndex int, record 
 		}
 	}
 	c.persisted = append(c.persisted, persisted...)
-	if len(persisted) == len(inputs) {
+	// A retry's first step writes the copy of its request ahead of the step's
+	// own rows. The run renders its input from the row it read, which the
+	// same transaction hid; the copy is the input from then on.
+	rows := persisted
+	if agentStep.Replacement != nil && len(persisted) > len(inputs) {
+		c.retriedRequest, c.requestCopy = strings.TrimSpace(agentStep.Replacement.RequestMessageID), persisted[0].ID
+		for i, id := range c.inputSourceIDs {
+			if id == c.retriedRequest {
+				c.inputSourceIDs[i] = c.requestCopy
+			}
+		}
+		rows = persisted[1:]
+	}
+	if len(rows) == len(inputs) {
 		if len(messages) > stepMessages {
-			c.inputSourceIDs = append(c.inputSourceIDs, persisted[0].ID)
+			c.inputSourceIDs = append(c.inputSourceIDs, rows[0].ID)
 		}
 		if steerIndex >= 0 {
-			c.inputSourceIDs = append(c.inputSourceIDs, persisted[steerIndex].ID)
+			c.inputSourceIDs = append(c.inputSourceIDs, rows[steerIndex].ID)
 		}
 	}
-	if len(persisted) == len(messages) && stepMessages == len(record.Messages) {
-		dir.Provenance = stepProvenance(persisted[len(messages)-stepMessages:], c.inputSourceIDs)
+	if len(rows) == len(messages) && stepMessages == len(record.Messages) {
+		dir.Provenance = stepProvenance(rows[len(messages)-stepMessages:], c.inputSourceIDs)
 	}
 	if mode == stepInterrupted && len(persisted) > 0 {
 		c.checkpointed = true
@@ -384,18 +415,37 @@ func stepProvenance(rows []messagepkg.Message, inputs []string) []native.Message
 	return provenance
 }
 
-// inputSources names the run's input and the steers its steps persisted.
+// inputSources names the run's input and the steers its steps persisted, or
+// the inputs of the batch a Discuss run answers.
 func (c *agentStepCommitter) inputSources() []turn.ContextMessageSource {
 	if c == nil {
 		return nil
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	var sources []turn.ContextMessageSource
+	sources := slices.Clone(c.req.discussCurrentSources)
 	for _, id := range c.inputSourceIDs {
 		sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: id})
 	}
 	return sources
+}
+
+// currentSources names sources the run rendered by the rows that hold them
+// now: a retry's request by the copy its first step wrote, with the same
+// content.
+func (c *agentStepCommitter) currentSources(sources []turn.ContextMessageSource) []turn.ContextMessageSource {
+	out := slices.Clone(sources)
+	if c == nil {
+		return out
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, source := range out {
+		if c.requestCopy != "" && source.Kind == "history" && source.ID == c.retriedRequest {
+			out[i].ID = c.requestCopy
+		}
+	}
+	return out
 }
 
 // stampSteerTurn files this step's injected steer input under the turn drawn
