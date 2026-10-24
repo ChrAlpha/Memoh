@@ -85,8 +85,33 @@ A load starts at the oldest visible row no usable summary replaces
 precedes it, or the newest row when every row is summarized. Chat and
 turn-response loads read newest-first within the byte budget from there; rows a
 summary replaced cost no budget, so a load costs what is unsummarized, not the
-thread's length. A thread whose history predates this has no summary yet, so
-its first over-budget turn folds its whole backlog once.
+thread's length.
+
+A session from before rolling summaries can hold months of unsummarized
+history, far more than any request read. Such a session has a history origin
+(`bot_sessions.history_origin_at`, 0172): where its context starts. History
+before it reaches a request only through the summaries that already cover it.
+The history anchor, compaction candidates, Discuss event replay and the record,
+pipeline and Discuss compositions all start there, and a history notice opens
+the history: a system message saying how many visible messages precede the
+origin, when the first and the last were sent, that only summaries carry them,
+and that the message history can be searched over that range
+(`timeline.HistoryNotice`; the history tools' usage says how). The notice
+renders no source, so no summary covers it and in-run compaction keeps it.
+`memoh_place_history_origin` places the origin at the start of the oldest turn
+for which every active summary plus the rows from there on fit nine tenths of
+a history budget, measured as the history load measures them, on a clean turn
+boundary that splits rows and session events alike; it always keeps the newest
+turn, and a session whose history fits gets none. The budget
+(`memoh_session_history_budget`) is the newest one the session's runs planned,
+else half its model's context window up to the default absolute cap. The
+migration places an origin for every live session it finds; afterwards only a
+fork or a bot import places one, and a session created later never has one.
+The first request after the upgrade fits without compacting, summaries from
+before the upgrade still render, and the first compaction that overflows folds
+them into the summary it writes. `memoh_rewind_compaction` rewinds nothing for
+a change before the origin that no usable summary reaches.
+
 
 An edit or retry renders the history as it stood at its cutoff: rows before the
 cutoff, folded only by the summaries that end before it, with the summary a

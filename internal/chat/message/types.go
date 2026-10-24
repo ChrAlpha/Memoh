@@ -175,6 +175,25 @@ type HistoryWindow struct {
 	FoldSummarized bool
 }
 
+// HistoryOrigin is where a session's context starts. History from before it
+// reaches a request only through the summaries that cover it, and a notice
+// opens the history to say what was left out: how many visible messages
+// precede the origin, and when the first and the last of them was created.
+// The zero value is a session whose whole history is context, which every
+// session is unless the upgrade that introduced origins, a fork or an import
+// placed one.
+type HistoryOrigin struct {
+	At           time.Time
+	OmittedCount int64
+	OmittedFirst time.Time
+	OmittedLast  time.Time
+}
+
+// Omits reports whether the origin leaves any history out.
+func (o HistoryOrigin) Omits() bool {
+	return !o.At.IsZero() && o.OmittedCount > 0
+}
+
 // ActiveMessagesMeasure is a database-side aggregate over a session's active
 // messages (CM-ADM-001): counts and raw content bytes, computed without
 // loading any payload into the process.
@@ -282,6 +301,9 @@ type Service interface {
 	// it is the anchor of the history as it stood then (HistoryWindow.Before).
 	// Zero for a session without rows.
 	HistoryAnchorBySession(ctx context.Context, sessionID string, before time.Time) (time.Time, error)
+	// HistoryOriginBySession reports where the session's context starts; the
+	// zero HistoryOrigin when its whole history is context.
+	HistoryOriginBySession(ctx context.Context, sessionID string) (HistoryOrigin, error)
 	// ListTurnResponseSourcesSinceBySessionWithinBytes is the same window as
 	// ListActiveBySessionWithinBytes projected to what turn-response
 	// composition reads: ID, role, content, created_at, and Metadata holding

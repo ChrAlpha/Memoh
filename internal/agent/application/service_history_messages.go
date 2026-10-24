@@ -18,9 +18,11 @@ import (
 // buildMessagesFromPipeline assembles chat context from the DCP pipeline's
 // RenderedContext (RC) merged with assistant/tool turns (TR) from
 // bot_history_messages. This gives chat mode the same event-driven context
-// that discuss mode uses, replacing the legacy loadMessages path. The second
-// return value is the token pressure of raw history and active summaries.
-// A history or frontier load failure fails the request (CM-ADM-003).
+// that discuss mode uses, replacing the legacy loadMessages path. Both
+// streams start at the session's history origin, under the notice of what it
+// left out. The second return value is the token pressure of raw history,
+// active summaries and the notice. A history or frontier load failure fails
+// the request (CM-ADM-003).
 func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, error) {
 	sessionID := strings.TrimSpace(req.ThreadID)
 	if s.pipeline == nil || sessionID == "" {
@@ -39,8 +41,12 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 	if err != nil {
 		return nil, 0, fmt.Errorf("load compaction frontier: %w", err)
 	}
+	origin, err := s.historyOrigin(ctx, sessionID)
+	if err != nil {
+		return nil, 0, err
+	}
 
-	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts)
+	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts, origin)
 	if composed == nil {
 		return nil, 0, nil
 	}

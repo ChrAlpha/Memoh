@@ -54,6 +54,10 @@ func (*recoveryHistoryService) HistoryAnchorBySession(context.Context, string, t
 	return time.Time{}, nil
 }
 
+func (*recoveryHistoryService) HistoryOriginBySession(context.Context, string) (messagepkg.HistoryOrigin, error) {
+	return messagepkg.HistoryOrigin{}, nil
+}
+
 type recoveryCompactionRunner struct {
 	configs []compaction.TriggerConfig
 	run     func() ([]compaction.Pass, error)

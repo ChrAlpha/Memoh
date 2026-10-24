@@ -1890,21 +1890,27 @@ WHERE m.team_id = public.memoh_current_team_id()
 -- or one whose compact is pending, failed, empty or from an earlier epoch.
 -- Every older row is summarized, so a history load starts here and reads only
 -- what is not. When every row is summarized it is the newest row, which
--- places the summary; NULL for a session without rows. With before, it is the
--- anchor of the history as it stood then (see
+-- places the summary; NULL for a session without rows. Rows before the
+-- session's history origin reach no request, so the anchor never precedes
+-- the origin and only rows from it on count. With before, it is the anchor of
+-- the history as it stood then (see
 -- ListActiveMessagesSinceBySessionWithinBytes). The uncompacted branch walks
 -- its partial index; the other reads only the rows of the compacts that do
 -- not count, usually none.
-WITH unusable_compacts AS MATERIALIZED (
-  SELECT c.id
+WITH owner_session AS MATERIALIZED (
+  SELECT s.id, s.bot_id, s.compaction_epoch, s.history_origin_at,
+    COALESCE(s.history_origin_at, '-infinity'::timestamptz) AS reads_from
   FROM bot_sessions s
+  WHERE s.team_id = public.memoh_current_team_id()
+    AND s.id = sqlc.arg(session_id)
+), unusable_compacts AS MATERIALIZED (
+  SELECT c.id
+  FROM owner_session s
   JOIN bot_history_message_compacts c
     ON c.team_id = public.memoh_current_team_id()
    AND c.bot_id = s.bot_id
    AND c.session_id = s.id
-  WHERE s.team_id = public.memoh_current_team_id()
-    AND s.id = sqlc.arg(session_id)
-    AND NOT (
+  WHERE NOT (
       c.compaction_epoch = s.compaction_epoch
       AND c.status = 'ok'
       AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
@@ -1918,12 +1924,13 @@ WITH unusable_compacts AS MATERIALIZED (
       )
     )
 )
-SELECT COALESCE(LEAST(
+SELECT GREATEST(COALESCE(LEAST(
   (
     SELECT m.created_at
     FROM bot_history_messages m
     WHERE m.team_id = public.memoh_current_team_id()
       AND m.session_id = sqlc.arg(session_id)
+      AND m.created_at >= (SELECT reads_from FROM owner_session)
       AND m.compact_id IS NULL
       AND m.turn_visible = true
       AND m.turn_id IS NOT NULL
@@ -1941,6 +1948,7 @@ SELECT COALESCE(LEAST(
       ON m.team_id = public.memoh_current_team_id()
      AND m.compact_id = u.id
     WHERE m.session_id = sqlc.arg(session_id)
+      AND m.created_at >= (SELECT reads_from FROM owner_session)
       AND (sqlc.narg(before)::timestamptz IS NULL OR m.created_at < sqlc.narg(before)::timestamptz)
       AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
   )
@@ -1949,8 +1957,18 @@ SELECT COALESCE(LEAST(
   FROM bot_visible_history_messages m
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
+    AND m.created_at >= (SELECT reads_from FROM owner_session)
     AND (sqlc.narg(before)::timestamptz IS NULL OR m.created_at < sqlc.narg(before)::timestamptz)
-))::timestamptz AS history_anchor;
+)), (SELECT history_origin_at FROM owner_session))::timestamptz AS history_anchor;
+
+-- name: GetSessionHistoryOrigin :one
+-- Where the session's context starts and what the history notice reports
+-- about the visible rows before it; NULL and zero for a session whose whole
+-- history is context.
+SELECT s.history_origin_at, s.history_omitted_count, s.history_omitted_first_at, s.history_omitted_last_at
+FROM bot_sessions s
+WHERE s.team_id = public.memoh_current_team_id()
+  AND s.id = sqlc.arg(session_id);
 
 -- name: ListTurnResponseSourcesSinceBySessionWithinBytes :many
 -- Turn-response (TR) composition, in Discuss and in pipeline chat, only needs
@@ -2719,6 +2737,11 @@ WITH target_sessions AS MATERIALIZED (
 invalidated_sessions AS (
   UPDATE bot_sessions session
   SET compaction_epoch = session.compaction_epoch + 1,
+      -- A cleared history has nothing before an origin to leave out.
+      history_origin_at = NULL,
+      history_omitted_count = 0,
+      history_omitted_first_at = NULL,
+      history_omitted_last_at = NULL,
       runtime_fencing_token = nextval('session_runtime_fencing_token_seq')::bigint,
       -- Runtime continuity anchors (codex_thread_id, claude_session_id, and
       -- whatever future drivers store) must die with the history they resume,
@@ -2805,9 +2828,13 @@ WITH target_session AS MATERIALIZED (
 invalidated_session AS (
   UPDATE bot_sessions session
   SET compaction_epoch = session.compaction_epoch + 1,
+      history_origin_at = NULL,
+      history_omitted_count = 0,
+      history_omitted_first_at = NULL,
+      history_omitted_last_at = NULL,
       runtime_fencing_token = nextval('session_runtime_fencing_token_seq')::bigint,
-      -- Same anchor scrub as ClearHistoryByBot: continuity keys die with the
-      -- history, identity (acp_agent_id) survives.
+      -- Same anchor and origin scrub as ClearHistoryByBot: continuity keys
+      -- die with the history, identity (acp_agent_id) survives.
       runtime_metadata = CASE
         WHEN session.runtime_metadata ? 'acp_agent_id'
           THEN jsonb_build_object('acp_agent_id', session.runtime_metadata->'acp_agent_id')
@@ -3237,7 +3264,8 @@ WHERE message.team_id = public.memoh_current_team_id()
 -- process-memory boundary. CandidateCount reports whether the prefix was
 -- truncated and lets the service choose a progress-preserving selection.
 -- message_ids, when set, restricts candidates to those rows and the rows of
--- external_message_ids: what the caller's request renders.
+-- external_message_ids: what the caller's request renders. Rows before the
+-- session's history origin are never candidates: no request reads them.
 WITH candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
@@ -3256,6 +3284,7 @@ WITH candidate_rows AS MATERIALIZED (
    AND candidate_session.team_id = public.memoh_current_team_id()
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
+    AND m.created_at >= COALESCE(candidate_session.history_origin_at, '-infinity'::timestamptz)
     AND (sqlc.narg(created_before)::timestamptz IS NULL OR m.created_at < sqlc.narg(created_before)::timestamptz)
     AND (sqlc.narg(message_ids)::uuid[] IS NULL
       OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
@@ -3333,7 +3362,8 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 
 -- name: MeasureUncompactedMessagesBySession :one
 -- Metadata-only companion for the bounded compaction read. It never returns
--- message payloads and exposes the oversized-head degradation explicitly.
+-- message payloads and exposes the oversized-head degradation explicitly. It
+-- measures the same candidates, from the session's history origin on.
 SELECT
   COUNT(*)::BIGINT AS candidate_count,
   COALESCE(SUM(
@@ -3354,6 +3384,7 @@ JOIN bot_sessions s
  AND s.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
+  AND m.created_at >= COALESCE(s.history_origin_at, '-infinity'::timestamptz)
   AND (sqlc.narg(created_before)::timestamptz IS NULL OR m.created_at < sqlc.narg(created_before)::timestamptz)
   AND (sqlc.narg(message_ids)::uuid[] IS NULL
     OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
@@ -3374,7 +3405,8 @@ WHERE m.team_id = public.memoh_current_team_id()
 
 -- name: ListUncompactedMessagesBySession :many
 -- Compatibility query retained for diagnostics and integration tests. Runtime
--- compaction must use ListUncompactedMessagesBySessionWithinBytes.
+-- compaction must use ListUncompactedMessagesBySessionWithinBytes, whose
+-- candidates, from the session's history origin on, it lists.
 SELECT
   m.id,
   m.bot_id,
@@ -3414,6 +3446,7 @@ LEFT JOIN bot_channel_routes r
  AND r.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
+  AND m.created_at >= COALESCE(s.history_origin_at, '-infinity'::timestamptz)
   AND (m.compact_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM bot_history_message_compacts c
     WHERE c.team_id = public.memoh_current_team_id()

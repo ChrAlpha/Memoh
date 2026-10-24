@@ -51,9 +51,14 @@ CREATE TABLE bot_sessions (
   bot_id UUID NOT NULL,
   team_id UUID NOT NULL DEFAULT public.memoh_current_team_id(),
   runtime_fencing_token BIGINT NOT NULL DEFAULT 0,
-  -- ClearHistoryBySession/ByBot scrub runtime continuity anchors alongside
-  -- the epoch bump; the fixture carries the column those queries touch.
-  runtime_metadata JSONB NOT NULL DEFAULT '{}'::jsonb
+  -- ClearHistoryBySession/ByBot scrub runtime continuity anchors and the
+  -- history origin alongside the epoch bump; the fixture carries the
+  -- columns those queries touch.
+  runtime_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  history_origin_at TIMESTAMPTZ,
+  history_omitted_count BIGINT NOT NULL DEFAULT 0,
+  history_omitted_first_at TIMESTAMPTZ,
+  history_omitted_last_at TIMESTAMPTZ
 );
 
 CREATE TABLE agent_session_publications (

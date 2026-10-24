@@ -73,6 +73,9 @@ func (s *Service) prepareHistoryWindow(
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}
+	if loaded, err = s.withHistoryNotice(ctx, req.ThreadID, loaded); err != nil {
+		return preparedHistoryContext{}, err
+	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	messages, records := historyMessagesFromRecords(loaded)
 	return preparedHistoryContext{

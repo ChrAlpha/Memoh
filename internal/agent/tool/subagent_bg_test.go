@@ -308,6 +308,10 @@ func (*fakeAgentMessageService) HistoryAnchorBySession(context.Context, string, 
 	return time.Time{}, nil
 }
 
+func (*fakeAgentMessageService) HistoryOriginBySession(context.Context, string) (messagepkg.HistoryOrigin, error) {
+	return messagepkg.HistoryOrigin{}, nil
+}
+
 func (*fakeAgentMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
 	return nil, nil
 }

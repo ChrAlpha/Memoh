@@ -223,6 +223,10 @@ func (*recordingMessageService) HistoryAnchorBySession(context.Context, string, 
 	return time.Time{}, nil
 }
 
+func (*recordingMessageService) HistoryOriginBySession(context.Context, string) (messagepkg.HistoryOrigin, error) {
+	return messagepkg.HistoryOrigin{}, nil
+}
+
 func (*recordingMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
 	return nil, nil
 }

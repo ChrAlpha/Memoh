@@ -54,6 +54,9 @@ func (s *Service) prepareContinuationRunConfig(
 	if err != nil {
 		return native.RunConfig{}, err
 	}
+	if loaded, err = s.withHistoryNotice(ctx, summaryScope.SessionID, loaded); err != nil {
+		return native.RunConfig{}, err
+	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	messages, retained := historyMessagesFromRecords(loaded)
 	if req.continuationToolCallID != "" && req.RunHandle.RunID != "" {

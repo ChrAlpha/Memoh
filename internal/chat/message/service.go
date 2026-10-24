@@ -1151,6 +1151,30 @@ func (s *DBService) HistoryAnchorBySession(ctx context.Context, sessionID string
 	return anchor.Time, nil
 }
 
+// HistoryOriginBySession reports where the session's context starts.
+func (s *DBService) HistoryOriginBySession(ctx context.Context, sessionID string) (HistoryOrigin, error) {
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return HistoryOrigin{}, err
+	}
+	row, err := s.queries.GetSessionHistoryOrigin(ctx, pgSessionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return HistoryOrigin{}, nil
+	}
+	if err != nil {
+		return HistoryOrigin{}, err
+	}
+	if !row.HistoryOriginAt.Valid {
+		return HistoryOrigin{}, nil
+	}
+	return HistoryOrigin{
+		At:           row.HistoryOriginAt.Time,
+		OmittedCount: row.HistoryOmittedCount,
+		OmittedFirst: row.HistoryOmittedFirstAt.Time,
+		OmittedLast:  row.HistoryOmittedLastAt.Time,
+	}, nil
+}
+
 // MeasureActiveBySession aggregates a session's active message count and
 // content bytes on the database side (CM-ADM-001).
 func (s *DBService) MeasureActiveBySession(ctx context.Context, sessionID string, since time.Time) (ActiveMessagesMeasure, error) {
