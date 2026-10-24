@@ -1161,15 +1161,16 @@ func (s *DBService) ListActiveSinceWithinBytes(ctx context.Context, botID string
 
 // ListActiveSinceBySessionWithinBytes returns session messages since a given
 // time, admitted newest-first within the content byte budget (CM-ADM-001).
-func (s *DBService) ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error) {
+func (s *DBService) ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64, foldSummarized bool) ([]Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
 		return nil, err
 	}
 	rows, err := s.queries.ListActiveMessagesSinceBySessionWithinBytes(ctx, sqlc.ListActiveMessagesSinceBySessionWithinBytesParams{
-		SessionID: pgSessionID,
-		CreatedAt: pgtype.Timestamptz{Time: since, Valid: true},
-		MaxBytes:  maxBytes,
+		FoldSummarized: foldSummarized,
+		SessionID:      pgSessionID,
+		CreatedAt:      pgtype.Timestamptz{Time: since, Valid: true},
+		MaxBytes:       maxBytes,
 	})
 	if err != nil {
 		return nil, err
@@ -2346,7 +2347,17 @@ func toMessagesFromActiveSinceWithinBytes(rows []sqlc.ListActiveMessagesSinceWit
 func toMessagesFromActiveSinceBySessionWithinBytes(rows []sqlc.ListActiveMessagesSinceBySessionWithinBytesRow) []Message {
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
-		messages = append(messages, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
+		message := toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow{
+			ID: row.ID, BotID: row.BotID, SessionID: row.SessionID,
+			SenderChannelIdentityID: row.SenderChannelIdentityID, SenderUserID: row.SenderUserID,
+			ExternalMessageID: row.ExternalMessageID, SourceReplyToMessageID: row.SourceReplyToMessageID,
+			Role: row.Role, Content: row.Content, Metadata: row.Metadata, Usage: row.Usage,
+			SessionMode: row.SessionMode, RuntimeType: row.RuntimeType, EventID: row.EventID,
+			DisplayText: row.DisplayText, CompactID: row.CompactID, CreatedAt: row.CreatedAt,
+			SenderDisplayName: row.SenderDisplayName, SenderAvatarUrl: row.SenderAvatarUrl, Platform: row.Platform,
+		})
+		message.Summarized = row.Summarized
+		messages = append(messages, message)
 	}
 	return messages
 }

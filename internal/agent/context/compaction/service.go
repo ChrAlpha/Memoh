@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/turn"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -48,6 +50,9 @@ var (
 	// errSummaryPastCutoff marks an edit or retry whose view ends inside an
 	// active summary: the view shows those rows raw, so no fold matches it.
 	errSummaryPastCutoff = errors.New("compaction: an active summary extends past the request cutoff")
+	// errStaleSource marks a pass whose claimed rows changed, or were claimed
+	// by another writer, before it committed.
+	errStaleSource = errors.New("compaction: source rows changed since they were claimed")
 )
 
 // inflightRun marks one session's running compaction for activity reporting.
@@ -127,23 +132,22 @@ func (s *Service) publishActivity(botID string) {
 	}
 }
 
-// RunCompactionSync runs compaction synchronously and reports this session's
-// scoped Result, so callers act on their own outcome (a noop keeps their
-// current context) instead of reading an unscoped bot-wide log that may belong
-// to another session. A session whose compaction is already in flight reports
-// a noop.
-func (s *Service) RunCompactionSync(ctx context.Context, cfg TriggerConfig) (Result, error) {
-	return s.runCompaction(ctx, cfg)
-}
-
-func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result, error) {
+// Compact runs one compaction event for the caller's request: it folds the
+// active summary and every candidate the request does not keep raw into one
+// summary. A pass folds as much as one summarizer call can read and commits
+// it; the event passes again only while candidates are left that the call
+// could not read. It returns the passes it committed: none when there was
+// nothing to fold or the session's compaction was already in flight. A
+// failed pass ends the event with an *EventError and leaves the passes before
+// it committed.
+func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
 	run, ok := s.beginSessionCompaction(cfg.SessionID)
 	if !ok {
 		s.logger.InfoContext(ctx, "compaction: already in flight for session",
 			slog.String("bot_id", cfg.BotID),
 			slog.String("session_id", cfg.SessionID),
 		)
-		return Result{Status: StatusNoop}, nil
+		return nil, nil
 	}
 	defer func() {
 		s.endSessionCompaction(cfg.SessionID)
@@ -168,23 +172,41 @@ func (s *Service) runCompaction(ctx context.Context, cfg TriggerConfig) (Result,
 	}()
 
 	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, cfg, nil); err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	preHookRan = true
 	botUUID, err := db.ParseUUID(cfg.BotID)
 	if err != nil {
 		compactErr = err
-		return Result{}, err
+		return nil, err
 	}
 	sessionUUID, err := db.ParseUUID(cfg.SessionID)
 	if err != nil {
 		compactErr = err
-		return Result{}, err
+		return nil, err
 	}
 
-	var res Result
-	res, compactErr = s.doCompaction(ctx, botUUID, sessionUUID, cfg)
-	return res, compactErr
+	var passes []Pass
+	for {
+		pass, folded, err := s.doCompaction(ctx, botUUID, sessionUUID, cfg)
+		if err != nil {
+			compactErr = err
+			return passes, err
+		}
+		if !folded {
+			return passes, nil
+		}
+		passes = append(passes, pass)
+		if cfg.View != nil {
+			cfg.View = slices.DeleteFunc(slices.Clone(cfg.View), func(source turn.ContextMessageSource) bool {
+				return source.Kind == "summary" && slices.Contains(pass.Absorbed, source.ID)
+			})
+			cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "summary", ID: pass.ArtifactID})
+		}
+		if !pass.More || len(pass.Covered) == 0 {
+			return passes, nil
+		}
+	}
 }
 
 // runPostCompactHook dispatches PostCompact after the compaction outcome is

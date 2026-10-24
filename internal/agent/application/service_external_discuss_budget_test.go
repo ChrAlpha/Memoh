@@ -347,8 +347,8 @@ func TestExternalDiscussOriginalPressureUsesFinalHistoryAllowance(t *testing.T) 
 // input when the compaction fails.
 func TestExternalDiscussFailedRecoveryReportsBudgetUnsatisfied(t *testing.T) {
 	service, _ := newControllerPolicyService(t)
-	runner := &recoveryCompactionRunner{run: func() (compaction.Result, error) {
-		return compaction.Result{}, errors.New("summarizer down")
+	runner := &recoveryCompactionRunner{run: func() ([]compaction.Pass, error) {
+		return nil, errors.New("summarizer down")
 	}}
 	service.compactionService = runner
 	service.SetContextAbsoluteMaxTokens(1000)

@@ -51,6 +51,7 @@ type Queries interface {
 	GetBotWorkspace(ctx context.Context, botID pgtype.UUID) (dbsqlc.BotWorkspace, error)
 	ListBotWorkspacesByObservedState(ctx context.Context, arg dbsqlc.ListBotWorkspacesByObservedStateParams) ([]dbsqlc.BotWorkspace, error)
 	ReleaseBotWorkspaceLease(ctx context.Context, arg dbsqlc.ReleaseBotWorkspaceLeaseParams) (int64, error)
+	ReleasePendingCompactionClaimsBySession(ctx context.Context, arg dbsqlc.ReleasePendingCompactionClaimsBySessionParams) error
 	RenewBotWorkspaceLease(ctx context.Context, arg dbsqlc.RenewBotWorkspaceLeaseParams) (int64, error)
 	UpdateBotWorkspaceObserved(ctx context.Context, arg dbsqlc.UpdateBotWorkspaceObservedParams) (dbsqlc.BotWorkspace, error)
 	UpsertBotWorkspaceIntent(ctx context.Context, arg dbsqlc.UpsertBotWorkspaceIntentParams) (dbsqlc.BotWorkspace, error)
@@ -94,6 +95,7 @@ type Queries interface {
 	CountScheduleLogsBySchedule(ctx context.Context, scheduleID pgtype.UUID) (int64, error)
 	CountSessionEvents(ctx context.Context, sessionID pgtype.UUID) (int64, error)
 	NextSessionEventCursor(ctx context.Context) (int64, error)
+	ListSessionEventCursors(ctx context.Context, arg dbsqlc.ListSessionEventCursorsParams) ([]dbsqlc.ListSessionEventCursorsRow, error)
 	CountTokenUsageRecords(ctx context.Context, arg dbsqlc.CountTokenUsageRecordsParams) (int64, error)
 	CreateMemoryUsage(ctx context.Context, arg dbsqlc.CreateMemoryUsageParams) error
 	CreateAccount(ctx context.Context, arg dbsqlc.CreateAccountParams) (dbsqlc.CreateAccountRow, error)
@@ -244,6 +246,7 @@ type Queries interface {
 	GetChannelIdentityByIDForUpdate(ctx context.Context, id pgtype.UUID) (dbsqlc.ChannelIdentity, error)
 	GetChatRouteByID(ctx context.Context, id pgtype.UUID) (dbsqlc.GetChatRouteByIDRow, error)
 	GetCompactionLogByID(ctx context.Context, id pgtype.UUID) (dbsqlc.BotHistoryMessageCompact, error)
+	GetActiveCompactionArtifactWithinBytes(ctx context.Context, arg dbsqlc.GetActiveCompactionArtifactWithinBytesParams) (dbsqlc.BotHistoryMessageCompact, error)
 	GetContainerByBotID(ctx context.Context, botID pgtype.UUID) (dbsqlc.Container, error)
 	GetBotWorkspaceResourceLimits(ctx context.Context, botID pgtype.UUID) (dbsqlc.BotWorkspaceResourceLimit, error)
 	GetBuiltinMemoryProvider(ctx context.Context) (dbsqlc.MemoryProvider, error)
@@ -375,6 +378,8 @@ type Queries interface {
 	ListMessagesBeforeMessageBySession(ctx context.Context, arg dbsqlc.ListMessagesBeforeMessageBySessionParams) ([]dbsqlc.ListMessagesBeforeMessageBySessionRow, error)
 	ListMessageRefsByCompactID(ctx context.Context, compactID pgtype.UUID) ([]dbsqlc.ListMessageRefsByCompactIDRow, error)
 	ListMessagesByCompactID(ctx context.Context, compactID pgtype.UUID) ([]dbsqlc.ListMessagesByCompactIDRow, error)
+	ListMessagesByCompactIDWithinBytes(ctx context.Context, arg dbsqlc.ListMessagesByCompactIDWithinBytesParams) ([]dbsqlc.ListMessagesByCompactIDWithinBytesRow, error)
+	ListRunHistoryTurnRequestMessageIDs(ctx context.Context, arg dbsqlc.ListRunHistoryTurnRequestMessageIDsParams) ([]pgtype.UUID, error)
 	ListMessagesBySession(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListMessagesBySessionRow, error)
 	ListSubagentForkContext(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListSubagentForkContextRow, error)
 	ListMessagesLatest(ctx context.Context, arg dbsqlc.ListMessagesLatestParams) ([]dbsqlc.ListMessagesLatestRow, error)

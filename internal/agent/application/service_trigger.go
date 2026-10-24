@@ -143,8 +143,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	// the run is visible while it executes. The previous Generate-based path
 	// emitted nothing until storeRound wrote the whole round at the end.
 	reasoningTiming := newReasoningTimingTracker(nil)
-	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
-	configureNativeReasoningTiming(&cfg, reasoningTiming, stepCommitter)
+	stepCommitter := s.bindNativeRun(ctx, req, rc, &cfg, reasoningTiming)
 
 	result, streamErr := s.runTriggeredNativeStream(ctx, cfg, req, rc, admission.Handle, stepCommitter, reasoningTiming)
 	lifecycleCause = streamErr

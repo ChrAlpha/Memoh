@@ -418,6 +418,7 @@ func (s *Service) continueUserInputSession(
 	chatReq := ChatRequest{
 		RunID:                   resolved.RunConfig.RunID,
 		RunHandle:               runHandle,
+		continuationToolCallID:  req.ToolCallID,
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		ThreadID:                req.SessionID,

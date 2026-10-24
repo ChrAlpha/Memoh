@@ -11,13 +11,20 @@ import (
 	"github.com/felinics/memoh/internal/messageconv"
 )
 
-func summaryProviderReplayTokens(summary string) int {
-	return contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdk.UserMessage("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")}))
+// SummaryMessage is the message a summary renders as in a request.
+func SummaryMessage(summary string) sdk.Message {
+	return sdk.UserMessage("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")
+}
+
+// summaryReplayTokens prices a summary as the request it lands in carries
+// it, wrapper and message envelope included.
+func summaryReplayTokens(summary string) int {
+	return contextfrag.ProviderEnvelopeTokens("", []sdk.Message{SummaryMessage(summary)}, nil)
 }
 
 // keptReplayTokens is the history a compaction leaves raw inside the
-// caller's budget: rows it must keep that the caller did not budget as
-// current input.
+// caller's budget: every row from the first one it must keep on, other than
+// anchors and what the caller budgeted as current input.
 func keptReplayTokens(messages []CompactionCandidate, sources []turn.ContextMessageSource) int {
 	current := make([]turn.ContextMessageSource, 0, len(sources))
 	for _, source := range sources {
@@ -25,9 +32,10 @@ func keptReplayTokens(messages []CompactionCandidate, sources []turn.ContextMess
 			current = append(current, source)
 		}
 	}
+	stop := min(firstPolicyStart(messages, CompactPolicyPreserveRecent), firstPolicyStart(messages, CompactPolicyMustKeep))
 	tokens := 0
-	for _, message := range messages {
-		if (message.HasPolicy(CompactPolicyPreserveRecent) || message.HasPolicy(CompactPolicyMustKeep)) && !isProtectedSource(message, current) {
+	for _, message := range messages[stop:] {
+		if !message.HasPolicy(CompactPolicyAnchor) && !isProtectedSource(message, current) {
 			tokens += messageReplayTokens(message)
 		}
 	}
@@ -90,11 +98,14 @@ func messageReplayTokens(message CompactionCandidate) int {
 	return contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdkMessage}))
 }
 
+// summaryOutputLimit is the longest summary, in tokens, the prompt may ask
+// for: one that long, with a token to spare for rounding, still fits
+// replayBudget as the request carries it.
 func summaryOutputLimit(replayBudget, modelLimit int) int {
 	low, high := 0, min(modelLimit, replayBudget)
 	for low < high {
 		mid := (low + high + 1) / 2
-		if summaryProviderReplayTokens(strings.Repeat("x", mid*contextfrag.EstimateBytesPerToken)) <= replayBudget {
+		if summaryReplayTokens(strings.Repeat("x", (mid+1)*contextfrag.EstimateBytesPerToken)) <= replayBudget {
 			low = mid
 		} else {
 			high = mid - 1

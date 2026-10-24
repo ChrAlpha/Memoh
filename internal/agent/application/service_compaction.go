@@ -34,6 +34,9 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		return err
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
+	if anchors := req.compactionAnchors(); len(anchors) > 0 {
+		cfg.Anchors, cfg.ProtectedSources = anchors, req.continuationTail
+	}
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
 	// The byte budget bounds what a request loads, not what its history is:
 	// rows inside the time window stay candidates after the view slides past.
@@ -51,29 +54,21 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 	cfg.HistoryBudgetTokens = historyBudget
 
 	start := time.Now()
-	passes, folded := 0, false
-	for {
-		res, err := s.compactionService.RunCompactionSync(ctx, cfg)
-		passes++
-		if err != nil {
-			s.logger.WarnContext(ctx, "compaction failed",
-				slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
-				slog.Int("passes", passes), slog.Int64("duration_ms", time.Since(start).Milliseconds()), slog.Any("error", err))
-			return err
-		}
-		folded = folded || res.Status == compaction.StatusOK || res.Status == compaction.StatusProgress
-		if res.Status != compaction.StatusProgress || res.MessageCount == 0 {
-			s.logger.InfoContext(ctx, "compaction finished",
-				slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
-				slog.String("status", res.Status), slog.Int("passes", passes),
-				slog.Int("input_tokens", inputTokens), slog.Int("history_budget_tokens", historyBudget),
-				slog.Int64("duration_ms", time.Since(start).Milliseconds()))
-			if !folded {
-				return fmt.Errorf("compaction status %s", res.Status)
-			}
-			return nil
-		}
+	passes, err := s.compactionService.Compact(ctx, cfg)
+	if err != nil {
+		s.logger.WarnContext(ctx, "compaction failed",
+			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
+			slog.Int("passes", len(passes)), slog.Int64("duration_ms", time.Since(start).Milliseconds()), slog.Any("error", err))
+		return err
 	}
+	s.logger.InfoContext(ctx, "compaction finished",
+		slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID), slog.Int("passes", len(passes)),
+		slog.Int("input_tokens", inputTokens), slog.Int("history_budget_tokens", historyBudget),
+		slog.Int64("duration_ms", time.Since(start).Milliseconds()))
+	if len(passes) == 0 {
+		return errors.New("compaction folded nothing")
+	}
+	return nil
 }
 
 // buildCompactionConfig resolves the summarizer through the shared model
@@ -134,4 +129,15 @@ func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
 		}
 	}
 	return sources
+}
+
+// compactionAnchors are the sources a compaction keeps raw in place. A
+// continuation that resumes after a deferred call keeps its input and steers
+// where they are and folds the work around them; the caller prices them, the
+// way an in-run fold does, outside the history budget it gives.
+func (req ChatRequest) compactionAnchors() []turn.ContextMessageSource {
+	if len(req.continuationTail) == 0 {
+		return nil
+	}
+	return append(compactionProtectedSources(req), req.continuationAnchors...)
 }

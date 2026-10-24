@@ -318,7 +318,7 @@ func prepareProviderAttempt(
 	snapshot := contextfrag.StepSnapshot{StepIndex: stepIndex}
 	reselector := cfg.ContextStepReselector
 	mode = mode.Normalize()
-	if mode == LoopReselectOff {
+	if mode == LoopReselectOff || cfg.contextSwitch != nil {
 		reselector = nil
 	}
 	inputAllowance := stepReselectionAllowance(cfg)
@@ -364,6 +364,18 @@ func prepareProviderAttempt(
 			}
 		default:
 			snapshot.ReselectionOutcome = contextfrag.ReselectionOutcomeUnchanged
+		}
+	}
+	if cfg.contextSwitch != nil {
+		switched, err := cfg.contextSwitch.fold(ctx, cfg, params, inputAllowance)
+		switch {
+		case ctx.Err() != nil:
+			handoff.reject()
+			return params
+		case err != nil:
+			return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, err)
+		case switched:
+			dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, cfg.contextSwitch.remap(dynamicRefs), params.Messages)
 		}
 	}
 	if overflow := providerAttemptEnvelopeOverflow(params, inputAllowance); overflow > 0 {

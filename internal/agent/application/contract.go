@@ -23,7 +23,10 @@ type ChatRequest struct {
 	historyViewFrom time.Time
 	// inputInHistory marks a continuation, whose input is already a history
 	// row budgeted with the rest of the history.
-	inputInHistory bool
+	inputInHistory         bool
+	continuationToolCallID string
+	continuationAnchors    []turn.ContextMessageSource
+	continuationTail       []turn.ContextMessageSource
 	// discussPromptPrefix and discussPromptSuffix wrap the admitted discuss
 	// prompt; a shutdown resume puts its instructions there.
 	discussPromptPrefix string

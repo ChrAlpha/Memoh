@@ -122,6 +122,7 @@ func ProjectInterruptedReasoning(modelMsg turn.ModelMessage) turn.ModelMessage {
 	projected.ToolCalls = modelMsg.ToolCalls
 	projected.ToolCallID = modelMsg.ToolCallID
 	projected.Name = modelMsg.Name
+	projected.ContextSource = modelMsg.ContextSource
 	return projected
 }
 

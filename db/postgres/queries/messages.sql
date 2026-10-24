@@ -1881,9 +1881,12 @@ ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_a
 -- Byte-budgeted variant of ListActiveMessagesSinceBySession (CM-ADM-001):
 -- rows are admitted newest-first until their running content byte total
 -- crosses max_bytes (the crossing row is kept, so the newest row always
--- loads), then returned in ascending order. Only content is budgeted: full
--- rows, metadata included, still load, so callers that need content alone
--- use ListTurnResponseSourcesSinceBySessionWithinBytes.
+-- loads), then returned in ascending order. With fold_summarized, rows a
+-- usable summary of the session's current epoch replaced cost nothing, and
+-- only the newest of each compact group loads, marked summarized, to place
+-- that summary. Only content is budgeted: full rows, metadata included,
+-- still load, so callers that need content alone use
+-- ListTurnResponseSourcesSinceBySessionWithinBytes.
 SELECT
   ranked.id,
   ranked.bot_id,
@@ -1904,7 +1907,8 @@ SELECT
   ranked.created_at,
   ranked.sender_display_name,
   ranked.sender_avatar_url,
-  ranked.platform
+  ranked.platform,
+  ranked.summarized
 FROM (
   SELECT
     m.id,
@@ -1929,18 +1933,33 @@ FROM (
     ci.display_name AS sender_display_name,
     ci.avatar_url AS sender_avatar_url,
     s.channel_type AS platform,
-    (SUM(octet_length(m.content::text)) OVER (
+    (c.id IS NOT NULL)::boolean AS summarized,
+    ROW_NUMBER() OVER (
+      PARTITION BY c.id
       ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-    ) - octet_length(m.content::text))::BIGINT AS preceding_bytes
+    ) AS summarized_rank,
+    (SUM(CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END) OVER (
+      ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    ) - CASE WHEN c.id IS NULL THEN octet_length(m.content::text) ELSE 0 END)::BIGINT AS preceding_bytes
   FROM bot_visible_history_messages m
   LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
   LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  LEFT JOIN bot_history_message_compacts c
+    ON sqlc.arg(fold_summarized)::boolean
+   AND c.team_id = public.memoh_current_team_id()
+   AND c.id = m.compact_id
+   AND c.bot_id = m.bot_id
+   AND c.session_id = s.id
+   AND c.compaction_epoch = s.compaction_epoch
+   AND c.status = 'ok'
+   AND NULLIF(BTRIM(c.summary, E' \t\n\r\f\x0B'), '') IS NOT NULL
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
     AND m.created_at >= sqlc.arg(created_at)
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ) ranked
 WHERE ranked.preceding_bytes < sqlc.arg(max_bytes)::BIGINT
+  AND (NOT ranked.summarized OR ranked.summarized_rank = 1)
 ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_at ASC, ranked.id ASC;
 
 -- name: ListActiveMessagesSinceWithinBytes :many
@@ -3152,6 +3171,8 @@ WHERE message.team_id = public.memoh_current_team_id()
 -- so an oversized leading row returns no payload instead of crossing the
 -- process-memory boundary. CandidateCount reports whether the prefix was
 -- truncated and lets the service choose a progress-preserving selection.
+-- message_ids, when set, restricts candidates to those rows and the rows of
+-- external_message_ids: what the caller's request renders.
 WITH candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
@@ -3172,6 +3193,9 @@ WITH candidate_rows AS MATERIALIZED (
     AND m.session_id = sqlc.arg(session_id)
     AND (sqlc.narg(created_from)::timestamptz IS NULL OR m.created_at >= sqlc.narg(created_from)::timestamptz)
     AND (sqlc.narg(created_before)::timestamptz IS NULL OR m.created_at < sqlc.narg(created_before)::timestamptz)
+    AND (sqlc.narg(message_ids)::uuid[] IS NULL
+      OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
+      OR m.source_message_id = ANY(sqlc.narg(external_message_ids)::text[]))
     AND (m.compact_id IS NULL OR NOT EXISTS (
       SELECT 1 FROM bot_history_message_compacts c
       WHERE c.team_id = public.memoh_current_team_id()
@@ -3268,6 +3292,9 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
   AND (sqlc.narg(created_from)::timestamptz IS NULL OR m.created_at >= sqlc.narg(created_from)::timestamptz)
   AND (sqlc.narg(created_before)::timestamptz IS NULL OR m.created_at < sqlc.narg(created_before)::timestamptz)
+  AND (sqlc.narg(message_ids)::uuid[] IS NULL
+    OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
+    OR m.source_message_id = ANY(sqlc.narg(external_message_ids)::text[]))
   AND (m.compact_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM bot_history_message_compacts c
     WHERE c.team_id = public.memoh_current_team_id()
@@ -3421,3 +3448,75 @@ WHERE message.team_id = public.memoh_current_team_id()
   AND btrim(COALESCE(message.metadata->>'agent_turn_id', '')) <> ''
 ORDER BY message.created_at DESC, message.id DESC
 LIMIT 1;
+
+-- name: ListMessagesByCompactIDWithinBytes :many
+-- Reads back the rows one attempt claimed, measured as
+-- ListUncompactedMessagesBySessionWithinBytes measures its candidates: rows
+-- the candidate read admitted fit the same budget here unless their payload
+-- changed since.
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.event_id,
+  m.display_text,
+  m.compact_id,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform,
+  s.compaction_epoch,
+  r.conversation_type AS conversation_type,
+  COALESCE(
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_name', '')), ''),
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_handle', '')), ''),
+    ''
+  )::text AS conversation_name,
+  r.default_reply_target AS reply_target
+FROM bot_visible_history_messages m
+LEFT JOIN channel_identities ci
+  ON ci.id = m.sender_channel_identity_id
+ AND ci.team_id = public.memoh_current_team_id()
+JOIN bot_sessions s
+  ON s.id = m.session_id
+ AND s.team_id = public.memoh_current_team_id()
+LEFT JOIN bot_channel_routes r
+  ON r.id = s.route_id
+ AND r.team_id = public.memoh_current_team_id()
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.compact_id = sqlc.arg(compact_id)
+  AND m.id IN (
+    SELECT bounded.id FROM (
+      SELECT source.id, SUM(
+        octet_length(source.content::text)
+        + octet_length(source.metadata::text)
+        + octet_length(COALESCE(source.usage, '{}'::jsonb)::text)
+        + octet_length(COALESCE(source.display_text, ''))
+      ) OVER (
+        ORDER BY source.turn_position ASC, source.turn_message_seq ASC, source.created_at ASC, source.id ASC
+      ) AS read_bytes
+      FROM bot_visible_history_messages source
+      WHERE source.team_id = public.memoh_current_team_id()
+        AND source.compact_id = sqlc.arg(compact_id)
+    ) bounded WHERE bounded.read_bytes <= sqlc.arg(max_bytes)::bigint
+  )
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
+
+-- name: ListRunHistoryTurnRequestMessageIDs :many
+-- Keep every applied input of a resumed run, including its steer turns.
+SELECT request.id
+FROM bot_history_messages request
+WHERE request.team_id = public.memoh_current_team_id()
+  AND request.session_id = sqlc.arg(session_id)
+  AND (request.run_id = sqlc.arg(run_id) OR request.turn_id = sqlc.arg(root_turn_id))
+  AND request.role = 'user' AND request.turn_message_seq = 1
+  AND request.turn_visible = true
+ORDER BY request.turn_position ASC;

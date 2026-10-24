@@ -340,3 +340,34 @@ DELETE FROM bot_history_message_compacts AS compacts
 USING target_compaction_logs target
 WHERE compacts.team_id = public.memoh_current_team_id()
   AND compacts.id = target.id;
+
+-- name: ReleasePendingCompactionClaimsBySession :exec
+-- A new runtime owner releases the compaction claims its predecessors left
+-- pending: their writes are fenced out, so those claims can never commit, and
+-- the rows they hold are compaction candidates again.
+UPDATE bot_history_message_compacts
+SET status = 'error',
+    error_message = 'claimant lost runtime ownership',
+    completed_at = now()
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND status = 'pending';
+
+-- name: GetActiveCompactionArtifactWithinBytes :one
+-- In-run compaction reads only an artifact already rendered by its request.
+SELECT compact.*
+FROM bot_history_message_compacts compact
+JOIN bot_sessions owner_session
+  ON owner_session.id = compact.session_id
+ AND owner_session.bot_id = compact.bot_id
+ AND owner_session.team_id = compact.team_id
+ AND owner_session.compaction_epoch = compact.compaction_epoch
+WHERE compact.team_id = public.memoh_current_team_id()
+  AND compact.id = sqlc.arg(id)
+  AND compact.bot_id = sqlc.arg(bot_id)
+  AND compact.session_id = sqlc.arg(session_id)
+  AND compact.status = 'ok'
+  AND compact.superseded_by IS NULL
+  AND compact.superseded_at IS NULL
+  AND octet_length(row_to_json(compact)::text) <= sqlc.arg(max_bytes)::bigint;

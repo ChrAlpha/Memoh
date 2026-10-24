@@ -16,6 +16,9 @@ const (
 	CompactPolicyPreserveRecent      CompactPolicy = "preserve_recent"
 	CompactPolicyPreserveToolClosure CompactPolicy = "preserve_tool_closure"
 	CompactPolicyMustKeep            CompactPolicy = "must_keep"
+	// CompactPolicyAnchor keeps a row of the running turn raw where it is
+	// (its input, a steer) without ending what a pass folds around it.
+	CompactPolicyAnchor CompactPolicy = "anchor"
 )
 
 // CompactionCandidate is the typed view of one uncompacted history row used
@@ -28,6 +31,7 @@ type CompactionCandidate struct {
 	Record       historyfrag.HistoryRecord
 	Policies     []CompactPolicy
 	IsToolResult bool
+	EventCursor  int64
 }
 
 func (c CompactionCandidate) HasPolicy(policy CompactPolicy) bool {
@@ -194,14 +198,15 @@ func estimateBytesAsTokens(value string) int {
 }
 
 // foldableItems is the history before the first row a compaction must keep,
-// extended over the tool results that answer a call it folds.
+// extended over the tool results that answer a call it folds. A must-keep row
+// ends it too: no summary covers rows on both sides of one.
 func foldableItems(items []CompactionCandidate) []CompactionCandidate {
 	protectedStart := firstPolicyStart(items, CompactPolicyPreserveRecent)
 	cutoff := adjustForToolBoundary(items, protectedStart)
 	if cutoff <= 0 || cutoff > protectedStart {
 		return nil
 	}
-	return items[:cutoff]
+	return items[:min(cutoff, firstPolicyStart(items, CompactPolicyMustKeep))]
 }
 
 func firstPolicyStart(items []CompactionCandidate, policy CompactPolicy) int {
@@ -233,50 +238,63 @@ func isToolResultItem(item CompactionCandidate) bool {
 }
 
 // buildEntriesAndIDs renders the summarizer entries and the ids to mark
-// compacted from one contiguous run of tool-exchange groups (see
-// toolExchangeGroups). Must-keep groups (a pending ask_user call, unparseable
-// barriers) stay in raw history and split the span into runs; the first run
-// that renders any entry wins and is covered whole. A row that renders
-// nothing (a reasoning-only message, an empty tool result) is covered with its
-// neighbours and contributes no entry: leaving it raw would split the run into
-// fragments too short to summarize. One run under one compact_id keeps the
-// marked ids a contiguous history range, which the read path
-// (replaceCompactedHistoryRecords) replaces in place.
+// compacted from foldable items. An anchor renders in place as a kept entry
+// and is not marked. A row that renders nothing (a reasoning-only message,
+// an empty tool result) is covered with its neighbours and contributes no
+// entry: leaving it raw would split the span into fragments too short to
+// summarize.
 func buildEntriesAndIDs(items []CompactionCandidate) ([]messageEntry, []pgtype.UUID) {
-	groups := toolExchangeGroups(items)
-	mustKeep := func(group []int) bool {
-		for _, idx := range group {
-			if items[idx].HasPolicy(CompactPolicyMustKeep) {
-				return true
-			}
+	var entries []messageEntry
+	var ids []pgtype.UUID
+	for _, item := range items {
+		if !item.HasPolicy(CompactPolicyAnchor) {
+			ids = append(ids, item.ID)
 		}
-		return false
+		if entry, ok := candidateEntry(item); ok {
+			entries = append(entries, entry)
+		}
 	}
-	for g := 0; g < len(groups); {
-		if mustKeep(groups[g]) {
-			g++
-			continue
-		}
-		runEnd := g
-		for runEnd < len(groups) && !mustKeep(groups[runEnd]) {
-			runEnd++
-		}
-		var entries []messageEntry
-		var ids []pgtype.UUID
-		for _, group := range groups[g:runEnd] {
-			for _, idx := range group {
-				ids = append(ids, items[idx].ID)
-				if content := renderCandidateEntry(items[idx].Record); strings.TrimSpace(content) != "" {
-					entries = append(entries, messageEntry{Role: items[idx].Record.ModelMessage.Role, Content: content})
-				}
-			}
-		}
-		if len(entries) > 0 {
-			return entries, ids
-		}
-		g = runEnd
+	if len(coveredEntries(entries)) == 0 {
+		return nil, nil
 	}
-	return nil, nil
+	return entries, ids
+}
+
+// candidateEntry is what the summarizer reads for item, kept when item is an
+// anchor. A row that renders nothing has no entry.
+func candidateEntry(item CompactionCandidate) (messageEntry, bool) {
+	content := renderCandidateEntry(item.Record)
+	if strings.TrimSpace(content) == "" {
+		return messageEntry{}, false
+	}
+	return messageEntry{Role: item.Record.ModelMessage.Role, Content: content, Kept: item.HasPolicy(CompactPolicyAnchor)}, true
+}
+
+// keptAfterSummary splits off the kept entries after the last one a summary
+// covers. The request keeps them after the summary, so the summarizer reads
+// them with what follows it rather than in place.
+func keptAfterSummary(entries []messageEntry) ([]messageEntry, []messageEntry) {
+	last := len(entries)
+	for last > 0 && entries[last-1].Kept {
+		last--
+	}
+	after := make([]messageEntry, 0, len(entries)-last)
+	for _, entry := range entries[last:] {
+		entry.Kept = false
+		after = append(after, entry)
+	}
+	return entries[:last], after
+}
+
+// coveredEntries are the entries a summary replaces: all but the kept ones.
+func coveredEntries(entries []messageEntry) []messageEntry {
+	var covered []messageEntry
+	for _, entry := range entries {
+		if !entry.Kept {
+			covered = append(covered, entry)
+		}
+	}
+	return covered
 }
 
 // trimCompactMessages keeps the oldest tool-exchange groups whose rendered
@@ -312,22 +330,20 @@ func leadingGroupCost(items []CompactionCandidate) int {
 
 // markableGroupCost is the summarizer-prompt cost of one tool-exchange group:
 // zero for a must-keep group, otherwise the line buildUserPrompt emits for
-// each rendered entry, as entriesPromptCost prices it, so tiny-but-real
-// entries can never ride along for free. Rows that render nothing cost
-// nothing. Costing the rendered bytes rather than the raw usage estimate
-// matters: a row whose generation cost five tokens can still render a
-// two-kilobyte tool outcome into the prompt.
+// each rendered entry, kept ones in their wrapper, as entriesPromptCost
+// prices it, so tiny-but-real entries can never ride along for free. Rows
+// that render nothing cost nothing. Costing the rendered bytes rather than
+// the raw usage estimate matters: a row whose generation cost five tokens
+// can still render a two-kilobyte tool outcome into the prompt.
 func markableGroupCost(items []CompactionCandidate, group []int) int {
 	cost := 0
 	for _, idx := range group {
 		if items[idx].HasPolicy(CompactPolicyMustKeep) {
 			return 0
 		}
-		rendered := renderCandidateEntry(items[idx].Record)
-		if strings.TrimSpace(rendered) == "" {
-			continue
+		if entry, ok := candidateEntry(items[idx]); ok {
+			cost += entryPromptCost(entry)
 		}
-		cost += entryPromptCost(messageEntry{Role: items[idx].Record.ModelMessage.Role, Content: rendered})
 	}
 	return cost
 }

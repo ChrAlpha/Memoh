@@ -30,8 +30,8 @@ func TestRunCompactionRecordsModelRecordProvenance(t *testing.T) {
 	recordID := testUUID(t)
 	cfg.ModelRecordID = recordID.String()
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
+		t.Fatalf("compact: %v", err)
 	}
 	if q.completed.ModelID != recordID {
 		t.Fatalf("artifact model provenance = %v, want the models row UUID %v: the runtime slug must not be parsed as a database id", q.completed.ModelID, recordID)
@@ -46,8 +46,8 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	cfg := machineryConfig(stub, 200)
 	cfg.SummaryWindowTokens = 20000
 
-	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
+		t.Fatalf("compact: %v", err)
 	}
 	if stub.maxTokens != 5000 {
 		t.Fatalf("summary max tokens = %d, want the model's output allowance in a 20000 window", stub.maxTokens)
@@ -56,8 +56,8 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	wide := &stubModel{summary: "SUMMARY"}
 	cfgWide := machineryConfig(wide, 200)
 	cfgWide.SummaryWindowTokens = 200000
-	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfgWide); err != nil {
-		t.Fatalf("RunCompactionSync wide: %v", err)
+	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfgWide); err != nil {
+		t.Fatalf("compact wide: %v", err)
 	}
 	if wide.maxTokens != models.DefaultOutputReserveTokens {
 		t.Fatalf("summary max tokens = %d, want the model's output allowance %d", wide.maxTokens, models.DefaultOutputReserveTokens)
@@ -67,8 +67,8 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	cfgDeclared := machineryConfig(declared, 200)
 	cfgDeclared.SummaryWindowTokens = 200000
 	cfgDeclared.MaxOutputTokens = 64000
-	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfgDeclared); err != nil {
-		t.Fatalf("RunCompactionSync declared: %v", err)
+	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfgDeclared); err != nil {
+		t.Fatalf("compact declared: %v", err)
 	}
 	if declared.maxTokens != 64000 {
 		t.Fatalf("summary max tokens = %d, want the model's declared output cap 64000", declared.maxTokens)
@@ -81,9 +81,9 @@ func TestRunCompactionRejectsTruncatedSummary(t *testing.T) {
 	q := &fakeQueries{uncompacted: qualityRows(t)}
 	stub := &stubModel{summary: "SUMMARY", finishReason: "length"}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 200))
+	_, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(stub, 200))
 	if !errors.Is(err, errIncompleteSummary) {
-		t.Fatalf("RunCompactionSync error = %v, want errIncompleteSummary: a truncated summary must never be published", err)
+		t.Fatalf("compact error = %v, want errIncompleteSummary: a truncated summary must never be published", err)
 	}
 	if q.completed.Status != "error" {
 		t.Fatalf("attempt status = %q, want error so the claimed rows stay reclaimable", q.completed.Status)
@@ -96,9 +96,9 @@ func TestRunCompactionRejectsIneffectiveSummary(t *testing.T) {
 	q := &fakeQueries{uncompacted: qualityRows(t)}
 	stub := &stubModel{summary: strings.Repeat("a summary longer than everything it replaces ", 200)}
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 200))
+	_, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(stub, 200))
 	if !errors.Is(err, errIneffectiveSummary) {
-		t.Fatalf("RunCompactionSync error = %v, want errIneffectiveSummary: a summary must shrink what it replaces", err)
+		t.Fatalf("compact error = %v, want errIneffectiveSummary: a summary must shrink what it replaces", err)
 	}
 	if q.completed.Status != "error" {
 		t.Fatalf("attempt status = %q, want error", q.completed.Status)
@@ -113,9 +113,9 @@ func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 	cfg := machineryConfig(stub, 200)
 	cfg.SummaryWindowTokens = 512
 
-	_, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	_, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 	if !errors.Is(err, ErrSummaryWindowTooSmall) {
-		t.Fatalf("RunCompactionSync error = %v, want ErrSummaryWindowTooSmall", err)
+		t.Fatalf("compact error = %v, want ErrSummaryWindowTooSmall", err)
 	}
 	if stub.calls != 0 {
 		t.Fatalf("summarizer calls = %d, want 0: a hopeless window must not burn an LLM call", stub.calls)
@@ -135,7 +135,7 @@ func TestRunCompactionReadsAsMuchWhateverOutputTheModelDeclares(t *testing.T) {
 		cfg.MaxOutputTokens = declared
 		rows := qualityRows(t)
 		rows[0] = mkRow(t, "user", jsonStr(strings.Repeat("large item ", 16000)), 100)
-		if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).RunCompactionSync(context.Background(), cfg); err != nil || stub.calls != 1 {
+		if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).compactOnce(context.Background(), cfg); err != nil || stub.calls != 1 {
 			t.Fatalf("declared output %d: err=%v calls=%d, want the large item summarized", declared, err, stub.calls)
 		}
 		if limit := statedSummaryLimit(t, stub.prompt); limit > stub.maxTokens {
@@ -150,8 +150,8 @@ func TestRunCompactionShowsAnUnsavedRequestAsTheGoal(t *testing.T) {
 	stub := &stubModel{summary: "SUMMARY"}
 	cfg := machineryConfig(stub, 200)
 	cfg.CurrentRequest = "deploy the staging build"
-	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
+	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfg); err != nil {
+		t.Fatalf("compact: %v", err)
 	}
 	if !strings.Contains(stub.prompt, "<current_request>\nuser: deploy the staging build") {
 		t.Fatalf("summarizer prompt lacks the unsaved request:\n%s", stub.prompt)

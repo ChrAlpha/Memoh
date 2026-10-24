@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -12,6 +13,8 @@ import (
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db"
 )
 
@@ -56,12 +59,65 @@ func sameModelMessage(a ModelMessage, b ModelMessage) bool {
 
 func historySourceMessageIDsForMessages(messages []ModelMessage, records []historyfrag.HistoryRecord) []string {
 	sourceIDs := make([]string, len(messages))
-	if len(messages) == 0 || len(records) == 0 {
-		return sourceIDs
+	for i, index := range matchHistoryRecords(messages, records) {
+		if index >= 0 {
+			sourceIDs[i] = strings.TrimSpace(records[index].DBMessageID)
+		}
+	}
+	return sourceIDs
+}
+
+// contextProvenance names what each message of a request renders, for a run
+// that compacts in place: the inbound message or row a message carries as
+// its source, or else the record it was loaded from, matched in order by
+// content (a summary renders its artifact). A message that renders the
+// request's own input is an anchor.
+func contextProvenance(messages []ModelMessage, records []historyfrag.HistoryRecord, inputs []turn.ContextMessageSource) []native.MessageProvenance {
+	matched := matchHistoryRecords(messages, records)
+	var out []native.MessageProvenance
+	for i, message := range messages {
+		var source turn.ContextMessageSource
+		switch index := matched[i]; {
+		case message.ContextSource != nil:
+			source = *message.ContextSource
+		case index >= 0 && records[index].SourceKind == historyfrag.SourceCompactionLog:
+			source = turn.ContextMessageSource{Kind: "summary", ID: records[index].Ref.ID}
+		case index >= 0:
+			source = turn.ContextMessageSource{Kind: "history", ID: strings.TrimSpace(records[index].DBMessageID)}
+		default:
+			continue
+		}
+		if source.Kind == "history" && source.ContentHash == "" && matched[i] >= 0 {
+			source.ContentHash = historyfrag.MessageContentHash(records[matched[i]].ModelMessage)
+		}
+		sent := modelMessagesToSDKMessages([]ModelMessage{message})
+		if len(sent) != 1 {
+			continue
+		}
+		anchor := source.Current || slices.ContainsFunc(inputs, func(input turn.ContextMessageSource) bool {
+			return input.Kind == source.Kind && input.ID == source.ID
+		})
+		source.Current = false
+		out = append(out, native.MessageProvenance{
+			Message: sent[0],
+			Sources: []turn.ContextMessageSource{source},
+			Anchor:  anchor,
+		})
+	}
+	return out
+}
+
+// matchHistoryRecords pairs each message, in order, with the index of the
+// stored record it was loaded from (a row, or the artifact a summary
+// renders), or -1.
+func matchHistoryRecords(messages []ModelMessage, records []historyfrag.HistoryRecord) []int {
+	matched := make([]int, len(messages))
+	for i := range matched {
+		matched[i] = -1
 	}
 	positions := make(map[string][]int, len(records))
 	for i, record := range records {
-		if strings.TrimSpace(record.DBMessageID) == "" {
+		if strings.TrimSpace(record.DBMessageID) == "" && record.SourceKind != historyfrag.SourceCompactionLog {
 			continue
 		}
 		key := modelMessageSourceKey(record.ModelMessage)
@@ -80,15 +136,17 @@ func historySourceMessageIDsForMessages(messages []ModelMessage, records []histo
 		if cursor >= len(candidates) {
 			continue
 		}
-		recordIndex := candidates[cursor]
+		matched[i] = candidates[cursor]
 		cursors[key] = cursor + 1
-		lastMatched = recordIndex
-		sourceIDs[i] = strings.TrimSpace(records[recordIndex].DBMessageID)
+		lastMatched = matched[i]
 	}
-	return sourceIDs
+	return matched
 }
 
 func modelMessageSourceKey(message ModelMessage) string {
+	if hash := historyfrag.MessageContentHash(message); hash != "" {
+		return hash
+	}
 	return strings.ToLower(strings.TrimSpace(message.Role)) + "\x00" + string(message.Content)
 }
 
@@ -148,7 +206,7 @@ func (s *Service) replaceCompactedMessages(ctx context.Context, sessionID string
 		return nil, err
 	}
 	if len(frontier.Artifacts) == 0 {
-		return messages, nil
+		return messages, requireSummariesRendered(messages, func(historyfrag.HistoryRecord) (compaction.Artifact, bool) { return compaction.Artifact{}, false })
 	}
 	owner := compaction.ArtifactOwner{BotID: scope.BotID, SessionID: sessionID, SessionIDKnown: true}
 	catalog := compaction.NewArtifactCatalog()
@@ -164,12 +222,32 @@ func (s *Service) replaceCompactedMessages(ctx context.Context, sessionID string
 		}
 		return artifact, true
 	}
+	if err := requireSummariesRendered(messages, resolve); err != nil {
+		return nil, err
+	}
 	messages = replaceCompactedHistoryRecordsWithService(messages, scope, resolve)
 	sessionSummaries := summaryRecordsFromArtifacts(missingCompactionArtifacts(messages, frontier.Artifacts, blocked, boundary), scope)
 	if len(sessionSummaries) > 0 {
 		messages = mergeMissingCompactionSummaries(messages, sessionSummaries)
 	}
 	return s.refreshCompactedSummaryCoverage(ctx, messages, resolve), nil
+}
+
+// errSummaryNotRendered reports a Summarized row whose summary does not
+// render in the request: the window left out the rest of its compact group,
+// so the caller loads the window again without folding.
+var errSummaryNotRendered = errors.New("history: a folded compact group's summary does not render")
+
+func requireSummariesRendered(messages []historyfrag.HistoryRecord, resolve func(historyfrag.HistoryRecord) (compaction.Artifact, bool)) error {
+	for _, record := range messages {
+		if !record.Summarized {
+			continue
+		}
+		if artifact, ok := resolve(record); !ok || strings.TrimSpace(artifact.Summary) == "" {
+			return fmt.Errorf("%w: compact %s", errSummaryNotRendered, record.CompactID)
+		}
+	}
+	return nil
 }
 
 // missingCompactionArtifacts filters the active frontier down to summaries not

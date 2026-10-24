@@ -139,9 +139,11 @@ type StartTurnCommand struct {
 }
 
 type ContextMessageSource struct {
-	Kind    string `json:"kind"`
-	ID      string `json:"id,omitempty"`
-	Current bool   `json:"current,omitempty"`
+	Kind        string `json:"kind"`
+	ID          string `json:"id,omitempty"`
+	Current     bool   `json:"current,omitempty"`
+	ContentHash string `json:"-"`
+	EventCursor int64  `json:"-"`
 }
 
 // DiscussMessage is one composed context message for a discuss turn.

@@ -102,7 +102,7 @@ type workspaceTargetResolver interface {
 }
 
 type compactionRunner interface {
-	RunCompactionSync(context.Context, compaction.TriggerConfig) (compaction.Result, error)
+	Compact(context.Context, compaction.TriggerConfig) ([]compaction.Pass, error)
 }
 
 // Service orchestrates chat with the internal agent.
@@ -622,6 +622,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.ContextFrags = historyContextFragsForMessages(messages, historyRecords)
 	forkMessages := nonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
+	runCfg.ContextProvenance = contextProvenance(forkMessages, historyRecords, compactionProtectedSources(req))
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {
@@ -733,11 +734,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
 	cfg := rc.runConfig
-	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
-	if stepCommitter != nil {
-		cfg.OnStepCommitted = stepCommitter.commit
-		stepCommitter.bindContinuation(&cfg)
-	}
+	stepCommitter := s.bindNativeRun(ctx, req, rc, &cfg, nil)
 	cfg = s.prepareRunConfig(ctx, cfg)
 	terminal := s.contextLifecycleTerminal(ctx, cfg)
 	var lifecycleCause error

@@ -25,6 +25,13 @@ type chatHistoryLayout struct {
 }
 
 func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) native.RunConfig {
+	if switchContext := cfg.SwitchContext; switchContext != nil {
+		cfg.SwitchContext = func(ctx context.Context, sw native.ContextSwitch) (string, error) {
+			idle.Pause()
+			defer idle.Resume()
+			return switchContext(ctx, sw)
+		}
+	}
 	if recoverBudget := cfg.RecoverContextBudget; recoverBudget != nil {
 		cfg.RecoverContextBudget = func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
 			idle.Pause()
@@ -44,6 +51,9 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		if budget <= 0 {
 			return cfg, false, nil
 		}
+		// The summary shares the history budget with what compaction keeps
+		// raw in place, which it does not price.
+		budget -= anchoredTokens(cfg.ContextProvenance, req.compactionAnchors())
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
 		if err := s.compactForBudget(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); err != nil {
@@ -74,6 +84,21 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		layout.pressureTokens = 0
 		return recovered, true, nil
 	}
+}
+
+// anchoredTokens is what the messages the request renders for anchors take.
+func anchoredTokens(provenance []native.MessageProvenance, anchors []turn.ContextMessageSource) int {
+	tokens := 0
+	for _, p := range provenance {
+		if slices.ContainsFunc(p.Sources, func(source turn.ContextMessageSource) bool {
+			return slices.ContainsFunc(anchors, func(anchor turn.ContextMessageSource) bool {
+				return anchor.Kind == source.Kind && anchor.ID == source.ID
+			})
+		}) {
+			tokens += contextfrag.ProviderEnvelopeTokens("", []sdk.Message{p.Message}, nil)
+		}
+	}
+	return tokens
 }
 
 func (l chatHistoryLayout) owns(frag contextfrag.ContextFrag) bool {
@@ -126,6 +151,7 @@ func (l chatHistoryLayout) replaceHistory(ctx context.Context, cfg native.RunCon
 	cfg.ContextMemoryMessageIndex = shiftRecoveryIndex(cfg.ContextMemoryMessageIndex, l.historyCount, delta)
 	cfg.ContextCurrentUserMessageIndex = shiftRecoveryIndex(cfg.ContextCurrentUserMessageIndex, l.historyCount, delta)
 	cfg.ContextFrags = historyContextFragsForMessages(messages, records)
+	cfg.ContextProvenance = contextProvenance(history, records, append(compactionProtectedSources(req), req.continuationAnchors...))
 	cfg.ForkContextSourceMessageIDs = make([]string, l.forkCount, len(cfg.Messages))
 	cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, historySourceMessageIDsForMessages(history, records)...)
 	copy(cfg.ForkContextSourceMessageIDs[:l.forkCount], old.ForkContextSourceMessageIDs[:min(l.forkCount, len(old.ForkContextSourceMessageIDs))])

@@ -509,6 +509,7 @@ func (s *Service) continueToolApprovalSession(
 	req := ChatRequest{
 		RunID:                   resolved.RunConfig.RunID,
 		RunHandle:               runHandle,
+		continuationToolCallID:  approval.ToolCallID,
 		BotID:                   input.BotID,
 		ChatID:                  input.BotID,
 		ThreadID:                approval.SessionID,
