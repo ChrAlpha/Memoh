@@ -255,8 +255,8 @@
       "upstream_unavailable": "Connect-It 暂时无法完成请求，请稍后重试。"
     },
     "context": {
-      "budget_unsatisfied": "模型上下文窗口不足，无法处理当前请求。可尝试缩短请求，或改用上下文窗口更大的模型。",
-      "protected_overflow": "必要的上下文内容超出了模型上下文预算。可尝试改用上下文窗口更大的模型。"
+      "budget_unsatisfied": "压缩较早的历史后，当前请求仍放不进模型上下文窗口，本次运行已停止。可重试、缩短请求、开始新对话，或改用上下文窗口更大的模型。",
+      "protected_overflow": "必要的上下文内容超出了模型上下文预算。请缩短请求，或改用上下文窗口更大的模型。"
     },
     "context_lifecycle": {
       "access_denied": "你没有权限查看上下文生命周期诊断信息。",
@@ -3330,15 +3330,6 @@
       "videoModel": "视频生成模型",
       "videoModelPlaceholder": "选择视频模型（可选）",
       "language": "语言",
-      "compactionEnabled": "启用上下文压缩",
-      "compactionDescription": "当对话上下文过长时，自动对旧消息进行摘要以节省 Token。",
-      "compactionThreshold": "压缩阈值",
-      "compactionThresholdDescription": "输入 Token 数；0 表示在模型上下文窗口达到 50% 时自动压缩。",
-      "compactionTargetPercent": "压缩后保留的上下文（%）",
-      "compactionTargetPercentDescription": "压缩后保留的模型上下文窗口比例。留空时使用 40%。",
-      "compactionModel": "压缩模型",
-      "compactionModelDescription": "选择用于摘要的模型，未设置时默认使用聊天模型。",
-      "compactionModelPlaceholder": "使用聊天模型（默认）",
       "showToolCallsInIM": "在 IM 中显示工具调用",
       "showToolCallsInIMDescription": "在聊天中以单条消息实时更新工具的执行状态。默认关闭。",
       "displayEnabled": "启用工作区显示器",
@@ -3781,8 +3772,6 @@
       "loadFailed": "加载压缩记录失败",
       "empty": "暂无压缩记录",
       "emptyHint": "机器人压缩会话历史后，这里会出现记录。",
-      "logsDisabledTitle": "压缩已关闭",
-      "logsDisabledHint": "开启压缩后开始记录日志。",
       "filterEmpty": "没有匹配当前状态筛选条件的记录。",
       "clearLogs": "清空记录",
       "clearConfirm": "确定要清空所有压缩记录吗？此操作不可撤销。",

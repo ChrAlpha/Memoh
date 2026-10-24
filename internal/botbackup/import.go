@@ -345,11 +345,6 @@ func settingsLabels(raw []byte) []string {
 		out = append(out, "acl default: "+v)
 	}
 	out = append(out, "reasoning: "+reasoningStr())
-	compaction := "off"
-	if enabled, ok := m["compaction_enabled"].(bool); ok && enabled {
-		compaction = "on"
-	}
-	out = append(out, "compaction: "+compaction)
 	return out
 }
 
@@ -878,7 +873,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 				eff.MemoryEnabled = current.MemoryEnabled
 				eff.TtsModelID = current.TtsModelID
 				eff.TranscriptionModelID = current.TranscriptionModelID
-				eff.CompactionModelID = current.CompactionModelID
 				eff.MemoryLLMModelID = current.MemoryLLMModelID
 				eff.DiscussProbeModelID = current.DiscussProbeModelID
 			}
@@ -890,9 +884,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 				eff.ChatACPProjectPath = current.ChatACPProjectPath
 				eff.ChatACPProjectMode = current.ChatACPProjectMode
 				eff.ReasoningEffort = current.ReasoningEffort
-				eff.CompactionEnabled = current.CompactionEnabled
-				eff.CompactionThreshold = current.CompactionThreshold
-				eff.CompactionTargetPercent = current.CompactionTargetPercent
 				eff.PersistFullToolResults = current.PersistFullToolResults
 				eff.ShowToolCallsInIM = current.ShowToolCallsInIM
 				eff.ToolApprovalConfig = current.ToolApprovalConfig
@@ -915,12 +906,6 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 
 	timezone := eff.Timezone
 	reasoningEffort := eff.ReasoningEffort
-	compactionEnabled := eff.CompactionEnabled
-	compactionThreshold := eff.CompactionThreshold
-	compactionTargetPercent := 0
-	if eff.CompactionTargetPercent != nil {
-		compactionTargetPercent = *eff.CompactionTargetPercent
-	}
 	persistFullToolResults := eff.PersistFullToolResults
 	showToolCalls := eff.ShowToolCallsInIM
 	toolApproval := eff.ToolApprovalConfig
@@ -930,33 +915,29 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 	fetchProviderID := modelID(eff.FetchProviderID, deps.fetchProviders)
 	memoryEnabled := eff.MemoryEnabled
 	_, err := s.settings.UpsertBot(ctx, botID, settings.UpsertRequest{
-		ChatModelID:             ptrStringAllowEmpty(modelID(eff.ChatModelID, deps.models)),
-		ChatRuntime:             ptrStringAllowEmpty(eff.ChatRuntime),
-		ChatACPAgentID:          ptrStringAllowEmpty(eff.ChatACPAgentID),
-		ChatACPProjectPath:      ptrStringAllowEmpty(eff.ChatACPProjectPath),
-		ChatACPProjectMode:      ptrStringAllowEmpty(eff.ChatACPProjectMode),
-		ImageModelID:            ptrStringAllowEmpty(modelID(eff.ImageModelID, deps.models)),
-		SearchProviderID:        ptrStringAllowEmpty(modelID(eff.SearchProviderID, deps.searchProviders)),
-		FetchProviderID:         &fetchProviderID,
-		MemoryEnabled:           &memoryEnabled,
-		TtsModelID:              ptrStringAllowEmpty(modelID(eff.TtsModelID, deps.models)),
-		TranscriptionModelID:    ptrStringAllowEmpty(modelID(eff.TranscriptionModelID, deps.models)),
-		AclDefaultEffect:        eff.AclDefaultEffect,
-		Timezone:                &timezone,
-		ReasoningEffort:         &reasoningEffort,
-		CompactionEnabled:       &compactionEnabled,
-		CompactionThreshold:     &compactionThreshold,
-		CompactionTargetPercent: &compactionTargetPercent,
-		CompactionModelID:       ptrString(modelID(eff.CompactionModelID, deps.models)),
-		MemoryLLMModelID:        ptrString(modelID(eff.MemoryLLMModelID, deps.models)),
-		DiscussProbeModelID:     modelID(eff.DiscussProbeModelID, deps.models),
-		PersistFullToolResults:  &persistFullToolResults,
-		ShowToolCallsInIM:       &showToolCalls,
-		ToolApprovalConfig:      &toolApproval,
-		DisplayEnabled:          &displayEnabled,
-		OverlayEnabled:          &overlayEnabled,
-		OverlayProvider:         &overlayProvider,
-		OverlayConfig:           eff.OverlayConfig,
+		ChatModelID:            ptrStringAllowEmpty(modelID(eff.ChatModelID, deps.models)),
+		ChatRuntime:            ptrStringAllowEmpty(eff.ChatRuntime),
+		ChatACPAgentID:         ptrStringAllowEmpty(eff.ChatACPAgentID),
+		ChatACPProjectPath:     ptrStringAllowEmpty(eff.ChatACPProjectPath),
+		ChatACPProjectMode:     ptrStringAllowEmpty(eff.ChatACPProjectMode),
+		ImageModelID:           ptrStringAllowEmpty(modelID(eff.ImageModelID, deps.models)),
+		SearchProviderID:       ptrStringAllowEmpty(modelID(eff.SearchProviderID, deps.searchProviders)),
+		FetchProviderID:        &fetchProviderID,
+		MemoryEnabled:          &memoryEnabled,
+		TtsModelID:             ptrStringAllowEmpty(modelID(eff.TtsModelID, deps.models)),
+		TranscriptionModelID:   ptrStringAllowEmpty(modelID(eff.TranscriptionModelID, deps.models)),
+		AclDefaultEffect:       eff.AclDefaultEffect,
+		Timezone:               &timezone,
+		ReasoningEffort:        &reasoningEffort,
+		MemoryLLMModelID:       ptrString(modelID(eff.MemoryLLMModelID, deps.models)),
+		DiscussProbeModelID:    modelID(eff.DiscussProbeModelID, deps.models),
+		PersistFullToolResults: &persistFullToolResults,
+		ShowToolCallsInIM:      &showToolCalls,
+		ToolApprovalConfig:     &toolApproval,
+		DisplayEnabled:         &displayEnabled,
+		OverlayEnabled:         &overlayEnabled,
+		OverlayProvider:        &overlayProvider,
+		OverlayConfig:          eff.OverlayConfig,
 	})
 	return err
 }

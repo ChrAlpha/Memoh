@@ -15,24 +15,57 @@ func summaryProviderReplayTokens(summary string) int {
 	return contextfrag.ResolveProviderBudgetFragTokens(contextfrag.MessageFrag(contextfrag.MessageFragInput{Message: sdk.UserMessage("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")}))
 }
 
-func retainedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID, frontier []Artifact, fusing bool, sources []turn.ContextMessageSource) int {
+// keptReplayTokens is the history a compaction leaves raw inside the
+// caller's budget: rows it must keep that the caller did not budget as
+// current input.
+func keptReplayTokens(messages []CompactionCandidate, sources []turn.ContextMessageSource) int {
+	current := make([]turn.ContextMessageSource, 0, len(sources))
+	for _, source := range sources {
+		if source.Current {
+			current = append(current, source)
+		}
+	}
+	tokens := 0
+	for _, message := range messages {
+		if (message.HasPolicy(CompactPolicyPreserveRecent) || message.HasPolicy(CompactPolicyMustKeep)) && !isProtectedSource(message, current) {
+			tokens += messageReplayTokens(message)
+		}
+	}
+	return tokens
+}
+
+// currentRequestEntries renders what the work continues from, so the
+// summarizer knows the goal its summary serves: the protected rows, or the
+// request itself before it is stored. It stays raw beside the summary and is
+// never part of what the summary covers.
+func currentRequestEntries(messages []CompactionCandidate, sources []turn.ContextMessageSource, request string) []messageEntry {
+	var entries []messageEntry
+	for _, message := range messages {
+		if !isProtectedSource(message, sources) {
+			continue
+		}
+		if content := renderCandidateEntry(message.Record); strings.TrimSpace(content) != "" {
+			entries = append(entries, messageEntry{Role: message.Record.ModelMessage.Role, Content: content})
+		}
+	}
+	if len(entries) == 0 && strings.TrimSpace(request) != "" {
+		entries = append(entries, messageEntry{Role: "user", Content: request})
+	}
+	return entries
+}
+
+func withoutCompacted(messages []CompactionCandidate, compacted []pgtype.UUID) []CompactionCandidate {
 	selected := make(map[pgtype.UUID]bool, len(compacted))
 	for _, id := range compacted {
 		selected[id] = true
 	}
-	tokens := 0
+	rest := make([]CompactionCandidate, 0, len(messages))
 	for _, message := range messages {
-		if selected[message.ID] || isProtectedSource(message, sources) {
-			continue
-		}
-		tokens += messageReplayTokens(message)
-	}
-	if !fusing {
-		for _, artifact := range frontier {
-			tokens += summaryProviderReplayTokens(artifact.Summary)
+		if !selected[message.ID] {
+			rest = append(rest, message)
 		}
 	}
-	return tokens
+	return rest
 }
 
 func compactedReplayTokens(messages []CompactionCandidate, compacted []pgtype.UUID) int {

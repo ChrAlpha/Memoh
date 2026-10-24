@@ -842,11 +842,6 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 		return nil
 	})
 	service.SetContextAbsoluteMaxTokens(cfg.Agent.EffectiveContextAbsoluteMaxTokens())
-	syncCompactionMode, recognized := cfg.Agent.EffectiveSyncCompactionMode()
-	if !recognized {
-		log.Warn("unrecognized agent.sync_compaction value; defaulting to shadow", slog.String("value", cfg.Agent.SyncCompaction))
-	}
-	service.SetSyncCompactionMode(syncCompactionMode)
 	service.SetBotPermissionChecker(&applicationBotPermissionChecker{bots: botService, accounts: accountService})
 	// Every turn entry point goes through admission, so a service without it can
 	// start nothing: this is the thread's single-run guarantee, not an add-on.

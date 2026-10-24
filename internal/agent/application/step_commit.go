@@ -435,7 +435,7 @@ func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText stri
 	return nil, err
 }
 
-func (c *agentStepCommitter) finish(ctx context.Context, inputTokens int) error {
+func (c *agentStepCommitter) finish(ctx context.Context) error {
 	if c == nil {
 		return nil
 	}
@@ -466,9 +466,6 @@ func (c *agentStepCommitter) finish(ctx context.Context, inputTokens int) error 
 	}
 	if !c.req.SkipMemoryExtraction && len(memoryPersisted) == memoryExpectedRows && len(memoryPersisted) > 0 {
 		c.service.storeMemory(ctx, c.req, memoryPersisted)
-	}
-	if inputTokens > 0 {
-		c.service.maybeCompact(ctx, c.req, c.rc, inputTokens)
 	}
 	return nil
 }

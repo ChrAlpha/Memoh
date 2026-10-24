@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"strings"
+	"time"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -10,11 +11,10 @@ import (
 )
 
 type preparedHistoryContext struct {
-	messages          []ModelMessage
-	records           []historyfrag.HistoryRecord
-	estimatedTokens   int
-	compactableTokens int
-	pressureTokens    int
+	messages       []ModelMessage
+	records        []historyfrag.HistoryRecord
+	pressureTokens int
+	viewFrom       time.Time
 }
 
 func (s *Service) prepareHistoryContext(
@@ -37,6 +37,7 @@ func (s *Service) prepareHistoryContext(
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}
+	viewFrom := historyRecordsViewFrom(loaded)
 	loaded, err = s.replaceCompactedMessages(
 		ctx,
 		req.ThreadID,
@@ -48,15 +49,23 @@ func (s *Service) prepareHistoryContext(
 		return preparedHistoryContext{}, err
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
-	compactableTokens := totalCompactableHistoryTokens(loaded)
-	messages, records, estimatedTokens := trimMessagesAndRecordsByTokens(s.logger, loaded, contextTokenBudget)
+	messages, records := historyMessagesFromRecords(loaded)
 	return preparedHistoryContext{
-		messages:          messages,
-		records:           records,
-		estimatedTokens:   estimatedTokens,
-		compactableTokens: compactableTokens,
-		pressureTokens:    estimateMessagesTokens(loaded),
+		messages:       messages,
+		records:        records,
+		pressureTokens: estimateMessagesTokens(loaded),
+		viewFrom:       viewFrom,
 	}, nil
+}
+
+func historyRecordsViewFrom(records []historyfrag.HistoryRecord) time.Time {
+	var from time.Time
+	for _, record := range records {
+		if record.DBMessageID != "" && !record.CreatedAt.IsZero() && (from.IsZero() || record.CreatedAt.Before(from)) {
+			from = record.CreatedAt
+		}
+	}
+	return from
 }
 
 func historyErrorCode(meta map[string]any) string {

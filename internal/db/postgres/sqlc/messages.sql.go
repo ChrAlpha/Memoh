@@ -5455,6 +5455,8 @@ WITH candidate_rows AS MATERIALIZED (
    AND candidate_session.team_id = public.memoh_current_team_id()
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
+    AND ($2::timestamptz IS NULL OR m.created_at >= $2::timestamptz)
+    AND ($3::timestamptz IS NULL OR m.created_at < $3::timestamptz)
     AND (m.compact_id IS NULL OR NOT EXISTS (
       SELECT 1 FROM bot_history_message_compacts c
       WHERE c.team_id = public.memoh_current_team_id()
@@ -5480,7 +5482,7 @@ WITH candidate_rows AS MATERIALIZED (
 ), admitted_candidates AS MATERIALIZED (
   SELECT id, turn_position, turn_message_seq, created_at, payload_bytes, candidate_count, candidate_bytes, cumulative_bytes
   FROM ranked_candidates
-  WHERE cumulative_bytes <= $2::BIGINT
+  WHERE cumulative_bytes <= $4::BIGINT
 )
 SELECT
   m.id,
@@ -5528,8 +5530,10 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 `
 
 type ListUncompactedMessagesBySessionWithinBytesParams struct {
-	SessionID pgtype.UUID `json:"session_id"`
-	MaxBytes  int64       `json:"max_bytes"`
+	SessionID     pgtype.UUID        `json:"session_id"`
+	CreatedFrom   pgtype.Timestamptz `json:"created_from"`
+	CreatedBefore pgtype.Timestamptz `json:"created_before"`
+	MaxBytes      int64              `json:"max_bytes"`
 }
 
 type ListUncompactedMessagesBySessionWithinBytesRow struct {
@@ -5566,7 +5570,12 @@ type ListUncompactedMessagesBySessionWithinBytesRow struct {
 // process-memory boundary. CandidateCount reports whether the prefix was
 // truncated and lets the service choose a progress-preserving selection.
 func (q *Queries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg ListUncompactedMessagesBySessionWithinBytesParams) ([]ListUncompactedMessagesBySessionWithinBytesRow, error) {
-	rows, err := q.db.Query(ctx, listUncompactedMessagesBySessionWithinBytes, arg.SessionID, arg.MaxBytes)
+	rows, err := q.db.Query(ctx, listUncompactedMessagesBySessionWithinBytes,
+		arg.SessionID,
+		arg.CreatedFrom,
+		arg.CreatedBefore,
+		arg.MaxBytes,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -6181,6 +6190,8 @@ JOIN bot_sessions s
  AND s.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
+  AND ($2::timestamptz IS NULL OR m.created_at >= $2::timestamptz)
+  AND ($3::timestamptz IS NULL OR m.created_at < $3::timestamptz)
   AND (m.compact_id IS NULL OR NOT EXISTS (
     SELECT 1 FROM bot_history_message_compacts c
     WHERE c.team_id = public.memoh_current_team_id()
@@ -6196,6 +6207,12 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 `
 
+type MeasureUncompactedMessagesBySessionParams struct {
+	SessionID     pgtype.UUID        `json:"session_id"`
+	CreatedFrom   pgtype.Timestamptz `json:"created_from"`
+	CreatedBefore pgtype.Timestamptz `json:"created_before"`
+}
+
 type MeasureUncompactedMessagesBySessionRow struct {
 	CandidateCount        int64 `json:"candidate_count"`
 	CandidateBytes        int64 `json:"candidate_bytes"`
@@ -6204,8 +6221,8 @@ type MeasureUncompactedMessagesBySessionRow struct {
 
 // Metadata-only companion for the bounded compaction read. It never returns
 // message payloads and exposes the oversized-head degradation explicitly.
-func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, sessionID pgtype.UUID) (MeasureUncompactedMessagesBySessionRow, error) {
-	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession, sessionID)
+func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, arg MeasureUncompactedMessagesBySessionParams) (MeasureUncompactedMessagesBySessionRow, error) {
+	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession, arg.SessionID, arg.CreatedFrom, arg.CreatedBefore)
 	var i MeasureUncompactedMessagesBySessionRow
 	err := row.Scan(&i.CandidateCount, &i.CandidateBytes, &i.LargestCandidateBytes)
 	return i, err

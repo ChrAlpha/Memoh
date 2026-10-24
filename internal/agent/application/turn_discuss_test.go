@@ -238,7 +238,7 @@ func TestDiscussInlinesImages(t *testing.T) {
 // Each image rides on the message it arrived with, and a message admission
 // leaves out takes its images with it instead of piling them onto the
 // protected current input.
-func TestDiscussInlinesImagesOnTheirAdmittedMessages(t *testing.T) {
+func TestDiscussInlinesImagesOnTheirMessages(t *testing.T) {
 	var requested []string
 	agent := &fakeAgentStreamer{}
 	resolver := &fakeDiscussService{
@@ -259,12 +259,10 @@ func TestDiscussInlinesImagesOnTheirAdmittedMessages(t *testing.T) {
 	a := newDiscussTestService(&fakeRunner{}, agent, resolver)
 	cmd := discussCommand()
 	cmd.DiscussMessages = []turn.DiscussMessage{
-		{Role: "user", Content: strings.Repeat("o", 4400), Source: &turn.ContextMessageSource{Kind: "external", ID: "omitted", Current: true}},
 		{Role: "user", Content: "older", Source: &turn.ContextMessageSource{Kind: "external", ID: "older", Current: true}},
 		{Role: "user", Content: "newest", Source: &turn.ContextMessageSource{Kind: "external", ID: "newest", Current: true}},
 	}
 	cmd.DiscussImageRefs = []turn.DiscussImageRef{
-		{ContentHash: "omitted-image", MessageID: "omitted"},
 		{ContentHash: "older-image", MessageID: "older"},
 		{ContentHash: "newest-image", MessageID: "newest"},
 		{ContentHash: "unattributed-image"},
@@ -277,7 +275,7 @@ func TestDiscussInlinesImagesOnTheirAdmittedMessages(t *testing.T) {
 	drainDiscuss(t, h)
 
 	if strings.Join(requested, ",") != "unattributed-image,newest-image,older-image" {
-		t.Fatalf("loaded images %v, want only those of admitted messages, newest first", requested)
+		t.Fatalf("loaded images %v, want those of the batch, newest first", requested)
 	}
 	images := map[string][]string{}
 	for _, message := range agent.lastConfig.Messages {
@@ -290,13 +288,6 @@ func TestDiscussInlinesImagesOnTheirAdmittedMessages(t *testing.T) {
 	}
 	if len(images) != 2 || strings.Join(images["older"], ",") != "older-image" || strings.Join(images["newest"], ",") != "newest-image,unattributed-image" {
 		t.Fatalf("images by message = %v, want each on its own message and the unattributed one on the current input", images)
-	}
-	recorded := false
-	for _, record := range agent.lastConfig.ContextMutations.Records() {
-		recorded = recorded || record.Kind == contextfrag.MutationCurrentInputImagesOmitted && record.Detail == "sources=omitted"
-	}
-	if !recorded {
-		t.Fatalf("mutations = %+v, want the left-out message's image recorded", agent.lastConfig.ContextMutations.Records())
 	}
 }
 
@@ -646,7 +637,7 @@ func TestDiscussMetadataOnlyRejectionNeverStartsRuntime(t *testing.T) {
 			}
 			var failures int
 			for err := range handle.Errs() {
-				if apperror.CodeOf(err) != apperror.CodeContextProtectedOverflow {
+				if apperror.CodeOf(err) != apperror.CodeContextBudgetUnsatisfied {
 					t.Fatalf("unexpected error: %v", err)
 				}
 				failures++

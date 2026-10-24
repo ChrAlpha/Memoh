@@ -11,7 +11,7 @@ import (
 const (
 	StatusProgress = "progress" // compacted history still exceeds the requested replay budget
 	StatusOK       = "ok"       // messages were compacted into a summary
-	StatusNoop     = "noop"     // nothing to compact (already compact, cooled down, or in flight)
+	StatusNoop     = "noop"     // nothing to compact (already compact or in flight)
 )
 
 // Result is the scoped outcome of a synchronous compaction. Callers use it to
@@ -56,31 +56,26 @@ type TriggerConfig struct {
 	BaseURL               string
 	ChatCompletionsCompat string
 	HTTPClient            *http.Client
-	Ratio                 int
-	TotalInputTokens      int
-	MaxCompactTokens      int // if > 0, cap compaction input to this many tokens (e.g. 85% of the summarizer window)
-	TargetTokens          int // if > 0, compaction goal: reduce context to this many tokens (used by sync compaction)
-	// SummaryWindowTokens is the summarizer model's full context window when
-	// declared; it bounds the summary output reserve. Zero means unknown and
-	// keeps the engine's conservative defaults.
+	// TotalInputTokens is the history pressure that called for this
+	// compaction, reported to hooks.
+	TotalInputTokens int
+	// SummaryWindowTokens and MaxOutputTokens are the summarizer model's
+	// declared window and output cap; they size the summarizer call.
 	SummaryWindowTokens int
-	// ContextWindowTokens is the chat model's context window. It is separate
-	// from SummaryWindowTokens, which belongs to the summarizer model.
-	ProtectedSources    []turn.ContextMessageSource
+	MaxOutputTokens     int
+	// CandidatesFrom is where the caller's history begins and
+	// CandidatesBefore the cutoff an edit or retry replays history before.
+	// Rows outside are not part of that request. Zero leaves that side open.
+	CandidatesFrom   time.Time
+	CandidatesBefore time.Time
+	// ProtectedSources stay raw. Current ones are the caller's current input,
+	// budgeted outside HistoryBudgetTokens; the rest are history it keeps.
+	ProtectedSources []turn.ContextMessageSource
+	// CurrentRequest is the caller's current input, shown to the summarizer
+	// when no protected source is a history row yet.
+	CurrentRequest string
+	// HistoryBudgetTokens is the room the caller's request has for the
+	// summary and the history it keeps raw.
 	HistoryBudgetTokens int
-	ContextWindowTokens int
 	PromptCacheTTL      string
-	AllowFrontierFusion bool
-
-	// Manual marks a user-initiated compaction (slash command, HTTP endpoint).
-	// Such a request bypasses the per-session failure cooldown so a user who
-	// just fixed their credentials/model isn't told "done" while nothing runs.
-	// Automatic per-request paths leave this false to keep the cooldown backstop.
-	Manual bool
-
-	// HardPressure marks an automatic trigger fired at or above the blocking
-	// share of the context window. Such retries re-attempt on an exponential
-	// backoff instead of waiting out the full failure cooldown, because every
-	// turn until a summary lands degrades or fails.
-	HardPressure bool
 }

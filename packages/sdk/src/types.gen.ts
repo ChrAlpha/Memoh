@@ -2699,12 +2699,6 @@ export type HandlersToolDefBucket = {
     tools?: number;
 };
 
-export type HandlersTriggerCompactResponse = {
-    message_count?: number;
-    status?: string;
-    summary?: string;
-};
-
 export type HandlersUiLocateMessageResponse = {
     items: Array<ConversationUiTurn>;
     target_external_message_id: string;
@@ -4090,10 +4084,6 @@ export type SettingsSettings = {
     chat_model_id?: string;
     chat_runtime?: string;
     command_ui_language?: string;
-    compaction_enabled?: boolean;
-    compaction_model_id?: string;
-    compaction_target_percent?: number | null;
-    compaction_threshold?: number;
     default_bot_agent_id?: string;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;
@@ -4161,16 +4151,12 @@ export type SettingsUpsertRequest = {
      * Reference fields below use pointer semantics so autosaving clients can
      * clear a selection: nil = keep current, "" = clear, value = set. The
      * service mirrors each into a `<field>_set` SQL flag (same pattern as
-     * FetchProviderID / CompactionModelID); plain strings would make ""
+     * FetchProviderID / MemoryLLMModelID); plain strings would make ""
      * indistinguishable from "not sent".
      */
     chat_model_id?: string;
     chat_runtime?: string;
     command_ui_language?: string;
-    compaction_enabled?: boolean;
-    compaction_model_id?: string;
-    compaction_target_percent?: number;
-    compaction_threshold?: number;
     default_bot_agent_id?: string;
     discuss_probe_model_id?: string;
     display_enabled?: boolean;
@@ -11723,44 +11709,6 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses = {
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponse = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningResponses];
-
-export type PostBotsByBotIdSessionsBySessionIdCompactData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Session ID
-         */
-        session_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/sessions/{session_id}/compact';
-};
-
-export type PostBotsByBotIdSessionsBySessionIdCompactErrors = {
-    /**
-     * Bad Request
-     */
-    400: ServerProblem;
-    /**
-     * Internal Server Error
-     */
-    500: ServerProblem;
-};
-
-export type PostBotsByBotIdSessionsBySessionIdCompactError = PostBotsByBotIdSessionsBySessionIdCompactErrors[keyof PostBotsByBotIdSessionsBySessionIdCompactErrors];
-
-export type PostBotsByBotIdSessionsBySessionIdCompactResponses = {
-    /**
-     * OK
-     */
-    200: HandlersTriggerCompactResponse;
-};
-
-export type PostBotsByBotIdSessionsBySessionIdCompactResponse = PostBotsByBotIdSessionsBySessionIdCompactResponses[keyof PostBotsByBotIdSessionsBySessionIdCompactResponses];
 
 export type GetBotsByBotIdSessionsBySessionIdContextLifecycleData = {
     body?: never;

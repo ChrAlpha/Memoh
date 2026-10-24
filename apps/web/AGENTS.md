@@ -180,7 +180,7 @@ src/
 │   │       ├── bot-tool-approval.vue  # Tool approval settings tab
 │   │       ├── bot-skills.vue         # Skills tab
 │   │       ├── bot-access.vue         # Access control tab
-│   │       ├── bot-compaction.vue     # Compaction settings tab
+│   │       ├── bot-compaction.vue     # Compaction logs section
 │   │       ├── bot-card.vue           # Bot card component
 │   │       ├── model-select.vue       # Model selection dropdown
 │   │       ├── model-options.vue      # Model options configuration

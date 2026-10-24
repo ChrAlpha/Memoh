@@ -121,6 +121,12 @@ type fakeQueries struct {
 	completeErrors  []error
 	rollupCompleted sqlc.CompleteCompactionRollupParams
 	rollupCalls     []sqlc.CompleteCompactionRollupParams
+	backfills       []sqlc.BackfillCompactionArtifactCoverageParams
+}
+
+func (f *fakeQueries) BackfillCompactionArtifactCoverage(_ context.Context, arg sqlc.BackfillCompactionArtifactCoverageParams) error {
+	f.backfills = append(f.backfills, arg)
+	return nil
 }
 
 func (f *fakeQueries) CreateCompactionLog(_ context.Context, arg sqlc.CreateCompactionLogParams) (sqlc.BotHistoryMessageCompact, error) {
@@ -151,7 +157,7 @@ func (f *fakeQueries) ListUncompactedMessagesBySession(_ context.Context, _ pgty
 	return f.uncompacted, nil
 }
 
-func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ pgtype.UUID) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
+func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ sqlc.MeasureUncompactedMessagesBySessionParams) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
 	var bytes int64
 	for _, row := range f.uncompacted {
 		bytes += int64(len(row.Content) + len(row.Metadata) + len(row.Usage) + len(row.DisplayText.String))
@@ -273,17 +279,26 @@ func newMachineryService(q dbstore.Queries) *Service {
 	return NewService(slog.New(slog.DiscardHandler), q)
 }
 
-func machineryConfig(stub *stubModel, targetTokens int) TriggerConfig {
+func machineryConfig(stub *stubModel, historyBudgetTokens int) TriggerConfig {
 	return TriggerConfig{
-		BotID:        uuid.NewString(),
-		SessionID:    uuid.NewString(),
-		ModelID:      "stub-model",
-		ClientType:   "openai-completions",
-		APIKey:       "test",
-		BaseURL:      "http://stub.invalid",
-		HTTPClient:   &http.Client{Transport: stub},
-		TargetTokens: targetTokens,
+		BotID:               uuid.NewString(),
+		SessionID:           uuid.NewString(),
+		ModelID:             "stub-model",
+		ClientType:          "openai-completions",
+		APIKey:              "test",
+		BaseURL:             "http://stub.invalid",
+		HTTPClient:          &http.Client{Transport: stub},
+		SummaryWindowTokens: 128000,
+		HistoryBudgetTokens: historyBudgetTokens,
 	}
+}
+
+// currentConfig is machineryConfig for a request whose current input is
+// current.
+func currentConfig(stub *stubModel, historyBudgetTokens int, current sqlc.ListUncompactedMessagesBySessionRow) TriggerConfig {
+	cfg := machineryConfig(stub, historyBudgetTokens)
+	cfg.ProtectedSources = historySources(current)
+	return cfg
 }
 
 func idSet(ids []pgtype.UUID) map[pgtype.UUID]bool {
@@ -322,12 +337,11 @@ func TestDoCompactionMarksToolAwareWindowAndRendersCleanPrompt(t *testing.T) {
 	stub := &stubModel{summary: "SUMMARY-OK"}
 	svc := newMachineryService(q)
 
-	// 10 msgs x 100 tokens. target 450: the naive cut would land at index 6
-	// (compact 0..5, keep 6..9) — orphaning tool result B at the keep-side head.
-	// The boundary guard must advance to 7, pulling result B in with its call, so
-	// the marked set is exactly 0..6. If adjustForToolBoundary regressed, this
-	// marks only 0..5 and the assertions below fail.
-	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 450)); err != nil {
+	// Everything before the current input (row 7) is folded, with both tool
+	// exchanges kept whole on the folded side.
+	cfg := machineryConfig(stub, 450)
+	cfg.ProtectedSources = historySources(rows[7])
+	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 
@@ -370,34 +384,10 @@ func TestDoCompactionMarksToolAwareWindowAndRendersCleanPrompt(t *testing.T) {
 	}
 }
 
-func TestDoCompactionSkipsWhitespaceOnlyPriorSummaries(t *testing.T) {
-	rows := machineryCorpus(t)
-	stub := &stubModel{summary: "S3"}
-	cfg := machineryConfig(stub, 450)
-	q := &fakeQueries{
-		uncompacted: rows,
-		priorLogs: []sqlc.BotHistoryMessageCompact{{
-			ID:        pgtype.UUID{Bytes: uuid.New(), Valid: true},
-			BotID:     pgtype.UUID{Bytes: uuid.MustParse(cfg.BotID), Valid: true},
-			SessionID: pgtype.UUID{Bytes: uuid.MustParse(cfg.SessionID), Valid: true},
-			Summary:   "  \n\t",
-			Status:    "ok",
-		}},
-	}
-	svc := newMachineryService(q)
-
-	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
-		t.Fatalf("RunCompactionSync: %v", err)
-	}
-	if strings.Contains(stub.prompt, "The following are summaries of earlier parts") {
-		t.Fatalf("whitespace-only prior summary injected as prior context:\n%s", stub.prompt)
-	}
-}
-
 // TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget drives one
-// unsplittable tool exchange with more minimal entries than MaxCompactTokens
-// can hold: sending it anyway would overflow the summarizer window, so the
-// attempt must fail closed with zero claims and zero provider calls.
+// unsplittable tool exchange larger than the summarizer can read: sending it
+// anyway would overflow the summarizer window, so the attempt must fail
+// closed with zero claims and zero provider calls.
 func TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget(t *testing.T) {
 	const fanout = 40
 	callParts := make([]string, 0, fanout)
@@ -417,7 +407,7 @@ func TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget(t *testing.T) {
 	svc := newMachineryService(q)
 
 	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 40
+	cfg.SummaryWindowTokens = 1000
 
 	_, err := svc.RunCompactionSync(context.Background(), cfg)
 	if !errors.Is(err, errCompactionInputOverflow) {
@@ -444,7 +434,9 @@ func TestDoCompactionAllEmptyWindowSkipsModelAndMarking(t *testing.T) {
 	stub := &stubModel{summary: "unused"}
 	svc := newMachineryService(q)
 
-	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 150)); err != nil {
+	cfg := machineryConfig(stub, 150)
+	cfg.ProtectedSources = historySources(rows[2])
+	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if stub.calls != 0 {
@@ -468,7 +460,9 @@ func TestDoCompactionCoversToolExchangeWhoseResultRendersEmpty(t *testing.T) {
 	stub := &stubModel{summary: "unused"}
 	svc := newMachineryService(q)
 
-	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 150)); err != nil {
+	cfg := machineryConfig(stub, 150)
+	cfg.ProtectedSources = historySources(rows[2])
+	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if stub.calls != 1 || len(q.markedIDs) != 2 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID {
@@ -491,7 +485,9 @@ func TestDoCompactionCoversEmptyMiddleRowWithItsNeighbours(t *testing.T) {
 	stub := &stubModel{summary: "SUMMARY"}
 	svc := newMachineryService(q)
 
-	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 250)); err != nil {
+	cfg := machineryConfig(stub, 250)
+	cfg.ProtectedSources = historySources(rows[3])
+	if _, err := svc.RunCompactionSync(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
 	if len(q.markedIDs) != 3 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID || q.markedIDs[2] != rows[2].ID {

@@ -9176,51 +9176,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/bots/{bot_id}/sessions/{session_id}/compact": {
-            "post": {
-                "description": "Run context compaction synchronously for a session",
-                "tags": [
-                    "compaction"
-                ],
-                "summary": "Trigger immediate context compaction",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Session ID",
-                        "name": "session_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.TriggerCompactResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/server.Problem"
-                        }
-                    }
-                }
-            }
-        },
         "/bots/{bot_id}/sessions/{session_id}/context-lifecycle": {
             "get": {
                 "description": "List run-keyed context lifecycle snapshots for a chat session, newest first, with page-scoped aggregate totals (cache read/write tokens, drop reasons, mutation kinds). Aggregates cover only the returned page; has_more reports older turns. Sessions predating run lifecycle persistence fall back to legacy assistant metadata (legacy_source). Per-fragment selection_decisions are never returned; each turn's selection trace carries their rolled-up counts and token costs",
@@ -24313,20 +24268,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.TriggerCompactResponse": {
-            "type": "object",
-            "properties": {
-                "message_count": {
-                    "type": "integer"
-                },
-                "status": {
-                    "type": "string"
-                },
-                "summary": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.UILocateMessageResponse": {
             "type": "object",
             "required": [
@@ -27195,19 +27136,6 @@ const docTemplate = `{
                 "command_ui_language": {
                     "type": "string"
                 },
-                "compaction_enabled": {
-                    "type": "boolean"
-                },
-                "compaction_model_id": {
-                    "type": "string"
-                },
-                "compaction_target_percent": {
-                    "type": "integer",
-                    "x-nullable": true
-                },
-                "compaction_threshold": {
-                    "type": "integer"
-                },
                 "default_bot_agent_id": {
                     "type": "string"
                 },
@@ -27363,7 +27291,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "chat_model_id": {
-                    "description": "Reference fields below use pointer semantics so autosaving clients can\nclear a selection: nil = keep current, \"\" = clear, value = set. The\nservice mirrors each into a ` + "`" + `\u003cfield\u003e_set` + "`" + ` SQL flag (same pattern as\nFetchProviderID / CompactionModelID); plain strings would make \"\"\nindistinguishable from \"not sent\".",
+                    "description": "Reference fields below use pointer semantics so autosaving clients can\nclear a selection: nil = keep current, \"\" = clear, value = set. The\nservice mirrors each into a ` + "`" + `\u003cfield\u003e_set` + "`" + ` SQL flag (same pattern as\nFetchProviderID / MemoryLLMModelID); plain strings would make \"\"\nindistinguishable from \"not sent\".",
                     "type": "string"
                 },
                 "chat_runtime": {
@@ -27371,18 +27299,6 @@ const docTemplate = `{
                 },
                 "command_ui_language": {
                     "type": "string"
-                },
-                "compaction_enabled": {
-                    "type": "boolean"
-                },
-                "compaction_model_id": {
-                    "type": "string"
-                },
-                "compaction_target_percent": {
-                    "type": "integer"
-                },
-                "compaction_threshold": {
-                    "type": "integer"
                 },
                 "default_bot_agent_id": {
                     "type": "string"

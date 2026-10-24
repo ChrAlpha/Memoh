@@ -2,6 +2,7 @@ package application
 
 import (
 	"encoding/json"
+	"time"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
@@ -17,6 +18,12 @@ type ChatRequest struct {
 	discussMessages          []turn.DiscussMessage
 	discussContextTokens     int
 	discussRecoveryExhausted bool
+	// historyViewFrom is when the oldest history row this request loaded was
+	// created; compaction reads from here or the time window, if earlier.
+	historyViewFrom time.Time
+	// inputInHistory marks a continuation, whose input is already a history
+	// row budgeted with the rest of the history.
+	inputInHistory bool
 	// discussPromptPrefix and discussPromptSuffix wrap the admitted discuss
 	// prompt; a shutdown resume puts its instructions there.
 	discussPromptPrefix string
@@ -31,8 +38,8 @@ type ChatRequest struct {
 	ChatID   string `json:"-"`
 	ThreadID string `json:"-"`
 	// RunID is the server-minted identity of this turn's run. Downstream state
-	// that must agree on "which turn is this" — the compaction barrier, the ACP
-	// session, interactive tool headers — keys on it.
+	// that must agree on "which turn is this" — the ACP session, interactive
+	// tool headers — keys on it.
 	RunID string `json:"-"`
 	// RunHandle is the server-owned execution capability for durable step and
 	// queue commits. Transport callers cannot supply it.

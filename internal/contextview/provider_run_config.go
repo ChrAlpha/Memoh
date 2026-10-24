@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -380,8 +381,11 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
-	if (recoveryAttempts == 0 || (budgetPlan != nil && providerHistoryCost(cfg.ContextSourceFrags) > budgetPlan.HistoryBudget)) && budgetErr == nil && (err == nil || errors.Is(err, contextfrag.ErrProtectedContextOverflow)) &&
-		recoveryAttempts < 3 && cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 &&
+	compacted := recoveryAttempts > 0
+	// One compaction per request: what it leaves is only rechecked, never
+	// compacted again to reach a lower mark.
+	if recoveryAttempts == 0 && budgetErr == nil && (err == nil || errors.Is(err, contextfrag.ErrProtectedContextOverflow)) &&
+		cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 &&
 		budgetPlan.ActualSystemCost <= budgetPlan.SystemBudget && ctx.Err() == nil {
 		recovery := cfg
 		recovery.ContextManifest.BudgetPlan = budgetPlan
@@ -398,10 +402,24 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		if recovered && recoveryErr == nil && !reflect.DeepEqual(recovery.ContextSourceFrags, cfg.ContextSourceFrags) {
 			return applyProviderRunConfigAttempt(ctx, logger, recovery, recoveryAttempts+1)
 		}
+		compacted = compacted || recovered || errors.Is(recoveryErr, contextfrag.ErrBudgetUnsatisfied)
+		if errors.Is(recoveryErr, contextfrag.ErrBudgetUnsatisfied) {
+			err = recoveryErr
+		}
+	}
+	if compacted && errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
+		err = fmt.Errorf("%w: compaction did not make the context fit: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
 	}
 	if budgetErr != nil {
 		recordContextBudgetFailure(ledger, budgetErr)
 		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), budgetErr
+	}
+	if err == nil && cfg.RecoverContextBudget != nil && (slices.ContainsFunc(view.Selected, func(frag contextfrag.ContextFrag) bool {
+		return frag.ID == historyTrimNoticeID
+	}) || slices.ContainsFunc(view.Manifest.SelectionDecisions, func(decision contextfrag.SelectionDecision) bool {
+		return decision.Reason == summaryBudgetEditReason
+	})) {
+		err = contextfrag.ErrBudgetUnsatisfied
 	}
 	if err != nil {
 		if isContextBudgetError(err) {
@@ -931,14 +949,4 @@ func warnMissingContextWindow(ctx context.Context, logger *slog.Logger, cfg agen
 		slog.String("session_id", cfg.ContextScope.SessionID),
 		slog.String("model_id", cfg.CurrentModelID),
 	)
-}
-
-func providerHistoryCost(frags []contextfrag.ContextFrag) int {
-	cost := 0
-	for _, frag := range frags {
-		if frag.Slot != contextfrag.SlotSystem && frag.Slot != contextfrag.SlotCurrentUser && frag.Kind != contextfrag.KindCurrentUserMessage {
-			cost += contextfrag.ResolveProviderBudgetFragTokens(frag)
-		}
-	}
-	return cost
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	"github.com/felinics/memoh/internal/models"
 )
 
 func qualityRows(t *testing.T) []sqlc.ListUncompactedMessagesBySessionRow {
@@ -48,8 +49,8 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	if _, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if stub.maxTokens != 2000 {
-		t.Fatalf("summary max tokens = %d, want window/10 = 2000", stub.maxTokens)
+	if stub.maxTokens != 5000 {
+		t.Fatalf("summary max tokens = %d, want the model's output allowance in a 20000 window", stub.maxTokens)
 	}
 
 	wide := &stubModel{summary: "SUMMARY"}
@@ -58,8 +59,19 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfgWide); err != nil {
 		t.Fatalf("RunCompactionSync wide: %v", err)
 	}
-	if wide.maxTokens != maxCompactionSummaryTokens {
-		t.Fatalf("summary max tokens = %d, want the %d cap", wide.maxTokens, maxCompactionSummaryTokens)
+	if wide.maxTokens != models.DefaultOutputReserveTokens {
+		t.Fatalf("summary max tokens = %d, want the model's output allowance %d", wide.maxTokens, models.DefaultOutputReserveTokens)
+	}
+
+	declared := &stubModel{summary: "SUMMARY"}
+	cfgDeclared := machineryConfig(declared, 200)
+	cfgDeclared.SummaryWindowTokens = 200000
+	cfgDeclared.MaxOutputTokens = 64000
+	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfgDeclared); err != nil {
+		t.Fatalf("RunCompactionSync declared: %v", err)
+	}
+	if declared.maxTokens != 64000 {
+		t.Fatalf("summary max tokens = %d, want the model's declared output cap 64000", declared.maxTokens)
 	}
 }
 
@@ -110,5 +122,38 @@ func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 	}
 	if q.created {
 		t.Fatal("attempt row was created: fail closed before claiming sources")
+	}
+}
+
+func TestRunCompactionReadsAsMuchWhateverOutputTheModelDeclares(t *testing.T) {
+	t.Parallel()
+
+	for _, declared := range []int{0, 32000, 131072} {
+		stub := &stubModel{summary: "SUMMARY"}
+		cfg := machineryConfig(stub, 108000)
+		cfg.SummaryWindowTokens = 131072
+		cfg.MaxOutputTokens = declared
+		rows := qualityRows(t)
+		rows[0] = mkRow(t, "user", jsonStr(strings.Repeat("large item ", 16000)), 100)
+		if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).RunCompactionSync(context.Background(), cfg); err != nil || stub.calls != 1 {
+			t.Fatalf("declared output %d: err=%v calls=%d, want the large item summarized", declared, err, stub.calls)
+		}
+		if limit := statedSummaryLimit(t, stub.prompt); limit > stub.maxTokens {
+			t.Fatalf("declared output %d: stated limit %d exceeds the request's max_tokens %d", declared, limit, stub.maxTokens)
+		}
+	}
+}
+
+func TestRunCompactionShowsAnUnsavedRequestAsTheGoal(t *testing.T) {
+	t.Parallel()
+
+	stub := &stubModel{summary: "SUMMARY"}
+	cfg := machineryConfig(stub, 200)
+	cfg.CurrentRequest = "deploy the staging build"
+	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).RunCompactionSync(context.Background(), cfg); err != nil {
+		t.Fatalf("RunCompactionSync: %v", err)
+	}
+	if !strings.Contains(stub.prompt, "<current_request>\nuser: deploy the staging build") {
+		t.Fatalf("summarizer prompt lacks the unsaved request:\n%s", stub.prompt)
 	}
 }

@@ -79,6 +79,7 @@ type Queries interface {
 	ClearMCPOAuthTokens(ctx context.Context, connectionID pgtype.UUID) error
 	CompleteCompactionLog(ctx context.Context, arg dbsqlc.CompleteCompactionLogParams) (dbsqlc.BotHistoryMessageCompact, error)
 	CompleteCompactionRollup(ctx context.Context, arg dbsqlc.CompleteCompactionRollupParams) (dbsqlc.BotHistoryMessageCompact, error)
+	BackfillCompactionArtifactCoverage(ctx context.Context, arg dbsqlc.BackfillCompactionArtifactCoverageParams) error
 	CompleteScheduleLog(ctx context.Context, arg dbsqlc.CompleteScheduleLogParams) (dbsqlc.ScheduleLog, error)
 	CountAccounts(ctx context.Context) (int64, error)
 	CountCompactionLogsByBot(ctx context.Context, botID pgtype.UUID) (int64, error)
@@ -433,7 +434,7 @@ type Queries interface {
 	ListTranscriptionProviders(ctx context.Context) ([]dbsqlc.Provider, error)
 	ListUncompactedMessagesBySession(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListUncompactedMessagesBySessionRow, error)
 	ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, arg dbsqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]dbsqlc.ListUncompactedMessagesBySessionWithinBytesRow, error)
-	MeasureUncompactedMessagesBySession(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.MeasureUncompactedMessagesBySessionRow, error)
+	MeasureUncompactedMessagesBySession(ctx context.Context, arg dbsqlc.MeasureUncompactedMessagesBySessionParams) (dbsqlc.MeasureUncompactedMessagesBySessionRow, error)
 	ListVideoModels(ctx context.Context) ([]dbsqlc.ListVideoModelsRow, error)
 	ListVideoModelsByProviderID(ctx context.Context, providerID pgtype.UUID) ([]dbsqlc.Model, error)
 	ListVideoProviders(ctx context.Context) ([]dbsqlc.Provider, error)

@@ -32,7 +32,7 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 	stub := &stubModel{summary: "compacted the old exchange"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 100))
+	res, err := svc.RunCompactionSync(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
@@ -48,10 +48,9 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 			t.Fatalf("summarizer prompt missing %q:\n%s", frag, stub.prompt)
 		}
 	}
-	for _, frag := range []string{"current question", "chain of thought"} {
-		if strings.Contains(stub.prompt, frag) {
-			t.Fatalf("summarizer prompt leaked raw-retained content %q:\n%s", frag, stub.prompt)
-		}
+	conversation, _, _ := strings.Cut(stub.prompt, "</conversation>")
+	if strings.Contains(conversation, "current question") || strings.Contains(stub.prompt, "chain of thought") || !strings.Contains(stub.prompt, "<current_request>\nuser: current question") {
+		t.Fatalf("summarizer prompt must read the current question only as the request it serves:\n%s", stub.prompt)
 	}
 }
 
@@ -65,7 +64,7 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 	stub := &stubModel{summary: "should never be produced"}
 	svc := newMachineryService(q)
 
-	res, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 100))
+	res, err := svc.RunCompactionSync(context.Background(), currentConfig(stub, 100, rows[5]))
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
@@ -98,7 +97,7 @@ func TestDoCompactionCoversOversizedRenderEmptyHead(t *testing.T) {
 	svc := newMachineryService(q)
 
 	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 10000 // smaller than one reasoning row's raw estimate
+	cfg.ProtectedSources = historySources(rows[4])
 	res, err := svc.RunCompactionSync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
@@ -126,7 +125,7 @@ func TestDoCompactionCostsAnExchangeByWhatItRenders(t *testing.T) {
 	svc := newMachineryService(q)
 
 	cfg := machineryConfig(stub, 100)
-	cfg.MaxCompactTokens = 10000 // smaller than the incomplete exchange's raw estimate
+	cfg.ProtectedSources = historySources(rows[4])
 	res, err := svc.RunCompactionSync(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
@@ -174,7 +173,7 @@ func TestCompactionCoversThePrefixPastAnsweredAskUserAndReasoningRows(t *testing
 	rows := productionStarvationCorpus(t)
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 72)}
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 1))
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 100000, rows[len(rows)-1]))
 	if err != nil || res.Status != StatusOK {
 		t.Fatalf("compaction stalled on the short head fragment: result=%+v err=%v", res, err)
 	}
@@ -209,8 +208,28 @@ func TestCompactionCountsTheReplayOfRowsThatRenderNothing(t *testing.T) {
 	}
 	q := &fakeQueries{uncompacted: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 20)}
-	res, err := newMachineryService(q).RunCompactionSync(context.Background(), machineryConfig(stub, 1))
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), currentConfig(stub, 100000, rows[3]))
 	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 3 {
 		t.Fatalf("a summary far smaller than the replayed reasoning was rejected: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
+	}
+}
+
+// Before a Web chat turn its input is not persisted yet, so the newest user
+// row is a finished exchange. When that exchange alone does not fit, it is
+// the history to summarize, not the current turn.
+func TestBudgetCompactionSummarizesTheNewestFinishedExchange(t *testing.T) {
+	t.Parallel()
+
+	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+		mkRow(t, "user", `"`+strings.Repeat("pasted report line ", 900)+`"`, 0),
+		mkRow(t, "assistant", `"noted"`, 2),
+	}
+	q := &fakeQueries{uncompacted: rows}
+	cfg := machineryConfig(&stubModel{summary: "the user pasted a long report"}, 0)
+	cfg.TotalInputTokens = 5000
+	cfg.HistoryBudgetTokens = 2700
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if err != nil || res.Status != StatusOK || len(q.markedIDs) != 2 {
+		t.Fatalf("the newest finished exchange stayed raw although it cannot fit: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
 	}
 }

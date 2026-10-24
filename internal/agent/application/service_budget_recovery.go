@@ -10,7 +10,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -38,7 +37,7 @@ func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) nativ
 
 func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) func(context.Context, native.RunConfig) (native.RunConfig, bool, error) {
 	return func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
-		if s.effectiveSyncCompactionMode() == syncCompactionModeOff || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return cfg, false, nil
 		}
 		budget, pressure := layout.availableHistoryBudget(cfg)
@@ -47,17 +46,20 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		}
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
-		if result := s.runBudgetCompactionSync(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); result.Status != compaction.StatusOK && result.Status != compaction.StatusProgress {
-			return cfg, false, nil
+		if err := s.compactForBudget(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); err != nil {
+			return cfg, false, fmt.Errorf("%w: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
 		}
 		var messages []ModelMessage
 		var records []historyfrag.HistoryRecord
 		if layout.usePipeline {
-			messages, _, _ = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens)
+			var err error
+			if messages, _, _, err = s.buildMessagesFromPipeline(ctx, req, cfg.ContextBudgetMaxTokens); err != nil {
+				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
+			}
 		} else {
 			prepared, err := s.prepareHistoryContext(ctx, req, historyScopeFallbackFromChatRequest(req), cfg.ContextBudgetMaxTokens)
 			if err != nil {
-				return cfg, false, err
+				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
 			}
 			messages, records = prepared.messages, prepared.records
 		}
@@ -66,7 +68,7 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 			return cfg, false, err
 		}
 		if reflect.DeepEqual(recovered.Messages, cfg.Messages) {
-			return cfg, false, nil
+			return cfg, false, fmt.Errorf("%w: compaction left the history unchanged", contextfrag.ErrBudgetUnsatisfied)
 		}
 		layout.historyCount = recovered.ContextTrimmableMessages
 		layout.pressureTokens = 0
@@ -241,7 +243,7 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 		}
 	}
 	cfg, shed := shedOlderBatchImages(cfg, batch, plan.HistoryBudget)
-	if *compacted || s.effectiveSyncCompactionMode() == syncCompactionModeOff {
+	if *compacted {
 		return cfg, shed, nil
 	}
 	type batchInput struct {
@@ -274,7 +276,7 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 	}
 	originalHistory := max(0, cmd.DiscussContextTokens-newestTokens)
 	pressure = max(pressure, contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(originalHistory))))
-	if pressure <= available || available <= 0 {
+	if pressure <= available && len(cmd.DiscussOmittedSources) == 0 {
 		return cfg, shed, nil
 	}
 	// Older input of the batch stays raw while it fits, leaving a tenth of the
@@ -286,12 +288,16 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 		historyBudget -= older[i].cost
 	}
 	if historyBudget <= 0 {
+		if len(cmd.DiscussOmittedSources) > 0 {
+			return cfg, false, fmt.Errorf("%w: no history room for input Channel omitted", contextfrag.ErrBudgetUnsatisfied)
+		}
 		return cfg, shed, nil
 	}
 	*compacted = true
-	result := s.runBudgetCompactionSync(ctx, ChatRequest{BotID: cmd.BotID, ChatID: cmd.BotID, ThreadID: cmd.ThreadID, RunID: cfg.RunID, discussCurrentSources: protected}, pressure, historyBudget, modelID)
-	if result.Status != compaction.StatusOK && result.Status != compaction.StatusProgress {
-		return cfg, shed, nil
+	recovery := ChatRequest{BotID: cmd.BotID, ChatID: cmd.BotID, ThreadID: cmd.ThreadID, RunID: cfg.RunID, discussCurrentSources: protected}
+	recovery.historyViewFrom = discussViewFrom(cmd)
+	if err := s.compactForBudget(ctx, recovery, pressure, historyBudget, modelID); err != nil {
+		return cfg, false, fmt.Errorf("%w: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
 	}
 	return cfg, false, native.ErrContextRecompose
 }

@@ -19,7 +19,7 @@ func TestBuildEntriesAndIDsCoversMiddleRowThatRendersNothing(t *testing.T) {
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking"}]`, 0),
 		mkRow(t, "assistant", `"the answer"`, 0),
 	}
-	items, _ := itemsFromRows(rows)
+	items, _ := candidatesFromRows(rows)
 
 	entries, ids := buildEntriesAndIDs(items)
 
@@ -46,7 +46,7 @@ func TestBuildEntriesAndIDsCoversWholeExchangeWhenResultRendersEmpty(t *testing.
 		// recognizable parts, so it renders empty.
 		mkRow(t, "tool", `[]`, 0),
 	}
-	items, _ := itemsFromRows(rows)
+	items, _ := candidatesFromRows(rows)
 
 	entries, ids := buildEntriesAndIDs(items)
 
@@ -70,7 +70,7 @@ func TestBuildEntriesAndIDsRendersLegacyToolResultEnvelopeExchange(t *testing.T)
 		toolCallRow(t, 0),
 		mkRow(t, "tool", `{"role":"tool","tool_call_id":"c1","content":{"output":"search results here"}}`, 0),
 	}
-	items, _ := itemsFromRows(rows)
+	items, _ := candidatesFromRows(rows)
 
 	entries, ids := buildEntriesAndIDs(items)
 
@@ -107,12 +107,12 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 			}
 			rows[tt.breakIndex].ID = pgtype.UUID{Valid: false}
 
-			items, barrierCount := itemsFromRows(rows)
+			items, barrierCount := candidatesFromRows(rows)
 			if barrierCount != 1 {
 				t.Fatalf("barrier count = %d, want 1", barrierCount)
 			}
-			selected := splitByTarget(items, 200)
-			entries, ids := buildEntriesAndIDs(selected)
+			protectCurrentSources(items, historySources(rows[4]))
+			entries, ids := buildEntriesAndIDs(foldableItems(items))
 
 			if len(ids) != 2 || ids[0] != rows[2].ID || ids[1] != rows[3].ID {
 				t.Fatalf("ids = %#v, want only the complete run after the protected tool exchange", ids)
@@ -121,27 +121,5 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 				t.Fatalf("entries = %#v, want the old question and answer", entries)
 			}
 		})
-	}
-}
-
-func TestBuildUserPromptPriorContextBranch(t *testing.T) {
-	t.Parallel()
-
-	entries := []messageEntry{{Role: "user", Content: "hi"}}
-
-	withPrior := buildUserPrompt([]string{"earlier summary"}, entries)
-	if !strings.Contains(withPrior, "<prior_context>") || !strings.Contains(withPrior, "earlier summary") {
-		t.Fatalf("prior-summary branch not rendered: %q", withPrior)
-	}
-	if !strings.Contains(withPrior, "user: hi") {
-		t.Fatalf("entries not included with prior context: %q", withPrior)
-	}
-
-	without := buildUserPrompt(nil, entries)
-	if strings.Contains(without, "<prior_context>") {
-		t.Fatalf("no-prior branch should omit prior context: %q", without)
-	}
-	if !strings.Contains(without, "Summarize the following conversation:") {
-		t.Fatalf("no-prior branch missing lead-in: %q", without)
 	}
 }
