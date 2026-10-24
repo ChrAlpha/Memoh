@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -13,17 +14,26 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/chat/timeline"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
 
-// originFixture drives chat sessions of the backlog fixture's bot.
+// originFixture drives chat sessions of the backlog fixture's bot, and forks
+// them through the thread service the server wires.
 type originFixture struct {
 	*backlogFixture
+	queries *postgresstore.Queries
+	threads *thread.Service
 }
 
 func newOriginFixture(t *testing.T) *originFixture {
 	t.Helper()
 	f := &originFixture{backlogFixture: newBacklogFixture(t)}
+	f.queries = postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
+	f.threads = thread.NewService(slog.Default(), f.queries, nil)
+	f.threads.SetForkHistoryCarrier(compaction.ForkHistoryCarrier{})
 	f.exec(`UPDATE bot_sessions SET type='chat', channel_type='local' WHERE id=$1`, f.sessionID)
 	return f
 }
@@ -153,6 +163,24 @@ func (f *originFixture) created(sessionID, id string) time.Time {
 	return at
 }
 
+// fork forks the session at the turn of the newest answer whose text
+// starts with prefix.
+func (f *originFixture) fork(sessionID, prefix string) string {
+	f.t.Helper()
+	var turnID string
+	if err := f.pool.QueryRow(f.ctx, `
+		SELECT turn_id::text FROM bot_history_messages
+		WHERE session_id=$1 AND role='assistant' AND turn_visible AND content::text LIKE '%' || $2 || '%'
+		ORDER BY created_at DESC LIMIT 1`, sessionID, prefix).Scan(&turnID); err != nil {
+		f.t.Fatal(err)
+	}
+	fork, err := f.threads.ForkFromAssistantTurn(f.ctx, thread.ForkFromAssistantInput{BotID: f.botID, ThreadID: sessionID, TurnID: turnID, Title: "Fork", CreatedByUserID: f.ownerUserID})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return fork.ID
+}
+
 // activeSummaryTexts lists the session's active summaries.
 func (f *originFixture) activeSummaryTexts(sessionID string) []string {
 	f.t.Helper()
@@ -177,8 +205,9 @@ const legacySummary = "Legacy summary of the first backlog."
 // A session from before the upgrade answers its first request from its
 // origin on, without compacting: the notice says what was left out, its
 // summaries still speak for what they cover, and the months of history
-// before the origin stay out. The first request that overflows folds the
-// legacy summary into the one summary it writes, and the notice stays.
+// before the origin stay out. Forks of it, before or after the origin,
+// answer the same way. The first request that overflows folds the legacy
+// summary into the one summary it writes, and the notice stays.
 func TestPostgresUpgradedChatSessionAnswersFromItsOrigin(t *testing.T) {
 	f := newOriginFixture(t)
 	// What a run of this bot's chat sessions plans for history.
@@ -215,6 +244,24 @@ func TestPostgresUpgradedChatSessionAnswersFromItsOrigin(t *testing.T) {
 	request := f.answered(session, "upgraded message")
 	assertFromOrigin(t, request, origin, "old-59")
 
+	t.Run("fork of the newest turn", func(t *testing.T) {
+		fork := f.fork(session, "BACKLOG_OK")
+		if got := f.origin(fork); got != origin {
+			t.Fatalf("fork origin = %+v, want the source's %+v", got, origin)
+		}
+		assertFromOrigin(t, f.answered(fork, "newest fork message"), origin, "old-59")
+	})
+	t.Run("fork before the origin", func(t *testing.T) {
+		if !f.created(session, "old-29").Before(origin.At) {
+			t.Fatal("the fork point is not before the origin")
+		}
+		fork := f.fork(session, "old-29 ")
+		forkOrigin := f.origin(fork)
+		if !forkOrigin.Omits() || !forkOrigin.At.Before(f.created(session, "old-29")) {
+			t.Fatalf("fork origin = %+v, want one placed before the fork point", forkOrigin)
+		}
+		assertFromOrigin(t, f.answered(fork, "earlier fork message"), forkOrigin, "old-29")
+	})
 	t.Run("overflow folds the legacy summary", func(t *testing.T) {
 		// Two more rows take the history just past the budget.
 		f.persist(session, "new-", 2, 2800)
@@ -263,6 +310,55 @@ func TestPostgresNewChatSessionCompactsWithoutAnOrigin(t *testing.T) {
 	if active := f.activeSummaryTexts(session); len(active) != 1 {
 		t.Fatalf("active summaries = %q, want one", active)
 	}
+}
+
+// A fork of a long session created after the upgrade carries the summaries
+// that end before the fork point. The rows of a summary that reaches past it
+// read raw in the fork; when they do not fit, the fork gets an origin. Either
+// way its first request needs no summary.
+func TestPostgresForkOfALongNewChatSessionNeedsNoSummary(t *testing.T) {
+	f := newOriginFixture(t)
+	session := f.sessionID
+	f.persist(session, "row-", 40, 1000)
+	if passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesBefore: f.created(session, "row-10")}); err != nil || len(passes) != 1 {
+		t.Fatalf("first summary: passes=%d err=%v", len(passes), err)
+	}
+	f.exec(`UPDATE bot_history_message_compacts SET summary='Summary of rows 0-9.' WHERE session_id=$1`, session)
+	if passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesBefore: f.created(session, "row-30")}); err != nil || len(passes) != 1 {
+		t.Fatalf("second summary: passes=%d err=%v", len(passes), err)
+	}
+	f.exec(`UPDATE bot_history_message_compacts SET summary='Summary of rows 0-29.' WHERE session_id=$1 AND superseded_by IS NULL`, session)
+	if active := f.activeSummaryTexts(session); len(active) != 1 || active[0] != "Summary of rows 0-29." {
+		t.Fatalf("active summaries = %q, want the second, which absorbed the first", active)
+	}
+	f.answered(session, "source message")
+
+	t.Run("fork of the newest turn", func(t *testing.T) {
+		fork := f.fork(session, "BACKLOG_OK")
+		if got := f.origin(fork); !got.At.IsZero() {
+			t.Fatalf("fork origin = %+v, want none", got)
+		}
+		request := f.answered(fork, "newest fork message")
+		if strings.Contains(request, "[History notice]") || !strings.Contains(request, "Summary of rows 0-29.") || !strings.Contains(request, "row-39 x") || strings.Contains(request, "row-29 x") {
+			t.Fatal("the fork does not read like its source")
+		}
+	})
+	t.Run("fork inside a summary", func(t *testing.T) {
+		// The second summary reaches row 29, so rows 10-25 read raw in the
+		// fork, more than its budget holds.
+		fork := f.fork(session, "row-25 ")
+		origin := f.origin(fork)
+		if !origin.Omits() || !origin.At.After(f.created(session, "row-10")) || origin.At.After(f.created(session, "row-24")) {
+			t.Fatalf("fork origin = %+v, want one inside rows 11-24", origin)
+		}
+		request := f.answered(fork, "inner fork message")
+		if strings.Count(request, timeline.HistoryNotice(origin)) != 1 || strings.Count(request, "Summary of rows 0-9.") != 1 || strings.Contains(request, "Summary of rows 0-29.") {
+			t.Fatal("the fork does not read the notice and the summary that ends before it")
+		}
+		if !strings.Contains(request, "row-25 x") || strings.Contains(request, "row-26 x") || strings.Contains(request, "row-10 x") {
+			t.Fatal("the fork does not read its own history from its origin on")
+		}
+	})
 }
 
 // A Discuss session from before the upgrade answers its first trigger after

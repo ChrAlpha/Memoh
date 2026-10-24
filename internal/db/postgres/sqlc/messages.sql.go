@@ -304,6 +304,30 @@ func (q *Queries) BindLatestHistoryTurnAssistant(ctx context.Context, arg BindLa
 	return i, err
 }
 
+const claimForkedMessagesForCompact = `-- name: ClaimForkedMessagesForCompact :execrows
+UPDATE bot_history_messages message
+SET compact_id = $1
+WHERE message.team_id = public.memoh_current_team_id()
+  AND message.session_id = $2
+  AND message.id = ANY($3::uuid[])
+  AND message.compact_id IS NULL
+`
+
+type ClaimForkedMessagesForCompactParams struct {
+	CompactID  pgtype.UUID   `json:"compact_id"`
+	SessionID  pgtype.UUID   `json:"session_id"`
+	MessageIds []pgtype.UUID `json:"message_ids"`
+}
+
+// A summary a fork carries claims the fork's copies of the rows it covers.
+func (q *Queries) ClaimForkedMessagesForCompact(ctx context.Context, arg ClaimForkedMessagesForCompactParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimForkedMessagesForCompact, arg.CompactID, arg.SessionID, arg.MessageIds)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearHistoryByBot = `-- name: ClearHistoryByBot :exec
 WITH target_sessions AS MATERIALIZED (
   SELECT session.id
@@ -4625,6 +4649,126 @@ func (q *Queries) ListMessagesByCompactIDWithinBytes(ctx context.Context, arg Li
 	var items []ListMessagesByCompactIDWithinBytesRow
 	for rows.Next() {
 		var i ListMessagesByCompactIDWithinBytesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
+			&i.Role,
+			&i.Content,
+			&i.Metadata,
+			&i.Usage,
+			&i.EventID,
+			&i.DisplayText,
+			&i.CompactID,
+			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
+			&i.CompactionEpoch,
+			&i.ConversationType,
+			&i.ConversationName,
+			&i.ReplyTarget,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMessagesByIDsForCoverage = `-- name: ListMessagesByIDsForCoverage :many
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.event_id,
+  m.display_text,
+  m.compact_id,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform,
+  s.compaction_epoch,
+  r.conversation_type AS conversation_type,
+  COALESCE(
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_name', '')), ''),
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_handle', '')), ''),
+    ''
+  )::text AS conversation_name,
+  r.default_reply_target AS reply_target
+FROM bot_visible_history_messages m
+LEFT JOIN channel_identities ci
+  ON ci.id = m.sender_channel_identity_id
+ AND ci.team_id = public.memoh_current_team_id()
+JOIN bot_sessions s
+  ON s.id = m.session_id
+ AND s.team_id = public.memoh_current_team_id()
+LEFT JOIN bot_channel_routes r
+  ON r.id = s.route_id
+ AND r.team_id = public.memoh_current_team_id()
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND m.id = ANY($2::uuid[])
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+`
+
+type ListMessagesByIDsForCoverageParams struct {
+	SessionID pgtype.UUID   `json:"session_id"`
+	Ids       []pgtype.UUID `json:"ids"`
+}
+
+type ListMessagesByIDsForCoverageRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	CompactID               pgtype.UUID        `json:"compact_id"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
+	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
+	Platform                pgtype.Text        `json:"platform"`
+	CompactionEpoch         int64              `json:"compaction_epoch"`
+	ConversationType        pgtype.Text        `json:"conversation_type"`
+	ConversationName        string             `json:"conversation_name"`
+	ReplyTarget             pgtype.Text        `json:"reply_target"`
+}
+
+// Rows of one session by id, in the shape compaction reads its candidates
+// in, so a fork hashes the coverage of the summaries it carries the way a
+// pass hashes it.
+func (q *Queries) ListMessagesByIDsForCoverage(ctx context.Context, arg ListMessagesByIDsForCoverageParams) ([]ListMessagesByIDsForCoverageRow, error) {
+	rows, err := q.db.Query(ctx, listMessagesByIDsForCoverage, arg.SessionID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMessagesByIDsForCoverageRow
+	for rows.Next() {
+		var i ListMessagesByIDsForCoverageRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.BotID,

@@ -418,6 +418,52 @@ func (q *Queries) CreateCompactionLog(ctx context.Context, arg CreateCompactionL
 	return i, err
 }
 
+const createForkedCompactionArtifact = `-- name: CreateForkedCompactionArtifact :one
+INSERT INTO bot_history_message_compacts (
+  bot_id, session_id, compaction_epoch, team_id, status, summary, message_count, model_id,
+  artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, started_at, completed_at
+)
+SELECT fork.bot_id, fork.id, fork.compaction_epoch, fork.team_id, 'ok', source.summary, $1,
+  source.model_id, source.artifact_version, $2, $3, $4,
+  source.artifact_level, source.started_at, source.completed_at
+FROM bot_history_message_compacts source
+JOIN bot_sessions fork
+  ON fork.team_id = public.memoh_current_team_id()
+ AND fork.id = $5
+ AND fork.bot_id = source.bot_id
+WHERE source.team_id = public.memoh_current_team_id()
+  AND source.id = $6
+  AND source.status = 'ok'
+RETURNING id
+`
+
+type CreateForkedCompactionArtifactParams struct {
+	MessageCount    int32       `json:"message_count"`
+	Coverage        []byte      `json:"coverage"`
+	AnchorStartMs   int64       `json:"anchor_start_ms"`
+	AnchorEndMs     int64       `json:"anchor_end_ms"`
+	SessionID       pgtype.UUID `json:"session_id"`
+	SourceCompactID pgtype.UUID `json:"source_compact_id"`
+}
+
+// A fork carries a summary of its source as an active root of its own: the
+// same text, model, level and timing, coverage naming the fork's copies of
+// the rows, and no usage, so the summarizer call that wrote it is counted
+// once.
+func (q *Queries) CreateForkedCompactionArtifact(ctx context.Context, arg CreateForkedCompactionArtifactParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createForkedCompactionArtifact,
+		arg.MessageCount,
+		arg.Coverage,
+		arg.AnchorStartMs,
+		arg.AnchorEndMs,
+		arg.SessionID,
+		arg.SourceCompactID,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getActiveCompactionArtifactWithinBytes = `-- name: GetActiveCompactionArtifactWithinBytes :one
 SELECT compact.id, compact.bot_id, compact.session_id, compact.status, compact.summary, compact.message_count, compact.error_message, compact.usage, compact.model_id, compact.artifact_version, compact.coverage, compact.anchor_start_ms, compact.anchor_end_ms, compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at, compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id
 FROM bot_history_message_compacts compact

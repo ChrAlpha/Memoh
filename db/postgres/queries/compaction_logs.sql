@@ -15,6 +15,28 @@ RETURNING id, bot_id, session_id, status, summary, message_count, error_message,
           artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, parent_ids,
           superseded_by, superseded_at, compaction_epoch, started_at, completed_at, team_id;
 
+-- name: CreateForkedCompactionArtifact :one
+-- A fork carries a summary of its source as an active root of its own: the
+-- same text, model, level and timing, coverage naming the fork's copies of
+-- the rows, and no usage, so the summarizer call that wrote it is counted
+-- once.
+INSERT INTO bot_history_message_compacts (
+  bot_id, session_id, compaction_epoch, team_id, status, summary, message_count, model_id,
+  artifact_version, coverage, anchor_start_ms, anchor_end_ms, artifact_level, started_at, completed_at
+)
+SELECT fork.bot_id, fork.id, fork.compaction_epoch, fork.team_id, 'ok', source.summary, sqlc.arg(message_count),
+  source.model_id, source.artifact_version, sqlc.arg(coverage), sqlc.arg(anchor_start_ms), sqlc.arg(anchor_end_ms),
+  source.artifact_level, source.started_at, source.completed_at
+FROM bot_history_message_compacts source
+JOIN bot_sessions fork
+  ON fork.team_id = public.memoh_current_team_id()
+ AND fork.id = sqlc.arg(session_id)
+ AND fork.bot_id = source.bot_id
+WHERE source.team_id = public.memoh_current_team_id()
+  AND source.id = sqlc.arg(source_compact_id)
+  AND source.status = 'ok'
+RETURNING id;
+
 -- name: CompleteCompactionLog :one
 WITH target_compact AS MATERIALIZED (
   SELECT compact.id, compact.session_id, compact.team_id

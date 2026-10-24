@@ -74,6 +74,32 @@ func (q *Queries) CompareAndSetSessionModelPreference(ctx context.Context, arg C
 	return result.RowsAffected(), nil
 }
 
+const copySessionHistoryOrigin = `-- name: CopySessionHistoryOrigin :exec
+UPDATE bot_sessions fork
+SET history_origin_at = source.history_origin_at,
+    history_omitted_count = source.history_omitted_count,
+    history_omitted_first_at = source.history_omitted_first_at,
+    history_omitted_last_at = source.history_omitted_last_at
+FROM bot_sessions source
+WHERE fork.team_id = public.memoh_current_team_id()
+  AND fork.id = $1
+  AND source.team_id = public.memoh_current_team_id()
+  AND source.id = $2
+`
+
+type CopySessionHistoryOriginParams struct {
+	SessionID       pgtype.UUID `json:"session_id"`
+	SourceSessionID pgtype.UUID `json:"source_session_id"`
+}
+
+// A fork that copies its source's history from before the source's origin
+// takes the origin too: the rows before it, and what the notice says about
+// them, are the source's.
+func (q *Queries) CopySessionHistoryOrigin(ctx context.Context, arg CopySessionHistoryOriginParams) error {
+	_, err := q.db.Exec(ctx, copySessionHistoryOrigin, arg.SessionID, arg.SourceSessionID)
+	return err
+}
+
 const createSession = `-- name: CreateSession :one
 INSERT INTO bot_sessions (
   bot_id, bot_agent_id, route_id, channel_type, type, session_mode, runtime_type, visibility, runtime_metadata, title, metadata, parent_session_id, created_by_user_id, workdir_id, preferred_chat_model_id, preferred_reasoning_effort
@@ -260,6 +286,14 @@ next_turn_position AS (
   SELECT COALESCE(MAX(new_position), 0) + 1 AS value
   FROM copy_turns
 ),
+fork_cutoff AS (
+  SELECT MIN(later.created_at) AS created_at
+  FROM target_turn tt
+  JOIN bot_visible_history_messages later
+    ON later.team_id = public.memoh_current_team_id()
+   AND later.session_id = $1
+   AND later.turn_position > tt.position
+),
 fork_anchor_message AS (
   SELECT assistant_message.new_message_id
   FROM target_turn tt
@@ -415,9 +449,20 @@ copied_assets AS (
   WHERE a.team_id = public.memoh_current_team_id()
   RETURNING id
 )
-SELECT cs.id, cs.bot_id, cs.route_id, cs.channel_type, cs.type, cs.session_mode, cs.runtime_type, cs.runtime_metadata, cs.preferred_chat_model_id, cs.preferred_reasoning_effort, cs.preferred_external_model_id, cs.model_preference_revision, cs.visibility, cs.title, cs.metadata, cs.next_turn_position, cs.compaction_epoch, cs.history_origin_at, cs.history_omitted_count, cs.history_omitted_first_at, cs.history_omitted_last_at, cs.runtime_fencing_token, cs.runtime_reset_token, cs.runtime_reset_expires_at, cs.runtime_config_epoch, cs.parent_session_id, cs.created_by_user_id, cs.created_at, cs.updated_at, cs.deleted_at, cs.team_id, cs.workdir_id, cs.bot_agent_id
+SELECT cs.id,
+  copied.source_message_ids,
+  copied.fork_message_ids,
+  cutoff.created_at::timestamptz AS fork_cutoff
 FROM created_session cs
 CROSS JOIN (SELECT count(*) AS copied_asset_count FROM copied_assets) copied_asset_counts
+CROSS JOIN fork_cutoff cutoff
+CROSS JOIN (
+  SELECT
+    COALESCE(array_agg(cm.old_message_id ORDER BY cm.old_message_id), '{}')::uuid[] AS source_message_ids,
+    COALESCE(array_agg(cm.new_message_id ORDER BY cm.old_message_id), '{}')::uuid[] AS fork_message_ids
+  FROM copy_messages cm
+  JOIN inserted_messages im ON im.id = cm.new_message_id
+) copied
 `
 
 type ForkSessionFromAssistantTurnParams struct {
@@ -431,41 +476,17 @@ type ForkSessionFromAssistantTurnParams struct {
 }
 
 type ForkSessionFromAssistantTurnRow struct {
-	ID                       pgtype.UUID        `json:"id"`
-	BotID                    pgtype.UUID        `json:"bot_id"`
-	RouteID                  pgtype.UUID        `json:"route_id"`
-	ChannelType              pgtype.Text        `json:"channel_type"`
-	Type                     string             `json:"type"`
-	SessionMode              string             `json:"session_mode"`
-	RuntimeType              string             `json:"runtime_type"`
-	RuntimeMetadata          []byte             `json:"runtime_metadata"`
-	PreferredChatModelID     pgtype.UUID        `json:"preferred_chat_model_id"`
-	PreferredReasoningEffort pgtype.Text        `json:"preferred_reasoning_effort"`
-	PreferredExternalModelID pgtype.Text        `json:"preferred_external_model_id"`
-	ModelPreferenceRevision  pgtype.UUID        `json:"model_preference_revision"`
-	Visibility               string             `json:"visibility"`
-	Title                    string             `json:"title"`
-	Metadata                 []byte             `json:"metadata"`
-	NextTurnPosition         int64              `json:"next_turn_position"`
-	CompactionEpoch          int64              `json:"compaction_epoch"`
-	HistoryOriginAt          pgtype.Timestamptz `json:"history_origin_at"`
-	HistoryOmittedCount      int64              `json:"history_omitted_count"`
-	HistoryOmittedFirstAt    pgtype.Timestamptz `json:"history_omitted_first_at"`
-	HistoryOmittedLastAt     pgtype.Timestamptz `json:"history_omitted_last_at"`
-	RuntimeFencingToken      int64              `json:"runtime_fencing_token"`
-	RuntimeResetToken        pgtype.UUID        `json:"runtime_reset_token"`
-	RuntimeResetExpiresAt    pgtype.Timestamptz `json:"runtime_reset_expires_at"`
-	RuntimeConfigEpoch       int64              `json:"runtime_config_epoch"`
-	ParentSessionID          pgtype.UUID        `json:"parent_session_id"`
-	CreatedByUserID          pgtype.UUID        `json:"created_by_user_id"`
-	CreatedAt                pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt                pgtype.Timestamptz `json:"updated_at"`
-	DeletedAt                pgtype.Timestamptz `json:"deleted_at"`
-	TeamID                   pgtype.UUID        `json:"team_id"`
-	WorkdirID                pgtype.UUID        `json:"workdir_id"`
-	BotAgentID               pgtype.UUID        `json:"bot_agent_id"`
+	ID               pgtype.UUID        `json:"id"`
+	SourceMessageIds []pgtype.UUID      `json:"source_message_ids"`
+	ForkMessageIds   []pgtype.UUID      `json:"fork_message_ids"`
+	ForkCutoff       pgtype.Timestamptz `json:"fork_cutoff"`
 }
 
+// The fork copies the source's visible history through the target turn. It
+// returns the fork's id, the ids of the source rows it copied beside the ids
+// of their copies, in the same order, and fork_cutoff: when the first visible
+// source row it did not copy was created, NULL when it copied every one. The
+// caller carries the summaries and history origin that hold for the copy.
 func (q *Queries) ForkSessionFromAssistantTurn(ctx context.Context, arg ForkSessionFromAssistantTurnParams) (ForkSessionFromAssistantTurnRow, error) {
 	row := q.db.QueryRow(ctx, forkSessionFromAssistantTurn,
 		arg.SessionID,
@@ -479,38 +500,9 @@ func (q *Queries) ForkSessionFromAssistantTurn(ctx context.Context, arg ForkSess
 	var i ForkSessionFromAssistantTurnRow
 	err := row.Scan(
 		&i.ID,
-		&i.BotID,
-		&i.RouteID,
-		&i.ChannelType,
-		&i.Type,
-		&i.SessionMode,
-		&i.RuntimeType,
-		&i.RuntimeMetadata,
-		&i.PreferredChatModelID,
-		&i.PreferredReasoningEffort,
-		&i.PreferredExternalModelID,
-		&i.ModelPreferenceRevision,
-		&i.Visibility,
-		&i.Title,
-		&i.Metadata,
-		&i.NextTurnPosition,
-		&i.CompactionEpoch,
-		&i.HistoryOriginAt,
-		&i.HistoryOmittedCount,
-		&i.HistoryOmittedFirstAt,
-		&i.HistoryOmittedLastAt,
-		&i.RuntimeFencingToken,
-		&i.RuntimeResetToken,
-		&i.RuntimeResetExpiresAt,
-		&i.RuntimeConfigEpoch,
-		&i.ParentSessionID,
-		&i.CreatedByUserID,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.DeletedAt,
-		&i.TeamID,
-		&i.WorkdirID,
-		&i.BotAgentID,
+		&i.SourceMessageIds,
+		&i.ForkMessageIds,
+		&i.ForkCutoff,
 	)
 	return i, err
 }
@@ -1390,6 +1382,28 @@ func (q *Queries) NextSessionRuntimeFenceToken(ctx context.Context) (int64, erro
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const placeSessionHistoryOrigin = `-- name: PlaceSessionHistoryOrigin :one
+SELECT public.memoh_place_history_origin(
+  $1::uuid,
+  public.memoh_session_history_budget($2::uuid)
+)::timestamptz AS history_origin_at
+`
+
+type PlaceSessionHistoryOriginParams struct {
+	SessionID       pgtype.UUID `json:"session_id"`
+	BudgetSessionID pgtype.UUID `json:"budget_session_id"`
+}
+
+// Places the session's history origin for the history budget of
+// budget_session_id (see memoh_place_history_origin); NULL when the session
+// needs none.
+func (q *Queries) PlaceSessionHistoryOrigin(ctx context.Context, arg PlaceSessionHistoryOriginParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, placeSessionHistoryOrigin, arg.SessionID, arg.BudgetSessionID)
+	var history_origin_at pgtype.Timestamptz
+	err := row.Scan(&history_origin_at)
+	return history_origin_at, err
 }
 
 const setSessionNextTurnPosition = `-- name: SetSessionNextTurnPosition :exec
