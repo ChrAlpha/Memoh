@@ -101,6 +101,9 @@ type effectLoop struct {
 	downFrom            int32
 	// resultBytes sizes each effect's result; zero keeps the default.
 	resultBytes int
+	// prose fills each result with words the summarizer reads instead of a
+	// repeated character run it treats as a media blob.
+	prose bool
 	// userID is the account the runs act for; empty sends them for none.
 	userID string
 	// arrival is a Discuss message delivered during effect arriveAt; arrived
@@ -194,7 +197,11 @@ func (s *effectLoop) Tools(context.Context, tools.SessionContext) ([]toolexec.To
 				s.arrived = append(s.arrived, segment)
 				s.mu.Unlock()
 			}
-			return toolexec.OutputFromValue(effectResult(input.Index, size)), nil
+			result := effectResult(input.Index, size)
+			if s.prose {
+				result = fmt.Sprintf("TOOL_RESULT_%03d ", input.Index) + strings.Repeat("finding ", size/8)
+			}
+			return toolexec.OutputFromValue(result), nil
 		}),
 		toolexec.Define("exec", "Run a command once it is approved.", func(_ *toolexec.ToolExecContext, _ execInput) (sdk.ToolOutput, error) {
 			return toolexec.OutputFromValue("DECISION_RESULT_KEEP" + strings.Repeat("x", s.decisionResultBytes)), nil
@@ -626,6 +633,51 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 	}
 }
 
+// Even without provider cache usage, a fold asks for its summary
+// at the end of the request the run sent last instead of in a request of its
+// own: the same tools, cache key and messages, then the compaction request.
+func TestPostgresInRunFoldExtendsTheRunRequest(t *testing.T) {
+	const steps = 14
+	web := runEntryNamed("web")
+	s := newEffectLoop(t, web)
+	f := s.f
+	s.prose, s.resultBytes = true, 9000
+	var asked []string
+	f.onSummary = func(body []byte) { asked = append(asked, string(body)) }
+	code, requests := s.run(web, loopInput, steps)
+	f.onSummary = nil
+	if code != "" || len(asked) == 0 || len(s.effects) != steps {
+		t.Fatalf("code=%q summary_calls=%d effects=%v, want the run to fold and finish", code, len(asked), s.effects)
+	}
+	type request struct {
+		Messages       []json.RawMessage `json:"messages"`
+		Tools          json.RawMessage   `json:"tools"`
+		PromptCacheKey string            `json:"prompt_cache_key"`
+	}
+	sent := make([]request, len(requests))
+	for i, body := range requests {
+		if err := json.Unmarshal([]byte(body), &sent[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, body := range asked {
+		var ask request
+		if err := json.Unmarshal([]byte(body), &ask); err != nil {
+			t.Fatal(err)
+		}
+		if n := len(ask.Messages); n == 0 || !strings.Contains(string(ask.Messages[n-1]), "[Context compaction]") {
+			t.Fatalf("summary request %d does not end with the compaction request", i+1)
+		}
+		extends := slices.ContainsFunc(sent, func(r request) bool {
+			return string(r.Tools) == string(ask.Tools) && r.PromptCacheKey == ask.PromptCacheKey &&
+				slices.EqualFunc(r.Messages, ask.Messages[:len(ask.Messages)-1], func(a, b json.RawMessage) bool { return string(a) == string(b) })
+		})
+		if !extends {
+			t.Fatalf("summary request %d does not extend a request the run sent", i+1)
+		}
+	}
+}
+
 func decisionAfterProgressScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	s.decisionAfter, s.decisionResultBytes = 2, 9000
 	code, requests := s.run(entry, loopInput, 4)
@@ -797,8 +849,8 @@ func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 // verbatim, a row written into the session by someone else is left alone, and
 // the next turn renders the summary the run sent at the same place without
 // compacting again. When the summarizer is down the loop ends visibly with
-// budget_unsatisfied after one retry, keeps the steps it committed, and the
-// next turn is answered once the summarizer is back.
+// budget_unsatisfied after retrying each attempted summary path once, keeps
+// the steps it committed, and answers the next turn once the summarizer is back.
 func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	const steps = 14
 	f := s.f
@@ -883,9 +935,20 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	}
 
 	s.downAt = 1
+	var summaryAttempts []bool
+	f.onSummary = func(body []byte) {
+		if f.failSummary.Load() {
+			summaryAttempts = append(summaryAttempts, strings.Contains(string(body), "[Context compaction]"))
+		}
+	}
 	code, requests = s.run(entry, "SUMMARIZER_DOWN_INPUT", steps)
-	if code != "context.budget_unsatisfied" || f.summaries.Load()-s.downFrom != 2 || len(s.effects) == 0 || len(s.effects) >= steps || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) {
-		t.Fatalf("summarizer down: code=%q summary_attempts=%d provider_calls=%d effects=%v, want budget_unsatisfied after the summarizer was retried once, with the effects so far run once", code, f.summaries.Load()-s.downFrom, len(requests), s.effects)
+	f.onSummary = nil
+	wantAttempts := []bool{false, false}
+	if len(summaryAttempts) > 0 && summaryAttempts[0] {
+		wantAttempts = []bool{true, true, false, false}
+	}
+	if code != "context.budget_unsatisfied" || !slices.Equal(summaryAttempts, wantAttempts) || len(s.effects) == 0 || len(s.effects) >= steps || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) {
+		t.Fatalf("summarizer down: code=%q summary_attempts=%v provider_calls=%d effects=%v, want budget_unsatisfied after each attempted summary path was retried once, with the effects so far run once", code, summaryAttempts, len(requests), s.effects)
 	}
 	var reasons, failedRows int
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, f.sessionID).Scan(&reasons); err != nil {

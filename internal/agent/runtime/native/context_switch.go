@@ -37,6 +37,9 @@ type ContextSwitch struct {
 	UsageTokens         int
 	AllowanceTokens     int
 	Fold                func(ContextFold) int
+	// Previous is the request the run sent last: this one without the
+	// latest step.
+	Previous *sdk.Request
 }
 
 // ContextFold is one pass an event committed: the summary that replaces the
@@ -133,7 +136,9 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	if tailStart < 0 {
 		return false, nil
 	}
-	sw := ContextSwitch{Tail: slices.Clone(s.tail), UsageTokens: usage, AllowanceTokens: allowance}
+	previous := *params
+	previous.Messages = slices.Clone(params.Messages[:tailStart])
+	sw := ContextSwitch{Tail: slices.Clone(s.tail), UsageTokens: usage, AllowanceTokens: allowance, Previous: &previous}
 	var kept []sdk.Message
 	for i, p := range provenance {
 		if p != nil {

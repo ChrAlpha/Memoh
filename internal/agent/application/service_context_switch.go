@@ -37,6 +37,7 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 			cfg.ProtectedSources = append(cfg.ProtectedSources, source)
 		}
 		cfg.HistoryBudgetTokens = sw.HistoryBudgetTokens
+		cfg.Continuation = sw.Previous
 
 		passes, err := s.compactionService.Compact(ctx, cfg)
 		tokens := sw.UsageTokens
