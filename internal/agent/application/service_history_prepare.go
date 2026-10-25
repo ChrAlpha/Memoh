@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
-	"time"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -16,7 +15,6 @@ type preparedHistoryContext struct {
 	messages       []ModelMessage
 	records        []historyfrag.HistoryRecord
 	pressureTokens int
-	viewFrom       time.Time
 }
 
 // prepareHistoryContext loads the history a request renders. Its window
@@ -49,7 +47,7 @@ func (s *Service) prepareHistoryWindow(
 	contextTokenBudget int,
 	fold bool,
 ) (preparedHistoryContext, error) {
-	loaded, err := s.loadHistoryRecords(ctx, fallback, req.ThreadID, defaultMaxContextMinutes, contextTokenBudget, fold)
+	loaded, err := s.loadHistoryRecords(ctx, fallback, req.ThreadID, contextTokenBudget, fold)
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}
@@ -63,7 +61,6 @@ func (s *Service) prepareHistoryWindow(
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}
-	viewFrom := historyRecordsViewFrom(loaded)
 	loaded, err = s.replaceCompactedMessages(
 		ctx,
 		req.ThreadID,
@@ -80,18 +77,7 @@ func (s *Service) prepareHistoryWindow(
 		messages:       messages,
 		records:        records,
 		pressureTokens: estimateMessagesTokens(loaded),
-		viewFrom:       viewFrom,
 	}, nil
-}
-
-func historyRecordsViewFrom(records []historyfrag.HistoryRecord) time.Time {
-	var from time.Time
-	for _, record := range records {
-		if record.DBMessageID != "" && !record.CreatedAt.IsZero() && (from.IsZero() || record.CreatedAt.Before(from)) {
-			from = record.CreatedAt
-		}
-	}
-	return from
 }
 
 func historyErrorCode(meta map[string]any) string {
