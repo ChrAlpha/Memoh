@@ -266,6 +266,10 @@ CREATE TABLE IF NOT EXISTS bots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   acl_default_effect TEXT NOT NULL DEFAULT 'allow',
+  -- When the bot's history started being kept under history checkpoints: its
+  -- creation, or for an older bot the migration that introduced them. A
+  -- context row created before it predates them (0171).
+  history_checkpoints_since TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT bots_type_check CHECK (type IN ('personal', 'public')),
   CONSTRAINT bots_status_check CHECK (status IN ('creating', 'ready', 'deleting', 'failed')),
   CONSTRAINT bots_acl_default_effect_check CHECK (acl_default_effect IN ('allow', 'deny')),
@@ -556,7 +560,6 @@ CREATE TABLE IF NOT EXISTS bot_sessions (
   title TEXT NOT NULL DEFAULT '',
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   next_turn_position BIGINT NOT NULL DEFAULT 1,
-  compaction_epoch BIGINT NOT NULL DEFAULT 0,
   -- The session's active history checkpoint (bot_history_checkpoints); NULL
   -- for a session whose whole history is context.
   history_checkpoint_id UUID,
@@ -625,7 +628,6 @@ CREATE TABLE IF NOT EXISTS bot_history_messages (
   session_mode TEXT NOT NULL DEFAULT 'chat' CHECK (session_mode IN ('chat', 'discuss', 'schedule', 'subagent')),
   runtime_type TEXT NOT NULL DEFAULT 'model' CHECK (runtime_type IN ('model', 'acp_agent', 'codex', 'claude-code', 'grok-build')),
   model_id UUID REFERENCES models(id) ON DELETE SET NULL,
-  compact_id UUID,
   event_id UUID REFERENCES bot_session_events(id) ON DELETE SET NULL,
   display_text TEXT,
   turn_id UUID,
@@ -639,7 +641,6 @@ CREATE TABLE IF NOT EXISTS bot_history_messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_bot_created ON bot_history_messages(bot_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_bot_history_messages_compact ON bot_history_messages(compact_id);
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_session
   ON bot_history_messages(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_session_role_created
@@ -689,7 +690,6 @@ SELECT
   m.content,
   m.metadata,
   m.usage,
-  m.compact_id,
   m.session_mode,
   m.runtime_type,
   m.model_id,
@@ -997,23 +997,10 @@ CREATE TABLE IF NOT EXISTS bot_history_message_compacts (
   error_message TEXT NOT NULL DEFAULT '',
   usage JSONB,
   model_id UUID REFERENCES models(id) ON DELETE SET NULL,
-  artifact_version INTEGER NOT NULL DEFAULT 1,
-  coverage JSONB NOT NULL DEFAULT '[]'::jsonb,
-  anchor_start_ms BIGINT NOT NULL DEFAULT 0,
-  anchor_end_ms BIGINT NOT NULL DEFAULT 0,
-  artifact_level INTEGER NOT NULL DEFAULT 0,
-  parent_ids UUID[] NOT NULL DEFAULT '{}'::uuid[],
-  superseded_by UUID REFERENCES bot_history_message_compacts(id) ON DELETE SET NULL,
-  superseded_at TIMESTAMPTZ,
-  compaction_epoch BIGINT NOT NULL DEFAULT 0,
   started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS idx_compacts_bot_session ON bot_history_message_compacts(bot_id, session_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_compacts_owner_epoch ON bot_history_message_compacts(bot_id, session_id, compaction_epoch, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_compacts_active_session ON bot_history_message_compacts(session_id, anchor_start_ms, started_at) WHERE status = 'ok' AND superseded_at IS NULL;
-
-ALTER TABLE bot_history_messages ADD CONSTRAINT fk_compact_id FOREIGN KEY (compact_id) REFERENCES bot_history_message_compacts(id) ON DELETE SET NULL;
 
 -- schedule_logs: structured execution records for scheduled tasks.
 CREATE TABLE IF NOT EXISTS schedule_logs (
@@ -1751,7 +1738,6 @@ SELECT
   m.content,
   m.metadata,
   m.usage,
-  m.compact_id,
   m.session_mode,
   m.runtime_type,
   m.model_id,
@@ -2291,6 +2277,7 @@ CREATE INDEX IF NOT EXISTS idx_user_input_run
 CREATE INDEX IF NOT EXISTS idx_bot_history_messages_run
     ON public.bot_history_messages (team_id, run_id)
     WHERE run_id IS NOT NULL;
+
 
 -- ---------------------------------------------------------------------------
 -- History checkpoints

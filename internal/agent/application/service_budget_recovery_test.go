@@ -15,7 +15,6 @@ import (
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
@@ -27,27 +26,21 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/contextview"
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
-
-type recoveryHistoryQueries struct{ *controllerQueries }
-
-func (*recoveryHistoryQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
-	return nil, nil
-}
 
 type recoveryHistoryService struct {
 	messagepkg.Service
-	messages []messagepkg.Message
-	loads    int
-	maxBytes int64
-	err      error
+	messages  []messagepkg.Message
+	truncated bool
+	loads     int
+	maxBytes  int64
+	err       error
 }
 
-func (s *recoveryHistoryService) ListActiveSinceBySessionWithinBytes(_ context.Context, _ string, _ time.Time, maxBytes int64, _ bool) ([]messagepkg.Message, error) {
+func (s *recoveryHistoryService) ListHistoryWithinBytes(_ context.Context, _ string, window messagepkg.HistoryWindow) (messagepkg.HistoryLoad, error) {
 	s.loads++
-	s.maxBytes = maxBytes
-	return append([]messagepkg.Message(nil), s.messages...), s.err
+	s.maxBytes = window.MaxBytes
+	return messagepkg.HistoryLoad{Messages: append([]messagepkg.Message(nil), s.messages...), Truncated: s.truncated}, s.err
 }
 
 type recoveryCompactionRunner struct {
@@ -63,7 +56,6 @@ func (r *recoveryCompactionRunner) Compact(_ context.Context, cfg compaction.Tri
 func chatRecoveryFixture(t *testing.T) (*Service, *recoveryHistoryService, *recoveryCompactionRunner, native.RunConfig) {
 	t.Helper()
 	s, _ := newControllerPolicyService(t)
-	s.queries = &recoveryHistoryQueries{controllerQueries: s.queries.(*controllerQueries)}
 	history := &recoveryHistoryService{}
 	s.messageService = history
 	runner := &recoveryCompactionRunner{run: func() ([]compaction.Pass, error) {
@@ -74,7 +66,7 @@ func chatRecoveryFixture(t *testing.T) (*Service, *recoveryHistoryService, *reco
 	modelMessages := []ModelMessage{{Role: "assistant", Content: newTextContent("frozen fork")}}
 	var summaryRecords []historyfrag.HistoryRecord
 	for i := range 20 {
-		summary := historyfrag.SummaryRecord(fmt.Sprintf("summary-%d", i), strings.Repeat("s", 200), nil, contextfrag.Scope{})
+		summary := historyfrag.SummaryRecord(fmt.Sprintf("summary-%d", i), strings.Repeat("s", 200), contextfrag.Scope{})
 		summaryRecords = append(summaryRecords, summary)
 		modelMessages = append(modelMessages, summary.ModelMessage)
 	}
@@ -216,6 +208,44 @@ func TestChatBudgetRecoveryDeclinesIrreducibleContext(t *testing.T) {
 	}
 }
 
+// A load the byte budget truncated left rows after the checkpoint out, while
+// its pressure, measured after tool payloads are pruned, can still fit. The
+// request compacts them instead of sending a history that silently starts
+// later, and a reload that is still truncated fails rather than trims.
+func TestChatBudgetRecoveryCompactsATruncatedLoad(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		truncated       bool
+		stillTruncated  bool
+		wantCompactions int
+		wantRecovered   bool
+		wantErr         bool
+	}{
+		{name: "complete load that fits", wantCompactions: 0},
+		{name: "truncated load that fits", truncated: true, wantCompactions: 1, wantRecovered: true},
+		{name: "still truncated after compaction", truncated: true, stillTruncated: true, wantCompactions: 1, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, history, runner, cfg := chatRecoveryFixture(t)
+			runner.run = func() ([]compaction.Pass, error) {
+				history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent("compacted history")}}
+				history.truncated = tc.stillTruncated
+				return []compaction.Pass{{}}, nil
+			}
+			cfg.ContextManifest.BudgetPlan = &contextfrag.ContextBudgetPlan{HistoryBudget: 100000}
+			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, Query: "current request"}
+			cfg.RecoverContextBudget = s.chatBudgetRecovery(req, chatHistoryLayout{forkCount: 1, historyCount: 22, pressureTokens: 2500, truncated: tc.truncated})
+			_, recovered, err := cfg.RecoverContextBudget(t.Context(), cfg)
+			if len(runner.configs) != tc.wantCompactions || recovered != tc.wantRecovered {
+				t.Fatalf("compactions=%d recovered=%v, want %d and %v (error %v)", len(runner.configs), recovered, tc.wantCompactions, tc.wantRecovered, err)
+			}
+			if tc.wantErr != errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || !tc.wantErr && err != nil {
+				t.Fatalf("error = %v, want budget unsatisfied: %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 type recoverySilentProvider struct {
 	triggerCaptureProvider
 	calls atomic.Int32
@@ -258,8 +288,8 @@ type triggerRecoveryMessages struct {
 	history *recoveryHistoryService
 }
 
-func (m triggerRecoveryMessages) ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64, fold bool) ([]messagepkg.Message, error) {
-	return m.history.ListActiveSinceBySessionWithinBytes(ctx, sessionID, since, maxBytes, fold)
+func (m triggerRecoveryMessages) ListHistoryWithinBytes(ctx context.Context, sessionID string, window messagepkg.HistoryWindow) (messagepkg.HistoryLoad, error) {
+	return m.history.ListHistoryWithinBytes(ctx, sessionID, window)
 }
 
 func TestTriggeredBudgetRecoveryPausesIdleUntilProviderDispatch(t *testing.T) {

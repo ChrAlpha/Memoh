@@ -7,20 +7,16 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
-	compaction "github.com/felinics/memoh/internal/agent/context/compaction"
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/partmeta"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
-	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
 func TestDropPreflightFailureTurns(t *testing.T) {
@@ -147,63 +143,26 @@ const (
 	pipelineTestSessionID = "22222222-2222-2222-2222-222222222222"
 )
 
-type fakeArtifactLineageQueries struct {
-	dbstore.Queries
-	rows []sqlc.BotHistoryMessageCompact
-	err  error
+// pipelineCheckpointService composes the pipeline under checkpoints read from
+// queries, whose kept rows messages serves.
+func pipelineCheckpointService(pipeline *timeline.Pipeline, queries *historyCheckpointQueries, messages messagepkg.Service) *Service {
+	logger := slog.New(slog.DiscardHandler)
+	return &Service{
+		pipeline:            pipeline,
+		messageService:      messages,
+		pipelineCheckpoints: timeline.NewCheckpointSource(logger, queries, messages),
+		logger:              logger,
+	}
 }
 
-func (f fakeArtifactLineageQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
-	return f.rows, f.err
-}
-
-func (fakeArtifactLineageQueries) GetCompactionLogByID(context.Context, pgtype.UUID) (sqlc.BotHistoryMessageCompact, error) {
-	return sqlc.BotHistoryMessageCompact{}, pgx.ErrNoRows
-}
-
-func (fakeArtifactLineageQueries) ListCompactionArtifactParentIDsBySuccessor(context.Context, sqlc.ListCompactionArtifactParentIDsBySuccessorParams) ([]pgtype.UUID, error) {
-	return nil, nil
-}
-
-func compactionLogRow(t *testing.T, summary string, coveredExternalID string, createdAtMs int64) sqlc.BotHistoryMessageCompact {
+// foldedSummaryQueries is a session whose checkpoint folds the inbound
+// message m1 into one summary.
+func foldedSummaryQueries(t *testing.T, summary string) *historyCheckpointQueries {
 	t.Helper()
-	coverage, err := json.Marshal([]compaction.CoveredSource{{
-		Ref: contextfrag.ContextRef{
-			Namespace:   "bot_history_message",
-			ID:          "33333333-3333-3333-3333-333333333333",
-			Schema:      contextfrag.SchemaContextRef,
-			HashAlgo:    contextfrag.HashAlgoSHA256,
-			HashScope:   contextfrag.HashScopeSourcePayload,
-			ContentHash: "deadbeef",
-		},
-		ExternalMessageID: coveredExternalID,
-		CreatedAtMs:       createdAtMs,
-	}})
-	if err != nil {
-		t.Fatalf("encode coverage: %v", err)
-	}
-	id, err := dbpkg.ParseUUID("44444444-4444-4444-4444-444444444444")
-	if err != nil {
-		t.Fatalf("parse artifact id: %v", err)
-	}
-	botID, err := dbpkg.ParseUUID(pipelineTestBotID)
-	if err != nil {
-		t.Fatalf("parse bot id: %v", err)
-	}
-	sessionID, err := dbpkg.ParseUUID(pipelineTestSessionID)
-	if err != nil {
-		t.Fatalf("parse session id: %v", err)
-	}
-	return sqlc.BotHistoryMessageCompact{
-		ID:            id,
-		BotID:         botID,
-		SessionID:     sessionID,
-		Status:        "ok",
-		Summary:       summary,
-		Coverage:      coverage,
-		AnchorStartMs: createdAtMs,
-		AnchorEndMs:   createdAtMs,
-	}
+	queries := &historyCheckpointQueries{classified: []sqlc.ClassifyHistoryCheckpointMessagesRow{{ExternalMessageID: "m1"}}}
+	queries.activate(historyCheckpointRow(t, checkpointTestID, historyTestPosition(0),
+		checkpoint.Item{SummaryID: queries.summary(t, checkpointTestSummaryID, summary)}))
+	return queries
 }
 
 func pipelineTextEvent(messageID string, atMs int64, text string) timeline.MessageEvent {
@@ -217,18 +176,13 @@ func pipelineTextEvent(messageID string, atMs int64, text string) timeline.Messa
 	}
 }
 
-func TestBuildMessagesFromPipelineInsertsArtifactSummary(t *testing.T) {
+func TestBuildMessagesFromPipelinePinsTheCheckpointSummary(t *testing.T) {
 	t.Parallel()
 
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, "current question"))
-
-	svc := &Service{
-		pipeline: pipeline,
-		queries:  fakeArtifactLineageQueries{rows: []sqlc.BotHistoryMessageCompact{compactionLogRow(t, "compacted window", "m1", 1000)}},
-		logger:   slog.New(slog.DiscardHandler),
-	}
+	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), nil)
 
 	messages, pressure, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
@@ -255,12 +209,56 @@ func TestBuildMessagesFromPipelineInsertsArtifactSummary(t *testing.T) {
 	if !strings.Contains(summaryText, "<summary>") || !strings.Contains(summaryText, "compacted window") {
 		t.Fatalf("expected leading summary, got %q", summaryText)
 	}
+	if source := messages[0].ContextSource; source == nil || source.Kind != "summary" || source.ID != checkpointTestSummaryID {
+		t.Fatalf("summary renders source %+v, want the checkpoint's summary", source)
+	}
 	joined := messagesDebug(messages)
 	if strings.Contains(joined, "old original") {
-		t.Fatalf("covered original must be replaced, got %s", joined)
+		t.Fatalf("folded original must be replaced, got %s", joined)
 	}
 	if !strings.Contains(joined, "current question") {
-		t.Fatalf("uncovered message must survive, got %s", joined)
+		t.Fatalf("message after the checkpoint must survive, got %s", joined)
+	}
+}
+
+// What the checkpoint keeps raw renders in its place among what it holds,
+// before what came after it: a kept inbound message as its segment, then
+// the summary, then the later inbound message and the turn responses after
+// the checkpoint's position.
+func TestBuildMessagesFromPipelinePinsWhatTheCheckpointHolds(t *testing.T) {
+	t.Parallel()
+
+	pipeline := timeline.NewPipeline(timeline.RenderParams{})
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "kept input"))
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, "folded question"))
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m3", 3000, "later question"))
+	kept := persistedHistoryMessage(t, "kept-row", "user", "kept input")
+	kept.ExternalMessageID = "m1"
+	answer := persistedHistoryMessage(t, "answer", "assistant", "later answer")
+	answer.CreatedAt = time.UnixMilli(4000)
+	messages := &turnResponseSourceMessageService{kept: []messagepkg.Message{kept}, projected: []messagepkg.Message{answer}}
+	queries := &historyCheckpointQueries{classified: []sqlc.ClassifyHistoryCheckpointMessagesRow{
+		{ExternalMessageID: "m1", Kept: true}, {ExternalMessageID: "m2"}, {ExternalMessageID: "m3", Kept: true},
+	}}
+	position := messagepkg.HistoryPosition{Turn: 2, Seq: 2}
+	queries.activate(historyCheckpointRow(t, checkpointTestID, position,
+		checkpoint.Item{RowID: kept.ID}, checkpoint.Item{SummaryID: queries.summary(t, checkpointTestSummaryID, "folded work")}))
+	svc := pipelineCheckpointService(pipeline, queries, messages)
+
+	got, _, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{BotID: pipelineTestBotID, ThreadID: pipelineTestSessionID}, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := make([]string, 0, len(got))
+	for _, message := range got {
+		texts = append(texts, message.TextContent())
+	}
+	if want := []string{"kept input", "<summary>\nfolded work\n</summary>", "later question", "later answer"}; len(texts) != len(want) ||
+		!strings.Contains(texts[0], want[0]) || texts[1] != want[1] || !strings.Contains(texts[2], want[2]) || texts[3] != want[3] {
+		t.Fatalf("composed %q, want %q in order", texts, want)
+	}
+	if messages.after != position {
+		t.Fatalf("turn responses load after %+v, want the checkpoint's position %+v", messages.after, position)
 	}
 }
 
@@ -279,12 +277,7 @@ func TestBuildMessagesFromPipelineKeepsHistoryOverBudget(t *testing.T) {
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, strings.Repeat("x", 4000)))
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m3", 3000, "current question"))
-
-	svc := &Service{
-		pipeline: pipeline,
-		queries:  fakeArtifactLineageQueries{rows: []sqlc.BotHistoryMessageCompact{compactionLogRow(t, "compacted window", "m1", 1000)}},
-		logger:   slog.New(slog.DiscardHandler),
-	}
+	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), nil)
 
 	messages, pressure, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
@@ -326,8 +319,8 @@ func TestBuildMessagesFromPipelineFailsWhenASourceCannotLoad(t *testing.T) {
 	t.Parallel()
 
 	for name, svc := range map[string]*Service{
-		"frontier": {queries: fakeArtifactLineageQueries{err: errors.New("frontier unavailable")}},
-		"history":  {messageService: &turnResponseSourceMessageService{err: errors.New("history unavailable")}},
+		"checkpoint": pipelineCheckpointService(nil, &historyCheckpointQueries{activeErr: errors.New("checkpoint unavailable")}, nil),
+		"history":    {messageService: &turnResponseSourceMessageService{err: errors.New("history unavailable")}},
 	} {
 		pipeline := timeline.NewPipeline(timeline.RenderParams{})
 		pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "current question"))

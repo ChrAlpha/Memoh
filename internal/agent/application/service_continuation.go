@@ -69,16 +69,12 @@ func (s *Service) prepareContinuationRunConfig(
 	eventCh chan<- WSStreamEvent,
 	req ChatRequest,
 ) (native.RunConfig, error) {
-	loaded, err := s.loadHistoryRecords(ctx, fallback, summaryScope.SessionID, 0, false)
+	loaded, truncated, err := s.loadHistoryRecords(ctx, fallback, summaryScope, 0, historyCut{})
 	if err != nil {
 		return native.RunConfig{}, err
 	}
 	loaded = pruneHistoryForGateway(loaded)
 	req.inputInHistory = true
-	loaded, err = s.replaceCompactedMessages(ctx, summaryScope.SessionID, summaryScope, loaded, compactionArtifactBoundary{})
-	if err != nil {
-		return native.RunConfig{}, err
-	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	messages, retained := historyMessagesFromRecords(loaded)
 	if req.continuationToolCallID != "" && req.RunHandle.RunID != "" {
@@ -130,6 +126,6 @@ func (s *Service) prepareContinuationRunConfig(
 	base.Query = ""
 	base.LiveToolStream = eventCh != nil
 	base.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)
-	base.RecoverContextBudget = s.chatBudgetRecovery(req, chatHistoryLayout{historyCount: len(messages), pressureTokens: pressure})
+	base.RecoverContextBudget = s.chatBudgetRecovery(req, chatHistoryLayout{historyCount: len(messages), pressureTokens: pressure, truncated: truncated})
 	return s.prepareRunConfig(ctx, base), nil
 }

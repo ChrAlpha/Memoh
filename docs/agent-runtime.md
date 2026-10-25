@@ -31,10 +31,12 @@ and continue the same run. An empty initial history does not disable recovery. A
 folds what its request renders: the history before its cutoff and the steps of
 the attempt its first step selected. A retry renders its input from the request
 it replaces, which that step hides; from then on the copy the step wrote is the
-input the event keeps in place. When the replaced turn had compacted in place,
-the same step moves the session to a new compaction epoch, so the attempt folds
-the history before the cutoff into a summary of its own. Subagent and external
-runtimes have separate ownership and remain outside this capability.
+input the event keeps in place. When the session's history checkpoint depends
+on the replaced turn, the same step moves the session back to the newest
+checkpoint that does not, or the attempt's first compaction does when it needs
+one before that step, so the attempt folds onto the checkpoint the replacement
+keeps. Subagent and external runtimes have separate ownership and remain
+outside this capability.
 
 A native Discuss run writes each step as it commits, under the rows ingress
 already wrote for its input. Each composed message names the inbound message,
@@ -48,29 +50,105 @@ that comes back without a durable cursor still answers the input of a run that
 failed after committing steps. The answer, the completed step that calls no
 tool, is that proof.
 
-`compaction.Service.Compact` executes one event that folds the rendered active
-summary and every eligible source into one rolling summary. A pass folds what one
+`compaction.Service.Compact` executes one event that folds the summaries of the
+session's active checkpoint and every eligible source into one rolling summary. A pass folds what one
 summarizer call can read; the event passes again only for what that call could
 not, and each further pass absorbs the summary before it. The current request and
 steers are verbatim anchors, not independent summary segments. The latest
 tool/reasoning closure is protected. At approval or ask_user resume, the deferred
 call/result is the tail; earlier committed work remains eligible. The summarizer
-sees anchors inline but never claims their coverage.
+sees anchors inline but never folds them.
 
-The native runtime applies each committed replacement to its own request snapshot.
-Uncovered messages retain their bytes. `turn.PlaceSummary` also governs record and
-pipeline replay: retained entries inside the covered span precede the summary.
-Per-source coverage times and event cursors survive rollup, so refolding a summary
-cannot hide an edit it never read. Stored message hashes survive replay projections;
-RC versions are checked against their persisted event cursors. Restart replay keeps
-the complete event chain for newer edits, including edits received before compaction
-started. Artifact commit additionally verifies the full durable source hash.
+The native runtime applies each committed fold to its own request snapshot by
+`turn.PlaceSummary`: messages the fold does not cover keep their bytes, and
+those inside the folded span precede the summary, the order its checkpoint
+keeps them in. A pass refuses a request whose view no longer matches what it
+reads: stored message hashes survive replay projections, RC versions are
+checked against their persisted event cursors, and the summaries the request
+rendered must be the ones the active checkpoint holds.
 
-Rendered artifacts, candidate payloads and claim verification use bounded reads.
-In-run recovery does not load the raw history span or reread ancestor summaries;
-legacy artifacts without exact coverage fail explicitly. Owner fencing, claim
-reclamation and cancellation remain authoritative. Failed passes publish nothing;
-successful earlier passes and tool effects stay committed.
+A thread's history has no time window. What stands in a request for the
+history before its context is the session's active history checkpoint
+(`bot_sessions.history_checkpoint_id`, `internal/chat/checkpoint`): a position
+in the session's turn order, `(turn_position, turn_message_seq)`, and what
+represents everything up to it: ordered items, rows kept by reference and
+summaries, always at least one summary. A request renders the items in their
+order and then the session's context rows after the position: the visible rows of complete
+turns, other than legacy `passive_sync` rows. Chat and turn-response loads
+read those rows newest first within the byte budget, so a load costs what the
+checkpoint leaves raw, not the thread's length. A chat load the byte budget
+truncates left context rows after the checkpoint out. Its pressure is measured
+after tool payloads are pruned, so it can fit while the load does not; the
+request then compacts anyway, rather than send a history that silently starts
+later, and fails if the compacted history still does not load whole.
+
+Compaction folds the checkpoint's summaries and the oldest complete foldable
+units after it into one summary and commits a checkpoint on top of the active
+one (`checkpoint.Store.Commit`): its position is the last row it folds, and it
+keeps every context row up to there it does not fold, in history order: the ones
+the pass read before its summary, where the request that read them places it,
+and the ones it never read after it. Kept rows are a run's inputs and steers,
+which the summarizer reads but never folds, so a run that folds its own earlier
+steps leaves `[input, summary, latest steps]`; once the run is over the input is
+an ordinary candidate and the next compaction folds it. A pass that cannot read
+everything at once repeats the step, and each further pass folds onto the
+summary the one before wrote: an event whose session moved back between passes
+fails instead of folding the same history again. Only a commit moves the
+position; neither a byte window nor a cutoff does. Before a run's first step,
+candidates end where the caller's history does: before the cutoff of an edit or
+retry, else before the turn the request runs as, so a fold never reaches a row
+admitted after the request's own; within a run, a fold reads only what the run's
+request renders. A commit whose parent is no longer the session's active
+checkpoint, or whose folded rows are no longer context rows, fails with
+`checkpoint.ErrMoved`. A row it keeps that the pass never read is logged and
+counted (`history.checkpoint.unseen_rows_total`).
+
+The rows of a message a checkpoint folded record the message as it was when
+they were written. A message changed after that, edited or deleted, composes
+again after the checkpoint with what its summary never read; Discuss event
+replay keeps its complete event chain.
+
+Every checkpoint names its parent and depends on every row up to its
+position, which its summary may have read. A write that removes rows (hiding,
+replacing or superseding a turn, deleting messages, retiring a run's
+projections) moves the session back, in its transaction, to the newest
+checkpoint on its chain that does not depend on them
+(`memoh_rewind_history_checkpoint`). A context row that appears at or before
+the active checkpoint's position, inserted so or made visible there, is
+recorded as it is written (`memoh_history_row_appeared`, a trigger on
+`bot_history_messages`, into `bot_history_appeared_rows`): neither that
+checkpoint nor an ancestor that reaches the row accounts for it. The writer holds only the session's key share, which a commit's row lock
+waits for, so each commit either sees the row or finds it on record and fails;
+moving the session itself would make the writer wait on a fenced transaction
+that waits on it. Reading the active checkpoint (`checkpoint.Store.Active`)
+checks that it holds: every row it keeps is a context row, every summary it
+holds is usable, and no row on record is hidden behind it. One that does not
+is replaced for the session by the newest member of its chain that holds,
+logged and counted by reason (`history.checkpoint.repairs_total`), and the
+rows on record that member does not hide are forgotten while it is still the
+session's active checkpoint; a row recorded against one made since stays for
+the next read. Adding an asset to a row changes nothing, and clearing history
+drops the session's checkpoints.
+
+An edit or retry renders the history as it stood at its cutoff: the checkpoint
+the replacement keeps (`checkpoint.Store.KeptBeforeTurn`) and the context rows
+after it before the cutoff. A retry after in-run compaction thus refolds from
+the summary before the replaced turn rather than from the start of the thread.
+An edit or retry that must compact before its first step commits rewinds the
+same way first (`RewindHistoryCheckpointBeforeTurn`), so its fold builds on the
+checkpoint the replacement keeps.
+
+Sessions from before checkpoints keep their context: 0171 turned each one's
+active summaries, with the rows in their span they left raw, into its
+checkpoint. A session restored by a bot import brings its history without
+summaries, so its first request that does not fit compacts it.
+
+Candidate payloads are read within byte bounds. A request reads the active
+checkpoint and walks its chain only to repair it; an edit or retry and a
+rewind walk it for the checkpoint they keep. In-run recovery does not
+load the raw history span or reread ancestor summaries. Owner fencing and
+cancellation remain authoritative. Failed passes publish nothing; successful
+earlier passes and tool effects stay committed.
 
 The caller checks the complete next request once, after the event; one that still
 does not fit fails instead of compacting again. Summary bounds include rendering

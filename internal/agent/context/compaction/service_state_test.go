@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -37,7 +36,7 @@ func TestCompactionReportsScopedNoop(t *testing.T) {
 }
 
 func TestCompactionReportsScopedSummaryOnSuccess(t *testing.T) {
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	q := &fakeQueries{history: machineryCorpus(t)}
 	stub := &stubModel{summary: "SUMMARY-OK"}
 	svc := newMachineryService(q)
 
@@ -45,13 +44,13 @@ func TestCompactionReportsScopedSummaryOnSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}
-	if res.Status != passOK || res.Summary != "SUMMARY-OK" || res.MessageCount != len(q.markedIDs) {
-		t.Fatalf("success result = %+v, want ok/SUMMARY-OK/%d", res, len(q.markedIDs))
+	if res.Status != passOK || res.Summary != "SUMMARY-OK" || res.MessageCount != len(q.folded) {
+		t.Fatalf("success result = %+v, want ok/SUMMARY-OK/%d", res, len(q.folded))
 	}
 }
 
 func TestCompactionFailureSurfacesError(t *testing.T) {
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	q := &fakeQueries{history: machineryCorpus(t)}
 	svc := newMachineryService(q)
 	cfg := machineryConfig(&stubModel{}, 450)
 	cfg.HTTPClient = &http.Client{Transport: &failingModel{}}
@@ -66,7 +65,7 @@ func TestCompactionFailureSurfacesError(t *testing.T) {
 }
 
 func TestRunCompactionRetriesImmediatelyAfterFailure(t *testing.T) {
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	q := &fakeQueries{history: machineryCorpus(t)}
 	svc := newMachineryService(q)
 	cfg := machineryConfig(&stubModel{}, 450)
 	fail := &failingModel{}
@@ -91,7 +90,7 @@ func TestRunCompactionRetriesImmediatelyAfterFailure(t *testing.T) {
 func TestCompactionSurfacesCompletionPersistenceFailure(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: machineryCorpus(t), completeErr: errors.New("db down")}
+	q := &fakeQueries{history: machineryCorpus(t), completeErr: errors.New("db down")}
 	svc := newMachineryService(q)
 	stub := &stubModel{summary: "durable summary"}
 
@@ -113,7 +112,7 @@ func summarizerWindowFor(inputTokens int) int {
 func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) {
 	t.Parallel()
 
-	rows := make([]sqlc.ListUncompactedMessagesBySessionRow, 0, 13)
+	rows := make([]candidateRow, 0, 13)
 	for i := 0; i < 12; i++ {
 		role := "user"
 		if i%2 == 1 {
@@ -129,11 +128,10 @@ func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) 
 		cfg := machineryConfig(stub, 100000)
 		cfg.SummaryWindowTokens = summarizerWindowFor(1000)
 		cfg.ProtectedSources = historySources(rows[12])
-		var priorLogs []sqlc.BotHistoryMessageCompact
+		q := &fakeQueries{history: rows}
 		if withPrior {
-			priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", 1200))
+			q.hold(strings.Repeat("p", 1200))
 		}
-		q := &fakeQueries{uncompacted: rows, priorLogs: priorLogs}
 		res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 		if err != nil {
 			t.Fatalf("compact: %v", err)
@@ -144,13 +142,13 @@ func TestDoCompactionSharesTheSummarizerInputWithEarlierSummaries(t *testing.T) 
 		if request := estimateBytesAsTokens(stub.prompt); request+stub.maxTokens > cfg.SummaryWindowTokens {
 			t.Fatalf("request %d + max_tokens %d exceeds the %d window", request, stub.maxTokens, cfg.SummaryWindowTokens)
 		}
-		return len(q.markedIDs)
+		return len(q.folded)
 	}
 
 	without := run(t, false)
 	with := run(t, true)
 	if with >= without {
-		t.Fatalf("earlier summaries must share the summarizer input: marked %d with prior, %d without", with, without)
+		t.Fatalf("earlier summaries must share the summarizer input: folded %d with prior, %d without", with, without)
 	}
 }
 
@@ -162,7 +160,7 @@ func TestDoCompactionSharesTheWindowBetweenWholeGroupsAndTheSummary(t *testing.T
 		rows    []int // rendered tokens of each history row, oldest first
 		earlier int
 		output  int  // summarizer's declared output cap
-		read    int  // rows read whole; zero means the pass fails before any claim
+		read    int  // rows read whole; zero means the pass fails before it starts
 		reduced bool // later groups took part of the summary room
 	}{
 		{name: "first group over half the window", rows: []int{4000}, output: 100000, read: 1},
@@ -173,7 +171,7 @@ func TestDoCompactionSharesTheWindowBetweenWholeGroupsAndTheSummary(t *testing.T
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			var rows []sqlc.ListUncompactedMessagesBySessionRow
+			var rows []candidateRow
 			for _, tokens := range tc.rows {
 				rows = append(rows, textRow(t, "user", tokens))
 			}
@@ -182,14 +180,14 @@ func TestDoCompactionSharesTheWindowBetweenWholeGroupsAndTheSummary(t *testing.T
 			cfg := machineryConfig(stub, 100000)
 			cfg.SummaryWindowTokens, cfg.MaxOutputTokens = 8000, tc.output
 			cfg.ProtectedSources = historySources(rows[len(rows)-1])
-			q := &fakeQueries{uncompacted: rows}
+			q := &fakeQueries{history: rows}
 			if tc.earlier > 0 {
-				q.priorLogs = fusionParentLogs(t, cfg, strings.Repeat("p", tc.earlier*4))
+				q.hold(strings.Repeat("p", tc.earlier*4))
 			}
 			res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
 			if tc.read == 0 {
-				if !errors.Is(err, errCompactionInputOverflow) || stub.calls != 0 || q.created || len(q.markedIDs) != 0 {
-					t.Fatalf("err=%v calls=%d created=%t marked=%v, want an overflow before any claim or call: a summary covers only what its model read", err, stub.calls, q.created, q.markedIDs)
+				if !errors.Is(err, errCompactionInputOverflow) || stub.calls != 0 || q.created || len(q.folded) != 0 {
+					t.Fatalf("err=%v calls=%d created=%t folded=%v, want an overflow before any log or call: a summary covers only what its model read", err, stub.calls, q.created, q.folded)
 				}
 				return
 			}
@@ -200,8 +198,8 @@ func TestDoCompactionSharesTheWindowBetweenWholeGroupsAndTheSummary(t *testing.T
 					t.Fatal("a deferred group reached the summarizer")
 				}
 			}
-			if err != nil || res.Status != wantStatus || len(q.markedIDs) != tc.read || !strings.Contains(stub.prompt, strings.Repeat("x", tc.rows[tc.read-1]*4)) || !strings.Contains(stub.prompt, strings.Repeat("p", tc.earlier*4)) {
-				t.Fatalf("err=%v status=%q marked=%d, want %d whole rows and the earlier summaries read in one call", err, res.Status, len(q.markedIDs), tc.read)
+			if err != nil || res.Status != wantStatus || len(q.folded) != tc.read || !strings.Contains(stub.prompt, strings.Repeat("x", tc.rows[tc.read-1]*4)) || !strings.Contains(stub.prompt, strings.Repeat("p", tc.earlier*4)) {
+				t.Fatalf("err=%v status=%q folded=%d, want %d whole rows and the earlier summaries read in one call", err, res.Status, len(q.folded), tc.read)
 			}
 			if request := contextfrag.ProviderBudgetTokensFromBytes(len(stub.prompt)); request+stub.maxTokens > cfg.SummaryWindowTokens {
 				t.Fatalf("request %d + max_tokens %d exceeds the %d window", request, stub.maxTokens, cfg.SummaryWindowTokens)
@@ -221,7 +219,7 @@ func TestDoCompactionSharesTheWindowBetweenWholeGroupsAndTheSummary(t *testing.T
 func TestRunCompactionPanicReleasesSlot(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: machineryCorpus(t), listPanic: true}
+	q := &fakeQueries{history: machineryCorpus(t), listPanic: true}
 	stub := &stubModel{summary: "recovered"}
 	svc := newMachineryService(q)
 	cfg := machineryConfig(stub, 450)
@@ -257,7 +255,7 @@ func (p *panickingHookProvider) MCPClient(context.Context, string) (*bridge.Clie
 func TestPreHookPanicReleasesSlot(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	q := &fakeQueries{history: machineryCorpus(t)}
 	stub := &stubModel{summary: "unused"}
 	svc := newMachineryService(q)
 	provider := &panickingHookProvider{}
@@ -292,7 +290,7 @@ func TestPreHookPanicReleasesSlot(t *testing.T) {
 func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	q := &fakeQueries{history: machineryCorpus(t)}
 	stub := &stubModel{summary: "SUMMARY-OK"}
 	svc := newMachineryService(q)
 	provider := &panickingHookProvider{}
@@ -326,6 +324,7 @@ func TestPostCompactHookPanicDoesNotPoisonASuccessfulRun(t *testing.T) {
 
 	q.onComplete = nil
 	svc.SetHookService(nil)
+	q.history = append(q.history, machineryCorpus(t)...)
 	if passes, err := svc.Compact(context.Background(), cfg); err != nil || len(passes) == 0 {
 		t.Fatalf("a contained post-hook panic must leave the session usable: passes=%d err=%v", len(passes), err)
 	}

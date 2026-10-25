@@ -38,6 +38,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -112,6 +113,8 @@ type Service struct {
 	agent                   *native.Agent
 	modelsService           *models.Service
 	queries                 dbstore.Queries
+	checkpoints             *checkpoint.Store
+	pipelineCheckpoints     *timeline.CheckpointSource
 	memoryRegistry          *memprovider.Registry
 	memoryOverviewActivity  sessionActivity
 	messageService          messagepkg.Service
@@ -232,6 +235,12 @@ func NewService(
 		memorySearchTimeout:    defaultMemorySearchTimeout,
 		clockLocation:          clockLocation,
 		logger:                 log.With(slog.String("service", "agent/application")),
+	}
+	if queries != nil {
+		service.checkpoints = checkpoint.NewStore(log, queries)
+		if messageService != nil {
+			service.pipelineCheckpoints = timeline.NewCheckpointSource(log, queries, messageService)
+		}
 	}
 	return service
 }
@@ -530,6 +539,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	var messages []ModelMessage
 	var historyRecords []historyfrag.HistoryRecord
 	var historyPressureTokens int
+	var historyTruncated bool
 	var currentMessageIndex *int
 	if usePipeline {
 		var loadErr error
@@ -552,6 +562,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		messages = prepared.messages
 		historyRecords = prepared.records
 		historyPressureTokens = prepared.pressureTokens
+		historyTruncated = prepared.truncated
 	}
 	forkMessageCount := 0
 	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
@@ -635,7 +646,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.InlineAttachments = extractNativeAttachmentParts(mergedAttachments)
 	runCfg.ContextScope = buildContextFragScope(req, displayName, runCfg.Identity)
 	runCfg = runCfg.RefreshContextFrag()
-	historyLayout := chatHistoryLayout{forkCount: min(forkMessageCount, runCfg.ContextTrimmableMessages), historyCount: runCfg.ContextTrimmableMessages, pressureTokens: historyPressureTokens, usePipeline: usePipeline}
+	historyLayout := chatHistoryLayout{forkCount: min(forkMessageCount, runCfg.ContextTrimmableMessages), historyCount: runCfg.ContextTrimmableMessages, pressureTokens: historyPressureTokens, truncated: historyTruncated, usePipeline: usePipeline}
 	if index := runCfg.ContextCurrentUserMessageIndex; index != nil && *index >= historyLayout.forkCount && *index < historyLayout.historyCount {
 		historyLayout.pressureTokens = max(0, historyLayout.pressureTokens-estimateMessageTokens(messages[*index]))
 	}

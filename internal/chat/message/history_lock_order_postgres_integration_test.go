@@ -2,18 +2,22 @@ package message
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
 
+	dbpkg "github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
 
 func TestPostgresAssetLinkAndHistoryReplacementShareLockOrder(t *testing.T) {
-	fixture := setupCommittedCompactionFixture(t)
+	fixture := setupCommittedTurnFixture(t)
 	ctx := context.Background()
 	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(fixture.pool)))
 	replacement, err := svc.Persist(ctx, PersistInput{
@@ -85,7 +89,7 @@ func TestPostgresAssetLinkAndHistoryReplacementShareLockOrder(t *testing.T) {
 
 func TestPostgresAssetLinkAndHistoryMutationsShareLockOrder(t *testing.T) {
 	t.Run("supersede", func(t *testing.T) {
-		fixture := setupCommittedCompactionFixture(t)
+		fixture := setupCommittedTurnFixture(t)
 		params := dbsqlc.SupersedeHistoryTurnParams{
 			SupersededByTurnID: mustTestUUID(t, uuid.NewString()),
 			SupersededAt:       pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
@@ -99,14 +103,14 @@ func TestPostgresAssetLinkAndHistoryMutationsShareLockOrder(t *testing.T) {
 		})
 	})
 	t.Run("hide", func(t *testing.T) {
-		fixture := setupCommittedCompactionFixture(t)
+		fixture := setupCommittedTurnFixture(t)
 		turnID := mustTestUUID(t, fixture.turn.ID)
 		assertAssetMutationLockOrder(t, fixture, func(ctx context.Context, queries *dbsqlc.Queries) error {
 			return queries.HideMessagesByHistoryTurn(ctx, turnID)
 		})
 	})
 	t.Run("delete", func(t *testing.T) {
-		fixture := setupCommittedCompactionFixture(t)
+		fixture := setupCommittedTurnFixture(t)
 		messageIDs := []pgtype.UUID{mustTestUUID(t, fixture.assistant.ID)}
 		assertAssetMutationLockOrder(t, fixture, func(ctx context.Context, queries *dbsqlc.Queries) error {
 			return queries.DeleteMessagesByIDs(ctx, messageIDs)
@@ -147,7 +151,7 @@ func TestPostgresCompactionLogDeleteAndBatchDeleteShareSessionLockOrder(t *testi
 }
 
 func TestPostgresSessionClearLocksCompactionArtifactsInIDOrder(t *testing.T) {
-	fixture := setupCommittedCompactionFixture(t)
+	fixture := setupCommittedTurnFixture(t)
 	sessionID := mustTestUUID(t, fixture.sessionID)
 	assertCompactionArtifactLockOrder(t, fixture, func(ctx context.Context, queries *dbsqlc.Queries) error {
 		return queries.ClearHistoryBySession(ctx, sessionID)
@@ -155,7 +159,7 @@ func TestPostgresSessionClearLocksCompactionArtifactsInIDOrder(t *testing.T) {
 }
 
 func TestPostgresCompactionLogDeleteLocksArtifactsInIDOrder(t *testing.T) {
-	fixture := setupCommittedCompactionFixture(t)
+	fixture := setupCommittedTurnFixture(t)
 	botID := mustTestUUID(t, fixture.botID)
 	assertCompactionArtifactLockOrder(t, fixture, func(ctx context.Context, queries *dbsqlc.Queries) error {
 		return queries.DeleteCompactionLogsByBot(ctx, botID)
@@ -164,15 +168,15 @@ func TestPostgresCompactionLogDeleteLocksArtifactsInIDOrder(t *testing.T) {
 
 func assertCompactionArtifactLockOrder(
 	t *testing.T,
-	fixture committedCompactionFixture,
+	fixture committedTurnFixture,
 	mutate func(context.Context, *dbsqlc.Queries) error,
 ) {
 	t.Helper()
 	ctx := context.Background()
 	lowArtifactID, highArtifactID := orderedTestUUIDPair()
 	if _, err := fixture.pool.Exec(ctx, `
-		INSERT INTO bot_history_message_compacts (id, bot_id, session_id, compaction_epoch)
-		VALUES ($1, $3, $4, 0), ($2, $3, $4, 0)
+		INSERT INTO bot_history_message_compacts (id, bot_id, session_id)
+		VALUES ($1, $3, $4), ($2, $3, $4)
 	`, highArtifactID, lowArtifactID, fixture.botID, fixture.sessionID); err != nil {
 		t.Fatalf("insert reverse-order artifacts: %v", err)
 	}
@@ -224,7 +228,7 @@ func assertCompactionArtifactLockOrder(
 }
 
 type orderedSessionFixture struct {
-	committedCompactionFixture
+	committedTurnFixture
 	highSessionID string
 	lowSessionID  string
 	highMessage   Message
@@ -233,7 +237,7 @@ type orderedSessionFixture struct {
 
 func setupOrderedSessionFixture(t *testing.T) orderedSessionFixture {
 	t.Helper()
-	fixture := setupCommittedCompactionFixture(t)
+	fixture := setupCommittedTurnFixture(t)
 	ctx := context.Background()
 	if _, err := fixture.pool.Exec(ctx, `DELETE FROM bot_sessions WHERE id = $1`, fixture.sessionID); err != nil {
 		t.Fatalf("remove original fixture session: %v", err)
@@ -259,11 +263,11 @@ func setupOrderedSessionFixture(t *testing.T) orderedSessionFixture {
 		t.Fatalf("persist low-session message: %v", err)
 	}
 	return orderedSessionFixture{
-		committedCompactionFixture: fixture,
-		highSessionID:              highSessionID,
-		lowSessionID:               lowSessionID,
-		highMessage:                highMessage,
-		lowMessage:                 lowMessage,
+		committedTurnFixture: fixture,
+		highSessionID:        highSessionID,
+		lowSessionID:         lowSessionID,
+		highMessage:          highMessage,
+		lowMessage:           lowMessage,
 	}
 }
 
@@ -344,7 +348,7 @@ func assertBotMutationLockOrder(
 
 func assertAssetMutationLockOrder(
 	t *testing.T,
-	fixture committedCompactionFixture,
+	fixture committedTurnFixture,
 	mutate func(context.Context, *dbsqlc.Queries) error,
 ) {
 	t.Helper()
@@ -394,5 +398,127 @@ func assertAssetMutationLockOrder(
 	}
 	if err := mutationTx.Commit(ctx); err != nil {
 		t.Fatalf("commit history mutation: %v", err)
+	}
+}
+
+// committedTurnFixture is one committed turn of a fresh bot and session,
+// written through a pool so that concurrent transactions see it.
+type committedTurnFixture struct {
+	pool      *pgxpool.Pool
+	botID     string
+	sessionID string
+	user      Message
+	assistant Message
+	turn      HistoryTurn
+}
+
+func setupCommittedTurnFixture(t *testing.T) committedTurnFixture {
+	t.Helper()
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not set")
+	}
+	ctx := context.Background()
+	pool, err := dbpkg.OpenPostgresDSN(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatalf("ping postgres: %v", err)
+	}
+
+	userID := uuid.NewString()
+	botID := uuid.NewString()
+	sessionID := uuid.NewString()
+	name := "history-lock-order-" + uuid.NewString()[:12]
+	if _, err := pool.Exec(ctx, `
+		WITH created_user AS (
+			INSERT INTO users (id, username, is_active)
+			VALUES ($1, $2, true) RETURNING id
+		)
+		INSERT INTO team_members (user_id, role)
+		SELECT id, 'admin' FROM created_user
+	`, userID, name); err != nil {
+		t.Fatalf("insert fixture user: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO bots (id, owner_user_id, name)
+		VALUES ($1, $2, $3)
+	`, botID, userID, name); err != nil {
+		t.Fatalf("insert fixture bot: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO bot_sessions (id, bot_id, channel_type)
+		VALUES ($1, $2, 'local')
+	`, sessionID, botID); err != nil {
+		t.Fatalf("insert fixture session: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
+
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(pool)))
+	user, err := svc.Persist(ctx, PersistInput{
+		BotID:     botID,
+		SessionID: sessionID,
+		Role:      "user",
+		Content:   []byte(`{"role":"user","content":"question"}`),
+	})
+	if err != nil {
+		t.Fatalf("persist fixture user: %v", err)
+	}
+	assistant, err := svc.Persist(ctx, PersistInput{
+		BotID:     botID,
+		SessionID: sessionID,
+		Role:      "assistant",
+		Content:   []byte(`{"role":"assistant","content":"answer"}`),
+	})
+	if err != nil {
+		t.Fatalf("persist fixture assistant: %v", err)
+	}
+	turn, err := svc.GetVisibleTurnByMessage(ctx, sessionID, assistant.ID)
+	if err != nil {
+		t.Fatalf("load fixture turn: %v", err)
+	}
+	return committedTurnFixture{
+		pool:      pool,
+		botID:     botID,
+		sessionID: sessionID,
+		user:      user,
+		assistant: assistant,
+		turn:      turn,
+	}
+}
+
+func postgresBackendPID(t *testing.T, tx pgx.Tx) int32 {
+	t.Helper()
+	var pid int32
+	if err := tx.QueryRow(context.Background(), `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+		t.Fatalf("read postgres backend pid: %v", err)
+	}
+	return pid
+}
+
+func waitForPostgresLock(t *testing.T, pool *pgxpool.Pool, pid int32) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var waiting bool
+		err := pool.QueryRow(context.Background(), `
+			SELECT COALESCE(wait_event_type = 'Lock', false)
+			FROM pg_stat_activity
+			WHERE pid = $1
+		`, pid).Scan(&waiting)
+		if err != nil {
+			t.Fatalf("read postgres lock state: %v", err)
+		}
+		if waiting {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("postgres backend %d did not wait on a lock", pid)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

@@ -13,8 +13,8 @@ import (
 )
 
 // History that does not fit the model window is summarized before the turn,
-// including history older than 24 hours, into one active summary that the
-// next compaction folds again. A summary as long as the prompt allows is
+// from the oldest row no summary replaces however old it is, into one active
+// summary that the next compaction folds again. A summary as long as the prompt allows is
 // answered without another compaction. When the summarizer fails, the turn
 // fails before any provider call and leaves history whole; once the
 // summarizer is back, the next turn runs on a summary that also covers the
@@ -30,7 +30,7 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			f.persistHistory("hidden-", 4, 400, time.Now().Add(-48*time.Hour))
+			f.persistHistory("old-", 4, 400, time.Now().Add(-48*time.Hour))
 			for round := range 2 {
 				prefix := fmt.Sprintf("round%d-", round)
 				// The second summary is as long as the prompt allows: it must
@@ -51,8 +51,8 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 				}
 			}
 			f.longSummary.Store(false)
-			if raw, compacted := f.backlogRowsPrefixed("hidden-"); raw != 0 || compacted != 4 {
-				t.Fatalf("old history: raw=%d compacted=%d, want all four rows summarized", raw, compacted)
+			if raw, compacted := f.backlogRowsPrefixed("old-"); raw != 0 || compacted != 4 {
+				t.Fatalf("history older than a day: raw=%d compacted=%d, want it summarized", raw, compacted)
 			}
 			f.failSummary.Store(true)
 			f.appendRound(entry, "failed-")
@@ -113,10 +113,14 @@ func (f *backlogFixture) appendRound(entry, prefix string) {
 	}
 }
 
+// activeSummaries counts the summaries the session's active checkpoint holds.
 func (f *backlogFixture) activeSummaries() int {
 	f.t.Helper()
 	var count int
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_message_compacts WHERE session_id=$1 AND status='ok' AND superseded_by IS NULL`, f.sessionID).Scan(&count); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_sessions s
+		JOIN bot_history_checkpoints c ON c.id = s.history_checkpoint_id
+		CROSS JOIN LATERAL jsonb_array_elements(c.items) item
+		WHERE s.id=$1 AND item ? 'summary'`, f.sessionID).Scan(&count); err != nil {
 		f.t.Fatal(err)
 	}
 	return count

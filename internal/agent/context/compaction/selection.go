@@ -8,6 +8,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 type CompactPolicy string
@@ -21,12 +22,13 @@ const (
 	CompactPolicyAnchor CompactPolicy = "anchor"
 )
 
-// CompactionCandidate is the typed view of one uncompacted history row used
+// CompactionCandidate is the typed view of one candidate history row used
 // during candidate selection. RawContent retains the raw row payload; Record
 // carries the typed classifier output used for policies, tool-aware
 // boundaries, and summarizer rendering.
 type CompactionCandidate struct {
 	ID           pgtype.UUID
+	Position     messagepkg.HistoryPosition
 	RawContent   []byte
 	Record       historyfrag.HistoryRecord
 	Policies     []CompactPolicy

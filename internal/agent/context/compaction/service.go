@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -22,8 +23,7 @@ import (
 
 var (
 	// errEmptySummary marks a completed LLM call that produced no usable summary
-	// text. The compacted rows must stay reclaimable, so this must never reach
-	// MarkMessagesCompacted.
+	// text. The pass fails and its rows stay candidates.
 	errEmptySummary = errors.New("compaction: model returned an empty summary")
 	// errIncompleteSummary marks a summarizer call that stopped for any reason
 	// other than a natural stop (length cap, content filter): the text is
@@ -34,12 +34,12 @@ var (
 	errIneffectiveSummary = errors.New("compaction: summary does not reduce replay tokens")
 	// ErrSummaryWindowTooSmall marks a summarizer whose declared window cannot
 	// hold the fixed prompt plus the output reserve; running it would overflow
-	// on every attempt, so it fails closed before claiming any source rows.
+	// on every attempt, so it fails closed before calling it.
 	ErrSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
 	// errCompactionInputOverflow marks content the summarizer cannot read in one
 	// call: an unsplittable tool exchange, or the earlier summary beside the
-	// oldest one. Its text is never cut to fit, so it fails before claiming any
-	// source rows.
+	// oldest one. Its text is never cut to fit, so it fails before calling the
+	// summarizer.
 	errCompactionInputOverflow = errors.New("compaction: content exceeds the summarizer input")
 	// errNoSummaryRoom marks a request whose kept history leaves no room for a
 	// summary, or a summary longer than that room.
@@ -47,12 +47,9 @@ var (
 	// errCompactionUnsized marks a call without the request budget or the
 	// summarizer window it is sized from.
 	errCompactionUnsized = errors.New("compaction: request budget or summarizer window unknown")
-	// errSummaryPastCutoff marks an edit or retry whose view ends inside an
-	// active summary: the view shows those rows raw, so no fold matches it.
-	errSummaryPastCutoff = errors.New("compaction: an active summary extends past the request cutoff")
-	// errStaleSource marks a pass whose claimed rows changed, or were claimed
-	// by another writer, before it committed.
-	errStaleSource = errors.New("compaction: source rows changed since they were claimed")
+	// errStaleSource marks a pass whose request rendered another checkpoint
+	// or another version of a row than the pass reads.
+	errStaleSource = errors.New("compaction: the request rendered history that changed since")
 )
 
 // inflightRun marks one session's running compaction for activity reporting.
@@ -63,6 +60,7 @@ type inflightRun struct {
 // Service manages context compaction for bot conversations.
 type Service struct {
 	queries     dbstore.Queries
+	checkpoints *checkpoint.Store
 	hookService *hooks.Service
 	logger      *slog.Logger
 	events      messageevent.Publisher
@@ -74,15 +72,16 @@ type Service struct {
 // NewService creates a new compaction Service.
 func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 	return &Service{
-		queries:  queries,
-		logger:   log,
-		inflight: make(map[string]*inflightRun),
+		queries:     queries,
+		checkpoints: checkpoint.NewStore(log, queries),
+		logger:      log,
+		inflight:    make(map[string]*inflightRun),
 	}
 }
 
 // beginSessionCompaction marks a session as having a compaction in flight.
-// Overlapping runs would select overlapping candidate sets and race
-// MarkMessagesCompacted, so only one compaction may run per session at a time.
+// Overlapping runs would fold onto the same checkpoint and all but one would
+// fail to commit, so only one compaction may run per session at a time.
 func (s *Service) beginSessionCompaction(sessionID string) (*inflightRun, bool) {
 	s.inflightMu.Lock()
 	defer s.inflightMu.Unlock()
@@ -133,13 +132,15 @@ func (s *Service) publishActivity(botID string) {
 }
 
 // Compact runs one compaction event for the caller's request: it folds the
-// active summary and every candidate the request does not keep raw into one
-// summary. A pass folds as much as one summarizer call can read and commits
-// it; the event passes again only while candidates are left that the call
-// could not read. It returns the passes it committed: none when there was
-// nothing to fold or the session's compaction was already in flight. A
-// failed pass ends the event with an *EventError and leaves the passes before
-// it committed.
+// summaries of the session's active checkpoint and every candidate the
+// request does not keep raw into one summary. A pass folds as much as one
+// summarizer call can read and commits it as the session's next checkpoint;
+// the event passes again only while candidates are left that the call could
+// not read. An edit or retry's event first rewinds the session to the
+// checkpoint its replacement keeps, as the replacement's first step does. It
+// returns the passes it committed: none when there was nothing to fold or the
+// session's compaction was already in flight. A failed pass ends the event
+// with an *EventError and leaves the passes before it committed.
 func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
 	run, ok := s.beginSessionCompaction(cfg.SessionID)
 	if !ok {
@@ -185,10 +186,20 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 		compactErr = err
 		return nil, err
 	}
+	if cfg.ReplacedTurnID != "" {
+		if err := s.rewindReplacedTurn(ctx, botUUID, sessionUUID, cfg); err != nil {
+			compactErr = err
+			return nil, err
+		}
+	}
 
 	var passes []Pass
 	for {
-		pass, folded, err := s.doCompaction(ctx, botUUID, sessionUUID, cfg)
+		previous := ""
+		if len(passes) > 0 {
+			previous = passes[len(passes)-1].ArtifactID
+		}
+		pass, folded, err := s.doCompaction(ctx, botUUID, sessionUUID, cfg, previous)
 		if err != nil {
 			compactErr = err
 			return passes, err
@@ -294,7 +305,8 @@ func (s *Service) ListLogs(ctx context.Context, botID string, limit, offset int)
 	return logs, total, nil
 }
 
-// DeleteLogs deletes all compaction logs for a bot.
+// DeleteLogs deletes all compaction logs for a bot, and with them the history
+// checkpoints of its sessions.
 func (s *Service) DeleteLogs(ctx context.Context, botID string) error {
 	botUUID, err := db.ParseUUID(botID)
 	if err != nil {

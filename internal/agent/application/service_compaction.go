@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/oauthctx"
 	"github.com/felinics/memoh/internal/providers"
@@ -43,15 +44,23 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		cfg.Anchors, cfg.ProtectedSources = cfg.ProtectedSources, nil
 	}
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
-	// Loading is byte-bounded, but all unsummarized session history remains
-	// eligible. An age or loaded-suffix bound would strand the older backlog.
-	if cutoff := strings.TrimSpace(req.HistoryCutoffBeforeMessageID); cutoff != "" {
-		message, err := s.messageService.GetByIDBySession(ctx, req.ThreadID, cutoff)
-		if err != nil {
-			return fmt.Errorf("load history cutoff: %w", err)
-		}
-		cfg.CandidatesBefore = message.CreatedAt
+	// Every row of the thread before the request's own turn that the
+	// checkpoint has not folded is a candidate, however far a request's view
+	// reaches: the summary absorbs the oldest of them and the checkpoint moves
+	// on. The request's rows land at its admitted turn when its first step
+	// commits, after whatever other writers append meanwhile, so a fold that
+	// reached past that turn would stop holding once they land. An edit or
+	// retry compacts only the history before its cutoff, onto the checkpoint
+	// its replacement keeps.
+	cut, err := s.loadHistoryCut(ctx, req)
+	if err != nil {
+		return err
 	}
+	cfg.CandidatesBefore = cut.before
+	if cfg.CandidatesBefore == nil && req.TurnPosition != nil {
+		cfg.CandidatesBefore = &messagepkg.HistoryPosition{Turn: *req.TurnPosition}
+	}
+	cfg.ReplacedTurnID = cut.replacedTurnID
 	cfg.HistoryBudgetTokens = historyBudget
 
 	start := time.Now()

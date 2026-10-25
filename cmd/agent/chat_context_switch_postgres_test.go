@@ -29,6 +29,7 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
+	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -575,12 +576,13 @@ func TestPostgresInRunCompactionByEntry(t *testing.T) {
 }
 
 // Replacing a turn that compacted in place leaves its summary behind: the
-// replacement's first step hides the turn and moves the session to a new
-// compaction epoch, so the attempt renders the history before the turn raw
-// and folds it, with its own steps, into a summary of its own. Every effect
-// of the attempt runs once, no summary of the current epoch covers a row of
-// the replaced turn, and the next turn renders the attempt's summary without
-// compacting.
+// replacement's first step hides the turn and moves the session back to the
+// newest checkpoint that does not depend on it, so the attempt renders the
+// history before the turn raw and folds it, with its own steps, into a
+// summary of its own. Every effect of the attempt runs once, the checkpoint
+// the replaced turn left active is not on the chain of the session's active
+// one, which holds one summary, and the next turn renders the attempt's
+// summary without compacting.
 func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 	const steps = 14
 	web := runEntryNamed("web")
@@ -594,13 +596,15 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 			if code, _ := s.run(web, loopInput, steps); code != "" || f.summaries.Load() == 0 {
 				t.Fatalf("the turn to replace: code=%q summary_calls=%d, want it answered after compacting in place", code, f.summaries.Load())
 			}
-			epoch := func() (epoch int64) {
-				if err := f.pool.QueryRow(f.ctx, `SELECT compaction_epoch FROM bot_sessions WHERE id=$1`, f.sessionID).Scan(&epoch); err != nil {
-					t.Fatal(err)
+			queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
+			active := func() sqlc.BotHistoryCheckpoint {
+				row, err := queries.GetActiveHistoryCheckpoint(f.ctx, dbpkg.ParseUUIDOrEmpty(f.sessionID))
+				if err != nil {
+					t.Fatalf("load the active history checkpoint: %v", err)
 				}
-				return epoch
+				return row
 			}
-			before, summaries := epoch(), f.summaries.Load()
+			before, summaries := active().ID, f.summaries.Load()
 			s.mu.Lock()
 			s.marker, s.steps, s.calls, s.effects, s.start = loopInput, steps, 0, nil, len(s.requests)
 			s.mu.Unlock()
@@ -611,16 +615,15 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 			if code := s.replaceLatest(s.replacement(edit)); code != "" || !slices.Equal(s.effects, want) || f.summaries.Load() == summaries {
 				t.Fatalf("replacement: code=%q effects=%v summary_calls=%d, want every effect once on a summary of its own", code, s.effects, f.summaries.Load()-summaries)
 			}
-			var active, coveredHidden int
-			if err := f.pool.QueryRow(f.ctx, `SELECT count(DISTINCT c.id), count(h.id) FILTER (WHERE NOT h.turn_visible)
-				FROM bot_history_message_compacts c JOIN bot_sessions s ON s.id=c.session_id AND s.compaction_epoch=c.compaction_epoch
-				LEFT JOIN bot_history_messages h ON h.compact_id=c.id
-				WHERE c.session_id=$1 AND c.status='ok' AND c.superseded_by IS NULL`, f.sessionID).Scan(&active, &coveredHidden); err != nil {
+			chain, err := queries.ListHistoryCheckpointChain(f.ctx, active().ID)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if epoch() == before || active != 1 || coveredHidden != 0 {
-				t.Fatalf("epoch moved=%v active summaries=%d covering %d hidden rows, want the replaced turn's summary retired and one summary covering none of it", epoch() != before, active, coveredHidden)
+			descends := slices.ContainsFunc(chain, func(member sqlc.BotHistoryCheckpoint) bool { return member.ID == before })
+			if descends || f.activeSummaries() != 1 {
+				t.Fatalf("active checkpoint descends from the replaced turn's=%v summaries=%d, want the replaced turn's summary left behind and one summary of the attempt's own", descends, f.activeSummaries())
 			}
+			assertActiveCheckpointHolds(t, f.ctx, queries, f.sessionID)
 			s.window(16000)
 			summaries = f.summaries.Load()
 			code, requests := s.run(web, "NEXT_ROUND_QUESTION", 0)
@@ -911,7 +914,7 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE state <> 'completed') FROM session_runs WHERE session_id=$1`, f.sessionID).Scan(&running); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%'), count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%' AND c.status='ok'), count(*) FILTER (WHERE h.content::text LIKE $2 AND h.compact_id IS NULL) FROM bot_history_messages h LEFT JOIN bot_history_message_compacts c ON c.id=h.compact_id WHERE h.session_id=$1`, f.sessionID, "%"+foreignRow+"%").Scan(&toolRows, &foldedRows, &foreign); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%'), count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%' AND h.folded), count(*) FILTER (WHERE h.content::text LIKE $2 AND NOT h.folded) FROM (`+historyRowsSQL+`) h`, f.sessionID, "%"+foreignRow+"%").Scan(&toolRows, &foldedRows, &foreign); err != nil {
 		t.Fatal(err)
 	}
 	if running != 0 || toolRows != steps || foldedRows != first-1 || foreign != 1 || f.activeSummaries() != 1 {

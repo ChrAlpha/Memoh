@@ -148,12 +148,16 @@ type ContextMessageSource struct {
 }
 
 // DiscussMessage is one composed context message for a discuss turn.
+// CompactionArtifactID names the summary a message renders. Pinned marks
+// what admission keeps whatever the budget: what the session's history
+// checkpoint holds.
 type DiscussMessage struct {
 	Source               *ContextMessageSource `json:"source,omitempty"`
 	Role                 string                `json:"role"`
 	Content              string                `json:"content"`
 	RawContent           json.RawMessage       `json:"raw_content,omitempty"`
 	CompactionArtifactID string                `json:"compaction_artifact_id,omitempty"`
+	Pinned               bool                  `json:"pinned,omitempty"`
 }
 
 // DiscussImageRef references an image attachment to inline as vision input.
@@ -176,8 +180,8 @@ const (
 	DiscussEventSkipped = "discuss_skipped"
 	// DiscussEventRecompose signals the runtime compacted the thread
 	// synchronously before calling the model; the run ends after this event
-	// and the driver must recompose against the refreshed artifact frontier
-	// and resubmit (CM-CMP-001). The cursor must not advance.
+	// and the driver must recompose against the session's new history
+	// checkpoint and resubmit (CM-CMP-001). The cursor must not advance.
 	DiscussEventRecompose = "discuss_recompose"
 )
 

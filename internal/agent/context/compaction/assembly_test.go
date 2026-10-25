@@ -5,14 +5,12 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
-
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 func TestBuildEntriesAndIDsCoversMiddleRowThatRendersNothing(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "user", `"first question"`, 0),
 		// reasoning-only: renders empty. It is covered with its neighbours so
 		// the span stays one contiguous range instead of two short fragments.
@@ -39,7 +37,7 @@ func TestBuildEntriesAndIDsCoversMiddleRowThatRendersNothing(t *testing.T) {
 func TestBuildEntriesAndIDsCoversWholeExchangeWhenResultRendersEmpty(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "user", `"question"`, 0),
 		toolCallRow(t, 0),
 		// degenerate content: still a "tool" role closure row, but has no
@@ -66,7 +64,7 @@ func TestBuildEntriesAndIDsRendersLegacyToolResultEnvelopeExchange(t *testing.T)
 	// The tool row uses the older OpenAI-style envelope (tool_call_id at the
 	// top level, content is the result payload directly), which previously
 	// rendered empty and withheld the whole exchange from marking.
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		toolCallRow(t, 0),
 		mkRow(t, "tool", `{"role":"tool","tool_call_id":"c1","content":{"output":"search results here"}}`, 0),
 	}
@@ -97,7 +95,7 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows := []sqlc.ListUncompactedMessagesBySessionRow{
+			rows := []candidateRow{
 				mkRow(t, "user", `"old question"`, 100),
 				mkRow(t, "assistant", `"old answer"`, 100),
 				toolCallRow(t, 100),
@@ -129,7 +127,7 @@ func TestBuildEntriesAndIDsKeepsToolExchangeAcrossUnparseableBarrier(t *testing.
 func TestTrimCompactMessagesPricesKeptEntriesAsRendered(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "assistant", `"old work"`, 0),
 		mkRow(t, "user", `"kept input"`, 0),
 		mkRow(t, "assistant", `"later work"`, 0),

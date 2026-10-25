@@ -21,7 +21,12 @@ type chatHistoryLayout struct {
 	forkCount      int
 	historyCount   int
 	pressureTokens int
-	usePipeline    bool
+	// truncated reports that the history load's byte budget left rows after
+	// the checkpoint out. Pressure is measured after tool payloads are
+	// pruned, so it can fit while the load does not; the request compacts
+	// then too, rather than send a history that silently starts later.
+	truncated   bool
+	usePipeline bool
 }
 
 func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) native.RunConfig {
@@ -71,6 +76,9 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 			if err != nil {
 				return cfg, false, fmt.Errorf("%w: reload compacted history: %w", contextfrag.ErrBudgetUnsatisfied, err)
 			}
+			if prepared.truncated {
+				return cfg, false, fmt.Errorf("%w: compacted history still exceeds the load budget", contextfrag.ErrBudgetUnsatisfied)
+			}
 			messages, records = prepared.messages, prepared.records
 		}
 		recovered, err := layout.replaceHistory(ctx, cfg, req, messages, records)
@@ -82,6 +90,7 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		}
 		layout.historyCount = recovered.ContextTrimmableMessages
 		layout.pressureTokens = 0
+		layout.truncated = false
 		return recovered, true, nil
 	}
 }
@@ -128,7 +137,7 @@ func (l chatHistoryLayout) availableHistoryBudget(cfg native.RunConfig) (int, in
 		}
 	}
 	pressure := max(contextfrag.ProviderBudgetTokensFromBytes(int(contextfrag.BudgetBytesForTokens(l.pressureTokens))), raw+summaries)
-	if pressure <= available {
+	if pressure <= available && !l.truncated {
 		return 0, pressure
 	}
 	return max(0, available), pressure

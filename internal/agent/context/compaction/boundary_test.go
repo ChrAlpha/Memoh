@@ -1,24 +1,20 @@
 package compaction
 
-import (
-	"testing"
+import "testing"
 
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
-)
-
-func toolCallRow(t *testing.T, tokens int) sqlc.ListUncompactedMessagesBySessionRow {
+func toolCallRow(t *testing.T, tokens int) candidateRow {
 	t.Helper()
 	return mkRow(t, "assistant", `[{"type":"tool-call","toolName":"calc","toolCallId":"c1","input":{}}]`, tokens)
 }
 
-func toolResultRow(t *testing.T, tokens int) sqlc.ListUncompactedMessagesBySessionRow {
+func toolResultRow(t *testing.T, tokens int) candidateRow {
 	t.Helper()
 	return mkRow(t, "tool", `[{"type":"tool-result","toolName":"calc","toolCallId":"c1","output":{"type":"text","value":"42"}}]`, tokens)
 }
 
 // textRow builds a plain text row whose rendered entry is ~tokens tokens, so
 // trim tests drive the rendered-byte budget directly.
-func textRow(t *testing.T, role string, tokens int) sqlc.ListUncompactedMessagesBySessionRow {
+func textRow(t *testing.T, role string, tokens int) candidateRow {
 	t.Helper()
 	body := make([]byte, 0, tokens*4)
 	for len(body) < tokens*4 {
@@ -38,7 +34,7 @@ func firstKeptIsNotOrphanTool(t *testing.T, items, toCompact []CompactionCandida
 func TestFoldableItemsStopsBeforeCurrentInputWithoutOrphaningTools(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "assistant", `"context"`, 0),
 		toolCallRow(t, 0),
 		toolResultRow(t, 0),
@@ -58,7 +54,7 @@ func TestFoldableItemsStopsBeforeCurrentInputWithoutOrphaningTools(t *testing.T)
 func TestAdjustForToolBoundaryNoOpWhenKeepStartsClean(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "user", `"a"`, 100),
 		mkRow(t, "assistant", `"b"`, 100),
 		mkRow(t, "user", `"c"`, 100),
@@ -72,7 +68,7 @@ func TestAdjustForToolBoundaryNoOpWhenKeepStartsClean(t *testing.T) {
 func TestAdjustForToolBoundaryAdvancesPastConsecutiveResults(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		toolCallRow(t, 100),
 		toolResultRow(t, 100),
 		toolResultRow(t, 100),
@@ -88,7 +84,7 @@ func TestAdjustForToolBoundaryAdvancesPastConsecutiveResults(t *testing.T) {
 func TestAdjustForToolBoundaryAllToolsCompactsAll(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		toolResultRow(t, 100),
 		toolResultRow(t, 100),
 	}
@@ -101,7 +97,7 @@ func TestAdjustForToolBoundaryAllToolsCompactsAll(t *testing.T) {
 func TestToolBoundaryGuardRequiresToolClosurePolicy(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		toolCallRow(t, 100),
 		toolResultRow(t, 100),
 		mkRow(t, "assistant", `"done"`, 100),
@@ -120,7 +116,7 @@ func TestTrimCompactMessagesKeepsOldestAndToolExchangeIntact(t *testing.T) {
 	// rows of ~130 rendered tokens. maxTokens 200 keeps the oldest groups
 	// within budget — the whole exchange plus the first text row — and defers
 	// the newest overflow to a later pass.
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		toolCallRow(t, 0),
 		toolResultRow(t, 0),
 		textRow(t, "user", 100),
@@ -142,7 +138,7 @@ func TestTrimCompactMessagesKeepsOldestAndToolExchangeIntact(t *testing.T) {
 func TestTrimCompactMessagesNeverCutsAnOversizedFirstGroup(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		textRow(t, "user", 600),
 		textRow(t, "assistant", 100),
 	}
@@ -156,7 +152,7 @@ func TestTrimCompactMessagesMustKeepRowsCostNoBudget(t *testing.T) {
 	t.Parallel()
 
 	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"ask_user","toolCallId":"a","input":{}}]`, 600)
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		askCall,
 		textRow(t, "user", 100),
 		textRow(t, "assistant", 100),
@@ -175,7 +171,7 @@ func TestTrimCompactMessagesMustKeepRowsCostNoBudget(t *testing.T) {
 func TestAdjustForToolBoundaryIgnoresZeroCutoff(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		toolResultRow(t, 100),
 		mkRow(t, "assistant", `"x"`, 100),
 	}
@@ -189,7 +185,7 @@ func TestAdjustForToolBoundaryIgnoresZeroCutoff(t *testing.T) {
 func TestTrimCompactMessagesFloorsTinyRowCosts(t *testing.T) {
 	t.Parallel()
 
-	rows := make([]sqlc.ListUncompactedMessagesBySessionRow, 0, 100)
+	rows := make([]candidateRow, 0, 100)
 	for i := 0; i < 100; i++ {
 		rows = append(rows, mkRow(t, "user", `"a"`, 0)) // no usage; raw estimate rounds to 0
 	}

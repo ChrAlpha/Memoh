@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -88,26 +87,35 @@ func TestSetCompactionServicePreservesNil(t *testing.T) {
 
 type cutoffMessageService struct {
 	recordingMessageService
-	created time.Time
+	position messagepkg.HistoryPosition
 }
 
-func (s *cutoffMessageService) GetByIDBySession(_ context.Context, _, messageID string) (messagepkg.Message, error) {
+func (s *cutoffMessageService) HistoryPositionByID(_ context.Context, _, messageID string) (messagepkg.HistoryPosition, error) {
 	if messageID != "edited" {
-		return messagepkg.Message{}, errors.New("message not found")
+		return messagepkg.HistoryPosition{}, errors.New("message not found")
 	}
-	return messagepkg.Message{ID: messageID, CreatedAt: s.created}, nil
+	return s.position, nil
 }
 
-func TestCompactForBudgetStopsCandidatesAtTheRequestCutoff(t *testing.T) {
+func TestCompactForBudgetBoundsAnEditByItsCutoffAndReplacedTurn(t *testing.T) {
 	t.Parallel()
 
 	service, runner := newControllerPolicyService(t)
-	created := time.UnixMilli(1_700_000_000_000).UTC()
-	service.messageService = &cutoffMessageService{created: created}
-	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, HistoryCutoffBeforeMessageID: "edited"}
+	position := messagepkg.HistoryPosition{Turn: 7, Seq: 1}
+	service.messageService = &cutoffMessageService{position: position}
+	editTurn := int64(9)
+	req := ChatRequest{
+		BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, HistoryCutoffBeforeMessageID: "edited",
+		TurnPosition:    &editTurn,
+		TurnReplacement: &messagepkg.TurnReplacement{OldTurnID: "replaced-turn", ReplacementTurnID: "edit-turn"},
+	}
 
-	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 1 || !runner.configs[0].CandidatesBefore.Equal(created) {
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 1 ||
+		runner.configs[0].CandidatesBefore == nil || *runner.configs[0].CandidatesBefore != position {
 		t.Fatalf("err=%v configs=%+v, want candidates bounded by the edited message", err, runner.configs)
+	}
+	if got := runner.configs[0].ReplacedTurnID; got != "replaced-turn" {
+		t.Fatalf("replaced turn = %q, want the turn the edit replaces rewound before folding", got)
 	}
 	req.HistoryCutoffBeforeMessageID = "missing"
 	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err == nil || len(runner.configs) != 1 {
@@ -115,15 +123,27 @@ func TestCompactForBudgetStopsCandidatesAtTheRequestCutoff(t *testing.T) {
 	}
 }
 
-func TestCompactForBudgetKeepsOldHistoryEligible(t *testing.T) {
+// A request's rows land at its admitted turn when its first step commits,
+// after whatever other writers append meanwhile, so a live request folds only
+// the history before that turn. A request admitted without a turn leaves the
+// candidates open.
+func TestCompactForBudgetBoundsALiveRequestByItsOwnTurn(t *testing.T) {
 	t.Parallel()
 	service, runner := newControllerPolicyService(t)
-	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID}
-	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil {
-		t.Fatal(err)
+	service.messageService = &cutoffMessageService{}
+	turnPosition := int64(12)
+	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, TurnPosition: &turnPosition}
+
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 1 ||
+		runner.configs[0].CandidatesBefore == nil || *runner.configs[0].CandidatesBefore != (messagepkg.HistoryPosition{Turn: turnPosition}) {
+		t.Fatalf("err=%v configs=%+v, want candidates before the request's own turn", err, runner.configs)
 	}
-	if got := runner.configs[len(runner.configs)-1].CandidatesFrom; !got.IsZero() {
-		t.Fatalf("candidates_from=%v, want all historical candidates", got)
+	if got := runner.configs[0].ReplacedTurnID; got != "" {
+		t.Fatalf("replaced turn = %q, want none for a live request", got)
+	}
+	req.TurnPosition = nil
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 2 || runner.configs[1].CandidatesBefore != nil {
+		t.Fatalf("err=%v configs=%+v, want open candidates without a turn", err, runner.configs)
 	}
 }
 

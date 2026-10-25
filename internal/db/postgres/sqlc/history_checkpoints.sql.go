@@ -93,6 +93,71 @@ func (q *Queries) CheckHistoryCheckpoint(ctx context.Context, id pgtype.UUID) (C
 	return i, err
 }
 
+const classifyHistoryCheckpointMessages = `-- name: ClassifyHistoryCheckpointMessages :many
+SELECT
+  m.source_message_id::text AS external_message_id,
+  bool_or(
+    (m.turn_position, m.turn_message_seq) > ($1::bigint, $2::bigint)
+    OR m.id = ANY($3::uuid[])
+  )::boolean AS kept,
+  COALESCE(MAX((event.event_data->>'event_cursor')::bigint), 0)::bigint AS event_cursor
+FROM bot_visible_history_messages m
+LEFT JOIN bot_session_events event
+  ON event.team_id = public.memoh_current_team_id()
+ AND event.id = m.event_id
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $4
+  AND m.source_message_id = ANY($5::text[])
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+GROUP BY m.source_message_id
+`
+
+type ClassifyHistoryCheckpointMessagesParams struct {
+	AfterTurnPosition   int64         `json:"after_turn_position"`
+	AfterTurnMessageSeq int64         `json:"after_turn_message_seq"`
+	KeptIds             []pgtype.UUID `json:"kept_ids"`
+	SessionID           pgtype.UUID   `json:"session_id"`
+	ExternalMessageIds  []string      `json:"external_message_ids"`
+}
+
+type ClassifyHistoryCheckpointMessagesRow struct {
+	ExternalMessageID string `json:"external_message_id"`
+	Kept              bool   `json:"kept"`
+	EventCursor       int64  `json:"event_cursor"`
+}
+
+// How a checkpoint stands for each inbound message that has context rows:
+// kept when one of its rows is after the checkpoint's position or is a row
+// the checkpoint keeps by reference, folded otherwise. event_cursor is the
+// cursor of the event its rows were written from, 0 when unknown: a summary
+// reads rows, so it knows the message as of that event. A message without
+// context rows returns nothing.
+func (q *Queries) ClassifyHistoryCheckpointMessages(ctx context.Context, arg ClassifyHistoryCheckpointMessagesParams) ([]ClassifyHistoryCheckpointMessagesRow, error) {
+	rows, err := q.db.Query(ctx, classifyHistoryCheckpointMessages,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+		arg.KeptIds,
+		arg.SessionID,
+		arg.ExternalMessageIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ClassifyHistoryCheckpointMessagesRow
+	for rows.Next() {
+		var i ClassifyHistoryCheckpointMessagesRow
+		if err := rows.Scan(&i.ExternalMessageID, &i.Kept, &i.EventCursor); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const createHistoryCheckpoint = `-- name: CreateHistoryCheckpoint :one
 INSERT INTO bot_history_checkpoints (
   bot_id, session_id, parent_id, turn_position, turn_message_seq, items
@@ -255,6 +320,195 @@ func (q *Queries) GetHistoryCheckpointKeptBeforeTurn(ctx context.Context, arg Ge
 	return checkpoint_id, err
 }
 
+const listHistoryCheckpointCandidatesWithinBytes = `-- name: ListHistoryCheckpointCandidatesWithinBytes :many
+WITH candidate_rows AS MATERIALIZED (
+  SELECT
+    m.id,
+    m.turn_position,
+    m.turn_message_seq,
+    m.created_at,
+    (
+      octet_length(m.content::text)
+      + octet_length(m.metadata::text)
+      + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+      + octet_length(COALESCE(m.display_text, ''))
+    )::BIGINT AS payload_bytes
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $1
+    AND (
+      (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      OR m.id = ANY($4::uuid[])
+    )
+    AND ($5::bigint IS NULL
+      OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
+    AND ($7::uuid[] IS NULL
+      OR m.id = ANY($7::uuid[])
+      OR m.source_message_id = ANY($8::text[]))
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+), ranked_candidates AS MATERIALIZED (
+  SELECT
+    candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.payload_bytes,
+    COUNT(*) OVER ()::BIGINT AS candidate_count,
+    COALESCE(SUM(payload_bytes) OVER (), 0)::BIGINT AS candidate_bytes,
+    SUM(payload_bytes) OVER (
+      ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
+    )::BIGINT AS cumulative_bytes
+  FROM candidate_rows
+), admitted_candidates AS MATERIALIZED (
+  SELECT id, turn_position, turn_message_seq, created_at, payload_bytes, candidate_count, candidate_bytes, cumulative_bytes
+  FROM ranked_candidates
+  WHERE cumulative_bytes <= $9::BIGINT
+)
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.event_id,
+  m.display_text,
+  m.turn_position,
+  m.turn_message_seq,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform,
+  r.conversation_type AS conversation_type,
+  COALESCE(
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_name', '')), ''),
+    NULLIF(TRIM(COALESCE(r.metadata->>'conversation_handle', '')), ''),
+    ''
+  )::text AS conversation_name,
+  r.default_reply_target AS reply_target,
+  admitted.candidate_count,
+  admitted.candidate_bytes,
+  admitted.cumulative_bytes
+FROM bot_visible_history_messages m
+JOIN admitted_candidates admitted ON admitted.id = m.id
+LEFT JOIN channel_identities ci
+  ON ci.id = m.sender_channel_identity_id
+ AND ci.team_id = public.memoh_current_team_id()
+JOIN bot_sessions s
+  ON s.id = m.session_id
+ AND s.team_id = public.memoh_current_team_id()
+LEFT JOIN bot_channel_routes r
+  ON r.id = s.route_id
+ AND r.team_id = public.memoh_current_team_id()
+WHERE m.team_id = public.memoh_current_team_id()
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+`
+
+type ListHistoryCheckpointCandidatesWithinBytesParams struct {
+	SessionID            pgtype.UUID   `json:"session_id"`
+	AfterTurnPosition    int64         `json:"after_turn_position"`
+	AfterTurnMessageSeq  int64         `json:"after_turn_message_seq"`
+	KeptIds              []pgtype.UUID `json:"kept_ids"`
+	BeforeTurnPosition   pgtype.Int8   `json:"before_turn_position"`
+	BeforeTurnMessageSeq pgtype.Int8   `json:"before_turn_message_seq"`
+	MessageIds           []pgtype.UUID `json:"message_ids"`
+	ExternalMessageIds   []string      `json:"external_message_ids"`
+	MaxBytes             int64         `json:"max_bytes"`
+}
+
+type ListHistoryCheckpointCandidatesWithinBytesRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	TurnPosition            pgtype.Int8        `json:"turn_position"`
+	TurnMessageSeq          pgtype.Int8        `json:"turn_message_seq"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
+	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
+	Platform                pgtype.Text        `json:"platform"`
+	ConversationType        pgtype.Text        `json:"conversation_type"`
+	ConversationName        string             `json:"conversation_name"`
+	ReplyTarget             pgtype.Text        `json:"reply_target"`
+	CandidateCount          int64              `json:"candidate_count"`
+	CandidateBytes          int64              `json:"candidate_bytes"`
+	CumulativeBytes         int64              `json:"cumulative_bytes"`
+}
+
+// A compaction pass reads its candidates oldest first within a hard payload
+// budget: the rows the checkpoint it folds onto keeps by reference and the
+// context rows after that checkpoint's position, before the cutoff position
+// when set. The cumulative filter is evaluated before the payload join, so an
+// oversized leading row returns no payload instead of crossing the
+// process-memory boundary. CandidateCount reports whether the prefix was
+// truncated. message_ids, when set, restricts candidates to those rows and
+// the rows of external_message_ids: what the caller's request renders.
+func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context, arg ListHistoryCheckpointCandidatesWithinBytesParams) ([]ListHistoryCheckpointCandidatesWithinBytesRow, error) {
+	rows, err := q.db.Query(ctx, listHistoryCheckpointCandidatesWithinBytes,
+		arg.SessionID,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+		arg.KeptIds,
+		arg.BeforeTurnPosition,
+		arg.BeforeTurnMessageSeq,
+		arg.MessageIds,
+		arg.ExternalMessageIds,
+		arg.MaxBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListHistoryCheckpointCandidatesWithinBytesRow
+	for rows.Next() {
+		var i ListHistoryCheckpointCandidatesWithinBytesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
+			&i.Role,
+			&i.Content,
+			&i.Metadata,
+			&i.Usage,
+			&i.EventID,
+			&i.DisplayText,
+			&i.TurnPosition,
+			&i.TurnMessageSeq,
+			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
+			&i.ConversationType,
+			&i.ConversationName,
+			&i.ReplyTarget,
+			&i.CandidateCount,
+			&i.CandidateBytes,
+			&i.CumulativeBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHistoryCheckpointChain = `-- name: ListHistoryCheckpointChain :many
 WITH RECURSIVE chain AS (
   SELECT checkpoint.id, checkpoint.parent_id, 0 AS depth
@@ -407,6 +661,457 @@ func (q *Queries) ListHistoryCheckpointSummaries(ctx context.Context, arg ListHi
 	return items, nil
 }
 
+const listHistoryMessagesAfterWithinBytes = `-- name: ListHistoryMessagesAfterWithinBytes :many
+WITH RECURSIVE history_window AS (
+  (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      octet_length(m.content::text)::bigint AS total_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $1
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      AND ($4::bigint IS NULL
+        OR (m.turn_position, m.turn_message_seq) < ($4::bigint, $5::bigint))
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND $6::bigint > 0
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  )
+  UNION ALL
+  SELECT older.id, older.turn_position, older.turn_message_seq, older.created_at,
+    previous.total_bytes + older.content_bytes AS total_bytes
+  FROM history_window previous
+  CROSS JOIN LATERAL (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      octet_length(m.content::text)::bigint AS content_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $1
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+        < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) older
+  WHERE previous.total_bytes < $6::bigint
+), oldest AS (
+  SELECT admitted.turn_position, admitted.turn_message_seq, admitted.created_at, admitted.id
+  FROM history_window admitted
+  ORDER BY admitted.turn_position ASC, admitted.turn_message_seq ASC, admitted.created_at ASC, admitted.id ASC
+  LIMIT 1
+), budget_cut AS (
+  SELECT EXISTS (
+    SELECT 1
+    FROM oldest
+    JOIN bot_history_messages m
+      ON m.team_id = public.memoh_current_team_id()
+     AND m.session_id = $1
+     AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+       < (oldest.turn_position, oldest.turn_message_seq, oldest.created_at, oldest.id)
+    WHERE m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  ) AS truncated
+)
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.session_mode,
+  m.runtime_type,
+  m.event_id,
+  m.display_text,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform,
+  budget_cut.truncated
+FROM history_window admitted
+JOIN bot_history_messages m ON m.id = admitted.id
+  AND m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+CROSS JOIN budget_cut
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
+LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+ORDER BY admitted.turn_position ASC, admitted.turn_message_seq ASC, admitted.created_at ASC, admitted.id ASC
+`
+
+type ListHistoryMessagesAfterWithinBytesParams struct {
+	SessionID            pgtype.UUID `json:"session_id"`
+	AfterTurnPosition    int64       `json:"after_turn_position"`
+	AfterTurnMessageSeq  int64       `json:"after_turn_message_seq"`
+	BeforeTurnPosition   pgtype.Int8 `json:"before_turn_position"`
+	BeforeTurnMessageSeq pgtype.Int8 `json:"before_turn_message_seq"`
+	MaxBytes             int64       `json:"max_bytes"`
+}
+
+type ListHistoryMessagesAfterWithinBytesRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	SessionMode             string             `json:"session_mode"`
+	RuntimeType             string             `json:"runtime_type"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
+	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
+	Platform                pgtype.Text        `json:"platform"`
+	Truncated               bool               `json:"truncated"`
+}
+
+// The raw history after a checkpoint (CM-ADM-001): the context rows after its
+// position, before the cutoff position when set, admitted newest-first until
+// their running content byte total crosses max_bytes (the crossing row is
+// kept, so the newest row always loads) and returned in ascending order. The
+// walk follows the visible-session-order index and stops at the budget, so
+// older rows are never measured, however much history the checkpoint leaves
+// raw. truncated reports that the budget, not the window, ended the walk:
+// context rows of the window remain older than the oldest it admitted. Only
+// content is budgeted: full rows, metadata included, still load, so callers
+// that need content alone use ListTurnResponseSourcesAfterWithinBytes.
+func (q *Queries) ListHistoryMessagesAfterWithinBytes(ctx context.Context, arg ListHistoryMessagesAfterWithinBytesParams) ([]ListHistoryMessagesAfterWithinBytesRow, error) {
+	rows, err := q.db.Query(ctx, listHistoryMessagesAfterWithinBytes,
+		arg.SessionID,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+		arg.BeforeTurnPosition,
+		arg.BeforeTurnMessageSeq,
+		arg.MaxBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListHistoryMessagesAfterWithinBytesRow
+	for rows.Next() {
+		var i ListHistoryMessagesAfterWithinBytesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
+			&i.Role,
+			&i.Content,
+			&i.Metadata,
+			&i.Usage,
+			&i.SessionMode,
+			&i.RuntimeType,
+			&i.EventID,
+			&i.DisplayText,
+			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
+			&i.Truncated,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHistoryMessagesByIDs = `-- name: ListHistoryMessagesByIDs :many
+SELECT
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id AS sender_user_id,
+  m.source_message_id AS external_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.session_mode,
+  m.runtime_type,
+  m.event_id,
+  m.display_text,
+  m.created_at,
+  ci.display_name AS sender_display_name,
+  ci.avatar_url AS sender_avatar_url,
+  s.channel_type AS platform
+FROM bot_visible_history_messages m
+LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
+LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND m.id = ANY($2::uuid[])
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+`
+
+type ListHistoryMessagesByIDsParams struct {
+	SessionID pgtype.UUID   `json:"session_id"`
+	Ids       []pgtype.UUID `json:"ids"`
+}
+
+type ListHistoryMessagesByIDsRow struct {
+	ID                      pgtype.UUID        `json:"id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderUserID            pgtype.UUID        `json:"sender_user_id"`
+	ExternalMessageID       pgtype.Text        `json:"external_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	SessionMode             string             `json:"session_mode"`
+	RuntimeType             string             `json:"runtime_type"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
+	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
+	Platform                pgtype.Text        `json:"platform"`
+}
+
+// The rows a checkpoint keeps by reference, as context rows, in turn order.
+func (q *Queries) ListHistoryMessagesByIDs(ctx context.Context, arg ListHistoryMessagesByIDsParams) ([]ListHistoryMessagesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listHistoryMessagesByIDs, arg.SessionID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListHistoryMessagesByIDsRow
+	for rows.Next() {
+		var i ListHistoryMessagesByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.BotID,
+			&i.SessionID,
+			&i.SenderChannelIdentityID,
+			&i.SenderUserID,
+			&i.ExternalMessageID,
+			&i.SourceReplyToMessageID,
+			&i.Role,
+			&i.Content,
+			&i.Metadata,
+			&i.Usage,
+			&i.SessionMode,
+			&i.RuntimeType,
+			&i.EventID,
+			&i.DisplayText,
+			&i.CreatedAt,
+			&i.SenderDisplayName,
+			&i.SenderAvatarUrl,
+			&i.Platform,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTurnResponseSourcesAfterWithinBytes = `-- name: ListTurnResponseSourcesAfterWithinBytes :many
+WITH RECURSIVE history_window AS (
+  (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      octet_length(m.content::text)::bigint AS total_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $1
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND $4::bigint > 0
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  )
+  UNION ALL
+  SELECT older.id, older.turn_position, older.turn_message_seq, older.created_at,
+    previous.total_bytes + older.content_bytes AS total_bytes
+  FROM history_window previous
+  CROSS JOIN LATERAL (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      octet_length(m.content::text)::bigint AS content_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $1
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+        < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) older
+  WHERE previous.total_bytes < $4::bigint
+)
+SELECT m.id, m.role, m.content, m.created_at,
+  COALESCE(m.metadata->'agent_step_interrupted' = 'true'::jsonb, false)::boolean AS interrupted,
+  COALESCE(m.metadata->'discuss_step' = 'true'::jsonb, false)::boolean AS discuss_step
+FROM history_window admitted
+JOIN bot_history_messages m ON m.id = admitted.id
+  AND m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+ORDER BY admitted.turn_position ASC, admitted.turn_message_seq ASC, admitted.created_at ASC, admitted.id ASC
+`
+
+type ListTurnResponseSourcesAfterWithinBytesParams struct {
+	SessionID           pgtype.UUID `json:"session_id"`
+	AfterTurnPosition   int64       `json:"after_turn_position"`
+	AfterTurnMessageSeq int64       `json:"after_turn_message_seq"`
+	MaxBytes            int64       `json:"max_bytes"`
+}
+
+type ListTurnResponseSourcesAfterWithinBytesRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Role        string             `json:"role"`
+	Content     []byte             `json:"content"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	Interrupted bool               `json:"interrupted"`
+	DiscussStep bool               `json:"discuss_step"`
+}
+
+// Turn-response (TR) composition, in Discuss and in pipeline chat, only needs
+// content, the interrupted-checkpoint flag and the Discuss step flag. Never
+// return full metadata: legacy context_lifecycle snapshots can dwarf the
+// content budget. Walk as ListHistoryMessagesAfterWithinBytes walks,
+// including its crossing row and turn order.
+func (q *Queries) ListTurnResponseSourcesAfterWithinBytes(ctx context.Context, arg ListTurnResponseSourcesAfterWithinBytesParams) ([]ListTurnResponseSourcesAfterWithinBytesRow, error) {
+	rows, err := q.db.Query(ctx, listTurnResponseSourcesAfterWithinBytes,
+		arg.SessionID,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+		arg.MaxBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTurnResponseSourcesAfterWithinBytesRow
+	for rows.Next() {
+		var i ListTurnResponseSourcesAfterWithinBytesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Role,
+			&i.Content,
+			&i.CreatedAt,
+			&i.Interrupted,
+			&i.DiscussStep,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTurnResponseSourcesByIDs = `-- name: ListTurnResponseSourcesByIDs :many
+SELECT
+  m.id,
+  m.role,
+  m.content,
+  m.created_at,
+  COALESCE(m.metadata->'agent_step_interrupted' = 'true'::jsonb, false)::boolean AS interrupted,
+  COALESCE(m.metadata->'discuss_step' = 'true'::jsonb, false)::boolean AS discuss_step,
+  m.source_message_id AS external_message_id
+FROM bot_visible_history_messages m
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND m.id = ANY($2::uuid[])
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+`
+
+type ListTurnResponseSourcesByIDsParams struct {
+	SessionID pgtype.UUID   `json:"session_id"`
+	Ids       []pgtype.UUID `json:"ids"`
+}
+
+type ListTurnResponseSourcesByIDsRow struct {
+	ID                pgtype.UUID        `json:"id"`
+	Role              string             `json:"role"`
+	Content           []byte             `json:"content"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	Interrupted       bool               `json:"interrupted"`
+	DiscussStep       bool               `json:"discuss_step"`
+	ExternalMessageID pgtype.Text        `json:"external_message_id"`
+}
+
+// The turn-response projection of the rows a checkpoint keeps by reference,
+// with the inbound message a user row records: timeline composition renders
+// that message's segment for it.
+func (q *Queries) ListTurnResponseSourcesByIDs(ctx context.Context, arg ListTurnResponseSourcesByIDsParams) ([]ListTurnResponseSourcesByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listTurnResponseSourcesByIDs, arg.SessionID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTurnResponseSourcesByIDsRow
+	for rows.Next() {
+		var i ListTurnResponseSourcesByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Role,
+			&i.Content,
+			&i.CreatedAt,
+			&i.Interrupted,
+			&i.DiscussStep,
+			&i.ExternalMessageID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lockHistoryCheckpointSession = `-- name: LockHistoryCheckpointSession :one
 SELECT session.history_checkpoint_id
 FROM bot_sessions session
@@ -428,6 +1133,104 @@ func (q *Queries) LockHistoryCheckpointSession(ctx context.Context, arg LockHist
 	var history_checkpoint_id pgtype.UUID
 	err := row.Scan(&history_checkpoint_id)
 	return history_checkpoint_id, err
+}
+
+const measureHistoryCheckpointCandidates = `-- name: MeasureHistoryCheckpointCandidates :one
+SELECT
+  COUNT(*)::BIGINT AS candidate_count,
+  COALESCE(SUM(
+    octet_length(m.content::text)
+    + octet_length(m.metadata::text)
+    + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+    + octet_length(COALESCE(m.display_text, ''))
+  ), 0)::BIGINT AS candidate_bytes,
+  COALESCE(MAX(
+    octet_length(m.content::text)
+    + octet_length(m.metadata::text)
+    + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+    + octet_length(COALESCE(m.display_text, ''))
+  ), 0)::BIGINT AS largest_candidate_bytes
+FROM bot_visible_history_messages m
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND (
+    (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+    OR m.id = ANY($4::uuid[])
+  )
+  AND ($5::bigint IS NULL
+    OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
+  AND ($7::uuid[] IS NULL
+    OR m.id = ANY($7::uuid[])
+    OR m.source_message_id = ANY($8::text[]))
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+`
+
+type MeasureHistoryCheckpointCandidatesParams struct {
+	SessionID            pgtype.UUID   `json:"session_id"`
+	AfterTurnPosition    int64         `json:"after_turn_position"`
+	AfterTurnMessageSeq  int64         `json:"after_turn_message_seq"`
+	KeptIds              []pgtype.UUID `json:"kept_ids"`
+	BeforeTurnPosition   pgtype.Int8   `json:"before_turn_position"`
+	BeforeTurnMessageSeq pgtype.Int8   `json:"before_turn_message_seq"`
+	MessageIds           []pgtype.UUID `json:"message_ids"`
+	ExternalMessageIds   []string      `json:"external_message_ids"`
+}
+
+type MeasureHistoryCheckpointCandidatesRow struct {
+	CandidateCount        int64 `json:"candidate_count"`
+	CandidateBytes        int64 `json:"candidate_bytes"`
+	LargestCandidateBytes int64 `json:"largest_candidate_bytes"`
+}
+
+// Metadata-only companion of ListHistoryCheckpointCandidatesWithinBytes over
+// the same candidates. It never returns payloads and reports the largest
+// one, which a read that admits nothing could not fit.
+func (q *Queries) MeasureHistoryCheckpointCandidates(ctx context.Context, arg MeasureHistoryCheckpointCandidatesParams) (MeasureHistoryCheckpointCandidatesRow, error) {
+	row := q.db.QueryRow(ctx, measureHistoryCheckpointCandidates,
+		arg.SessionID,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+		arg.KeptIds,
+		arg.BeforeTurnPosition,
+		arg.BeforeTurnMessageSeq,
+		arg.MessageIds,
+		arg.ExternalMessageIds,
+	)
+	var i MeasureHistoryCheckpointCandidatesRow
+	err := row.Scan(&i.CandidateCount, &i.CandidateBytes, &i.LargestCandidateBytes)
+	return i, err
+}
+
+const measureHistoryMessagesAfter = `-- name: MeasureHistoryMessagesAfter :one
+SELECT
+  COUNT(*)::BIGINT AS message_count,
+  COALESCE(SUM(octet_length(m.content::text)), 0)::BIGINT AS content_bytes
+FROM bot_visible_history_messages m
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+`
+
+type MeasureHistoryMessagesAfterParams struct {
+	SessionID           pgtype.UUID `json:"session_id"`
+	AfterTurnPosition   int64       `json:"after_turn_position"`
+	AfterTurnMessageSeq int64       `json:"after_turn_message_seq"`
+}
+
+type MeasureHistoryMessagesAfterRow struct {
+	MessageCount int64 `json:"message_count"`
+	ContentBytes int64 `json:"content_bytes"`
+}
+
+// Metadata-only context admission measure (CM-ADM-001) of the raw history
+// after a checkpoint: counts and content bytes aggregate on the database
+// side, so admission can size it without shipping any payload.
+func (q *Queries) MeasureHistoryMessagesAfter(ctx context.Context, arg MeasureHistoryMessagesAfterParams) (MeasureHistoryMessagesAfterRow, error) {
+	row := q.db.QueryRow(ctx, measureHistoryMessagesAfter, arg.SessionID, arg.AfterTurnPosition, arg.AfterTurnMessageSeq)
+	var i MeasureHistoryMessagesAfterRow
+	err := row.Scan(&i.MessageCount, &i.ContentBytes)
+	return i, err
 }
 
 const rewindHistoryCheckpointBeforeTurn = `-- name: RewindHistoryCheckpointBeforeTurn :one

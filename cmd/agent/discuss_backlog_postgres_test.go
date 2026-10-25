@@ -198,20 +198,17 @@ func (f *backlogFixture) appendMessageAt(id, text string, created time.Time) {
 	f.rc = append(f.rc, segment)
 }
 
-// deliver writes text as the message ingress stores, received at created,
-// and returns the segment the timeline renders for it. It does not touch the
-// fixture's rendered context, so a tool may call it while a run reads it.
+// deliver writes text as the message ingress stores it: an event received at
+// created, and a history row written now. It returns the segment the
+// timeline renders for it. It does not touch the fixture's rendered context,
+// so a tool may call it while a run reads it.
 func (f *backlogFixture) deliver(ctx context.Context, id, text string, created time.Time) (timeline.RenderedSegment, error) {
 	eventID, event, err := f.cursor.PersistEvent(ctx, f.botID, f.sessionID, timeline.MessageEvent{SessionID: f.sessionID, MessageID: id, ReceivedAtMs: created.UnixMilli(), Content: []timeline.ContentNode{{Type: "text", Text: text}}})
 	if err != nil {
 		return timeline.RenderedSegment{}, err
 	}
 	content, _ := json.Marshal(text)
-	msg, err := f.messages.Persist(ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: id, EventID: eventID, Role: "user", Content: content, SessionMode: "discuss"})
-	if err != nil {
-		return timeline.RenderedSegment{}, err
-	}
-	if _, err := f.pool.Exec(ctx, `UPDATE bot_history_messages SET created_at=$2 WHERE id=$1`, msg.ID, created); err != nil {
+	if _, err := f.messages.Persist(ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, ExternalMessageID: id, EventID: eventID, Role: "user", Content: content, SessionMode: "discuss"}); err != nil {
 		return timeline.RenderedSegment{}, err
 	}
 	return timeline.RenderedSegment{MessageID: id, LastEventCursor: event.(timeline.MessageEvent).EventCursor, ReceivedAtMs: created.UnixMilli(), Content: []timeline.RenderedContentPiece{{Type: "text", Text: text}}}, nil
@@ -220,7 +217,8 @@ func (f *backlogFixture) deliver(ctx context.Context, id, text string, created t
 // startDriver starts a Discuss driver that knows only what the cursor store
 // and the history hold.
 func (f *backlogFixture) startDriver() {
-	f.driver = discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Turn: f.service, CursorStore: f.cursor, MessageService: f.messages, Artifacts: compaction.NewTimelineArtifactSource(postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))), Broadcaster: f.broadcaster, AdmissionMaxTokens: 16000, Logger: slog.Default()})
+	checkpoints := timeline.NewCheckpointSource(slog.Default(), postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool)), f.messages)
+	f.driver = discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Turn: f.service, CursorStore: f.cursor, MessageService: f.messages, Checkpoints: checkpoints, Broadcaster: f.broadcaster, AdmissionMaxTokens: 16000, Logger: slog.Default()})
 	f.t.Cleanup(f.driver.StopAll)
 }
 
@@ -271,13 +269,26 @@ func (f *backlogFixture) appendBacklog(count, size int) {
 	}
 }
 
+// historyRowsSQL lists the history rows of session $1, each with whether
+// the session's active checkpoint folds it: a context row at or before the
+// checkpoint's position that the checkpoint does not keep by reference.
+const historyRowsSQL = `SELECT h.*, COALESCE(h.turn_visible
+	  AND (h.turn_position, h.turn_message_seq) <= (c.turn_position, c.turn_message_seq)
+	  AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(c.items) item WHERE item->>'row' = h.id::text), false) AS folded
+	FROM bot_history_messages h
+	JOIN bot_sessions s ON s.id = h.session_id
+	LEFT JOIN bot_history_checkpoints c ON c.id = s.history_checkpoint_id
+	WHERE h.session_id = $1`
+
 func (f *backlogFixture) backlogRows() (raw, compacted int) {
 	return f.backlogRowsPrefixed("backlog-")
 }
 
+// backlogRowsPrefixed counts the rows of inbound messages named with prefix
+// that the session's active checkpoint leaves raw and that it folds.
 func (f *backlogFixture) backlogRowsPrefixed(prefix string) (raw, compacted int) {
 	f.t.Helper()
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE c.status IS DISTINCT FROM 'ok'), count(*) FILTER (WHERE c.status = 'ok') FROM bot_history_messages h LEFT JOIN bot_history_message_compacts c ON c.id=h.compact_id WHERE h.session_id=$1 AND h.source_message_id LIKE $2`, f.sessionID, prefix+"%").Scan(&raw, &compacted); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE NOT folded), count(*) FILTER (WHERE folded) FROM (`+historyRowsSQL+`) h WHERE h.source_message_id LIKE $2`, f.sessionID, prefix+"%").Scan(&raw, &compacted); err != nil {
 		f.t.Fatal(err)
 	}
 	return raw, compacted
@@ -370,12 +381,8 @@ func TestPostgresDiscussUnreadableOversizedInputFailsExplicitly(t *testing.T) {
 			if code := f.trigger(); code != "context.budget_unsatisfied" || f.modelCalls.Load() != 0 || f.summaries.Load() != 0 {
 				t.Fatalf("next round: code=%q provider_calls=%d summaries=%d, want budget_unsatisfied before any call", code, f.modelCalls.Load(), f.summaries.Load())
 			}
-			var compacted bool
-			if err := f.pool.QueryRow(f.ctx, `SELECT compact_id IS NOT NULL FROM bot_history_messages WHERE session_id=$1 AND source_message_id='oversized'`, f.sessionID).Scan(&compacted); err != nil {
-				t.Fatal(err)
-			}
-			if compacted {
-				t.Fatal("an input the summarizer could not read was marked compacted")
+			if _, compacted := f.backlogRowsPrefixed("oversized"); compacted != 0 {
+				t.Fatal("an input the summarizer could not read was folded")
 			}
 		})
 	}

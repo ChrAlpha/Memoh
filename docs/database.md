@@ -44,7 +44,7 @@ The canonical source of truth for the full PostgreSQL schema is `db/postgres/mig
 - `user_channel_bindings` — Outbound delivery config per user/channel
 
 **Bots & Sessions**
-- `bots` — Bot definitions with model references and settings
+- `bots` — Bot definitions with model references and settings; `history_checkpoints_since` is when the bot's history started being kept under history checkpoints (its creation, or the 0171 migration for older bots)
 - `bot_sessions` — Bot conversation sessions; `history_checkpoint_id` points at the session's active history checkpoint
 - `bot_session_events` — Session event log
 - `bot_channel_configs` — Per-bot channel configurations

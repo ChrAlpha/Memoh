@@ -30,6 +30,7 @@ import (
 	"github.com/felinics/memoh/internal/db/dbtest"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/settings"
@@ -94,14 +95,9 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 	appendMessage := func(id, role, text string, self bool) {
 		created := base.Add(time.Duration(len(rc)+1) * time.Second)
 		content, _ := json.Marshal(text)
-		msg, err := messages.Persist(ctx, messagepkg.PersistInput{BotID: botID, SessionID: sessionID, ExternalMessageID: id, Role: role, Content: content, SessionMode: "discuss"})
-		if err != nil {
+		if _, err := messages.Persist(ctx, messagepkg.PersistInput{BotID: botID, SessionID: sessionID, ExternalMessageID: id, Role: role, Content: content, SessionMode: "discuss"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := pool.Exec(ctx, `UPDATE bot_history_messages SET created_at=$2 WHERE id=$1`, msg.ID, created); err != nil {
-			t.Fatal(err)
-		}
-
 		rc = append(rc, timeline.RenderedSegment{MessageID: id, ReceivedAtMs: created.UnixMilli(), IsSelfSent: self, Content: []timeline.RenderedContentPiece{{Type: "text", Text: text}}})
 	}
 	for i := range 6 {
@@ -140,7 +136,7 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 		service.SetContextAbsoluteMaxTokens(16000)
 
 		cursor := &notifyingRecoveryCursor{EventStore: cursors, advanced: make(chan timeline.DiscussCursorPosition, 2)}
-		driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Turn: service, CursorStore: cursor, MessageService: messages, Artifacts: compaction.NewTimelineArtifactSource(queries), AdmissionMaxTokens: 16000, Logger: logger})
+		driver := discuss.NewDiscussDriver(discuss.DiscussDriverDeps{Turn: service, CursorStore: cursor, MessageService: messages, Checkpoints: timeline.NewCheckpointSource(logger, queries, messages), AdmissionMaxTokens: 16000, Logger: logger})
 		t.Cleanup(driver.StopAll)
 		cfg := discuss.DiscussSessionConfig{BotID: botID, ThreadID: sessionID, TeamID: teamID}
 		before := summaries.Load()
@@ -168,16 +164,13 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 		}
 
 		var compacted int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND source_message_id=ANY($2) AND compact_id IS NOT NULL`, sessionID, []string{a, b}).Scan(&compacted); err != nil {
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM (`+historyRowsSQL+`) h WHERE h.source_message_id=ANY($2) AND h.folded`, sessionID, []string{a, b}).Scan(&compacted); err != nil {
 			t.Fatal(err)
 		}
 		if compacted != 0 {
 			t.Fatal("current batch was compacted")
 		}
-		frontier, err := compaction.NewArtifactProjection(queries).LoadActiveSession(ctx, compaction.ArtifactOwner{BotID: botID, SessionID: sessionID, SessionIDKnown: true})
-		if err != nil || len(frontier.Issues) > 0 {
-			t.Fatalf("round %d invalid frontier: %v %+v", round, err, frontier.Issues)
-		}
+		assertActiveCheckpointHolds(t, ctx, queries, sessionID)
 		driver.StopAll()
 		_ = manager.Close()
 	}
@@ -205,6 +198,21 @@ func (c *notifyingRecoveryCursor) UpsertDiscussCursor(ctx context.Context, sessi
 	}
 	c.advanced <- position
 	return nil
+}
+
+// assertActiveCheckpointHolds fails unless the session's active checkpoint
+// holds as it stands: every row it keeps is a context row, every summary it
+// holds is usable, and no context row appeared below it.
+func assertActiveCheckpointHolds(t *testing.T, ctx context.Context, queries dbstore.Queries, sessionID string) {
+	t.Helper()
+	active, err := queries.GetActiveHistoryCheckpoint(ctx, dbpkg.ParseUUIDOrEmpty(sessionID))
+	if err != nil {
+		t.Fatalf("load the active history checkpoint: %v", err)
+	}
+	held, err := queries.CheckHistoryCheckpoint(ctx, active.ID)
+	if err != nil || held.MissingRows != 0 || held.MissingSummaries != 0 || held.AppearedRows != 0 {
+		t.Fatalf("active history checkpoint %s does not hold: %+v err=%v", active.ID, held, err)
+	}
 }
 
 func openDiscussRecoveryPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {

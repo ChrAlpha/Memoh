@@ -8,6 +8,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 // Pass is one committed pass of a compaction event: the summary it wrote and
@@ -85,7 +86,7 @@ type TriggerConfig struct {
 	BotID                 string
 	SessionID             string
 	ModelID               string // runtime model slug sent to the provider
-	ModelRecordID         string // models.id row UUID recorded as artifact/log provenance
+	ModelRecordID         string // models.id row UUID recorded as the log's provenance
 	ClientType            string
 	APIKey                string //nolint:gosec // runtime credential, not a hardcoded secret
 	CodexAccountID        string
@@ -99,11 +100,15 @@ type TriggerConfig struct {
 	// declared window and output cap; they size the summarizer call.
 	SummaryWindowTokens int
 	MaxOutputTokens     int
-	// CandidatesFrom is where the caller's history begins and
-	// CandidatesBefore the cutoff an edit or retry replays history before.
-	// Rows outside are not part of that request. Zero leaves that side open.
-	CandidatesFrom   time.Time
-	CandidatesBefore time.Time
+	// CandidatesBefore, when set, is where the caller's history ends: the
+	// cutoff an edit or retry replays history before, or the turn the request
+	// runs as. Rows from it on are not candidates.
+	CandidatesBefore *messagepkg.HistoryPosition
+	// ReplacedTurnID is the turn an edit or retry replaces. The replacement
+	// rewinds the session to the checkpoint that does not depend on that
+	// turn when its first step commits; an event the request needs earlier
+	// rewinds first, so it folds onto the checkpoint the replacement keeps.
+	ReplacedTurnID string
 	// ProtectedSources stay raw, with everything after them. Current ones are
 	// the caller's current input, budgeted outside HistoryBudgetTokens; the
 	// rest are history it keeps.

@@ -8,7 +8,7 @@ import (
 func TestCompactRunsNothingWhileSessionIsBusy(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	q := &fakeQueries{history: machineryCorpus(t)}
 	stub := &stubModel{summary: "healthy summary"}
 	svc := newMachineryService(q)
 	cfg := machineryConfig(stub, 450)
@@ -17,8 +17,8 @@ func TestCompactRunsNothingWhileSessionIsBusy(t *testing.T) {
 		t.Fatal("first acquisition must succeed")
 	}
 	passes, err := svc.Compact(context.Background(), cfg)
-	if err != nil || len(passes) != 0 || stub.calls != 0 || len(q.markedIDs) != 0 {
-		t.Fatalf("busy session must noop without running: passes=%d err=%v calls=%d marked=%d", len(passes), err, stub.calls, len(q.markedIDs))
+	if err != nil || len(passes) != 0 || stub.calls != 0 || len(q.folded) != 0 {
+		t.Fatalf("busy session must noop without running: passes=%d err=%v calls=%d folded=%d", len(passes), err, stub.calls, len(q.folded))
 	}
 
 	svc.endSessionCompaction(cfg.SessionID)

@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 // starvationCorpus is a leading reasoning-only row that renders empty, an
 // answered ask_user exchange, then ordinary old history, then the current
 // turn.
-func starvationCorpus(t *testing.T) []sqlc.ListUncompactedMessagesBySessionRow {
+func starvationCorpus(t *testing.T) []candidateRow {
 	t.Helper()
-	return []sqlc.ListUncompactedMessagesBySessionRow{
+	return []candidateRow{
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"internal chain of thought"}]`, 400),                                       // 0: renders empty
 		mkRow(t, "assistant", `[{"type":"tool-call","toolCallId":"U","toolName":"ask_user","input":{}}]`, 40),                         // 1: must-keep call
 		mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"U","toolName":"ask_user","output":"user said yes"}]`, 40),              // 2: must-keep result
@@ -28,7 +26,7 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 	t.Parallel()
 
 	rows := starvationCorpus(t)
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	stub := &stubModel{summary: "compacted the old exchange"}
 	svc := newMachineryService(q)
 
@@ -40,8 +38,8 @@ func TestDoCompactionCoversLeadingRowsThatRenderNothing(t *testing.T) {
 		t.Fatalf("status = %q, want %q: a leading row that renders nothing must not starve the history behind it", res.Status, passOK)
 	}
 
-	if len(q.markedIDs) != 5 {
-		t.Fatalf("marked = %v, want the whole prefix before the current question", q.markedIDs)
+	if len(q.folded) != 5 {
+		t.Fatalf("folded = %v, want the whole prefix before the current question", q.folded)
 	}
 	for _, frag := range []string{"old question", "old answer", "user said yes"} {
 		if !strings.Contains(stub.prompt, frag) {
@@ -59,8 +57,8 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 
 	rows := starvationCorpus(t)
 	// The reasoning row renders nothing and the unanswered ask_user call stays.
-	remaining := append([]sqlc.ListUncompactedMessagesBySessionRow{}, rows[0], rows[1], rows[5])
-	q := &fakeQueries{uncompacted: remaining}
+	remaining := append([]candidateRow{}, rows[0], rows[1], rows[5])
+	q := &fakeQueries{history: remaining}
 	stub := &stubModel{summary: "should never be produced"}
 	svc := newMachineryService(q)
 
@@ -74,8 +72,8 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 	if stub.calls != 0 {
 		t.Fatalf("model called %d times for an unmarkable window, want 0", stub.calls)
 	}
-	if len(q.markedIDs) != 0 {
-		t.Fatalf("marked = %v, want none", q.markedIDs)
+	if len(q.folded) != 0 {
+		t.Fatalf("folded = %v, want none", q.folded)
 	}
 	if q.created {
 		t.Fatal("a compaction log row was created for a no-op window")
@@ -85,14 +83,14 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 func TestDoCompactionCoversOversizedRenderEmptyHead(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"a"}]`, 20000), // renders empty, huge raw estimate
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"b"}]`, 20000),
 		mkRow(t, "user", `"old question"`, 100),
 		mkRow(t, "assistant", `"old answer"`, 100),
 		mkRow(t, "user", `"current question"`, 40),
 	}
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	stub := &stubModel{summary: "old exchange condensed"}
 	svc := newMachineryService(q)
 
@@ -105,22 +103,22 @@ func TestDoCompactionCoversOversizedRenderEmptyHead(t *testing.T) {
 	if res.Status != passOK {
 		t.Fatalf("status = %q, want %q: a render-empty head must not eat the trim budget", res.Status, passOK)
 	}
-	if len(q.markedIDs) != 4 {
-		t.Fatalf("marked = %v, want the render-empty head covered with the old question/answer pair", q.markedIDs)
+	if len(q.folded) != 4 {
+		t.Fatalf("folded = %v, want the render-empty head covered with the old question/answer pair", q.folded)
 	}
 }
 
 func TestDoCompactionCostsAnExchangeByWhatItRenders(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "assistant", `[{"type":"text","text":"running the tool"},{"type":"tool-call","toolCallId":"x","toolName":"exec","input":{}}]`, 40000),
 		mkRow(t, "tool", `[{"type":"binary","data":"opaque"}]`, 100), // unrecognized part renders empty -> exchange incomplete
 		mkRow(t, "user", `"old question"`, 100),
 		mkRow(t, "assistant", `"old answer"`, 100),
 		mkRow(t, "user", `"current question"`, 40),
 	}
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	stub := &stubModel{summary: "old exchange condensed"}
 	svc := newMachineryService(q)
 
@@ -133,17 +131,17 @@ func TestDoCompactionCostsAnExchangeByWhatItRenders(t *testing.T) {
 	if res.Status != passOK {
 		t.Fatalf("status = %q, want %q: an exchange's raw usage estimate must not eat the trim budget", res.Status, passOK)
 	}
-	if len(q.markedIDs) != 4 {
-		t.Fatalf("marked = %v, want the exchange covered with the old question/answer pair", q.markedIDs)
+	if len(q.folded) != 4 {
+		t.Fatalf("folded = %v, want the exchange covered with the old question/answer pair", q.folded)
 	}
 }
 
 // productionStarvationCorpus is the MEMOH-100 session shape: a head of
 // answered ask_user exchanges and reasoning-only rows, a 14-character user
 // message, another reasoning-only row, then the history worth compacting.
-func productionStarvationCorpus(t *testing.T) []sqlc.ListUncompactedMessagesBySessionRow {
+func productionStarvationCorpus(t *testing.T) []candidateRow {
 	t.Helper()
-	var rows []sqlc.ListUncompactedMessagesBySessionRow
+	var rows []candidateRow
 	for i := range 14 {
 		id := fmt.Sprintf("ask-%02d", i)
 		rows = append(rows,
@@ -171,7 +169,7 @@ func TestCompactionCoversThePrefixPastAnsweredAskUserAndReasoningRows(t *testing
 	t.Parallel()
 
 	rows := productionStarvationCorpus(t)
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 72)}
 	res, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 100000, rows[len(rows)-1]))
 	if err != nil || res.Status != passOK {
@@ -181,12 +179,12 @@ func TestCompactionCoversThePrefixPastAnsweredAskUserAndReasoningRows(t *testing
 		t.Fatalf("summarizer calls = %d, want 1", stub.calls)
 	}
 	want := rows[:len(rows)-1]
-	if len(q.markedIDs) != len(want) {
-		t.Fatalf("marked %d rows, want the %d-row prefix before the current input", len(q.markedIDs), len(want))
+	if len(q.folded) != len(want) {
+		t.Fatalf("folded %d rows, want the %d-row prefix before the current input", len(q.folded), len(want))
 	}
 	for i, row := range want {
-		if q.markedIDs[i] != row.ID {
-			t.Fatalf("marked[%d] is not prefix row %d: coverage must be one contiguous span", i, i)
+		if q.folded[i] != row.ID {
+			t.Fatalf("folded[%d] is not prefix row %d: the summary must stand for one contiguous span", i, i)
 		}
 	}
 	for _, frag := range []string{"answer ask-00", "dbdfc538", "EXEC_OUTPUT"} {
@@ -200,17 +198,17 @@ func TestCompactionCountsTheReplayOfRowsThatRenderNothing(t *testing.T) {
 	t.Parallel()
 
 	reasoning := `[{"type":"reasoning","text":"` + strings.Repeat("weigh the options ", 1500) + `"}]`
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "user", `"ok"`, 2),
 		mkRow(t, "assistant", reasoning, 6000),
 		mkRow(t, "assistant", `"done"`, 2),
 		mkRow(t, "user", `"current question"`, 4),
 	}
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	stub := &stubModel{summary: "SUMMARY " + strings.Repeat("kept decision ", 20)}
 	res, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 100000, rows[3]))
-	if err != nil || res.Status != passOK || len(q.markedIDs) != 3 {
-		t.Fatalf("a summary far smaller than the replayed reasoning was rejected: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
+	if err != nil || res.Status != passOK || len(q.folded) != 3 {
+		t.Fatalf("a summary far smaller than the replayed reasoning was rejected: result=%+v err=%v folded=%d", res, err, len(q.folded))
 	}
 }
 
@@ -220,16 +218,16 @@ func TestCompactionCountsTheReplayOfRowsThatRenderNothing(t *testing.T) {
 func TestBudgetCompactionSummarizesTheNewestFinishedExchange(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
+	rows := []candidateRow{
 		mkRow(t, "user", `"`+strings.Repeat("pasted report line ", 900)+`"`, 0),
 		mkRow(t, "assistant", `"noted"`, 2),
 	}
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	cfg := machineryConfig(&stubModel{summary: "the user pasted a long report"}, 0)
 	cfg.TotalInputTokens = 5000
 	cfg.HistoryBudgetTokens = 2700
 	res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
-	if err != nil || res.Status != passOK || len(q.markedIDs) != 2 {
-		t.Fatalf("the newest finished exchange stayed raw although it cannot fit: result=%+v err=%v marked=%d", res, err, len(q.markedIDs))
+	if err != nil || res.Status != passOK || len(q.folded) != 2 {
+		t.Fatalf("the newest finished exchange stayed raw although it cannot fit: result=%+v err=%v folded=%d", res, err, len(q.folded))
 	}
 }

@@ -13,13 +13,14 @@ import (
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
-// candidatesFromRows classifies each uncompacted row into a typed
+// candidateRow is a compaction candidate as the database returns it.
+type candidateRow = sqlc.ListHistoryCheckpointCandidatesWithinBytesRow
+
+// candidatesFromRows classifies each candidate row into a typed
 // CompactionCandidate. A row that cannot be classified remains as a must-keep
-// barrier rather than aborting the whole compaction. Keeping its position
-// prevents compact spans on either side from sharing an ID and being
-// reordered by the read path. The current turn is named only through
-// ProtectedSources.
-func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]CompactionCandidate, int) {
+// barrier rather than aborting the whole compaction: no summary folds rows on
+// both sides of it. The current turn is named only through ProtectedSources.
+func candidatesFromRows(rows []candidateRow) ([]CompactionCandidate, int) {
 	items := make([]CompactionCandidate, 0, len(rows))
 	barrierCount := 0
 	for _, row := range rows {
@@ -33,6 +34,7 @@ func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]Comp
 			}
 			items = append(items, CompactionCandidate{
 				ID:           row.ID,
+				Position:     rowPosition(row),
 				RawContent:   row.Content,
 				Policies:     policies,
 				IsToolResult: toolResult,
@@ -41,6 +43,7 @@ func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]Comp
 		}
 		items = append(items, CompactionCandidate{
 			ID:           row.ID,
+			Position:     rowPosition(row),
 			RawContent:   row.Content,
 			Record:       record,
 			Policies:     candidatePolicies(record),
@@ -54,8 +57,8 @@ func candidatesFromRows(rows []sqlc.ListUncompactedMessagesBySessionRow) ([]Comp
 	return items, barrierCount
 }
 
-func candidatesWithAssets(items []CompactionCandidate, rows []sqlc.ListUncompactedMessagesBySessionRow, assetRows []sqlc.ListMessageAssetsBatchRow) ([]CompactionCandidate, error) {
-	rowByID := make(map[pgtype.UUID]sqlc.ListUncompactedMessagesBySessionRow, len(rows))
+func candidatesWithAssets(items []CompactionCandidate, rows []candidateRow, assetRows []sqlc.ListMessageAssetsBatchRow) ([]CompactionCandidate, error) {
+	rowByID := make(map[pgtype.UUID]candidateRow, len(rows))
 	for _, row := range rows {
 		rowByID[row.ID] = row
 	}
@@ -94,7 +97,7 @@ func assetsByMessageID(rows []sqlc.ListMessageAssetsBatchRow) map[pgtype.UUID][]
 	return assets
 }
 
-func rawToolShape(row sqlc.ListUncompactedMessagesBySessionRow) (preserveToolClosure, toolResult bool) {
+func rawToolShape(row candidateRow) (preserveToolClosure, toolResult bool) {
 	toolResult = strings.EqualFold(strings.TrimSpace(row.Role), "tool")
 	if toolResult {
 		return true, true
@@ -122,7 +125,7 @@ func rawToolShape(row sqlc.ListUncompactedMessagesBySessionRow) (preserveToolClo
 	return false, false
 }
 
-func rowToMessage(row sqlc.ListUncompactedMessagesBySessionRow) messagepkg.Message {
+func rowToMessage(row candidateRow) messagepkg.Message {
 	return messagepkg.Message{
 		ID:                      formatUUID(row.ID),
 		BotID:                   formatUUID(row.BotID),
@@ -138,14 +141,19 @@ func rowToMessage(row sqlc.ListUncompactedMessagesBySessionRow) messagepkg.Messa
 		Content:                 row.Content,
 		Metadata:                metadataMap(row.Metadata),
 		Usage:                   row.Usage,
-		CompactID:               formatUUID(row.CompactID),
 		EventID:                 formatUUID(row.EventID),
 		DisplayContent:          textValue(row.DisplayText),
 		CreatedAt:               row.CreatedAt.Time,
 	}
 }
 
-func rowScopeFallback(row sqlc.ListUncompactedMessagesBySessionRow) historyfrag.ScopeFallback {
+// rowPosition is where a candidate is in the history; every context row has
+// a position.
+func rowPosition(row candidateRow) messagepkg.HistoryPosition {
+	return messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}
+}
+
+func rowScopeFallback(row candidateRow) historyfrag.ScopeFallback {
 	return historyfrag.ScopeFallback{
 		ConversationType: textValue(row.ConversationType),
 		ConversationName: strings.TrimSpace(row.ConversationName),

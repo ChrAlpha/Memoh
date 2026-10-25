@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/contextview"
@@ -117,11 +118,54 @@ func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *
 	}
 }
 
-func TestPrepareContinuationRunConfigPropagatesArtifactProjectionFailure(t *testing.T) {
+// A continuation resumes on the history as a request renders it: what the
+// checkpoint holds, and the rows after it.
+func TestPrepareContinuationRunConfigRendersTheCheckpoint(t *testing.T) {
 	t.Parallel()
 
-	sentinel := errors.New("artifact projection unavailable")
-	resolver := &Service{queries: &recordingCompactionLogQueries{listErr: sentinel}}
+	queries := &historyCheckpointQueries{}
+	queries.activate(historyCheckpointRow(t, checkpointTestID, historyTestPosition(1),
+		checkpoint.Item{SummaryID: queries.summary(t, checkpointTestSummaryID, "earlier work")}))
+	resolver := checkpointTestService(&memoryQueryMessageService{messages: []messagepkg.Message{
+		persistedHistoryMessage(t, "earlier", "user", "earlier"),
+		persistedHistoryMessage(t, "folded", "assistant", "folded"),
+		persistedHistoryMessage(t, "request-row", "user", "resumed request"),
+	}}, queries)
+
+	got, err := resolver.prepareContinuationRunConfig(
+		context.Background(),
+		native.RunConfig{},
+		historyfrag.ScopeFallback{},
+		contextfrag.Scope{SessionID: lifecycleTestSessionID},
+		nil,
+		ChatRequest{ThreadID: lifecycleTestSessionID},
+	)
+	if err != nil {
+		t.Fatalf("prepareContinuationRunConfig() error = %v", err)
+	}
+	var texts []string
+	for _, message := range got.Messages {
+		texts = append(texts, messageContentTextForTest(message))
+	}
+	if want := []string{"<summary>\nearlier work\n</summary>", "resumed request"}; !slices.Equal(texts, want) {
+		t.Fatalf("continuation messages = %q, want %q", texts, want)
+	}
+	var summaries []int
+	for _, frag := range got.ContextFrags {
+		if frag.Kind == contextfrag.KindConversationSummary {
+			summaries = append(summaries, frag.Provenance.Index)
+		}
+	}
+	if !slices.Equal(summaries, []int{0}) {
+		t.Fatalf("summary frags at messages %v, want the summary at message 0", summaries)
+	}
+}
+
+func TestPrepareContinuationRunConfigPropagatesCheckpointFailure(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("history checkpoint unavailable")
+	resolver := checkpointTestService(&memoryQueryMessageService{}, &historyCheckpointQueries{activeErr: sentinel})
 	got, err := resolver.prepareContinuationRunConfig(
 		context.Background(),
 		native.RunConfig{Query: "must not survive"},

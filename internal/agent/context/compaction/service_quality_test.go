@@ -6,13 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
 )
 
-func qualityRows(t *testing.T) []sqlc.ListUncompactedMessagesBySessionRow {
+func qualityRows(t *testing.T) []candidateRow {
 	t.Helper()
-	return []sqlc.ListUncompactedMessagesBySessionRow{
+	return []candidateRow{
 		mkRow(t, "user", jsonStr(strings.Repeat("old question ", 40)), 100),
 		mkRow(t, "assistant", jsonStr(strings.Repeat("old answer ", 40)), 100),
 		mkRow(t, "user", `"current question"`, 100),
@@ -23,7 +22,7 @@ func qualityRows(t *testing.T) []sqlc.ListUncompactedMessagesBySessionRow {
 func TestRunCompactionRecordsModelRecordProvenance(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: qualityRows(t)}
+	q := &fakeQueries{history: qualityRows(t)}
 	stub := &stubModel{summary: "SUMMARY"}
 	cfg := machineryConfig(stub, 200)
 	cfg.ModelID = "openai/gpt-test"
@@ -34,14 +33,14 @@ func TestRunCompactionRecordsModelRecordProvenance(t *testing.T) {
 		t.Fatalf("compact: %v", err)
 	}
 	if q.completed.ModelID != recordID {
-		t.Fatalf("artifact model provenance = %v, want the models row UUID %v: the runtime slug must not be parsed as a database id", q.completed.ModelID, recordID)
+		t.Fatalf("log model provenance = %v, want the models row UUID %v: the runtime slug must not be parsed as a database id", q.completed.ModelID, recordID)
 	}
 }
 
 func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: qualityRows(t)}
+	q := &fakeQueries{history: qualityRows(t)}
 	stub := &stubModel{summary: "SUMMARY"}
 	cfg := machineryConfig(stub, 200)
 	cfg.SummaryWindowTokens = 20000
@@ -56,7 +55,7 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	wide := &stubModel{summary: "SUMMARY"}
 	cfgWide := machineryConfig(wide, 200)
 	cfgWide.SummaryWindowTokens = 200000
-	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfgWide); err != nil {
+	if _, err := newMachineryService(&fakeQueries{history: qualityRows(t)}).compactOnce(context.Background(), cfgWide); err != nil {
 		t.Fatalf("compact wide: %v", err)
 	}
 	if wide.maxTokens != models.DefaultOutputReserveTokens {
@@ -67,7 +66,7 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 	cfgDeclared := machineryConfig(declared, 200)
 	cfgDeclared.SummaryWindowTokens = 200000
 	cfgDeclared.MaxOutputTokens = 64000
-	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfgDeclared); err != nil {
+	if _, err := newMachineryService(&fakeQueries{history: qualityRows(t)}).compactOnce(context.Background(), cfgDeclared); err != nil {
 		t.Fatalf("compact declared: %v", err)
 	}
 	if declared.maxTokens != 64000 {
@@ -78,7 +77,7 @@ func TestRunCompactionCapsSummaryOutputTokens(t *testing.T) {
 func TestRunCompactionRejectsTruncatedSummary(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: qualityRows(t)}
+	q := &fakeQueries{history: qualityRows(t)}
 	stub := &stubModel{summary: "SUMMARY", finishReason: "length"}
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(stub, 200))
@@ -86,14 +85,14 @@ func TestRunCompactionRejectsTruncatedSummary(t *testing.T) {
 		t.Fatalf("compact error = %v, want errIncompleteSummary: a truncated summary must never be published", err)
 	}
 	if q.completed.Status != "error" {
-		t.Fatalf("attempt status = %q, want error so the claimed rows stay reclaimable", q.completed.Status)
+		t.Fatalf("attempt status = %q, want error so its rows stay candidates", q.completed.Status)
 	}
 }
 
 func TestRunCompactionRejectsIneffectiveSummary(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: qualityRows(t)}
+	q := &fakeQueries{history: qualityRows(t)}
 	stub := &stubModel{summary: strings.Repeat("a summary longer than everything it replaces ", 200)}
 
 	_, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(stub, 200))
@@ -108,7 +107,7 @@ func TestRunCompactionRejectsIneffectiveSummary(t *testing.T) {
 func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 	t.Parallel()
 
-	q := &fakeQueries{uncompacted: qualityRows(t)}
+	q := &fakeQueries{history: qualityRows(t)}
 	stub := &stubModel{summary: "SUMMARY"}
 	cfg := machineryConfig(stub, 200)
 	cfg.SummaryWindowTokens = 512
@@ -121,7 +120,7 @@ func TestRunCompactionFailsClosedOnTinySummarizerWindow(t *testing.T) {
 		t.Fatalf("summarizer calls = %d, want 0: a hopeless window must not burn an LLM call", stub.calls)
 	}
 	if q.created {
-		t.Fatal("attempt row was created: fail closed before claiming sources")
+		t.Fatal("attempt row was created: fail closed before the pass starts")
 	}
 }
 
@@ -135,7 +134,7 @@ func TestRunCompactionReadsAsMuchWhateverOutputTheModelDeclares(t *testing.T) {
 		cfg.MaxOutputTokens = declared
 		rows := qualityRows(t)
 		rows[0] = mkRow(t, "user", jsonStr(strings.Repeat("large item ", 16000)), 100)
-		if _, err := newMachineryService(&fakeQueries{uncompacted: rows}).compactOnce(context.Background(), cfg); err != nil || stub.calls != 1 {
+		if _, err := newMachineryService(&fakeQueries{history: rows}).compactOnce(context.Background(), cfg); err != nil || stub.calls != 1 {
 			t.Fatalf("declared output %d: err=%v calls=%d, want the large item summarized", declared, err, stub.calls)
 		}
 		if limit := statedSummaryLimit(t, stub.prompt); limit > stub.maxTokens {
@@ -150,7 +149,7 @@ func TestRunCompactionShowsAnUnsavedRequestAsTheGoal(t *testing.T) {
 	stub := &stubModel{summary: "SUMMARY"}
 	cfg := machineryConfig(stub, 200)
 	cfg.CurrentRequest = "deploy the staging build"
-	if _, err := newMachineryService(&fakeQueries{uncompacted: qualityRows(t)}).compactOnce(context.Background(), cfg); err != nil {
+	if _, err := newMachineryService(&fakeQueries{history: qualityRows(t)}).compactOnce(context.Background(), cfg); err != nil {
 		t.Fatalf("compact: %v", err)
 	}
 	if !strings.Contains(stub.prompt, "<current_request>\nuser: deploy the staging build") {

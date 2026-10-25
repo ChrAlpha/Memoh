@@ -125,7 +125,7 @@ func discussBudgetRecoveryFixture(t *testing.T) (*Service, *fakeDiscussService, 
 	cmd.DiscussMessages = nil
 	for i := 0; i < 20; i++ {
 		cmd.DiscussMessages = append(cmd.DiscussMessages, turn.DiscussMessage{
-			Role: "user", Content: strings.Repeat("s", 200), CompactionArtifactID: fmt.Sprintf("summary-%d", i),
+			Role: "user", Content: strings.Repeat("s", 200), CompactionArtifactID: fmt.Sprintf("summary-%d", i), Pinned: true,
 		})
 	}
 	cmd.DiscussMessages = append(cmd.DiscussMessages,

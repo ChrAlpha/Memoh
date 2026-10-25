@@ -8,21 +8,25 @@ import (
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
 
-type fakeArtifactProvider struct {
-	artifacts []timeline.CompactionArtifact
-	botID     string
-	sessionID string
+// fakeCheckpointSource serves one checkpoint and records what it was asked
+// for.
+type fakeCheckpointSource struct {
+	checkpoint timeline.HistoryCheckpoint
+	sessionID  string
+	rc         timeline.RenderedContext
+	calls      int
 }
 
-func (f *fakeArtifactProvider) ActiveCompactionArtifacts(_ context.Context, botID, sessionID string) ([]timeline.CompactionArtifact, error) {
-	f.botID = botID
+func (f *fakeCheckpointSource) Load(_ context.Context, sessionID string, rc timeline.RenderedContext) (timeline.HistoryCheckpoint, error) {
+	f.calls++
 	f.sessionID = sessionID
-	return f.artifacts, nil
+	f.rc = rc
+	return f.checkpoint, nil
 }
 
-func TestHandleReplyWithTurn_InsertsArtifactSummaryAtCoveredSlot(t *testing.T) {
-	// The covered message sits between two survivors, so a blind prepend and a
-	// slot insert produce different orders and this test can tell them apart.
+func TestHandleReplyWithTurn_ComposesUnderTheCheckpoint(t *testing.T) {
+	// The checkpoint keeps the earliest input, folds the next one into its
+	// summary and leaves the current question after it.
 	rc := timeline.RenderedContext{
 		{
 			MessageID:    "m0",
@@ -40,15 +44,12 @@ func TestHandleReplyWithTurn_InsertsArtifactSummaryAtCoveredSlot(t *testing.T) {
 			Content:      []timeline.RenderedContentPiece{{Type: "text", Text: `<message id="m2">current question</message>`}},
 		},
 	}
-	artifacts := []timeline.CompactionArtifact{{
-		ID:          "a1",
-		Summary:     "compacted window",
-		AnchorEndMs: 100,
-		Sources:     []timeline.CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 100}},
+	source := &fakeCheckpointSource{checkpoint: timeline.HistoryCheckpoint{
+		Items:    []timeline.CheckpointItem{{MessageID: "m0"}, {SummaryID: "a1", Summary: "compacted window"}},
+		Messages: map[string]timeline.CheckpointMessage{"m0": {Kept: true}, "m1": {}, "m2": {Kept: true}},
 	}}
-	provider := &fakeArtifactProvider{artifacts: artifacts}
 	svc := &fakeTurnService{}
-	driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: provider})
+	driver := NewDiscussDriver(DiscussDriverDeps{Checkpoints: source})
 	sess := &discussSession{
 		config: DiscussSessionConfig{TeamID: "team-1", BotID: "bot-1", ThreadID: "sess-1"},
 	}
@@ -58,31 +59,31 @@ func TestHandleReplyWithTurn_InsertsArtifactSummaryAtCoveredSlot(t *testing.T) {
 	if svc.calls != 1 {
 		t.Fatalf("StartTurn calls = %d, want 1", svc.calls)
 	}
-	if provider.botID != "bot-1" || provider.sessionID != "sess-1" {
-		t.Fatalf("artifact provider scoped to %q/%q", provider.botID, provider.sessionID)
+	if source.sessionID != "sess-1" || len(source.rc) != len(rc) {
+		t.Fatalf("checkpoint loaded for %q with %d segments, want sess-1 with the trigger's %d", source.sessionID, len(source.rc), len(rc))
 	}
 
 	msgs := svc.lastCmd.DiscussMessages
 	if len(msgs) != 3 {
-		t.Fatalf("expected survivor + summary + survivor, got %d: %+v", len(msgs), msgs)
+		t.Fatalf("expected kept input + summary + current question, got %d: %+v", len(msgs), msgs)
 	}
-	if !strings.Contains(msgs[0].Content, "earliest survivor") {
-		t.Fatalf("summary must not be prepended ahead of an earlier survivor, got %+v", msgs)
+	if !strings.Contains(msgs[0].Content, "earliest survivor") || !msgs[0].Pinned {
+		t.Fatalf("the kept input must open the history, pinned, got %+v", msgs)
 	}
-	if msgs[1].CompactionArtifactID != "a1" || !strings.Contains(msgs[1].Content, "compacted window") {
-		t.Fatalf("summary must occupy the covered slot, got %+v", msgs)
+	if msgs[1].CompactionArtifactID != "a1" || !strings.Contains(msgs[1].Content, "compacted window") || !msgs[1].Pinned {
+		t.Fatalf("the summary must follow what the checkpoint keeps before it, pinned, got %+v", msgs)
 	}
-	if !strings.Contains(msgs[2].Content, "current question") {
-		t.Fatalf("later survivor must follow the summary, got %+v", msgs)
+	if !strings.Contains(msgs[2].Content, "current question") || msgs[2].Pinned {
+		t.Fatalf("the current question must follow the checkpoint, unpinned, got %+v", msgs)
 	}
 	for _, message := range msgs {
 		if strings.Contains(message.Content, "old original") {
-			t.Fatalf("covered original must be replaced, got %+v", msgs)
+			t.Fatalf("the folded input must not compose, got %+v", msgs)
 		}
 	}
 }
 
-func TestHandleReplyWithTurn_NilArtifactProviderComposesPlain(t *testing.T) {
+func TestHandleReplyWithTurn_NoCheckpointSourceComposesPlain(t *testing.T) {
 	rc := timeline.RenderedContext{
 		{
 			MessageID:    "m1",
@@ -119,7 +120,15 @@ func TestWasRecentlyMentionedSkipsSelfSent(t *testing.T) {
 	}
 }
 
-func TestBuildMentionGatesOnWatermarkNotCoverage(t *testing.T) {
+// foldingCheckpoint folds the inbound message into its summary.
+func foldingCheckpoint(messageID, summary string) timeline.HistoryCheckpoint {
+	return timeline.HistoryCheckpoint{
+		Items:    []timeline.CheckpointItem{{SummaryID: "a1", Summary: summary}},
+		Messages: map[string]timeline.CheckpointMessage{messageID: {}},
+	}
+}
+
+func TestBuildMentionGatesOnWatermarkNotFolding(t *testing.T) {
 	mention := timeline.RenderedSegment{
 		MessageID:    "m1",
 		ReceivedAtMs: 100,
@@ -134,21 +143,17 @@ func TestBuildMentionGatesOnWatermarkNotCoverage(t *testing.T) {
 			Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "unrelated chatter"}},
 		},
 	}
-	artifacts := []timeline.CompactionArtifact{{
-		ID:      "a1",
-		Summary: "covers the pending mention",
-		Sources: []timeline.CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 100}},
-	}}
+	held := foldingCheckpoint("m1", "folds the pending mention")
 
-	pending, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, artifacts, timeline.ComposeBudget{})
+	pending, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, held, timeline.ComposeBudget{})
 	if !ok {
 		t.Fatal("expected a composed plan")
 	}
 	if !pending.command.DiscussAddressed {
-		t.Fatal("a mention the watermark has not consumed must wake the session even when compaction covers it")
+		t.Fatal("a mention the watermark has not consumed must wake the session even when the checkpoint folds it")
 	}
 
-	consumed, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{SourceCursor: 150}, artifacts, timeline.ComposeBudget{})
+	consumed, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{SourceCursor: 150}, held, timeline.ComposeBudget{})
 	if !ok {
 		t.Fatal("expected a composed plan past the mention")
 	}
@@ -157,10 +162,10 @@ func TestBuildMentionGatesOnWatermarkNotCoverage(t *testing.T) {
 	}
 }
 
-// A summarized message's image cannot ride in the summary. Its ref still
+// A folded message's image cannot ride in the summary. Its ref still
 // travels, naming a message the composed context no longer carries, so the
 // server records the image instead of attaching it.
-func TestBuildKeepsCoveredImageRefsOutsideTheComposedMessages(t *testing.T) {
+func TestBuildKeepsFoldedImageRefsOutsideTheComposedMessages(t *testing.T) {
 	imageMsg := timeline.RenderedSegment{
 		MessageID:    "m1",
 		ReceivedAtMs: 100,
@@ -175,31 +180,26 @@ func TestBuildKeepsCoveredImageRefsOutsideTheComposedMessages(t *testing.T) {
 			Content:      []timeline.RenderedContentPiece{{Type: "text", Text: "current"}},
 		},
 	}
-	artifacts := []timeline.CompactionArtifact{{
-		ID:      "a1",
-		Summary: "covers the image message",
-		Sources: []timeline.CompactionSource{{ExternalMessageID: "m1", CreatedAtMs: 100}},
-	}}
 
-	plan, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, artifacts, timeline.ComposeBudget{})
+	plan, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, foldingCheckpoint("m1", "folds the image message"), timeline.ComposeBudget{})
 	if !ok {
 		t.Fatal("expected a composed plan")
 	}
 	if refs := plan.command.DiscussImageRefs; len(refs) != 1 || refs[0].MessageID != "m1" {
-		t.Fatalf("covered image ref = %+v, want it to name its summarized message", refs)
+		t.Fatalf("folded image ref = %+v, want it to name its folded message", refs)
 	}
 	for _, message := range plan.command.DiscussMessages {
 		if message.Source != nil && message.Source.ID == "m1" {
-			t.Fatalf("the summarized message is still composed: %+v", plan.command.DiscussMessages)
+			t.Fatalf("the folded message is still composed: %+v", plan.command.DiscussMessages)
 		}
 	}
 
-	planLive, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, nil, timeline.ComposeBudget{})
+	planLive, _, ok := discussTriggerBuilder{}.Build(DiscussSessionConfig{ConversationType: "group"}, rc, nil, timeline.DiscussCursorPosition{}, timeline.HistoryCheckpoint{}, timeline.ComposeBudget{})
 	if !ok {
-		t.Fatal("expected a composed plan without artifacts")
+		t.Fatal("expected a composed plan without a checkpoint")
 	}
 	if len(planLive.command.DiscussImageRefs) != 1 {
-		t.Fatalf("uncovered image must be attached, got %+v", planLive.command.DiscussImageRefs)
+		t.Fatalf("unfolded image must be attached, got %+v", planLive.command.DiscussImageRefs)
 	}
 }
 

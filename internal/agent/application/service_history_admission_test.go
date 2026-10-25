@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -19,18 +19,30 @@ type turnResponseSourceMessageService struct {
 	recordingMessageService
 	full      []messagepkg.Message
 	projected []messagepkg.Message
+	kept      []messagepkg.Message
 	sessionID string
+	after     messagepkg.HistoryPosition
 	maxBytes  int64
 	err       error
 }
 
-func (s *turnResponseSourceMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64, bool) ([]messagepkg.Message, error) {
-	return s.full, nil
+func (s *turnResponseSourceMessageService) ListHistoryWithinBytes(context.Context, string, messagepkg.HistoryWindow) (messagepkg.HistoryLoad, error) {
+	return messagepkg.HistoryLoad{Messages: s.full}, nil
 }
 
-func (s *turnResponseSourceMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes(_ context.Context, sessionID string, _ time.Time, maxBytes int64) ([]messagepkg.Message, error) {
-	s.sessionID, s.maxBytes = sessionID, maxBytes
+func (s *turnResponseSourceMessageService) ListTurnResponseSourcesWithinBytes(_ context.Context, sessionID string, after messagepkg.HistoryPosition, maxBytes int64) ([]messagepkg.Message, error) {
+	s.sessionID, s.after, s.maxBytes = sessionID, after, maxBytes
 	return s.projected, s.err
+}
+
+func (s *turnResponseSourceMessageService) ListTurnResponseSourcesByIDs(_ context.Context, _ string, ids []string) ([]messagepkg.Message, error) {
+	var kept []messagepkg.Message
+	for _, message := range s.kept {
+		if slices.Contains(ids, message.ID) {
+			kept = append(kept, message)
+		}
+	}
+	return kept, nil
 }
 
 func TestLoadTurnResponsesReadsProjectedSources(t *testing.T) {
@@ -41,13 +53,14 @@ func TestLoadTurnResponsesReadsProjectedSources(t *testing.T) {
 		projected: []messagepkg.Message{persistedHistoryMessage(t, "projected", "assistant", "projected row")},
 	}
 	svc := &Service{messageService: source, logger: slog.New(slog.DiscardHandler)}
-	entries, err := svc.loadTurnResponses(context.Background(), "session-1", 1000)
+	after := messagepkg.HistoryPosition{Turn: 12, Seq: 3}
+	entries, err := svc.loadTurnResponses(context.Background(), "session-1", after, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if source.sessionID != "session-1" || source.maxBytes != 1000*contextfrag.EstimateBytesPerToken {
-		t.Fatalf("projected load got session=%q maxBytes=%d", source.sessionID, source.maxBytes)
+	if source.sessionID != "session-1" || source.after != after || source.maxBytes != 1000*contextfrag.EstimateBytesPerToken {
+		t.Fatalf("projected load got session=%q after=%+v maxBytes=%d", source.sessionID, source.after, source.maxBytes)
 	}
 	if len(entries) != 1 || entries[0].SourceMessageID != "projected" {
 		t.Fatalf("turn responses = %#v, want the projected source only", entries)

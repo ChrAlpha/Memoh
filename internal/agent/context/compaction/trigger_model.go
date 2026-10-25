@@ -5,7 +5,7 @@ package compaction
 // surfaces, the engine only receives this completed contract.
 type TriggerModel struct {
 	Slug                  string // runtime model slug sent to the provider
-	RecordID              string // models.id row UUID recorded as artifact/log provenance
+	RecordID              string // models.id row UUID recorded as the log's provenance
 	ClientType            string
 	APIKey                string //nolint:gosec // runtime credential, not a hardcoded secret
 	CodexAccountID        string

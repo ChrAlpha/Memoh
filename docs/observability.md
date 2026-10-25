@@ -192,6 +192,20 @@ as `host:port/database`. Only the pool statistics come from `otelpgx`; query
 spans still come from `telemetry.PgxTracer`, which never records query
 arguments.
 
+The history checkpoint store counts what it finds wrong with a session's
+history checkpoint (see [agent-runtime.md](agent-runtime.md)).
+`history.checkpoint.repairs_total` counts sessions moved back to an older
+checkpoint on reading, by `reason`: `row_appeared` (a context row was
+written or made visible at or before its position after it was made: a
+result bound into an earlier turn, a restored message), `missing_row` (a row
+it keeps is no longer a context row) or `missing_summary` (a summary it
+holds is no longer usable). Ordinary chat and Discuss write no row below the
+checkpoint, and writes that remove rows move the session back themselves,
+so any count means history changed behind a checkpoint.
+`history.checkpoint.unseen_rows_total` counts rows a committed checkpoint keeps
+by reference that its pass never read: rows that joined its span while the
+summary was written, or that the request's view left out.
+
 Installing a meter provider also turns on the RPC metrics that `otelgrpc`
 records on every gRPC connection in the table above, and the HTTP client
 metrics of libraries instrumented with OpenTelemetry, the Docker client among

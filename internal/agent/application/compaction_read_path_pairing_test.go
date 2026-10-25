@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,53 +18,44 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
-	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
+// pairingQueries serves a compaction pass over a session's rows and then the
+// session's history checkpoints as the pass left them.
 type pairingQueries struct {
-	dbstore.Queries
-	uncompacted []sqlc.ListUncompactedMessagesBySessionRow
-	logID       pgtype.UUID
-	markedIDs   []pgtype.UUID
+	*historyCheckpointQueries
+	rows  []sqlc.ListHistoryCheckpointCandidatesWithinBytesRow
+	logID pgtype.UUID
 }
 
-func (f *pairingQueries) ListUncompactedMessagesBySession(context.Context, pgtype.UUID) ([]sqlc.ListUncompactedMessagesBySessionRow, error) {
-	return f.uncompacted, nil
+func pairingPosition(row sqlc.ListHistoryCheckpointCandidatesWithinBytesRow) messagepkg.HistoryPosition {
+	return messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}
 }
 
-func (f *pairingQueries) MeasureUncompactedMessagesBySession(context.Context, sqlc.MeasureUncompactedMessagesBySessionParams) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
-	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: int64(len(f.uncompacted)), CandidateBytes: 1}, nil
-}
-
-func (f *pairingQueries) ListUncompactedMessagesBySessionWithinBytes(context.Context, sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
-	return compactionRowsForPairing(f.uncompacted), nil
-}
-
-func compactionRowsForPairing(rows []sqlc.ListUncompactedMessagesBySessionRow) []sqlc.ListUncompactedMessagesBySessionWithinBytesRow {
-	converted := make([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, len(rows))
-	for i, row := range rows {
-		converted[i] = sqlc.ListUncompactedMessagesBySessionWithinBytesRow{
-			ID: row.ID, BotID: row.BotID, SessionID: row.SessionID,
-			SenderChannelIdentityID: row.SenderChannelIdentityID, SenderUserID: row.SenderUserID,
-			ExternalMessageID: row.ExternalMessageID, SourceReplyToMessageID: row.SourceReplyToMessageID,
-			Role: row.Role, Content: row.Content, Metadata: row.Metadata, Usage: row.Usage,
-			EventID: row.EventID, DisplayText: row.DisplayText, CompactID: row.CompactID, CreatedAt: row.CreatedAt,
-			SenderDisplayName: row.SenderDisplayName, SenderAvatarUrl: row.SenderAvatarUrl,
-			Platform: row.Platform, CompactionEpoch: row.CompactionEpoch,
-			ConversationType: row.ConversationType, ConversationName: row.ConversationName, ReplyTarget: row.ReplyTarget,
-			CandidateCount: int64(len(rows)), CandidateBytes: 1, CumulativeBytes: 1,
+func (f *pairingQueries) candidates(after messagepkg.HistoryPosition) []sqlc.ListHistoryCheckpointCandidatesWithinBytesRow {
+	var rows []sqlc.ListHistoryCheckpointCandidatesWithinBytesRow
+	for _, row := range f.rows {
+		if after.Before(pairingPosition(row)) {
+			rows = append(rows, row)
 		}
 	}
-	return converted
+	return rows
 }
 
-func (*pairingQueries) ListCompactionLogsBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
-	return nil, nil
+func (f *pairingQueries) MeasureHistoryCheckpointCandidates(_ context.Context, arg sqlc.MeasureHistoryCheckpointCandidatesParams) (sqlc.MeasureHistoryCheckpointCandidatesRow, error) {
+	rows := f.candidates(messagepkg.HistoryPosition{Turn: arg.AfterTurnPosition, Seq: arg.AfterTurnMessageSeq})
+	return sqlc.MeasureHistoryCheckpointCandidatesRow{CandidateCount: int64(len(rows)), CandidateBytes: 1, LargestCandidateBytes: 1}, nil
 }
 
-func (*pairingQueries) ListCompactionArtifactLineageBySession(context.Context, pgtype.UUID) ([]sqlc.BotHistoryMessageCompact, error) {
-	return nil, nil
+func (f *pairingQueries) ListHistoryCheckpointCandidatesWithinBytes(_ context.Context, arg sqlc.ListHistoryCheckpointCandidatesWithinBytesParams) ([]sqlc.ListHistoryCheckpointCandidatesWithinBytesRow, error) {
+	rows := f.candidates(messagepkg.HistoryPosition{Turn: arg.AfterTurnPosition, Seq: arg.AfterTurnMessageSeq})
+	for i := range rows {
+		rows[i].CandidateCount, rows[i].CandidateBytes, rows[i].CumulativeBytes = int64(len(rows)), 1, 1
+	}
+	return rows, nil
 }
 
 func (*pairingQueries) ListMessageAssetsBatch(context.Context, []pgtype.UUID) ([]sqlc.ListMessageAssetsBatchRow, error) {
@@ -74,32 +66,48 @@ func (f *pairingQueries) CreateCompactionLog(context.Context, sqlc.CreateCompact
 	return sqlc.BotHistoryMessageCompact{ID: f.logID}, nil
 }
 
-func (f *pairingQueries) ListMessagesByCompactIDWithinBytes(ctx context.Context, arg sqlc.ListMessagesByCompactIDWithinBytesParams) ([]sqlc.ListMessagesByCompactIDWithinBytesRow, error) {
-	rows, err := f.ListMessagesByCompactID(ctx, arg.CompactID)
-	bounded := make([]sqlc.ListMessagesByCompactIDWithinBytesRow, len(rows))
-	for i, row := range rows {
-		bounded[i] = sqlc.ListMessagesByCompactIDWithinBytesRow(row)
-	}
-	return bounded, err
+func (f *pairingQueries) LockHistoryCheckpointSession(context.Context, sqlc.LockHistoryCheckpointSessionParams) (pgtype.UUID, error) {
+	return f.active, nil
 }
 
-func (f *pairingQueries) ListMessagesByCompactID(_ context.Context, compactID pgtype.UUID) ([]sqlc.ListMessagesByCompactIDRow, error) {
-	var rows []sqlc.ListMessagesByCompactIDRow
-	for _, row := range f.uncompacted {
-		if compactID == f.logID && slices.Contains(f.markedIDs, row.ID) {
-			row.CompactID = compactID
-			rows = append(rows, sqlc.ListMessagesByCompactIDRow(row))
+func (f *pairingQueries) ListHistoryCheckpointSpanRows(_ context.Context, arg sqlc.ListHistoryCheckpointSpanRowsParams) ([]sqlc.ListHistoryCheckpointSpanRowsRow, error) {
+	after := messagepkg.HistoryPosition{Turn: arg.AfterTurnPosition, Seq: arg.AfterTurnMessageSeq}
+	through := messagepkg.HistoryPosition{Turn: arg.ThroughTurnPosition, Seq: arg.ThroughTurnMessageSeq}
+	var span []sqlc.ListHistoryCheckpointSpanRowsRow
+	for _, row := range f.rows {
+		at := pairingPosition(row)
+		if after.Before(at) && !through.Before(at) || slices.Contains(arg.Ids, row.ID) {
+			span = append(span, sqlc.ListHistoryCheckpointSpanRowsRow{ID: row.ID, TurnPosition: row.TurnPosition, TurnMessageSeq: row.TurnMessageSeq})
 		}
 	}
-	return rows, nil
+	return span, nil
 }
 
-func (f *pairingQueries) MarkMessagesCompacted(_ context.Context, arg sqlc.MarkMessagesCompactedParams) (int64, error) {
-	f.markedIDs = append([]pgtype.UUID(nil), arg.MessageIds...)
-	return int64(len(arg.MessageIds)), nil
+func (f *pairingQueries) CreateHistoryCheckpoint(_ context.Context, arg sqlc.CreateHistoryCheckpointParams) (sqlc.BotHistoryCheckpoint, error) {
+	row := sqlc.BotHistoryCheckpoint{
+		ID:             pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		SessionID:      arg.SessionID,
+		ParentID:       arg.ParentID,
+		TurnPosition:   arg.TurnPosition,
+		TurnMessageSeq: arg.TurnMessageSeq,
+		Items:          arg.Items,
+	}
+	f.add(row)
+	return row, nil
 }
 
-func (*pairingQueries) CompleteCompactionLog(_ context.Context, arg sqlc.CompleteCompactionLogParams) (sqlc.BotHistoryMessageCompact, error) {
+func (f *pairingQueries) SetHistoryCheckpoint(_ context.Context, arg sqlc.SetHistoryCheckpointParams) (int64, error) {
+	if arg.ExpectedCheckpointID != f.active {
+		return 0, nil
+	}
+	f.active = arg.CheckpointID
+	return 1, nil
+}
+
+func (f *pairingQueries) CompleteCompactionLog(_ context.Context, arg sqlc.CompleteCompactionLogParams) (sqlc.BotHistoryMessageCompact, error) {
+	if arg.Status == "ok" {
+		f.summaries[arg.ID] = arg.Summary
+	}
 	return sqlc.BotHistoryMessageCompact{ID: arg.ID, Status: arg.Status, Summary: arg.Summary}, nil
 }
 
@@ -116,42 +124,48 @@ func (s pairingSummarizer) RoundTrip(*http.Request) (*http.Response, error) {
 	}, nil
 }
 
-func pairingRow(t *testing.T, role, content string) sqlc.ListUncompactedMessagesBySessionRow {
-	t.Helper()
-	return sqlc.ListUncompactedMessagesBySessionRow{
-		ID:      pgtype.UUID{Bytes: uuid.New(), Valid: true},
-		Role:    role,
-		Content: []byte(content),
-		Usage:   []byte(`{"outputTokens":100}`),
+// pairingRow is the i-th row of the session, filed where the history read
+// files it (historyTestPosition).
+func pairingRow(i int, role, content string) sqlc.ListHistoryCheckpointCandidatesWithinBytesRow {
+	position := historyTestPosition(i)
+	return sqlc.ListHistoryCheckpointCandidatesWithinBytesRow{
+		ID:             pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		Role:           role,
+		Content:        []byte(content),
+		Usage:          []byte(`{"outputTokens":100}`),
+		TurnPosition:   pgtype.Int8{Int64: position.Turn, Valid: true},
+		TurnMessageSeq: pgtype.Int8{Int64: position.Seq, Valid: true},
 	}
 }
 
 // TestSelectorToReadPathPreservesOrderEndToEnd drives the real compaction
-// selector over a history with a pending ask_user island and feeds its
-// actual marked rows into replaceCompactedHistoryRecords. It pins the pair of
-// invariants that live in two packages: the selector folds only the run
-// before the island, which ends what any pass folds, and the read path
-// substitutes it in place — content behind the island (like "mid q") must
-// never fold in front of it.
+// selector over a history with a pending ask_user island, commits its
+// checkpoint, and reads the history back through it. It pins the pair of
+// invariants that live in different packages: the selector folds only the
+// run before the island, which ends what any pass folds, and the read path
+// renders the summary in that run's place — content behind the island (like
+// "mid q") must never fold in front of it.
 func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	t.Parallel()
 
-	rows := []sqlc.ListUncompactedMessagesBySessionRow{
-		pairingRow(t, "user", `"old q with plenty of extra descriptive words so the raw exchange clearly outweighs its summary"`),
-		pairingRow(t, "assistant", `"old a walking through the answer in enough detail that compaction genuinely shrinks it"`),
-		pairingRow(t, "assistant", `[{"type":"tool-call","toolCallId":"ask-1","toolName":"ask_user","input":{"questions":[]}}]`),
-		pairingRow(t, "user", `"mid q"`),
-		pairingRow(t, "user", `"current q"`),
+	rows := []sqlc.ListHistoryCheckpointCandidatesWithinBytesRow{
+		pairingRow(0, "user", `"old q with plenty of extra descriptive words so the raw exchange clearly outweighs its summary"`),
+		pairingRow(1, "assistant", `"old a walking through the answer in enough detail that compaction genuinely shrinks it"`),
+		pairingRow(2, "assistant", `[{"type":"tool-call","toolCallId":"ask-1","toolName":"ask_user","input":{"questions":[]}}]`),
+		pairingRow(3, "user", `"mid q"`),
+		pairingRow(4, "user", `"current q"`),
 	}
 	q := &pairingQueries{
-		uncompacted: rows,
-		logID:       pgtype.UUID{Bytes: uuid.New(), Valid: true},
+		historyCheckpointQueries: &historyCheckpointQueries{summaries: map[pgtype.UUID]string{}},
+		rows:                     rows,
+		logID:                    pgtype.UUID{Bytes: uuid.New(), Valid: true},
 	}
-	svc := compaction.NewService(slog.New(slog.DiscardHandler), q)
+	logger := slog.New(slog.DiscardHandler)
+	sessionID := uuid.NewString()
 
-	passes, err := svc.Compact(context.Background(), compaction.TriggerConfig{
+	passes, err := compaction.NewService(logger, q).Compact(context.Background(), compaction.TriggerConfig{
 		BotID:               uuid.NewString(),
-		SessionID:           uuid.NewString(),
+		SessionID:           sessionID,
 		ModelID:             "stub-model",
 		ClientType:          "openai-completions",
 		APIKey:              "test",
@@ -165,38 +179,43 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		t.Fatalf("passes = %+v err = %v, want one pass that stops at the island", passes, err)
 	}
 
-	marked := make(map[pgtype.UUID]bool, len(q.markedIDs))
-	for _, id := range q.markedIDs {
-		marked[id] = true
+	committed := q.checkpoints[q.active]
+	var items []checkpoint.Item
+	if err := json.Unmarshal(committed.Items, &items); err != nil {
+		t.Fatal(err)
 	}
-	if len(marked) != 2 || !marked[rows[0].ID] || !marked[rows[1].ID] {
-		t.Fatalf("marked = %v, want exactly the contiguous pre-island run [old q, old a]", q.markedIDs)
-	}
-
 	compactID := uuid.UUID(q.logID.Bytes).String()
-	texts := []string{`old q`, `old a`, `ask you something`, `mid q`, `current q`}
-	roles := []string{"user", "assistant", "assistant", "user", "user"}
-	records := make([]historyfrag.HistoryRecord, 0, len(rows))
-	for i, row := range rows {
-		id := uuid.UUID(row.ID.Bytes).String()
-		record := historyRecord(id, ModelMessage{
-			Role:    roles[i],
-			Content: newTextContent(texts[i]),
-		}, nil)
-		if marked[row.ID] {
-			record.CompactID = compactID
-		}
-		records = append(records, record)
+	if position := (messagepkg.HistoryPosition{Turn: committed.TurnPosition, Seq: committed.TurnMessageSeq}); position != pairingPosition(rows[1]) ||
+		!reflect.DeepEqual(items, []checkpoint.Item{{SummaryID: compactID}}) {
+		t.Fatalf("checkpoint at %+v holds %+v, want the summary of exactly the contiguous pre-island run [old q, old a]", position, items)
 	}
 
-	got := replaceCompactedHistoryRecords(records, map[string]string{compactID: passes[0].Summary}, contextfrag.Scope{})
-	want := []ModelMessage{
-		{Role: "user", Content: newTextContent("<summary>\n" + passes[0].Summary + "\n</summary>")},
-		{Role: "assistant", Content: newTextContent("ask you something")},
-		{Role: "user", Content: newTextContent("mid q")},
-		{Role: "user", Content: newTextContent("current q")},
+	messages := make([]messagepkg.Message, 0, len(rows))
+	for _, row := range rows {
+		messages = append(messages, messagepkg.Message{ID: uuid.UUID(row.ID.Bytes).String(), SessionID: sessionID, Role: row.Role, Content: row.Content})
 	}
-	if gotMessages := historyfrag.ToModelMessages(got); !reflect.DeepEqual(gotMessages, want) {
-		t.Fatalf("selector output broke read-path ordering:\ngot  %#v\nwant %#v", gotMessages, want)
+	svc := &Service{
+		messageService: &memoryQueryMessageService{messages: messages},
+		checkpoints:    checkpoint.NewStore(logger, q),
+		logger:         logger,
 	}
+	got, _, err := svc.loadHistoryRecords(context.Background(), historyfrag.ScopeFallback{}, contextfrag.Scope{SessionID: sessionID}, 0, historyCut{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{compactID, messages[2].ID, messages[3].ID, messages[4].ID}
+	if gotIDs := recordSequenceIDs(got); !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("selector output broke read-path ordering:\ngot  %v\nwant %v", gotIDs, want)
+	}
+	if text := got[0].ModelMessage.TextContent(); text != "<summary>\n"+passes[0].Summary+"\n</summary>" {
+		t.Fatalf("summary renders as %q", text)
+	}
+}
+
+func recordSequenceIDs(records []historyfrag.HistoryRecord) []string {
+	ids := make([]string, 0, len(records))
+	for _, record := range records {
+		ids = append(ids, record.Ref.ID)
+	}
+	return ids
 }

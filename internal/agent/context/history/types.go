@@ -61,11 +61,7 @@ type HistoryRecord struct {
 	Platform                string
 	SourceReplyToMessageID  string
 
-	CompactID string
-	// Summarized marks a row the history window loaded only to place the
-	// compaction summary that replaced it and the rest of its compact group.
-	Summarized bool
-	CreatedAt  time.Time
+	CreatedAt time.Time
 
 	UsageInputTokens  *int
 	UsageOutputTokens *int

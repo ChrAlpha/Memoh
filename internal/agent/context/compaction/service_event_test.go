@@ -19,7 +19,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 func TestCompactRejectsUnrenderedPipelineVersion(t *testing.T) {
@@ -41,7 +40,7 @@ func TestCompactRejectsUnrenderedPipelineVersion(t *testing.T) {
 			for _, message := range timeline.ComposeContext(rc, trs).Messages {
 				cfg.View = append(cfg.View, *message.Source)
 			}
-			q := &fakeQueries{uncompacted: []sqlc.ListUncompactedMessagesBySessionRow{row}}
+			q := &fakeQueries{history: []candidateRow{row}}
 			passes, err := newMachineryService(q).Compact(t.Context(), cfg)
 			if ReasonOf(err) != ReasonStaleSource || len(passes) != 0 || stub.calls != 0 || q.completed.Status == "ok" {
 				t.Fatalf("unseen source version committed: passes=%d calls=%d status=%s err=%v", len(passes), stub.calls, q.completed.Status, err)
@@ -59,7 +58,7 @@ func TestCompactRejectsSourceEditedAfterRendering(t *testing.T) {
 		cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "history", ID: formatUUID(item.ID), ContentHash: historyfrag.MessageContentHash(item.Record.ModelMessage)})
 	}
 	rows[0].Content = []byte(`{"role":"user","content":[{"type":"text","text":"edited after request assembly"}]}`)
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	passes, err := newMachineryService(q).Compact(t.Context(), cfg)
 	if ReasonOf(err) != ReasonStaleSource || stub.calls != 0 || len(passes) != 0 {
 		t.Fatalf("passes=%d calls=%d err=%v, want stale_source without summarizing a different version", len(passes), stub.calls, err)
@@ -103,7 +102,7 @@ func TestCompactRetriesTheSummarizerOnceAndOnlyWhenTransient(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			q := &fakeQueries{uncompacted: machineryCorpus(t)}
+			q := &fakeQueries{history: machineryCorpus(t)}
 			transport := &statusSequence{stub: &stubModel{summary: "SUMMARY"}, statuses: tc.statuses}
 			cfg := machineryConfig(transport.stub, 450)
 			cfg.HTTPClient = &http.Client{Transport: transport}
@@ -120,12 +119,12 @@ func TestCompactRetriesTheSummarizerOnceAndOnlyWhenTransient(t *testing.T) {
 }
 
 // When what the request keeps leaves less room than a useful summary, the
-// event fails before it claims a row or calls the summarizer.
+// event fails before it opens a log or calls the summarizer.
 func TestCompactFailsWithoutRoomForAUsefulSummary(t *testing.T) {
 	t.Parallel()
 
 	rows := machineryCorpus(t)
-	q := &fakeQueries{uncompacted: rows}
+	q := &fakeQueries{history: rows}
 	stub := &stubModel{summary: "SUMMARY"}
 	cfg := machineryConfig(stub, 0)
 	cfg.ProtectedSources = historySources(rows[8])
@@ -136,7 +135,7 @@ func TestCompactFailsWithoutRoomForAUsefulSummary(t *testing.T) {
 
 	passes, err := newMachineryService(q).Compact(context.Background(), cfg)
 	if len(passes) != 0 || ReasonOf(err) != ReasonProtectedOverflow || stub.calls != 0 || q.created {
-		t.Fatalf("passes=%d err=%v summarizer calls=%d claimed=%v, want %s before any claim", len(passes), err, stub.calls, q.created, ReasonProtectedOverflow)
+		t.Fatalf("passes=%d err=%v summarizer calls=%d logged=%v, want %s before any log", len(passes), err, stub.calls, q.created, ReasonProtectedOverflow)
 	}
 }
 
@@ -177,7 +176,7 @@ func TestCompactCommitsASummaryAtItsStatedLimit(t *testing.T) {
 	t.Parallel()
 
 	for _, budget := range []int{300, 450, 900} {
-		q := &fakeQueries{uncompacted: machineryCorpus(t)}
+		q := &fakeQueries{history: machineryCorpus(t)}
 		stub := &stubModel{}
 		cfg := machineryConfig(stub, budget)
 		cfg.HTTPClient = &http.Client{Transport: statedLimit{stub: stub}}
@@ -196,20 +195,22 @@ func TestCompactNamesWhyAPassFailed(t *testing.T) {
 	for _, tc := range []struct {
 		reason Reason
 		stub   stubModel
-		marked int64
+		// moved commits another checkpoint while the summary is written.
+		moved bool
 	}{
-		{ReasonEmpty, stubModel{summary: "  "}, -1},
-		{ReasonTruncated, stubModel{summary: "SUMMARY", finishReason: "length"}, -1},
-		{ReasonIneffective, stubModel{summary: strings.Repeat("long summary ", 400)}, -1},
-		{ReasonStaleSource, stubModel{summary: "SUMMARY"}, 1},
+		{ReasonEmpty, stubModel{summary: "  "}, false},
+		{ReasonTruncated, stubModel{summary: "SUMMARY", finishReason: "length"}, false},
+		{ReasonIneffective, stubModel{summary: strings.Repeat("long summary ", 400)}, false},
+		{ReasonStaleSource, stubModel{summary: "SUMMARY"}, true},
 	} {
 		t.Run(string(tc.reason), func(t *testing.T) {
 			t.Parallel()
-			q := &fakeQueries{uncompacted: machineryCorpus(t)}
-			if tc.marked >= 0 {
-				q.markedRowCount = &tc.marked
+			q := &fakeQueries{history: machineryCorpus(t)}
+			stub := tc.stub
+			if tc.moved {
+				stub.during = func() { q.hold("written meanwhile") }
 			}
-			passes, err := newMachineryService(q).Compact(context.Background(), machineryConfig(&tc.stub, 100000))
+			passes, err := newMachineryService(q).Compact(context.Background(), machineryConfig(&stub, 100000))
 			if len(passes) != 0 || ReasonOf(err) != tc.reason {
 				t.Fatalf("passes=%d err=%v, want %s", len(passes), err, tc.reason)
 			}
@@ -234,9 +235,9 @@ func TestCompactCancellationBeforeCommitPublishesNothing(t *testing.T) {
 	stub := &stubModel{summary: "short-summary"}
 	cfg := machineryConfig(stub, 450)
 	cfg.HTTPClient = &http.Client{Transport: cancelOnSummary{stub: stub, cancel: cancel}}
-	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	q := &fakeQueries{history: machineryCorpus(t)}
 	passes, err := newMachineryService(q).Compact(ctx, cfg)
-	if !errors.Is(err, context.Canceled) || len(passes) > 0 || q.completed.Status == "ok" || len(q.rollupCalls) > 0 {
-		t.Fatalf("canceled pass published a summary: ctx=%v err=%v passes=%d completed=%q rollups=%d", ctx.Err(), err, len(passes), q.completed.Status, len(q.rollupCalls))
+	if !errors.Is(err, context.Canceled) || len(passes) > 0 || q.completed.Status == "ok" || q.active.Valid {
+		t.Fatalf("canceled pass published a summary: ctx=%v err=%v passes=%d completed=%q checkpoint=%v", ctx.Err(), err, len(passes), q.completed.Status, q.active)
 	}
 }

@@ -7,11 +7,10 @@ package turn
 // render before it. Without a covered item, items come back unchanged and
 // summary is not placed.
 //
-// The in-run splice, the record-path history loader and the pipeline
-// composer all place a summary by this rule, so a summary renders at the
-// same relative place in the request that wrote it and in every later one.
-// A later request that does not load the last item a summary covers places
-// it where that item was, by the summary's durable end anchor.
+// The in-run splice places a summary by this rule, and a history checkpoint
+// orders the rows a request read the same way: the ones it keeps, then its
+// summary. A summary then renders at the same relative place in the request
+// that wrote it and in every later one.
 func PlaceSummary[T any](items []T, summary T, covered func(T) bool) ([]T, bool) {
 	last := -1
 	for i, item := range items {

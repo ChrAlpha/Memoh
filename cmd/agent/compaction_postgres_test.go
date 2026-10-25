@@ -11,10 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgtype"
-
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -47,57 +46,57 @@ func foldedRows(passes ...compaction.Pass) []string {
 	return ids
 }
 
-// A summary written before artifacts carried coverage is folded into the next
-// summary, and the read path accepts the lineage: one active summary covering
-// both the legacy rows and the newly compacted ones.
-func TestPostgresCompactionFoldsALegacySummaryIntoOne(t *testing.T) {
+// A pass folds onto the session's active checkpoint: the summary it holds
+// and the row it keeps raw go, with the rows after it, into the one summary
+// the pass writes. The summarizer reads both, and the session is left with
+// one checkpoint that holds one summary and keeps nothing raw.
+func TestPostgresCompactionFoldsTheActiveCheckpointIntoOneSummary(t *testing.T) {
 	f := newBacklogFixture(t)
-	var legacyID string
-	if err := f.pool.QueryRow(f.ctx, `INSERT INTO bot_history_message_compacts(bot_id,session_id,status,summary,completed_at) VALUES($1,$2,'ok','Legacy summary.',now()) RETURNING id`, f.botID, f.sessionID).Scan(&legacyID); err != nil {
-		t.Fatal(err)
+	for i := range 3 {
+		f.appendMessage(fmt.Sprintf("earlier-%d", i), fmt.Sprintf("earlier-%d ", i)+strings.Repeat("y", 400))
 	}
-	legacyRows := map[string]bool{}
-	for _, text := range []string{"legacy question", "legacy answer"} {
-		content, _ := json.Marshal(text)
-		msg, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: f.sessionID, Role: "user", Content: content})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET compact_id=$2 WHERE id=$1`, msg.ID, legacyID); err != nil {
-			t.Fatal(err)
-		}
-		legacyRows[msg.ID] = true
+	kept := turn.ContextMessageSource{Kind: "history", ID: f.rowID("earlier-1")}
+	first, err := f.fold(f.ctx, compaction.TriggerConfig{Anchors: []turn.ContextMessageSource{kept}})
+	if err != nil || len(first) != 1 {
+		t.Fatalf("fold the earlier rows around the one kept raw: passes=%+v err=%v", first, err)
+	}
+	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
+	checkpoints := checkpoint.NewStore(slog.Default(), queries)
+	held, err := checkpoints.Active(f.ctx, f.sessionID)
+	if err != nil || !slices.Equal(held.RowIDs(), []string{kept.ID}) || !slices.Equal(held.SummaryIDs(), []string{first[0].ArtifactID}) {
+		t.Fatalf("active checkpoint rows=%v summaries=%v err=%v, want the kept row and the first summary", held.RowIDs(), held.SummaryIDs(), err)
 	}
 	f.appendBacklog(4, 400)
 
+	var read string
+	f.onSummary = func(body []byte) { read = string(body) }
 	passes, err := f.fold(f.ctx, compaction.TriggerConfig{})
 	if err != nil || len(passes) != 1 {
 		t.Fatalf("passes=%+v err=%v", passes, err)
 	}
-	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
-	frontier, err := compaction.NewArtifactProjection(queries).LoadActiveSession(f.ctx, compaction.ArtifactOwner{BotID: f.botID, SessionID: f.sessionID, SessionIDKnown: true})
-	if err != nil || len(frontier.Issues) != 0 || len(frontier.Artifacts) != 1 {
-		t.Fatalf("frontier=%+v err=%v, want one active summary and no lineage issue", frontier, err)
+	if !strings.Contains(read, "Earlier backlog summarized.") || !strings.Contains(read, "earlier-1 ") || !strings.Contains(read, "backlog-3 ") {
+		t.Fatal("the summarizer did not read the held summary, the kept row and the backlog")
 	}
-	active := frontier.Artifacts[0]
-	if len(active.ParentIDs) != 1 || active.ParentIDs[0] != legacyID {
-		t.Fatalf("active summary parents=%v, want the legacy summary %s", active.ParentIDs, legacyID)
+	if absorbed := passes[0].Absorbed; !slices.Equal(absorbed, []string{first[0].ArtifactID}) {
+		t.Fatalf("absorbed=%v, want the summary the checkpoint held (%s)", absorbed, first[0].ArtifactID)
 	}
-	covered := 0
-	for _, source := range active.Coverage {
-		if legacyRows[source.Ref.ID] {
-			covered++
-		}
+	want := []string{kept.ID, f.rowID("backlog-0"), f.rowID("backlog-1"), f.rowID("backlog-2"), f.rowID("backlog-3")}
+	if folded := foldedRows(passes...); !slices.Equal(folded, want) {
+		t.Fatalf("folded %v, want the kept row and the backlog %v", folded, want)
 	}
-	if folded := len(foldedRows(passes...)); covered != len(legacyRows) || len(active.Coverage) != len(legacyRows)+folded {
-		t.Fatalf("coverage=%d legacy=%d/%d new=%d, want legacy and new rows covered once", len(active.Coverage), covered, len(legacyRows), folded)
+	active, err := checkpoints.Active(f.ctx, f.sessionID)
+	if err != nil || active.ParentID != held.ID || len(active.RowIDs()) != 0 || !slices.Equal(active.SummaryIDs(), []string{passes[0].ArtifactID}) {
+		t.Fatalf("active checkpoint parent=%s rows=%v summaries=%v err=%v, want one summary over %s and nothing kept", active.ParentID, active.RowIDs(), active.SummaryIDs(), err, held.ID)
+	}
+	if raw, compacted := f.backlogRowsPrefixed("earlier-"); raw != 0 || compacted != 3 {
+		t.Fatalf("earlier rows raw=%d compacted=%d, want all of them folded", raw, compacted)
 	}
 }
 
-// Compaction only summarizes rows inside the caller's history range: an older
-// backlog, and rows after an edit or retry cutoff, stay raw instead of being
-// folded into a summary the request then carries.
-func TestPostgresCompactionLeavesRowsOutsideTheViewRaw(t *testing.T) {
+// Compaction summarizes the thread's history however old it is, but an edit
+// or retry compacts only the history before its cutoff: rows after it stay
+// raw instead of being folded into a summary the request then carries.
+func TestPostgresCompactionStopsAtTheCutoff(t *testing.T) {
 	f := newBacklogFixture(t)
 	f.appendBacklog(3, 400)
 	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET created_at=created_at - interval '2 days' WHERE session_id=$1`, f.sessionID); err != nil {
@@ -106,22 +105,62 @@ func TestPostgresCompactionLeavesRowsOutsideTheViewRaw(t *testing.T) {
 	for i := range 4 {
 		f.appendMessage(fmt.Sprintf("view-%d", i), fmt.Sprintf("view-%d ", i)+strings.Repeat("y", 400))
 	}
-	cutoff := f.base.Add(time.Duration(len(f.rc)+1) * time.Second)
 	for i := range 2 {
 		f.appendMessage(fmt.Sprintf("after-%d", i), fmt.Sprintf("after-%d ", i)+strings.Repeat("z", 400))
 	}
+	cutoff := f.position("after-0")
 
-	if passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesFrom: f.base, CandidatesBefore: cutoff}); err != nil || len(passes) != 1 {
+	if passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesBefore: &cutoff}); err != nil || len(passes) != 1 {
 		t.Fatalf("passes=%+v err=%v", passes, err)
 	}
-	if raw, compacted := f.backlogRows(); raw != 3 || compacted != 0 {
-		t.Fatalf("backlog outside the view: raw=%d compacted=%d, want all 3 left raw", raw, compacted)
+	if raw, compacted := f.backlogRows(); raw != 0 || compacted != 3 {
+		t.Fatalf("backlog days old: raw=%d compacted=%d, want all 3 summarized", raw, compacted)
 	}
 	if raw, compacted := f.backlogRowsPrefixed("after-"); raw != 2 || compacted != 0 {
 		t.Fatalf("rows after the cutoff: raw=%d compacted=%d, want both left raw", raw, compacted)
 	}
 	if _, compacted := f.backlogRowsPrefixed("view-"); compacted == 0 {
 		t.Fatal("rows inside the view were not compacted")
+	}
+}
+
+// An edit or retry that compacts before its first step commits folds onto the
+// summaries its replacement keeps. The replaced turn's run wrote a summary
+// that reaches past the cutoff; the event first rewinds the session to before
+// the turn, as the replacement will, so the summary that ends before it is
+// active again and the turn's rows are left raw for the attempt to replace.
+func TestPostgresCompactionRewindsTheReplacedTurnBeforeFolding(t *testing.T) {
+	f := newBacklogFixture(t)
+	base := time.Now().Add(-time.Hour)
+	f.persistHistory("early-", 4, 400, base)
+	early, err := f.fold(f.ctx, compaction.TriggerConfig{})
+	if err != nil || len(early) != 1 {
+		t.Fatalf("fold the early history: passes=%+v err=%v", early, err)
+	}
+	f.persistHistory("later-", 4, 400, base.Add(10*time.Second))
+	f.persistHistory("replaced-", 2, 400, base.Add(20*time.Second))
+	var turnID string
+	if err := f.pool.QueryRow(f.ctx, `SELECT turn_id::text FROM bot_history_messages WHERE session_id=$1 AND source_message_id='replaced-0'`, f.sessionID).Scan(&turnID); err != nil {
+		t.Fatal(err)
+	}
+	turnStart := f.position("replaced-0")
+	// The replaced turn's run folded its own rows with everything before them.
+	if spanning, err := f.fold(f.ctx, compaction.TriggerConfig{}); err != nil || len(spanning) != 1 {
+		t.Fatalf("fold the replaced turn: passes=%+v err=%v", spanning, err)
+	}
+
+	passes, err := f.fold(f.ctx, compaction.TriggerConfig{CandidatesBefore: &turnStart, ReplacedTurnID: turnID})
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("passes=%+v err=%v, want the edit's event to fold once the replaced turn is rewound", passes, err)
+	}
+	if absorbed := passes[0].Absorbed; len(absorbed) != 1 || absorbed[0] != early[0].ArtifactID {
+		t.Fatalf("absorbed=%v, want only the summary that ends before the turn (%s)", absorbed, early[0].ArtifactID)
+	}
+	if folded := foldedRows(passes...); len(folded) != 4 {
+		t.Fatalf("folded %d rows, want the 4 rows between the earlier summary and the turn", len(folded))
+	}
+	if raw, compacted := f.backlogRowsPrefixed("replaced-"); raw != 2 || compacted != 0 {
+		t.Fatalf("replaced turn rows raw=%d compacted=%d, want both left raw", raw, compacted)
 	}
 }
 
@@ -145,9 +184,9 @@ func TestPostgresCompactionEventFoldsTheWholeBacklog(t *testing.T) {
 		}
 	}
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
-	frontier, err := compaction.NewArtifactProjection(queries).LoadActiveSession(f.ctx, compaction.ArtifactOwner{BotID: f.botID, SessionID: f.sessionID, SessionIDKnown: true})
-	if err != nil || len(frontier.Artifacts) != 1 || frontier.Artifacts[0].ID != passes[len(passes)-1].ArtifactID {
-		t.Fatalf("frontier=%+v err=%v, want the last pass as the one active summary", frontier.Artifacts, err)
+	active, err := checkpoint.NewStore(slog.Default(), queries).Active(f.ctx, f.sessionID)
+	if err != nil || len(active.RowIDs()) != 0 || !slices.Equal(active.SummaryIDs(), []string{passes[len(passes)-1].ArtifactID}) {
+		t.Fatalf("active checkpoint rows=%v summaries=%v err=%v, want the last pass as its one summary", active.RowIDs(), active.SummaryIDs(), err)
 	}
 	if raw, compacted := f.backlogRows(); raw != 0 || compacted != len(foldedRows(passes...)) {
 		t.Fatalf("backlog raw=%d compacted=%d after %d passes, want all of it folded", raw, compacted, len(passes))
@@ -218,37 +257,41 @@ func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
 	}
 }
 
-// A compaction claims and commits as the session's runtime owner. An owner
-// that lost the session, or rows that changed after their claim, cannot
-// commit; a claim its crashed owner left pending is released when the next
-// owner activates. Each time the rows stay raw and the next event folds them.
-func TestPostgresCompactionCommitsOnlyWhatItsOwnerClaimed(t *testing.T) {
-	for _, interruption := range []string{"owner replaced", "row changed", "owner crashed after claim"} {
+// A compaction pass commits as the session's runtime owner, onto the
+// history it read. An owner that lost the session cannot commit, nor can a
+// pass when a row it read is removed while the summarizer runs; a pass its
+// crashed owner left pending is settled when the next owner activates. Each
+// time what is left of the backlog stays raw and the next event folds it.
+func TestPostgresCompactionCommitsOnlyOntoTheHistoryItRead(t *testing.T) {
+	for _, interruption := range []string{"owner replaced", "row removed", "owner crashed mid-pass"} {
 		t.Run(interruption, func(t *testing.T) {
 			f := newBacklogFixture(t)
 			f.appendBacklog(4, 400)
+			backlog := 4
 			queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
 			f.activate(t, queries, 1)
 			switch interruption {
 			case "owner replaced":
 				f.onSummary = func([]byte) { f.activate(t, queries, 2) }
-			case "row changed":
+			case "row removed":
+				removed := f.rowID("backlog-1")
+				backlog--
 				f.onSummary = func([]byte) {
-					if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET content='"backlog-1 edited"'::jsonb WHERE session_id=$1 AND source_message_id='backlog-1'`, f.sessionID); err != nil {
+					if err := f.messages.DeleteByIDs(f.ctx, []string{removed}); err != nil {
 						t.Error(err)
 					}
 				}
-			case "owner crashed after claim":
-				claimBacklog(t, f, queries)
+			case "owner crashed mid-pass":
+				openPass(t, f, queries)
 			}
-			if interruption != "owner crashed after claim" {
+			if interruption != "owner crashed mid-pass" {
 				passes, err := f.fold(f.owner(1), compaction.TriggerConfig{})
 				if len(passes) != 0 || compaction.ReasonOf(err) != compaction.ReasonStaleSource {
 					t.Fatalf("interrupted event passes=%d err=%v, want %s", len(passes), err, compaction.ReasonStaleSource)
 				}
 			}
-			if raw, compacted := f.backlogRows(); raw != 4 || compacted != 0 {
-				t.Fatalf("after the interruption raw=%d compacted=%d, want the backlog left raw", raw, compacted)
+			if raw, compacted := f.backlogRows(); raw != backlog || compacted != 0 {
+				t.Fatalf("after the interruption raw=%d compacted=%d, want the backlog of %d left raw", raw, compacted, backlog)
 			}
 			f.onSummary = nil
 			if interruption != "owner replaced" {
@@ -257,12 +300,12 @@ func TestPostgresCompactionCommitsOnlyWhatItsOwnerClaimed(t *testing.T) {
 			if passes, err := f.fold(f.owner(2), compaction.TriggerConfig{}); err != nil || len(passes) != 1 {
 				t.Fatalf("next event passes=%+v err=%v", passes, err)
 			}
-			if raw, compacted := f.backlogRows(); raw != 0 || compacted != 4 {
-				t.Fatalf("after the next event raw=%d compacted=%d, want the backlog folded", raw, compacted)
+			if raw, compacted := f.backlogRows(); raw != 0 || compacted != backlog {
+				t.Fatalf("after the next event raw=%d compacted=%d, want the backlog of %d folded", raw, compacted, backlog)
 			}
 			var pending int
 			if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_message_compacts WHERE session_id=$1 AND status='pending'`, f.sessionID).Scan(&pending); err != nil || pending != 0 {
-				t.Fatalf("pending claims=%d err=%v", pending, err)
+				t.Fatalf("pending passes=%d err=%v", pending, err)
 			}
 		})
 	}
@@ -278,6 +321,16 @@ func (f *backlogFixture) rowID(id string) string {
 	return row
 }
 
+// position is the place in the history of the inbound message id's row.
+func (f *backlogFixture) position(id string) messagepkg.HistoryPosition {
+	f.t.Helper()
+	position, err := f.messages.HistoryPositionByID(f.ctx, f.sessionID, f.rowID(id))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return position
+}
+
 // owner is the context a run that holds token writes in.
 func (f *backlogFixture) owner(token int64) context.Context {
 	return runtimefence.WithContext(f.ctx, runtimefence.Fence{BotID: f.botID, SessionID: f.sessionID, Token: token})
@@ -291,33 +344,11 @@ func (f *backlogFixture) activate(t *testing.T, queries dbstore.Queries, token i
 	}
 }
 
-// claimBacklog claims the backlog the way a compaction does, and stops there.
-func claimBacklog(t *testing.T, f *backlogFixture, queries dbstore.Queries) {
+// openPass records a pass the way a compaction does before its summarizer
+// call, and stops there.
+func openPass(t *testing.T, f *backlogFixture, queries dbstore.Queries) {
 	t.Helper()
-	botID, sessionID := db.ParseUUIDOrEmpty(f.botID), db.ParseUUIDOrEmpty(f.sessionID)
-	var epoch int64
-	if err := f.pool.QueryRow(f.ctx, `SELECT compaction_epoch FROM bot_sessions WHERE id=$1`, f.sessionID).Scan(&epoch); err != nil {
+	if _, err := queries.CreateCompactionLog(f.ctx, sqlc.CreateCompactionLogParams{BotID: db.ParseUUIDOrEmpty(f.botID), SessionID: db.ParseUUIDOrEmpty(f.sessionID)}); err != nil {
 		t.Fatal(err)
-	}
-	log, err := queries.CreateCompactionLog(f.ctx, sqlc.CreateCompactionLogParams{BotID: botID, SessionID: sessionID, ExpectedEpoch: epoch})
-	if err != nil {
-		t.Fatal(err)
-	}
-	rows, err := f.pool.Query(f.ctx, `SELECT id FROM bot_history_messages WHERE session_id=$1 AND source_message_id LIKE 'backlog-%' ORDER BY created_at`, f.sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ids []pgtype.UUID
-	for rows.Next() {
-		var id pgtype.UUID
-		if err := rows.Scan(&id); err != nil {
-			t.Fatal(err)
-		}
-		ids = append(ids, id)
-	}
-	rows.Close()
-	marked, err := queries.MarkMessagesCompacted(f.ctx, sqlc.MarkMessagesCompactedParams{CompactID: log.ID, MessageIds: ids, ExpectedCompactIds: make([]pgtype.UUID, len(ids))})
-	if err != nil || marked != int64(len(ids)) {
-		t.Fatalf("claimed %d of %d rows: %v", marked, len(ids), err)
 	}
 }

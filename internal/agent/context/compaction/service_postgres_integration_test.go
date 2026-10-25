@@ -14,6 +14,7 @@ import (
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/dbtest"
@@ -21,10 +22,10 @@ import (
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
 
-// A pass that claims every row its candidate read admitted commits: the
-// rows read back at commit are measured as the candidate read measured them,
-// so a long run of short messages, whose stored rows weigh far more than
-// their payload, is not mistaken for rows that lost their claim.
+// A pass over a long run of short messages, whose stored rows weigh far more
+// than their payload, commits every row its candidate read admitted: the
+// checkpoint it makes active holds its summary alone, through the last of
+// them.
 func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 	ctx := context.Background()
 	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
@@ -91,11 +92,25 @@ func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}
-	var folded int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM bot_history_messages h JOIN bot_history_message_compacts c ON c.id=h.compact_id AND c.status='ok' WHERE h.session_id=$1`, sessionID).Scan(&folded); err != nil {
+	active, err := checkpoint.NewStore(slog.Default(), queries).Active(ctx, sessionID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(passes) != 1 || folded != rows {
-		t.Fatalf("passes=%d folded=%d, want every row folded by one committed pass", len(passes), folded)
+	var folded, total int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+		  (SELECT count(*) FROM bot_history_messages WHERE session_id = $1 AND (turn_position, turn_message_seq) <= ($2, $3)),
+		  (SELECT count(*) FROM bot_history_messages WHERE session_id = $1)`,
+		sessionID, active.Position.Turn, active.Position.Seq).Scan(&folded, &total); err != nil {
+		t.Fatal(err)
+	}
+	if len(passes) != 1 {
+		t.Fatalf("passes=%d, want one committed pass", len(passes))
+	}
+	if len(passes[0].Covered) != rows || folded != rows || total != rows {
+		t.Fatalf("covered=%d folded=%d of %d, want every row folded", len(passes[0].Covered), folded, total)
+	}
+	if len(active.Items) != 1 || active.Items[0].SummaryID != passes[0].ArtifactID || active.Items[0].Summary != "The short messages were exchanged." {
+		t.Fatalf("checkpoint holds %+v, want the pass's summary alone", active.Items)
 	}
 }
