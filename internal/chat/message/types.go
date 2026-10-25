@@ -159,6 +159,19 @@ type LocateResult struct {
 	TargetID string
 }
 
+// HistoryPosition is a place in a session's history: the position of a
+// turn and the sequence of a message in it. Positions order the history; the
+// zero position precedes every message.
+type HistoryPosition struct {
+	Turn int64
+	Seq  int64
+}
+
+// Before reports whether p comes before other.
+func (p HistoryPosition) Before(other HistoryPosition) bool {
+	return p.Turn < other.Turn || p.Turn == other.Turn && p.Seq < other.Seq
+}
+
 // ActiveMessagesMeasure is a database-side aggregate over a session's active
 // messages (CM-ADM-001): counts and raw content bytes, computed without
 // loading any payload into the process.

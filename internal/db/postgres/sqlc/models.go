@@ -262,6 +262,28 @@ type BotDependencyInstallation struct {
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
+type BotHistoryAppearedRow struct {
+	MessageID      pgtype.UUID        `json:"message_id"`
+	TeamID         pgtype.UUID        `json:"team_id"`
+	SessionID      pgtype.UUID        `json:"session_id"`
+	CheckpointID   pgtype.UUID        `json:"checkpoint_id"`
+	TurnPosition   int64              `json:"turn_position"`
+	TurnMessageSeq int64              `json:"turn_message_seq"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type BotHistoryCheckpoint struct {
+	ID             pgtype.UUID        `json:"id"`
+	TeamID         pgtype.UUID        `json:"team_id"`
+	BotID          pgtype.UUID        `json:"bot_id"`
+	SessionID      pgtype.UUID        `json:"session_id"`
+	ParentID       pgtype.UUID        `json:"parent_id"`
+	TurnPosition   int64              `json:"turn_position"`
+	TurnMessageSeq int64              `json:"turn_message_seq"`
+	Items          []byte             `json:"items"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type BotHistoryMessage struct {
 	ID                      pgtype.UUID        `json:"id"`
 	BotID                   pgtype.UUID        `json:"bot_id"`
@@ -370,6 +392,7 @@ type BotSession struct {
 	Metadata                 []byte             `json:"metadata"`
 	NextTurnPosition         int64              `json:"next_turn_position"`
 	CompactionEpoch          int64              `json:"compaction_epoch"`
+	HistoryCheckpointID      pgtype.UUID        `json:"history_checkpoint_id"`
 	RuntimeFencingToken      int64              `json:"runtime_fencing_token"`
 	RuntimeResetToken        pgtype.UUID        `json:"runtime_reset_token"`
 	RuntimeResetExpiresAt    pgtype.Timestamptz `json:"runtime_reset_expires_at"`
