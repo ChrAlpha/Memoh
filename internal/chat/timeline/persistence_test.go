@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"math"
 	"reflect"
 	"testing"
 
@@ -138,8 +139,8 @@ func TestPersistEventReturnsOriginalEventOnDedup(t *testing.T) {
 }
 
 // Replay leaves out in SQL what the session's checkpoint stands for: it
-// passes the checkpoint's position and the rows it keeps, and restores the
-// newest-first pages to chronological order.
+// passes the checkpoint's position, the rows it keeps and the last message it
+// omits, and restores the newest-first pages to chronological order.
 func TestLoadEventsForReplayLeavesOutWhatTheCheckpointStandsFor(t *testing.T) {
 	t.Parallel()
 	const (
@@ -162,19 +163,21 @@ func TestLoadEventsForReplayLeavesOutWhatTheCheckpointStandsFor(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		name      string
-		active    sqlc.BotHistoryCheckpoint
-		wantAfter messagepkg.HistoryPosition
-		wantKept  []string
+		name        string
+		active      sqlc.BotHistoryCheckpoint
+		wantAfter   messagepkg.HistoryPosition
+		wantKept    []string
+		wantOmitted int64
 	}{
 		{
 			name: "checkpoint",
-			active: checkpointRow(t, messagepkg.HistoryPosition{Turn: 7, Seq: 2},
+			active: checkpointRow(t, messagepkg.HistoryPosition{Turn: 7, Seq: 2}, omittedThrough(100, 400, 3),
 				checkpoint.Item{SummaryID: summaryID}, checkpoint.Item{RowID: keptID}),
-			wantAfter: messagepkg.HistoryPosition{Turn: 7, Seq: 2},
-			wantKept:  []string{keptID},
+			wantAfter:   messagepkg.HistoryPosition{Turn: 7, Seq: 2},
+			wantKept:    []string{keptID},
+			wantOmitted: 400,
 		},
-		{name: "no checkpoint", wantKept: []string{}},
+		{name: "no checkpoint", wantKept: []string{}, wantOmitted: math.MinInt64},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -207,6 +210,9 @@ func TestLoadEventsForReplayLeavesOutWhatTheCheckpointStandsFor(t *testing.T) {
 			}
 			if !reflect.DeepEqual(kept, tc.wantKept) {
 				t.Fatalf("replay kept ids = %v, want %v", kept, tc.wantKept)
+			}
+			if params.OmittedThroughMs != tc.wantOmitted {
+				t.Fatalf("replay omitted through %d, want %d", params.OmittedThroughMs, tc.wantOmitted)
 			}
 		})
 	}

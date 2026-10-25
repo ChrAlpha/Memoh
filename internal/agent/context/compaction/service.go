@@ -137,10 +137,14 @@ func (s *Service) publishActivity(botID string) {
 // summarizer call can read and commits it as the session's next checkpoint;
 // the event passes again only while candidates are left that the call could
 // not read. An edit or retry's event first rewinds the session to the
-// checkpoint its replacement keeps, as the replacement's first step does. It
-// returns the passes it committed: none when there was nothing to fold or the
-// session's compaction was already in flight. A failed pass ends the event
-// with an *EventError and leaves the passes before it committed.
+// checkpoint its replacement keeps, as the replacement's first step does. An
+// event that reads every candidate then steps over the history from before
+// checkpoints that the load following it cannot render, or a pass could not
+// read (LoadMaxBytes), without a summarizer call. It returns what it committed,
+// a pass without a summary first when it stepped over: none when there was
+// nothing to fold or the session's compaction was already in flight. A failed
+// pass ends the event with an *EventError and leaves the passes before it
+// committed.
 func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
 	run, ok := s.beginSessionCompaction(cfg.SessionID)
 	if !ok {
@@ -160,7 +164,10 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 	s.inflightMu.Unlock()
 	s.publishActivity(cfg.BotID)
 
-	var compactErr error
+	var (
+		compactErr  error
+		steppedOver int64
+	)
 	preHookRan := false
 	defer func() {
 		if r := recover(); r != nil {
@@ -169,7 +176,7 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 		if !preHookRan {
 			return
 		}
-		s.runPostCompactHook(context.WithoutCancel(ctx), cfg, compactErr)
+		s.runPostCompactHook(context.WithoutCancel(ctx), cfg, compactErr, steppedOver)
 	}()
 
 	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, cfg, nil); err != nil {
@@ -194,6 +201,20 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 	}
 
 	var passes []Pass
+	if cfg.View == nil && cfg.LoadMaxBytes > 0 {
+		stepped, err := s.checkpoints.StepOver(ctx, cfg.SessionID, cfg.CandidatesBefore, checkpoint.StepOverLimits{
+			ContentBytes:    cfg.LoadMaxBytes,
+			RowPayloadBytes: passReadMaxBytes(cfg.SummaryWindowTokens),
+		})
+		if err != nil {
+			compactErr = err
+			return nil, err
+		}
+		if stepped > 0 {
+			steppedOver = stepped
+			passes = append(passes, Pass{SteppedOver: stepped})
+		}
+	}
 	for {
 		previous := ""
 		if len(passes) > 0 {
@@ -221,9 +242,10 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 }
 
 // runPostCompactHook dispatches PostCompact after the compaction outcome is
-// already decided. Post-hook failures are advisory, so an error only logs a
-// warning and a panic is contained here.
-func (s *Service) runPostCompactHook(ctx context.Context, cfg TriggerConfig, compactErr error) {
+// already decided, with how many context rows the event stepped over.
+// Post-hook failures are advisory, so an error only logs a warning and a
+// panic is contained here.
+func (s *Service) runPostCompactHook(ctx context.Context, cfg TriggerConfig, compactErr error, steppedOver int64) {
 	defer func() {
 		if r := recover(); r != nil && s.logger != nil {
 			s.logger.WarnContext(ctx, "post compaction hook panicked", slog.String("bot_id", cfg.BotID), slog.Any("panic", r))
@@ -232,6 +254,9 @@ func (s *Service) runPostCompactHook(ctx context.Context, cfg TriggerConfig, com
 	extra := map[string]any{}
 	if compactErr != nil {
 		extra["error"] = compactErr.Error()
+	}
+	if steppedOver > 0 {
+		extra["stepped_over_rows"] = steppedOver
 	}
 	if err := s.runCompactionHook(ctx, hooks.EventPostCompact, cfg, extra); err != nil && s.logger != nil {
 		s.logger.WarnContext(ctx, "post compaction hook failed", slog.String("bot_id", cfg.BotID), slog.Any("error", err))

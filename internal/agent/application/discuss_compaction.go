@@ -39,7 +39,7 @@ func (s *Service) maybeSyncCompactDiscuss(ctx context.Context, cmd turn.StartTur
 		return false, nil
 	}
 	req := ChatRequest{BotID: cmd.BotID, ChatID: cmd.BotID, ThreadID: cmd.ThreadID, RunID: runID, discussCurrentSources: protected}
-	if err := s.compactForBudget(ctx, req, discussContextPressure(cmd), budget, resolved.ModelID); err != nil {
+	if err := s.compactForBudget(ctx, req, discussContextPressure(cmd), budget, s.discussHistoryLoadMaxBytes(), resolved.ModelID); err != nil {
 		return false, err
 	}
 	return true, nil

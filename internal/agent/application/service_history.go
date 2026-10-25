@@ -13,6 +13,7 @@ import (
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/chat/timeline"
 )
 
 // injectWorkspaceTransitionRecords marks every switch of Computer between
@@ -107,8 +108,9 @@ func currentWorkspaceTransitionMessage(history []historyfrag.HistoryRecord, curr
 }
 
 // loadHistoryRecords loads the thread's history under its history
-// checkpoint: what it holds in its order, its summaries and the rows it keeps
-// raw, and the rows after its position. What a load reads follows what is unsummarized, never the
+// checkpoint: the notice of what the checkpoint omits, what it holds in its
+// order, its summaries and the rows it keeps raw, and the rows after its
+// position. What a load reads follows what is unsummarized, never the
 // thread's length or age. The rows after the checkpoint are byte-budgeted on
 // the database side (CM-ADM-001): admitted newest-first within
 // contextTokenBudget (the absolute cap when the budget is unset). It reports
@@ -145,7 +147,7 @@ func (s *Service) loadHistoryRecords(ctx context.Context, fallback historyfrag.S
 		return nil, false, err
 	}
 	msgs := load.Messages
-	result := make([]historyfrag.HistoryRecord, 0, len(held.Items)+len(msgs))
+	result := make([]historyfrag.HistoryRecord, 0, 1+len(held.Items)+len(msgs))
 	for _, item := range held.Items {
 		if item.SummaryID != "" {
 			result = append(result, historyfrag.SummaryRecord(item.SummaryID, item.Summary, scope))
@@ -171,7 +173,31 @@ func (s *Service) loadHistoryRecords(ctx context.Context, fallback historyfrag.S
 		msgs[i] = messagepkg.Message{}
 		result = append(result, record)
 	}
+	// The notice renders no source, so in-run compaction keeps it as it is
+	// and no summary folds it.
+	if notice := timeline.HistoryNotice(held.Omitted); notice != "" && len(result) > 0 {
+		result = append([]historyfrag.HistoryRecord{{
+			ModelMessage: ModelMessage{Role: "system", Content: newTextContent(notice)},
+			Synthetic:    true,
+		}}, result...)
+	}
 	return result, load.Truncated, nil
+}
+
+// stepOverHistory lets the session's active checkpoint step over the history
+// its bot recorded before keeping history under checkpoints that a request
+// within contextTokenBudget cannot render (checkpoint.Store.StepOver), before
+// the request reads it; before bounds the history as a cutoff does. A
+// session without such history costs one index probe.
+func (s *Service) stepOverHistory(ctx context.Context, sessionID string, before *messagepkg.HistoryPosition, contextTokenBudget int) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if s.checkpoints == nil || sessionID == "" {
+		return nil
+	}
+	if _, err := s.checkpoints.StepOver(ctx, sessionID, before, checkpoint.StepOverLimits{ContentBytes: s.historyLoadMaxBytes(contextTokenBudget)}); err != nil {
+		return fmt.Errorf("step over history before checkpoints: %w", err)
+	}
+	return nil
 }
 
 // historyCheckpoint is the checkpoint a request renders: the session's

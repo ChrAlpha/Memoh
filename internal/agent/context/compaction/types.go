@@ -24,6 +24,11 @@ type Pass struct {
 	// More reports candidates left that the pass could not read; the event
 	// folds them in a later pass.
 	More bool
+	// SteppedOver, on a pass without a summary, counts the context rows the
+	// event stepped over before folding: history its bot recorded before
+	// keeping history under checkpoints that the request cannot render
+	// (checkpoint.Store.StepOver).
+	SteppedOver int64
 }
 
 // Reason names why a compaction event failed.
@@ -127,6 +132,12 @@ type TriggerConfig struct {
 	// sources are not in it: the caller prices what it renders for them.
 	HistoryBudgetTokens int
 	PromptCacheTTL      string
+	// LoadMaxBytes, when positive, is the content the history load that
+	// follows the event reads after the checkpoint: the request's reload, or
+	// a Discuss recomposition's. An event that reads every candidate first
+	// steps over the history from before checkpoints past it, and any such
+	// row a pass could not read (checkpoint.Store.StepOver).
+	LoadMaxBytes int64
 	// Continuation, when set, is the request the caller sent last. A pass
 	// that folds everything foldable may ask for its summary by extending
 	// that request, which the provider may still hold in its prompt cache,

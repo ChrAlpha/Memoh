@@ -8,6 +8,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/httpx"
 	"github.com/felinics/memoh/internal/logger"
@@ -88,12 +89,17 @@ type discussHistory struct {
 }
 
 // loadHistory reads the session's history checkpoint for rc and the turn
-// responses after it. A load failure fails the trigger: composing without
-// the checkpoint would either re-materialize the history it folds or leave
-// what it holds out (CM-ADM-003).
+// responses after it, once the checkpoint has stepped over the history from
+// before checkpoints that the turn responses' byte budget cannot render. A
+// load failure fails the trigger: composing without the checkpoint would
+// either re-materialize the history it folds or leave what it holds out
+// (CM-ADM-003).
 func (d *DiscussDriver) loadHistory(ctx context.Context, cfg DiscussSessionConfig, rc timeline.RenderedContext, log *slog.Logger) (discussHistory, error) {
 	var history discussHistory
 	if d.checkpoints != nil {
+		if _, err := d.checkpoints.StepOver(ctx, cfg.ThreadID, checkpoint.StepOverLimits{ContentBytes: d.history.maxBytes}); err != nil {
+			return discussHistory{}, err
+		}
 		var err error
 		if history.checkpoint, err = d.checkpoints.Load(ctx, cfg.ThreadID, rc); err != nil {
 			return discussHistory{}, err

@@ -58,6 +58,11 @@ func TestDiscussAdmissionOverflowRunsRecovery(t *testing.T) {
 	if err != nil || !fired || len(runner.configs) != 1 || runner.configs[0].HistoryBudgetTokens != 500 {
 		t.Fatalf("rejected context did not enter recovery: fired=%v configs=%+v", fired, runner.configs)
 	}
+	// The turn recomposes within the Discuss composition's window, the
+	// admission cap, which the model's smaller budget does not narrow.
+	if got, want := runner.configs[0].LoadMaxBytes, service.historyLoadMaxBytes(service.contextAbsoluteMaxTokens()); got != want {
+		t.Fatalf("compaction steps over past %d bytes, want the Discuss composition's %d", got, want)
+	}
 }
 
 func TestDiscussRecoveryHonorsCancellation(t *testing.T) {

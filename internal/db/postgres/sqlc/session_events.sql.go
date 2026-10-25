@@ -253,7 +253,8 @@ WITH message_rows AS MATERIALIZED (
    AND event.external_message_id = message.external_message_id
   WHERE NOT message.kept
   GROUP BY message.external_message_id, message.event_cursor
-  HAVING CASE
+  HAVING MIN(event.received_at_ms) > $5::BIGINT
+    AND CASE
       WHEN message.event_cursor > 0
         THEN MAX(COALESCE((event.event_data->>'event_cursor')::bigint, 0)) > message.event_cursor
       ELSE bool_or(event.event_kind = 'edit')
@@ -272,17 +273,17 @@ WITH message_rows AS MATERIALIZED (
   WHERE event.team_id = public.memoh_current_team_id()
     AND event.session_id = $4
     AND (
-      NOT $5::boolean
+      NOT $6::boolean
       OR (event.received_at_ms, event.created_at, event.id) < (
-        $6::BIGINT,
-        $7::TIMESTAMPTZ,
-        $8::UUID
+        $7::BIGINT,
+        $8::TIMESTAMPTZ,
+        $9::UUID
       )
     )
     AND (
       message.kept
       OR changed.external_message_id IS NOT NULL
-      OR message.external_message_id IS NULL
+      OR message.external_message_id IS NULL AND event.received_at_ms > $5::BIGINT
     )
 ), ranked AS MATERIALIZED (
   SELECT
@@ -294,9 +295,9 @@ WITH message_rows AS MATERIALIZED (
 ), admitted AS MATERIALIZED (
   SELECT id, received_at_ms, created_at, payload_bytes, cumulative_bytes
   FROM ranked
-  WHERE cumulative_bytes <= $9::BIGINT
+  WHERE cumulative_bytes <= $10::BIGINT
   ORDER BY received_at_ms DESC, created_at DESC, id DESC
-  LIMIT $10
+  LIMIT $11
 )
 SELECT
   event.id,
@@ -321,6 +322,7 @@ type ListSessionEventsBySessionPageBeforeWithinBytesParams struct {
 	AfterTurnMessageSeq int64              `json:"after_turn_message_seq"`
 	KeptIds             []pgtype.UUID      `json:"kept_ids"`
 	SessionID           pgtype.UUID        `json:"session_id"`
+	OmittedThroughMs    int64              `json:"omitted_through_ms"`
 	HasCursor           bool               `json:"has_cursor"`
 	BeforeReceivedAtMs  int64              `json:"before_received_at_ms"`
 	BeforeCreatedAt     pgtype.Timestamptz `json:"before_created_at"`
@@ -348,16 +350,19 @@ type ListSessionEventsBySessionPageBeforeWithinBytesRow struct {
 // What the session's checkpoint stands for is excluded in SQL before
 // event_data reaches the process: every event of a message whose context
 // rows all lie at or before the checkpoint's position without being kept by
-// reference. A folded message that changed after its rows were written
-// replays whole: its summary read the rows, never the change. The change is
-// the events after the one its rows were written from or, when that cursor
-// is unknown, an edit.
+// reference, and every event without a context row received by the last
+// message the checkpoint omits (omitted_through_ms). A folded message that
+// changed after its rows were written replays whole unless the checkpoint
+// omits it: its summary read the rows, never the change. The change is the
+// events after the one its rows were written from or, when that cursor is
+// unknown, an edit.
 func (q *Queries) ListSessionEventsBySessionPageBeforeWithinBytes(ctx context.Context, arg ListSessionEventsBySessionPageBeforeWithinBytesParams) ([]ListSessionEventsBySessionPageBeforeWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listSessionEventsBySessionPageBeforeWithinBytes,
 		arg.AfterTurnPosition,
 		arg.AfterTurnMessageSeq,
 		arg.KeptIds,
 		arg.SessionID,
+		arg.OmittedThroughMs,
 		arg.HasCursor,
 		arg.BeforeReceivedAtMs,
 		arg.BeforeCreatedAt,

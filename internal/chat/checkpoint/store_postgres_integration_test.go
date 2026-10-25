@@ -386,17 +386,26 @@ func TestPostgresARowAppearingBelowTheActiveCheckpointMovesItBackOnTheNextRead(t
 	}
 }
 
-// Every checkpoint holds a summary: what moves a session back relies on it,
-// so the database refuses one without.
-func TestPostgresACheckpointAlwaysHoldsASummary(t *testing.T) {
+// Every checkpoint stands for its history with a summary, an omission, or
+// both, so the database refuses one with neither and keeps one that only
+// omits.
+func TestPostgresACheckpointStandsForItsHistory(t *testing.T) {
 	f := newHistoryFixture(t)
 	row := f.row(f.session, 1, 1)
-	_, err := create(f.ctx, f.queries, dbpkg.ParseUUIDOrEmpty(f.session), Checkpoint{}, messagepkg.HistoryPosition{Turn: 1, Seq: 1}, items(Item{RowID: row}))
-	if err == nil || !strings.Contains(err.Error(), "bot_history_checkpoints_summary_check") {
-		t.Fatalf("create without a summary = %v, want the summary check to refuse it", err)
+	_, err := create(f.ctx, f.queries, dbpkg.ParseUUIDOrEmpty(f.session), Checkpoint{}, messagepkg.HistoryPosition{Turn: 1, Seq: 1}, Omitted{}, items(Item{RowID: row}))
+	if err == nil || !strings.Contains(err.Error(), "bot_history_checkpoints_stands_check") {
+		t.Fatalf("create without a summary or an omission = %v, want the check to refuse it", err)
 	}
 	if got := f.pointer(f.session); got != "" {
 		t.Fatalf("active after the refused checkpoint = %q, want none", got)
+	}
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	omits, err := create(f.ctx, f.queries, dbpkg.ParseUUIDOrEmpty(f.session), Checkpoint{}, messagepkg.HistoryPosition{Turn: 1, Seq: 1}, Omitted{Count: 1, First: at, Last: at}, nil)
+	if err != nil {
+		t.Fatalf("create with an omission alone: %v", err)
+	}
+	if got := f.active(); got.ID != omits.ID || got.Omitted.Count != 1 || !got.Omitted.First.Equal(at) {
+		t.Fatalf("active = %+v, want the checkpoint that omits one row", got)
 	}
 }
 

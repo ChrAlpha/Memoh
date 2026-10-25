@@ -851,6 +851,8 @@ func discussMessagesToSDK(messages []turn.DiscussMessage) []sdk.Message {
 		switch m.Role {
 		case "assistant":
 			result = append(result, sdk.AssistantMessage(m.Content))
+		case "system":
+			result = append(result, sdk.SystemMessage(m.Content))
 		default:
 			result = append(result, sdk.UserMessage(m.Content))
 		}

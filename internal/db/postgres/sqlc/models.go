@@ -283,6 +283,9 @@ type BotHistoryCheckpoint struct {
 	TurnMessageSeq int64              `json:"turn_message_seq"`
 	Items          []byte             `json:"items"`
 	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	OmittedCount   int64              `json:"omitted_count"`
+	OmittedFirstAt pgtype.Timestamptz `json:"omitted_first_at"`
+	OmittedLastAt  pgtype.Timestamptz `json:"omitted_last_at"`
 }
 
 type BotHistoryMessage struct {

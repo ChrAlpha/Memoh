@@ -76,19 +76,25 @@ func mustCheckpointUUID(t *testing.T, id string) pgtype.UUID {
 	return parsed
 }
 
-func checkpointRow(t *testing.T, position messagepkg.HistoryPosition, items ...checkpoint.Item) sqlc.BotHistoryCheckpoint {
+func checkpointRow(t *testing.T, position messagepkg.HistoryPosition, omitted checkpoint.Omitted, items ...checkpoint.Item) sqlc.BotHistoryCheckpoint {
 	t.Helper()
 	encoded, err := json.Marshal(items)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sqlc.BotHistoryCheckpoint{
+	row := sqlc.BotHistoryCheckpoint{
 		ID:             mustCheckpointUUID(t, "cccccccc-cccc-cccc-cccc-cccccccccccc"),
 		SessionID:      mustCheckpointUUID(t, checkpointTestSessionID),
 		TurnPosition:   position.Turn,
 		TurnMessageSeq: position.Seq,
 		Items:          encoded,
 	}
+	if omitted.Omits() {
+		row.OmittedCount = omitted.Count
+		row.OmittedFirstAt = pgtype.Timestamptz{Time: omitted.First, Valid: true}
+		row.OmittedLastAt = pgtype.Timestamptz{Time: omitted.Last, Valid: true}
+	}
+	return row
 }
 
 func storedModelMessage(t *testing.T, role string, content any) []byte {
@@ -117,8 +123,9 @@ func TestCheckpointSourceLoadProjectsTheActiveCheckpoint(t *testing.T) {
 		replyID    = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3"
 		resultID   = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb4"
 	)
+	omitted := omittedThrough(100, 400, 2)
 	queries := &fakeCheckpointQueries{
-		active: checkpointRow(t, messagepkg.HistoryPosition{Turn: 4, Seq: 3},
+		active: checkpointRow(t, messagepkg.HistoryPosition{Turn: 4, Seq: 3}, omitted,
 			checkpoint.Item{SummaryID: summaryID},
 			checkpoint.Item{RowID: inputID},
 			checkpoint.Item{RowID: feedbackID},
@@ -143,8 +150,9 @@ func TestCheckpointSourceLoadProjectsTheActiveCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if held.Position != (messagepkg.HistoryPosition{Turn: 4, Seq: 3}) {
-		t.Fatalf("position %+v, want the checkpoint's", held.Position)
+	if held.Position != (messagepkg.HistoryPosition{Turn: 4, Seq: 3}) || held.Omitted.Count != 2 ||
+		!held.Omitted.First.Equal(omitted.First) || !held.Omitted.Last.Equal(omitted.Last) {
+		t.Fatalf("position %+v omitted %+v, want the checkpoint's", held.Position, held.Omitted)
 	}
 	if want := []string{inputID, feedbackID, replyID, resultID}; !reflect.DeepEqual(rows.ids, want) {
 		t.Fatalf("kept rows read = %v, want %v", rows.ids, want)

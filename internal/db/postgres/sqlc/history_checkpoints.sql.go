@@ -160,23 +160,28 @@ func (q *Queries) ClassifyHistoryCheckpointMessages(ctx context.Context, arg Cla
 
 const createHistoryCheckpoint = `-- name: CreateHistoryCheckpoint :one
 INSERT INTO bot_history_checkpoints (
-  bot_id, session_id, parent_id, turn_position, turn_message_seq, items
+  bot_id, session_id, parent_id, turn_position, turn_message_seq,
+  omitted_count, omitted_first_at, omitted_last_at, items
 )
 SELECT session.bot_id, session.id, $1::uuid,
   $2::bigint, $3::bigint,
-  $4::jsonb
+  $4::bigint, $5::timestamptz,
+  $6::timestamptz, $7::jsonb
 FROM bot_sessions session
 WHERE session.team_id = public.memoh_current_team_id()
-  AND session.id = $5
-RETURNING id, team_id, bot_id, session_id, parent_id, turn_position, turn_message_seq, items, created_at
+  AND session.id = $8
+RETURNING id, team_id, bot_id, session_id, parent_id, turn_position, turn_message_seq, items, created_at, omitted_count, omitted_first_at, omitted_last_at
 `
 
 type CreateHistoryCheckpointParams struct {
-	ParentID       pgtype.UUID `json:"parent_id"`
-	TurnPosition   int64       `json:"turn_position"`
-	TurnMessageSeq int64       `json:"turn_message_seq"`
-	Items          []byte      `json:"items"`
-	SessionID      pgtype.UUID `json:"session_id"`
+	ParentID       pgtype.UUID        `json:"parent_id"`
+	TurnPosition   int64              `json:"turn_position"`
+	TurnMessageSeq int64              `json:"turn_message_seq"`
+	OmittedCount   int64              `json:"omitted_count"`
+	OmittedFirstAt pgtype.Timestamptz `json:"omitted_first_at"`
+	OmittedLastAt  pgtype.Timestamptz `json:"omitted_last_at"`
+	Items          []byte             `json:"items"`
+	SessionID      pgtype.UUID        `json:"session_id"`
 }
 
 func (q *Queries) CreateHistoryCheckpoint(ctx context.Context, arg CreateHistoryCheckpointParams) (BotHistoryCheckpoint, error) {
@@ -184,6 +189,9 @@ func (q *Queries) CreateHistoryCheckpoint(ctx context.Context, arg CreateHistory
 		arg.ParentID,
 		arg.TurnPosition,
 		arg.TurnMessageSeq,
+		arg.OmittedCount,
+		arg.OmittedFirstAt,
+		arg.OmittedLastAt,
 		arg.Items,
 		arg.SessionID,
 	)
@@ -198,6 +206,9 @@ func (q *Queries) CreateHistoryCheckpoint(ctx context.Context, arg CreateHistory
 		&i.TurnMessageSeq,
 		&i.Items,
 		&i.CreatedAt,
+		&i.OmittedCount,
+		&i.OmittedFirstAt,
+		&i.OmittedLastAt,
 	)
 	return i, err
 }
@@ -234,7 +245,7 @@ func (q *Queries) ForgetHistoryAppearedRows(ctx context.Context, arg ForgetHisto
 }
 
 const getActiveHistoryCheckpoint = `-- name: GetActiveHistoryCheckpoint :one
-SELECT checkpoint.id, checkpoint.team_id, checkpoint.bot_id, checkpoint.session_id, checkpoint.parent_id, checkpoint.turn_position, checkpoint.turn_message_seq, checkpoint.items, checkpoint.created_at
+SELECT checkpoint.id, checkpoint.team_id, checkpoint.bot_id, checkpoint.session_id, checkpoint.parent_id, checkpoint.turn_position, checkpoint.turn_message_seq, checkpoint.items, checkpoint.created_at, checkpoint.omitted_count, checkpoint.omitted_first_at, checkpoint.omitted_last_at
 FROM bot_history_checkpoints checkpoint
 JOIN bot_sessions session
   ON session.team_id = checkpoint.team_id
@@ -257,6 +268,9 @@ func (q *Queries) GetActiveHistoryCheckpoint(ctx context.Context, sessionID pgty
 		&i.TurnMessageSeq,
 		&i.Items,
 		&i.CreatedAt,
+		&i.OmittedCount,
+		&i.OmittedFirstAt,
+		&i.OmittedLastAt,
 	)
 	return i, err
 }
@@ -311,7 +325,7 @@ func (q *Queries) GetForkHistoryPosition(ctx context.Context, arg GetForkHistory
 }
 
 const getHistoryCheckpoint = `-- name: GetHistoryCheckpoint :one
-SELECT id, team_id, bot_id, session_id, parent_id, turn_position, turn_message_seq, items, created_at
+SELECT id, team_id, bot_id, session_id, parent_id, turn_position, turn_message_seq, items, created_at, omitted_count, omitted_first_at, omitted_last_at
 FROM bot_history_checkpoints
 WHERE team_id = public.memoh_current_team_id()
   AND id = $1
@@ -330,6 +344,9 @@ func (q *Queries) GetHistoryCheckpoint(ctx context.Context, id pgtype.UUID) (Bot
 		&i.TurnMessageSeq,
 		&i.Items,
 		&i.CreatedAt,
+		&i.OmittedCount,
+		&i.OmittedFirstAt,
+		&i.OmittedLastAt,
 	)
 	return i, err
 }
@@ -367,6 +384,47 @@ func (q *Queries) GetHistoryCheckpointKeptBeforeTurn(ctx context.Context, arg Ge
 	var checkpoint_id pgtype.UUID
 	err := row.Scan(&checkpoint_id)
 	return checkpoint_id, err
+}
+
+const getHistoryCheckpointStepOverBoundary = `-- name: GetHistoryCheckpointStepOverBoundary :one
+SELECT
+  session.bot_id,
+  bot.history_checkpoints_since,
+  EXISTS (
+    SELECT 1
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = session.id
+      AND m.created_at < bot.history_checkpoints_since
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  ) AS has_pre_checkpoint_rows
+FROM bot_sessions session
+JOIN bots bot
+  ON bot.team_id = session.team_id
+ AND bot.id = session.bot_id
+WHERE session.team_id = public.memoh_current_team_id()
+  AND session.id = $1
+`
+
+type GetHistoryCheckpointStepOverBoundaryRow struct {
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	HistoryCheckpointsSince pgtype.Timestamptz `json:"history_checkpoints_since"`
+	HasPreCheckpointRows    bool               `json:"has_pre_checkpoint_rows"`
+}
+
+// When the session's bot started keeping its history under checkpoints, and
+// whether the session holds a context row written before then: only such a
+// row can need stepping over. The probe follows (session_id, created_at), so
+// a session without one answers from the index alone.
+func (q *Queries) GetHistoryCheckpointStepOverBoundary(ctx context.Context, sessionID pgtype.UUID) (GetHistoryCheckpointStepOverBoundaryRow, error) {
+	row := q.db.QueryRow(ctx, getHistoryCheckpointStepOverBoundary, sessionID)
+	var i GetHistoryCheckpointStepOverBoundaryRow
+	err := row.Scan(&i.BotID, &i.HistoryCheckpointsSince, &i.HasPreCheckpointRows)
+	return i, err
 }
 
 const listHistoryCheckpointCandidatesWithinBytes = `-- name: ListHistoryCheckpointCandidatesWithinBytes :many
@@ -571,7 +629,7 @@ WITH RECURSIVE chain AS (
     ON parent.team_id = public.memoh_current_team_id()
    AND parent.id = chain.parent_id
 )
-SELECT checkpoint.id, checkpoint.team_id, checkpoint.bot_id, checkpoint.session_id, checkpoint.parent_id, checkpoint.turn_position, checkpoint.turn_message_seq, checkpoint.items, checkpoint.created_at
+SELECT checkpoint.id, checkpoint.team_id, checkpoint.bot_id, checkpoint.session_id, checkpoint.parent_id, checkpoint.turn_position, checkpoint.turn_message_seq, checkpoint.items, checkpoint.created_at, checkpoint.omitted_count, checkpoint.omitted_first_at, checkpoint.omitted_last_at
 FROM chain
 JOIN bot_history_checkpoints checkpoint
   ON checkpoint.team_id = public.memoh_current_team_id()
@@ -599,6 +657,9 @@ func (q *Queries) ListHistoryCheckpointChain(ctx context.Context, id pgtype.UUID
 			&i.TurnMessageSeq,
 			&i.Items,
 			&i.CreatedAt,
+			&i.OmittedCount,
+			&i.OmittedFirstAt,
+			&i.OmittedLastAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1250,6 +1311,69 @@ func (q *Queries) MeasureHistoryCheckpointCandidates(ctx context.Context, arg Me
 	return i, err
 }
 
+const measureHistoryCheckpointStepOver = `-- name: MeasureHistoryCheckpointStepOver :one
+WITH span AS MATERIALIZED (
+  SELECT m.turn_position, m.turn_message_seq, m.created_at,
+    MIN(m.created_at) OVER (PARTITION BY m.turn_position) AS turn_began_at
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $3
+    AND (m.turn_position, m.turn_message_seq) > ($4::bigint, $5::bigint)
+    AND m.turn_position <= $1::bigint
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+)
+SELECT
+  COUNT(*)::bigint AS row_count,
+  MIN(span.created_at)::timestamptz AS first_at,
+  MAX(span.created_at)::timestamptz AS last_at,
+  COALESCE(MAX(span.turn_message_seq) FILTER (WHERE span.turn_position = $1::bigint), 0)::bigint AS last_turn_message_seq,
+  COUNT(*) FILTER (WHERE span.turn_began_at >= $2::timestamptz)::bigint AS later_rows,
+  COALESCE(MIN(span.turn_position) FILTER (WHERE span.turn_began_at >= $2::timestamptz), 0)::bigint AS first_later_turn_position
+FROM span
+`
+
+type MeasureHistoryCheckpointStepOverParams struct {
+	ThroughTurnPosition int64              `json:"through_turn_position"`
+	Since               pgtype.Timestamptz `json:"since"`
+	SessionID           pgtype.UUID        `json:"session_id"`
+	AfterTurnPosition   int64              `json:"after_turn_position"`
+	AfterTurnMessageSeq int64              `json:"after_turn_message_seq"`
+}
+
+type MeasureHistoryCheckpointStepOverRow struct {
+	RowCount               int64              `json:"row_count"`
+	FirstAt                pgtype.Timestamptz `json:"first_at"`
+	LastAt                 pgtype.Timestamptz `json:"last_at"`
+	LastTurnMessageSeq     int64              `json:"last_turn_message_seq"`
+	LaterRows              int64              `json:"later_rows"`
+	FirstLaterTurnPosition int64              `json:"first_later_turn_position"`
+}
+
+// What a step-over would omit after a checkpoint: the context rows after its
+// position through the end of a turn, how many, when the first and the last
+// was written, the position of the last, and the rows of turns that began
+// since the bot's boundary, which a step-over never omits. A turn that began
+// before it stays one turn of that history whatever is written into it later.
+func (q *Queries) MeasureHistoryCheckpointStepOver(ctx context.Context, arg MeasureHistoryCheckpointStepOverParams) (MeasureHistoryCheckpointStepOverRow, error) {
+	row := q.db.QueryRow(ctx, measureHistoryCheckpointStepOver,
+		arg.ThroughTurnPosition,
+		arg.Since,
+		arg.SessionID,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+	)
+	var i MeasureHistoryCheckpointStepOverRow
+	err := row.Scan(
+		&i.RowCount,
+		&i.FirstAt,
+		&i.LastAt,
+		&i.LastTurnMessageSeq,
+		&i.LaterRows,
+		&i.FirstLaterTurnPosition,
+	)
+	return i, err
+}
+
 const measureHistoryMessagesAfter = `-- name: MeasureHistoryMessagesAfter :one
 SELECT
   COUNT(*)::BIGINT AS message_count,
@@ -1345,4 +1469,267 @@ func (q *Queries) SetHistoryCheckpoint(ctx context.Context, arg SetHistoryCheckp
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const walkPreCheckpointHistoryAfter = `-- name: WalkPreCheckpointHistoryAfter :many
+WITH RECURSIVE walk AS (
+  (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      (m.created_at < $1::timestamptz) AS pre,
+      (CASE WHEN m.created_at < $1::timestamptz
+        THEN octet_length(m.content::text)
+        ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN m.created_at < $1::timestamptz
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes,
+      (CASE WHEN m.created_at < $1::timestamptz
+        THEN octet_length(m.content::text)
+        ELSE 0 END)::bigint AS total_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $2
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($3::bigint, $4::bigint)
+      AND ($5::bigint IS NULL
+        OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  )
+  UNION ALL
+  SELECT older.id, older.turn_position, older.turn_message_seq, older.created_at,
+    older.pre, older.content_bytes, older.payload_bytes,
+    previous.total_bytes + older.content_bytes AS total_bytes
+  FROM walk previous
+  CROSS JOIN LATERAL (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      (m.created_at < $1::timestamptz) AS pre,
+      (CASE WHEN m.created_at < $1::timestamptz
+        THEN octet_length(m.content::text)
+        ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN m.created_at < $1::timestamptz
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $2
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($3::bigint, $4::bigint)
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+        < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) older
+  WHERE previous.total_bytes <= $7::bigint
+    AND ($8::bigint <= 0 OR previous.payload_bytes <= $8::bigint)
+)
+SELECT id, turn_position, turn_message_seq, created_at, pre, content_bytes, payload_bytes, total_bytes
+FROM walk
+ORDER BY turn_position DESC, turn_message_seq DESC, created_at DESC, id DESC
+`
+
+type WalkPreCheckpointHistoryAfterParams struct {
+	Since                pgtype.Timestamptz `json:"since"`
+	SessionID            pgtype.UUID        `json:"session_id"`
+	AfterTurnPosition    int64              `json:"after_turn_position"`
+	AfterTurnMessageSeq  int64              `json:"after_turn_message_seq"`
+	BeforeTurnPosition   pgtype.Int8        `json:"before_turn_position"`
+	BeforeTurnMessageSeq pgtype.Int8        `json:"before_turn_message_seq"`
+	MaxBytes             int64              `json:"max_bytes"`
+	MaxRowBytes          int64              `json:"max_row_bytes"`
+}
+
+type WalkPreCheckpointHistoryAfterRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TurnPosition   pgtype.Int8        `json:"turn_position"`
+	TurnMessageSeq pgtype.Int8        `json:"turn_message_seq"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Pre            bool               `json:"pre"`
+	ContentBytes   int64              `json:"content_bytes"`
+	PayloadBytes   int64              `json:"payload_bytes"`
+	TotalBytes     int64              `json:"total_bytes"`
+}
+
+// The context rows after a checkpoint's position and before the cutoff when
+// set, newest first down the visible-session-order index, as a request would
+// render them. A row written since the bot's boundary passes at no cost; an
+// earlier one adds its content bytes, measured as
+// ListHistoryMessagesAfterWithinBytes measures them, and reports its payload
+// as a compaction pass reads it. The walk stops after the first earlier row
+// that takes the total past max_bytes, or whose payload alone exceeds
+// max_row_bytes when that is positive, so it never measures more than one
+// request renders.
+func (q *Queries) WalkPreCheckpointHistoryAfter(ctx context.Context, arg WalkPreCheckpointHistoryAfterParams) ([]WalkPreCheckpointHistoryAfterRow, error) {
+	rows, err := q.db.Query(ctx, walkPreCheckpointHistoryAfter,
+		arg.Since,
+		arg.SessionID,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+		arg.BeforeTurnPosition,
+		arg.BeforeTurnMessageSeq,
+		arg.MaxBytes,
+		arg.MaxRowBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WalkPreCheckpointHistoryAfterRow
+	for rows.Next() {
+		var i WalkPreCheckpointHistoryAfterRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TurnPosition,
+			&i.TurnMessageSeq,
+			&i.CreatedAt,
+			&i.Pre,
+			&i.ContentBytes,
+			&i.PayloadBytes,
+			&i.TotalBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const walkPreCheckpointKeptRows = `-- name: WalkPreCheckpointKeptRows :many
+WITH RECURSIVE kept AS MATERIALIZED (
+  SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+    (m.created_at < $1::timestamptz) AS pre
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $2
+    AND m.id = ANY($3::uuid[])
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+), walk AS (
+  (
+    SELECT kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at,
+      (CASE WHEN kept.pre THEN octet_length(m.content::text) ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN kept.pre
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes,
+      ($4::bigint
+        + CASE WHEN kept.pre THEN octet_length(m.content::text) ELSE 0 END)::bigint AS total_bytes
+    FROM kept
+    JOIN bot_history_messages m
+      ON m.team_id = public.memoh_current_team_id()
+     AND m.id = kept.id
+    ORDER BY kept.turn_position DESC, kept.turn_message_seq DESC, kept.created_at DESC, kept.id DESC
+    LIMIT 1
+  )
+  UNION ALL
+  SELECT older.id, older.turn_position, older.turn_message_seq, older.created_at,
+    older.content_bytes, older.payload_bytes,
+    previous.total_bytes + older.content_bytes AS total_bytes
+  FROM walk previous
+  CROSS JOIN LATERAL (
+    SELECT kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at,
+      (CASE WHEN kept.pre THEN octet_length(m.content::text) ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN kept.pre
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes
+    FROM kept
+    JOIN bot_history_messages m
+      ON m.team_id = public.memoh_current_team_id()
+     AND m.id = kept.id
+    WHERE (kept.turn_position, kept.turn_message_seq, kept.created_at, kept.id)
+      < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY kept.turn_position DESC, kept.turn_message_seq DESC, kept.created_at DESC, kept.id DESC
+    LIMIT 1
+  ) older
+  WHERE previous.total_bytes <= $5::bigint
+    AND ($6::bigint <= 0 OR previous.payload_bytes <= $6::bigint)
+)
+SELECT kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at, kept.pre,
+  (walk.id IS NOT NULL)::boolean AS walked,
+  COALESCE(walk.payload_bytes, 0)::bigint AS payload_bytes,
+  COALESCE(walk.total_bytes, 0)::bigint AS total_bytes
+FROM kept
+LEFT JOIN walk ON walk.id = kept.id
+ORDER BY kept.turn_position DESC, kept.turn_message_seq DESC, kept.created_at DESC, kept.id DESC
+`
+
+type WalkPreCheckpointKeptRowsParams struct {
+	Since       pgtype.Timestamptz `json:"since"`
+	SessionID   pgtype.UUID        `json:"session_id"`
+	KeptIds     []pgtype.UUID      `json:"kept_ids"`
+	StartBytes  int64              `json:"start_bytes"`
+	MaxBytes    int64              `json:"max_bytes"`
+	MaxRowBytes int64              `json:"max_row_bytes"`
+}
+
+type WalkPreCheckpointKeptRowsRow struct {
+	ID             pgtype.UUID        `json:"id"`
+	TurnPosition   pgtype.Int8        `json:"turn_position"`
+	TurnMessageSeq pgtype.Int8        `json:"turn_message_seq"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	Pre            bool               `json:"pre"`
+	Walked         bool               `json:"walked"`
+	PayloadBytes   int64              `json:"payload_bytes"`
+	TotalBytes     int64              `json:"total_bytes"`
+}
+
+// The rows a checkpoint keeps by reference, newest first, continuing the
+// total of WalkPreCheckpointHistoryAfter from start_bytes: an earlier row adds
+// its content bytes, and the walk measures them only until it stops as that
+// walk stops. Every kept row comes back; walked is false for those past the
+// stop, which are never measured.
+func (q *Queries) WalkPreCheckpointKeptRows(ctx context.Context, arg WalkPreCheckpointKeptRowsParams) ([]WalkPreCheckpointKeptRowsRow, error) {
+	rows, err := q.db.Query(ctx, walkPreCheckpointKeptRows,
+		arg.Since,
+		arg.SessionID,
+		arg.KeptIds,
+		arg.StartBytes,
+		arg.MaxBytes,
+		arg.MaxRowBytes,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WalkPreCheckpointKeptRowsRow
+	for rows.Next() {
+		var i WalkPreCheckpointKeptRowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TurnPosition,
+			&i.TurnMessageSeq,
+			&i.CreatedAt,
+			&i.Pre,
+			&i.Walked,
+			&i.PayloadBytes,
+			&i.TotalBytes,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -106,6 +106,9 @@ func TestChatBudgetRecoveryReloadsOnlyHistory(t *testing.T) {
 	if len(runner.configs) != 1 || history.loads != 1 || history.maxBytes != s.historyLoadMaxBytes(16000) {
 		t.Fatalf("compactions=%d history loads=%d maxBytes=%d", len(runner.configs), history.loads, history.maxBytes)
 	}
+	if got := runner.configs[0].LoadMaxBytes; got != history.maxBytes {
+		t.Fatalf("compaction steps over past %d bytes, want the %d the reload reads", got, history.maxBytes)
+	}
 	if compactionCfg := runner.configs[0]; compactionCfg.HistoryBudgetTokens != 984 || compactionCfg.TotalInputTokens != 3900 {
 		t.Fatalf("recovery did not subtract fixed history content: %#v", compactionCfg)
 	}

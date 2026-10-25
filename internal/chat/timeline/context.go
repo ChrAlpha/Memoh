@@ -25,8 +25,8 @@ type TurnResponseEntry struct {
 }
 
 // ContextMessage is a unified message for LLM context, produced by MergeContext.
-// Pinned marks what composition keeps whatever the budget: what the
-// session's checkpoint holds.
+// Pinned marks what composition keeps whatever the budget: the history
+// notice and what the session's checkpoint holds.
 type ContextMessage struct {
 	Source               *turn.ContextMessageSource `json:"source,omitempty"`
 	Role                 string                     `json:"role"`
@@ -44,17 +44,19 @@ type ComposeContextResult struct {
 
 type mergeEntry struct {
 	source *turn.ContextMessageSource
-	kind   string // "rc", "summary", or "tr"
+	kind   string // "notice", "rc", "summary", or "tr"
 	time   int64
 	step   int
-	// pinned entries open the history in a fixed order: what the checkpoint
-	// holds.
+	// pinned entries open the history in a fixed order: the notice and what
+	// the checkpoint holds.
 	pinned bool
 	// For RC entries
 	rcContent []RenderedContentPiece
 	// For summary entries
 	summaryContent    string
 	summaryArtifactID string
+	// For the history notice
+	noticeContent string
 	// For TR entries
 	trRole       string
 	trContent    string
@@ -143,6 +145,8 @@ func materializeMergeEntries(entries []mergeEntry) []ContextMessage {
 
 	for _, entry := range entries {
 		switch entry.kind {
+		case "notice":
+			messages = append(messages, ContextMessage{Role: "system", Content: entry.noticeContent, Pinned: true})
 		case "rc":
 			var pendingText strings.Builder
 			for _, piece := range entry.rcContent {
@@ -183,8 +187,9 @@ func ComposeContext(rc RenderedContext, trs []TurnResponseEntry) *ComposeContext
 }
 
 // ComposeContextWithCheckpoint composes a session's history under its
-// checkpoint: what the checkpoint holds in its order, and then, by time, the
-// segments it leaves raw and trs, the turn responses after its position.
+// checkpoint: the notice of what the checkpoint omits, what it holds in its
+// order, and then, by time, the segments it leaves raw and trs, the turn
+// responses after its position.
 func ComposeContextWithCheckpoint(rc RenderedContext, trs []TurnResponseEntry, checkpoint HistoryCheckpoint) *ComposeContextResult {
 	allMessages := mergeEntries(composeMergeEntries(rc, trs, checkpoint))
 	if len(allMessages) == 0 {
@@ -200,8 +205,8 @@ func ComposeContextWithCheckpoint(rc RenderedContext, trs []TurnResponseEntry, c
 // composeMergeEntries builds the ordered merge-entry list for composition.
 // Entries hold references into rc/trs plus small summary strings; nothing
 // large is materialized here, so admission can measure before it selects.
-// A segment the checkpoint folds without a change since does not compose
-// (HistoryCheckpoint.composes); a row
+// A segment the checkpoint folds without a change since, or one without a
+// context row it omits, does not compose (HistoryCheckpoint.composes); a row
 // the checkpoint keeps renders at its place among what it holds, its segment
 // for an inbound message, and nowhere else.
 func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, checkpoint HistoryCheckpoint) []mergeEntry {
@@ -224,7 +229,7 @@ func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, checkpoint
 		}
 		rest = append(rest, rc[i])
 	}
-	entries := make([]mergeEntry, 0, len(checkpoint.Items)+len(rest)+len(trs))
+	entries := make([]mergeEntry, 0, 1+len(checkpoint.Items)+len(rest)+len(trs))
 	for i, item := range checkpoint.Items {
 		var entry mergeEntry
 		switch {
@@ -248,6 +253,9 @@ func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, checkpoint
 	entries = appendRenderedContextEntries(entries, rest)
 	entries = appendTurnResponseEntries(entries, trs)
 	sortMergeEntries(entries[pinned:])
+	if notice := HistoryNotice(checkpoint.Omitted); notice != "" && len(entries) > 0 {
+		entries = append([]mergeEntry{{kind: "notice", noticeContent: notice, pinned: true}}, entries...)
+	}
 	return entries
 }
 
@@ -364,6 +372,8 @@ func mergeEntryTokens(entry mergeEntry) int {
 			return turn.EstimateTokensFromBytes(len(entry.trRawContent))
 		}
 		return turn.EstimateTokensFromBytes(len(entry.trContent))
+	case "notice":
+		return turn.EstimateTokensFromBytes(len(entry.noticeContent))
 	default:
 		return turn.EstimateTokensFromBytes(len(entry.summaryContent))
 	}

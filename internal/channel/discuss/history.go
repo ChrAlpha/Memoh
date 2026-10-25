@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
@@ -16,8 +17,11 @@ type HistoryReader interface {
 }
 
 // DiscussCheckpointSource reads a session's active history checkpoint for
-// composing its rendered context. *timeline.CheckpointSource implements it.
+// composing its rendered context, once it has stepped over the history from
+// before checkpoints that a composition within limits cannot render.
+// *timeline.CheckpointSource implements it.
 type DiscussCheckpointSource interface {
+	StepOver(ctx context.Context, sessionID string, limits checkpoint.StepOverLimits) (int64, error)
 	Load(ctx context.Context, sessionID string, rc timeline.RenderedContext) (timeline.HistoryCheckpoint, error)
 }
 

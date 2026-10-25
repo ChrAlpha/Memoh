@@ -149,8 +149,8 @@ type ContextMessageSource struct {
 
 // DiscussMessage is one composed context message for a discuss turn.
 // CompactionArtifactID names the summary a message renders. Pinned marks
-// what admission keeps whatever the budget: what the session's history
-// checkpoint holds.
+// what admission keeps whatever the budget: the history notice and what the
+// session's history checkpoint holds.
 type DiscussMessage struct {
 	Source               *ContextMessageSource `json:"source,omitempty"`
 	Role                 string                `json:"role"`

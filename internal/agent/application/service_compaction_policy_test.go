@@ -110,7 +110,7 @@ func TestCompactForBudgetBoundsAnEditByItsCutoffAndReplacedTurn(t *testing.T) {
 		TurnReplacement: &messagepkg.TurnReplacement{OldTurnID: "replaced-turn", ReplacementTurnID: "edit-turn"},
 	}
 
-	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 1 ||
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, service.historyLoadMaxBytes(1000), ""); err != nil || len(runner.configs) != 1 ||
 		runner.configs[0].CandidatesBefore == nil || *runner.configs[0].CandidatesBefore != position {
 		t.Fatalf("err=%v configs=%+v, want candidates bounded by the edited message", err, runner.configs)
 	}
@@ -118,7 +118,7 @@ func TestCompactForBudgetBoundsAnEditByItsCutoffAndReplacedTurn(t *testing.T) {
 		t.Fatalf("replaced turn = %q, want the turn the edit replaces rewound before folding", got)
 	}
 	req.HistoryCutoffBeforeMessageID = "missing"
-	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err == nil || len(runner.configs) != 1 {
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, service.historyLoadMaxBytes(1000), ""); err == nil || len(runner.configs) != 1 {
 		t.Fatalf("err=%v runs=%d, want an unknown cutoff to fail before compacting", err, len(runner.configs))
 	}
 }
@@ -134,7 +134,7 @@ func TestCompactForBudgetBoundsALiveRequestByItsOwnTurn(t *testing.T) {
 	turnPosition := int64(12)
 	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, TurnPosition: &turnPosition}
 
-	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 1 ||
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, service.historyLoadMaxBytes(1000), ""); err != nil || len(runner.configs) != 1 ||
 		runner.configs[0].CandidatesBefore == nil || *runner.configs[0].CandidatesBefore != (messagepkg.HistoryPosition{Turn: turnPosition}) {
 		t.Fatalf("err=%v configs=%+v, want candidates before the request's own turn", err, runner.configs)
 	}
@@ -142,7 +142,7 @@ func TestCompactForBudgetBoundsALiveRequestByItsOwnTurn(t *testing.T) {
 		t.Fatalf("replaced turn = %q, want none for a live request", got)
 	}
 	req.TurnPosition = nil
-	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 2 || runner.configs[1].CandidatesBefore != nil {
+	if err := service.compactForBudget(t.Context(), req, 2000, 1000, service.historyLoadMaxBytes(1000), ""); err != nil || len(runner.configs) != 2 || runner.configs[1].CandidatesBefore != nil {
 		t.Fatalf("err=%v configs=%+v, want open candidates without a turn", err, runner.configs)
 	}
 }

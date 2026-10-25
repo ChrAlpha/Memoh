@@ -20,8 +20,11 @@ type preparedHistoryContext struct {
 
 // prepareHistoryContext loads the history a request renders: the history
 // under the session's checkpoint, with what it must keep raw and without
-// what never replays. An edit or retry renders the history as it stood at
-// its cutoff, under the checkpoint its replacement keeps.
+// what never replays. The checkpoint first steps over the history from
+// before checkpoints that the request cannot render. An edit or retry
+// renders the history as it stood at its cutoff, under the checkpoint its
+// replacement keeps, which its compaction steps over from once it makes that
+// checkpoint the session's.
 func (s *Service) prepareHistoryContext(
 	ctx context.Context,
 	req ChatRequest,
@@ -31,6 +34,11 @@ func (s *Service) prepareHistoryContext(
 	cut, err := s.loadHistoryCut(ctx, req)
 	if err != nil {
 		return preparedHistoryContext{}, err
+	}
+	if cut.replacedTurnID == "" {
+		if err := s.stepOverHistory(ctx, req.ThreadID, cut.before, contextTokenBudget); err != nil {
+			return preparedHistoryContext{}, err
+		}
 	}
 	scope := compactionSummaryScope(req.BotID, req.ChatID, req.ThreadID, req.ConversationType, req.ConversationName, req.ReplyTarget)
 	loaded, truncated, err := s.loadHistoryRecords(ctx, fallback, scope, contextTokenBudget, cut)

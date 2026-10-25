@@ -22,7 +22,7 @@ import (
 // Replay and classification read the session's checkpoint the same way: a
 // message whose rows it folds leaves replay unless it changed after its
 // rows were written, a message whose rows it leaves raw replays whole, and
-// chatter without rows replays.
+// chatter without rows replays unless the checkpoint omits it.
 func TestPostgresReplayAndClassificationFollowTheCheckpoint(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
 	if dsn == "" {

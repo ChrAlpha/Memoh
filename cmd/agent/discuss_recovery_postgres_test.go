@@ -255,8 +255,10 @@ func createDiscussRecoveryFixture(t *testing.T, ctx context.Context, pool *pgxpo
 	`, userID, name); err != nil {
 		t.Fatalf("create user fixture: %v", err)
 	}
+	// The bot keeps all of its history under checkpoints, whatever time a
+	// test gives a row; history from before checkpoints has its own tests.
 	if _, err := pool.Exec(ctx, `
-		INSERT INTO bots (id, owner_user_id, name) VALUES ($1, $2, $3)
+		INSERT INTO bots (id, owner_user_id, name, history_checkpoints_since) VALUES ($1, $2, $3, '-infinity')
 	`, botID, userID, name); err != nil {
 		t.Fatalf("create bot fixture: %v", err)
 	}

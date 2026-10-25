@@ -72,8 +72,11 @@ history before its context is the session's active history checkpoint
 (`bot_sessions.history_checkpoint_id`, `internal/chat/checkpoint`): a position
 in the session's turn order, `(turn_position, turn_message_seq)`, and what
 represents everything up to it: ordered items, rows kept by reference and
-summaries, always at least one summary. A request renders the items in their
-order and then the session's context rows after the position: the visible rows of complete
+summaries, and a record of the history it omits without a summary (how many
+context rows, from when to when), at least a summary or an omission. A request
+renders a notice of what it omits (`timeline.HistoryNotice`, a system message
+that stays the same on every request until the omission changes), the items
+in their order, and then the session's context rows after the position: the visible rows of complete
 turns, other than legacy `passive_sync` rows. Chat and turn-response loads
 read those rows newest first within the byte budget, so a load costs what the
 checkpoint leaves raw, not the thread's length. A chat load the byte budget
@@ -140,15 +143,40 @@ checkpoint the replacement keeps.
 
 Sessions from before checkpoints keep their context: 0171 turned each one's
 active summaries, with the rows in their span they left raw, into its
-checkpoint. A session restored by a bot import brings its history without
-summaries, so its first request that does not fit compacts it.
+checkpoint, and recorded when each bot's history started being kept under
+checkpoints (`bots.history_checkpoints_since`; a later bot's creation). History
+written before that was written while a sliding window decided what a request
+saw, so nothing guarantees that a summary covers it or that any request
+rendered it. A request does not summarize what it could not render: before it
+reads the checkpoint, the record path, the warm pipeline and Discuss each let it
+step over that history (`checkpoint.Store.StepOver`), and so does a compaction
+event that reads every candidate, after an edit or retry's rewind, for the load
+that follows it. Walking the turns that began before the bot's boundary newest
+first, measured as the load measures content, a step-over omits those past the
+load's byte budget (a model request's context window, a Discuss composition's
+admission cap) through the oldest after the checkpoint, and the earlier rows
+the checkpoint keeps by reference past it; an event also steps over through a
+row no pass could read.
+It writes a checkpoint with the same summaries and the omission added, with no
+summarizer call, logged and counted
+(`history.checkpoint.stepped_over_rows_total`, `stepped_over_rows` in the
+`PostCompact` hook payload). What a request rendered stays inside the bound
+and is folded when it no longer fits; a session created since has no such
+history and never steps over. The first request of a session with a large
+backlog thus folds at most its newest load window. Every checkpoint folded
+onto a step-over carries its omission. A change to an omitted row moves the
+session back like any change below a checkpoint, and the next request steps
+over again. A bot created by an import starts at the import, so a restored
+history whose rows keep their times is stepped over the same way.
 
 A fork copies the source's visible history through its turn and carries the
 newest checkpoint on the source's active chain that holds for the copy
 (`compaction.ForkHistoryCarrier`): one that accounts for no history past the
 fork point and whose kept rows the fork copied. Its summaries are copied, its
-kept rows named by their copies, and its position mapped to the copy's, so a
-fork's first request does not fold again what the source had folded.
+kept rows named by their copies, its position mapped to the copy's, and what it
+omits stays omitted, so a fork's first request does not fold again what the
+source had folded. A fork before the source's step-over copies history from
+before checkpoints with its times, and its first request steps over it.
 
 Candidate payloads are read within byte bounds. A request reads the active
 checkpoint and walks its chain only to repair it; an edit or retry, a rewind

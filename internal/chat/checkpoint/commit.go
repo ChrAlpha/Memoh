@@ -132,7 +132,7 @@ func (s *Store) Commit(ctx context.Context, q dbstore.Queries, fold Fold) (Check
 	}
 	items = append(items, Item{SummaryID: fold.SummaryID, Summary: fold.Summary})
 	items = append(items, unseen...)
-	created, err := create(ctx, q, pgSessionID, fold.Parent, through, items)
+	created, err := create(ctx, q, pgSessionID, fold.Parent, through, fold.Parent.Omitted, items)
 	if err != nil {
 		return Checkpoint{}, err
 	}
@@ -148,7 +148,7 @@ func (s *Store) Commit(ctx context.Context, q dbstore.Queries, fold Fold) (Check
 
 // create writes a checkpoint after parent and makes it the session's active
 // one in place of parent.
-func create(ctx context.Context, q dbstore.Queries, sessionID pgtype.UUID, parent Checkpoint, position messagepkg.HistoryPosition, items []Item) (Checkpoint, error) {
+func create(ctx context.Context, q dbstore.Queries, sessionID pgtype.UUID, parent Checkpoint, position messagepkg.HistoryPosition, omitted Omitted, items []Item) (Checkpoint, error) {
 	encoded, err := encodeItems(items)
 	if err != nil {
 		return Checkpoint{}, err
@@ -159,6 +159,11 @@ func create(ctx context.Context, q dbstore.Queries, sessionID pgtype.UUID, paren
 		TurnMessageSeq: position.Seq,
 		Items:          encoded,
 		SessionID:      sessionID,
+	}
+	if omitted.Omits() {
+		params.OmittedCount = omitted.Count
+		params.OmittedFirstAt = pgtype.Timestamptz{Time: omitted.First, Valid: true}
+		params.OmittedLastAt = pgtype.Timestamptz{Time: omitted.Last, Valid: true}
 	}
 	row, err := q.CreateHistoryCheckpoint(ctx, params)
 	if err != nil {

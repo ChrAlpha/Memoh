@@ -69,6 +69,9 @@ func (s *Service) prepareContinuationRunConfig(
 	eventCh chan<- WSStreamEvent,
 	req ChatRequest,
 ) (native.RunConfig, error) {
+	if err := s.stepOverHistory(ctx, summaryScope.SessionID, nil, 0); err != nil {
+		return native.RunConfig{}, err
+	}
 	loaded, truncated, err := s.loadHistoryRecords(ctx, fallback, summaryScope, 0, historyCut{})
 	if err != nil {
 		return native.RunConfig{}, err

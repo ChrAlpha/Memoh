@@ -17,10 +17,11 @@ import (
 // RenderedContext (RC) merged with assistant/tool turns (TR) from
 // bot_history_messages. This gives chat mode the same event-driven context
 // that discuss mode uses, replacing the legacy loadMessages path. Both
-// streams compose under the session's history checkpoint: what it holds,
-// then what came after it. The second return value is the token pressure of
-// what composes. A history or checkpoint load
-// failure fails the request (CM-ADM-003).
+// streams compose under the session's history checkpoint, once it has
+// stepped over the history from before checkpoints that the request cannot
+// render: the notice of what it omits, what it holds, then what came after
+// it. The second return value is the token pressure of what composes. A
+// history or checkpoint load failure fails the request (CM-ADM-003).
 func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, error) {
 	sessionID := strings.TrimSpace(req.ThreadID)
 	if s.pipeline == nil || sessionID == "" {
@@ -31,6 +32,9 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 		return nil, 0, nil
 	}
 
+	if err := s.stepOverHistory(ctx, sessionID, nil, contextTokenBudget); err != nil {
+		return nil, 0, err
+	}
 	var held timeline.HistoryCheckpoint
 	if s.pipelineCheckpoints != nil {
 		var err error
@@ -112,4 +116,11 @@ func (s *Service) historyLoadMaxBytes(contextTokenBudget int) int64 {
 		contextTokenBudget = s.contextAbsoluteMaxTokens()
 	}
 	return int64(contextTokenBudget) * contextfrag.EstimateBytesPerToken
+}
+
+// discussHistoryLoadMaxBytes is the content a Discuss composition loads after
+// the checkpoint: its turn responses within the admission cap, as the Discuss
+// driver reads them, whatever the model's window.
+func (s *Service) discussHistoryLoadMaxBytes() int64 {
+	return s.historyLoadMaxBytes(s.contextAbsoluteMaxTokens())
 }

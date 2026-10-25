@@ -152,15 +152,214 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 
 -- name: CreateHistoryCheckpoint :one
 INSERT INTO bot_history_checkpoints (
-  bot_id, session_id, parent_id, turn_position, turn_message_seq, items
+  bot_id, session_id, parent_id, turn_position, turn_message_seq,
+  omitted_count, omitted_first_at, omitted_last_at, items
 )
 SELECT session.bot_id, session.id, sqlc.narg(parent_id)::uuid,
   sqlc.arg(turn_position)::bigint, sqlc.arg(turn_message_seq)::bigint,
-  sqlc.arg(items)::jsonb
+  sqlc.arg(omitted_count)::bigint, sqlc.narg(omitted_first_at)::timestamptz,
+  sqlc.narg(omitted_last_at)::timestamptz, sqlc.arg(items)::jsonb
 FROM bot_sessions session
 WHERE session.team_id = public.memoh_current_team_id()
   AND session.id = sqlc.arg(session_id)
 RETURNING *;
+
+-- name: GetHistoryCheckpointStepOverBoundary :one
+-- When the session's bot started keeping its history under checkpoints, and
+-- whether the session holds a context row written before then: only such a
+-- row can need stepping over. The probe follows (session_id, created_at), so
+-- a session without one answers from the index alone.
+SELECT
+  session.bot_id,
+  bot.history_checkpoints_since,
+  EXISTS (
+    SELECT 1
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = session.id
+      AND m.created_at < bot.history_checkpoints_since
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  ) AS has_pre_checkpoint_rows
+FROM bot_sessions session
+JOIN bots bot
+  ON bot.team_id = session.team_id
+ AND bot.id = session.bot_id
+WHERE session.team_id = public.memoh_current_team_id()
+  AND session.id = sqlc.arg(session_id);
+
+-- name: WalkPreCheckpointHistoryAfter :many
+-- The context rows after a checkpoint's position and before the cutoff when
+-- set, newest first down the visible-session-order index, as a request would
+-- render them. A row written since the bot's boundary passes at no cost; an
+-- earlier one adds its content bytes, measured as
+-- ListHistoryMessagesAfterWithinBytes measures them, and reports its payload
+-- as a compaction pass reads it. The walk stops after the first earlier row
+-- that takes the total past max_bytes, or whose payload alone exceeds
+-- max_row_bytes when that is positive, so it never measures more than one
+-- request renders.
+WITH RECURSIVE walk AS (
+  (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      (m.created_at < sqlc.arg(since)::timestamptz) AS pre,
+      (CASE WHEN m.created_at < sqlc.arg(since)::timestamptz
+        THEN octet_length(m.content::text)
+        ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN m.created_at < sqlc.arg(since)::timestamptz
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes,
+      (CASE WHEN m.created_at < sqlc.arg(since)::timestamptz
+        THEN octet_length(m.content::text)
+        ELSE 0 END)::bigint AS total_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = sqlc.arg(session_id)
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > (sqlc.arg(after_turn_position)::bigint, sqlc.arg(after_turn_message_seq)::bigint)
+      AND (sqlc.narg(before_turn_position)::bigint IS NULL
+        OR (m.turn_position, m.turn_message_seq) < (sqlc.narg(before_turn_position)::bigint, sqlc.narg(before_turn_message_seq)::bigint))
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  )
+  UNION ALL
+  SELECT older.id, older.turn_position, older.turn_message_seq, older.created_at,
+    older.pre, older.content_bytes, older.payload_bytes,
+    previous.total_bytes + older.content_bytes AS total_bytes
+  FROM walk previous
+  CROSS JOIN LATERAL (
+    SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+      (m.created_at < sqlc.arg(since)::timestamptz) AS pre,
+      (CASE WHEN m.created_at < sqlc.arg(since)::timestamptz
+        THEN octet_length(m.content::text)
+        ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN m.created_at < sqlc.arg(since)::timestamptz
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = sqlc.arg(session_id)
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > (sqlc.arg(after_turn_position)::bigint, sqlc.arg(after_turn_message_seq)::bigint)
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+        < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) older
+  WHERE previous.total_bytes <= sqlc.arg(max_bytes)::bigint
+    AND (sqlc.arg(max_row_bytes)::bigint <= 0 OR previous.payload_bytes <= sqlc.arg(max_row_bytes)::bigint)
+)
+SELECT id, turn_position, turn_message_seq, created_at, pre, content_bytes, payload_bytes, total_bytes
+FROM walk
+ORDER BY turn_position DESC, turn_message_seq DESC, created_at DESC, id DESC;
+
+-- name: WalkPreCheckpointKeptRows :many
+-- The rows a checkpoint keeps by reference, newest first, continuing the
+-- total of WalkPreCheckpointHistoryAfter from start_bytes: an earlier row adds
+-- its content bytes, and the walk measures them only until it stops as that
+-- walk stops. Every kept row comes back; walked is false for those past the
+-- stop, which are never measured.
+WITH RECURSIVE kept AS MATERIALIZED (
+  SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
+    (m.created_at < sqlc.arg(since)::timestamptz) AS pre
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = sqlc.arg(session_id)
+    AND m.id = ANY(sqlc.arg(kept_ids)::uuid[])
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+), walk AS (
+  (
+    SELECT kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at,
+      (CASE WHEN kept.pre THEN octet_length(m.content::text) ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN kept.pre
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes,
+      (sqlc.arg(start_bytes)::bigint
+        + CASE WHEN kept.pre THEN octet_length(m.content::text) ELSE 0 END)::bigint AS total_bytes
+    FROM kept
+    JOIN bot_history_messages m
+      ON m.team_id = public.memoh_current_team_id()
+     AND m.id = kept.id
+    ORDER BY kept.turn_position DESC, kept.turn_message_seq DESC, kept.created_at DESC, kept.id DESC
+    LIMIT 1
+  )
+  UNION ALL
+  SELECT older.id, older.turn_position, older.turn_message_seq, older.created_at,
+    older.content_bytes, older.payload_bytes,
+    previous.total_bytes + older.content_bytes AS total_bytes
+  FROM walk previous
+  CROSS JOIN LATERAL (
+    SELECT kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at,
+      (CASE WHEN kept.pre THEN octet_length(m.content::text) ELSE 0 END)::bigint AS content_bytes,
+      (CASE WHEN kept.pre
+        THEN octet_length(m.content::text)
+          + octet_length(m.metadata::text)
+          + octet_length(COALESCE(m.usage, '{}'::jsonb)::text)
+          + octet_length(COALESCE(m.display_text, ''))
+        ELSE 0 END)::bigint AS payload_bytes
+    FROM kept
+    JOIN bot_history_messages m
+      ON m.team_id = public.memoh_current_team_id()
+     AND m.id = kept.id
+    WHERE (kept.turn_position, kept.turn_message_seq, kept.created_at, kept.id)
+      < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY kept.turn_position DESC, kept.turn_message_seq DESC, kept.created_at DESC, kept.id DESC
+    LIMIT 1
+  ) older
+  WHERE previous.total_bytes <= sqlc.arg(max_bytes)::bigint
+    AND (sqlc.arg(max_row_bytes)::bigint <= 0 OR previous.payload_bytes <= sqlc.arg(max_row_bytes)::bigint)
+)
+SELECT kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at, kept.pre,
+  (walk.id IS NOT NULL)::boolean AS walked,
+  COALESCE(walk.payload_bytes, 0)::bigint AS payload_bytes,
+  COALESCE(walk.total_bytes, 0)::bigint AS total_bytes
+FROM kept
+LEFT JOIN walk ON walk.id = kept.id
+ORDER BY kept.turn_position DESC, kept.turn_message_seq DESC, kept.created_at DESC, kept.id DESC;
+
+-- name: MeasureHistoryCheckpointStepOver :one
+-- What a step-over would omit after a checkpoint: the context rows after its
+-- position through the end of a turn, how many, when the first and the last
+-- was written, the position of the last, and the rows of turns that began
+-- since the bot's boundary, which a step-over never omits. A turn that began
+-- before it stays one turn of that history whatever is written into it later.
+WITH span AS MATERIALIZED (
+  SELECT m.turn_position, m.turn_message_seq, m.created_at,
+    MIN(m.created_at) OVER (PARTITION BY m.turn_position) AS turn_began_at
+  FROM bot_visible_history_messages m
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = sqlc.arg(session_id)
+    AND (m.turn_position, m.turn_message_seq) > (sqlc.arg(after_turn_position)::bigint, sqlc.arg(after_turn_message_seq)::bigint)
+    AND m.turn_position <= sqlc.arg(through_turn_position)::bigint
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+)
+SELECT
+  COUNT(*)::bigint AS row_count,
+  MIN(span.created_at)::timestamptz AS first_at,
+  MAX(span.created_at)::timestamptz AS last_at,
+  COALESCE(MAX(span.turn_message_seq) FILTER (WHERE span.turn_position = sqlc.arg(through_turn_position)::bigint), 0)::bigint AS last_turn_message_seq,
+  COUNT(*) FILTER (WHERE span.turn_began_at >= sqlc.arg(since)::timestamptz)::bigint AS later_rows,
+  COALESCE(MIN(span.turn_position) FILTER (WHERE span.turn_began_at >= sqlc.arg(since)::timestamptz), 0)::bigint AS first_later_turn_position
+FROM span;
 
 -- name: SetHistoryCheckpoint :execrows
 -- Moves the session's active checkpoint, only from the one the caller read.

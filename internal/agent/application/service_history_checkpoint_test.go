@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -15,6 +16,7 @@ import (
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
@@ -87,6 +89,12 @@ func (q *historyCheckpointQueries) GetActiveHistoryCheckpoint(context.Context, p
 	return row, nil
 }
 
+// GetHistoryCheckpointStepOverBoundary reports a session whose history was
+// all written under checkpoints, so it never steps over.
+func (*historyCheckpointQueries) GetHistoryCheckpointStepOverBoundary(context.Context, pgtype.UUID) (sqlc.GetHistoryCheckpointStepOverBoundaryRow, error) {
+	return sqlc.GetHistoryCheckpointStepOverBoundaryRow{}, nil
+}
+
 func (q *historyCheckpointQueries) GetHistoryCheckpoint(_ context.Context, id pgtype.UUID) (sqlc.BotHistoryCheckpoint, error) {
 	row, ok := q.checkpoints[id]
 	if !ok {
@@ -134,6 +142,14 @@ func historyCheckpointRow(t *testing.T, id string, position messagepkg.HistoryPo
 		TurnMessageSeq: position.Seq,
 		Items:          encoded,
 	}
+}
+
+// omitting makes a checkpoint row leave out messages without a summary.
+func omitting(row sqlc.BotHistoryCheckpoint, omitted checkpoint.Omitted) sqlc.BotHistoryCheckpoint {
+	row.OmittedCount = omitted.Count
+	row.OmittedFirstAt = pgtype.Timestamptz{Time: omitted.First, Valid: true}
+	row.OmittedLastAt = pgtype.Timestamptz{Time: omitted.Last, Valid: true}
+	return row
 }
 
 func checkpointTestService(messages messagepkg.Service, queries dbstore.Queries) *Service {
@@ -238,14 +254,66 @@ func TestPrepareHistoryContextRendersTheCheckpointAReplacementKeeps(t *testing.T
 	}
 }
 
-// A history whose checkpoint does not load is not loaded at all.
-func TestPrepareHistoryContextFailsWithoutItsCheckpoint(t *testing.T) {
+// A checkpoint that omits history opens the history with the notice of what
+// it omits, a system message that renders no source; one that omits nothing,
+// or a history with nothing to open, has none. A history whose checkpoint
+// does not load is not loaded at all.
+func TestPrepareHistoryContextOpensWithTheHistoryNotice(t *testing.T) {
 	t.Parallel()
 
-	svc := checkpointTestService(&memoryQueryMessageService{messages: []messagepkg.Message{
+	omitted := checkpoint.Omitted{
+		Count: 2,
+		First: time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC),
+		Last:  time.Date(2026, 8, 31, 8, 0, 0, 0, time.UTC),
+	}
+	rows := []messagepkg.Message{
+		persistedHistoryMessage(t, "omitted-question", "user", "omitted question"),
+		persistedHistoryMessage(t, "omitted-answer", "assistant", "omitted answer"),
 		persistedHistoryMessage(t, "question", "user", "question"),
-	}}, &historyCheckpointQueries{activeErr: errors.New("checkpoint unavailable")})
-	if _, err := svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}, historyfrag.ScopeFallback{}, 100000); err == nil {
+		persistedHistoryMessage(t, "answer", "assistant", "answer"),
+	}
+	prepare := func(queries *historyCheckpointQueries) (preparedHistoryContext, error) {
+		svc := checkpointTestService(&memoryQueryMessageService{messages: rows}, queries)
+		return svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}, historyfrag.ScopeFallback{}, 100000)
+	}
+	withActive := func(row sqlc.BotHistoryCheckpoint) *historyCheckpointQueries {
+		queries := &historyCheckpointQueries{}
+		queries.activate(row)
+		return queries
+	}
+
+	prepared, err := prepare(withActive(omitting(historyCheckpointRow(t, checkpointTestID, historyTestPosition(1)), omitted)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.messages) != 3 || len(prepared.records) != 3 {
+		t.Fatalf("prepared %d messages, %d records; want the notice and the two rows", len(prepared.messages), len(prepared.records))
+	}
+	notice := prepared.records[0]
+	if notice.ModelMessage.Role != "system" || notice.ModelMessage.TextContent() != timeline.HistoryNotice(omitted) || !notice.Synthetic || notice.DBMessageID != "" {
+		t.Fatalf("history opens with %+v, want the synthetic notice", notice)
+	}
+	if prepared.records[1].DBMessageID != "question" || prepared.records[2].DBMessageID != "answer" {
+		t.Fatalf("the rows follow as %q, %q", prepared.records[1].DBMessageID, prepared.records[2].DBMessageID)
+	}
+
+	for name, queries := range map[string]*historyCheckpointQueries{
+		"no checkpoint":   {},
+		"nothing omitted": withActive(historyCheckpointRow(t, checkpointTestID, historyTestPosition(1))),
+		"no history":      withActive(omitting(historyCheckpointRow(t, checkpointTestID, historyTestPosition(3)), omitted)),
+	} {
+		prepared, err := prepare(queries)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, record := range prepared.records {
+			if record.ModelMessage.Role == "system" {
+				t.Fatalf("%s: history carries a notice %q", name, record.ModelMessage.TextContent())
+			}
+		}
+	}
+
+	if _, err := prepare(&historyCheckpointQueries{activeErr: errors.New("checkpoint unavailable")}); err == nil {
 		t.Fatal("history loaded without its checkpoint")
 	}
 }

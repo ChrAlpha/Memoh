@@ -3,13 +3,16 @@
 // rows after it load raw.
 //
 // A checkpoint holds, in order, the rows it keeps by reference and the
-// summaries that fold the rest; it always holds a summary. A request renders
-// the items in their order, and then the session's context rows after the
-// checkpoint's position: its visible rows of complete turns, other than
-// legacy passive_sync rows. Compaction folds onto the active checkpoint and
-// makes the result active; a fork takes a copy of its source's. Every
-// checkpoint names its parent, so a change to the history the active one
-// depends on moves the session back to the newest one that does not.
+// summaries that fold the rest, with a record of the history it omits
+// without a summary; it holds a summary, an omission, or both. A request
+// renders a notice of what it omits, the items in their order, and then the
+// session's context rows after the checkpoint's position: its visible rows
+// of complete turns, other than legacy passive_sync rows. Compaction folds
+// onto the active checkpoint and makes the result active; a fork takes a copy
+// of its source's. A request steps over the history its bot recorded before
+// keeping history under checkpoints when it cannot render it (StepOver).
+// Every checkpoint names its parent, so a change to the history the active
+// one depends on moves the session back to the newest one that does not.
 package checkpoint
 
 import (
@@ -35,6 +38,38 @@ type Item struct {
 	Summary string `json:"-"`
 }
 
+// Omitted is what a checkpoint leaves out without a summary: how many
+// context rows, and when the first and the last of them was written. A
+// history notice reports it.
+type Omitted struct {
+	Count int64
+	First time.Time
+	Last  time.Time
+}
+
+// Omits reports whether anything is left out.
+func (o Omitted) Omits() bool {
+	return o.Count > 0 && !o.First.IsZero() && !o.Last.IsZero()
+}
+
+// add is o with rows more left out, written from first to last.
+func (o Omitted) add(rows int64, first, last time.Time) Omitted {
+	if rows <= 0 {
+		return o
+	}
+	if !o.Omits() {
+		return Omitted{Count: rows, First: first, Last: last}
+	}
+	o.Count += rows
+	if first.Before(o.First) {
+		o.First = first
+	}
+	if last.After(o.Last) {
+		o.Last = last
+	}
+	return o
+}
+
 // Checkpoint is one history checkpoint of a session. The zero Checkpoint
 // stands for nothing: every context row of the session renders raw.
 type Checkpoint struct {
@@ -44,6 +79,7 @@ type Checkpoint struct {
 	ParentID  string
 	// Position is the last place in the history the checkpoint accounts for.
 	Position  messagepkg.HistoryPosition
+	Omitted   Omitted
 	Items     []Item
 	CreatedAt time.Time
 }
@@ -93,7 +129,7 @@ func fromRow(row sqlc.BotHistoryCheckpoint) (Checkpoint, error) {
 		}
 		items[i] = item
 	}
-	return Checkpoint{
+	checkpoint := Checkpoint{
 		ID:        row.ID.String(),
 		BotID:     row.BotID.String(),
 		SessionID: row.SessionID.String(),
@@ -101,7 +137,11 @@ func fromRow(row sqlc.BotHistoryCheckpoint) (Checkpoint, error) {
 		Position:  messagepkg.HistoryPosition{Turn: row.TurnPosition, Seq: row.TurnMessageSeq},
 		Items:     items,
 		CreatedAt: row.CreatedAt.Time,
-	}, nil
+	}
+	if row.OmittedCount > 0 {
+		checkpoint.Omitted = Omitted{Count: row.OmittedCount, First: row.OmittedFirstAt.Time, Last: row.OmittedLastAt.Time}
+	}
+	return checkpoint, nil
 }
 
 func encodeItems(items []Item) ([]byte, error) {

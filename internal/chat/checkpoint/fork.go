@@ -30,7 +30,8 @@ type Copy struct {
 // CopyToFork gives a fork the newest checkpoint on its source's active chain
 // that holds and accounts for no history past the copy, in the transaction q
 // runs in: its summaries become the fork's own, the rows it keeps are named
-// by their copies, and its position becomes the copy's place for it. The
+// by their copies, its position becomes the copy's place for it, and what it
+// omits stays omitted, as the copied rows keep their creation times. The
 // fork's checkpoint has no parent: nothing before it exists in the fork. It
 // returns the zero Checkpoint when no checkpoint of the source holds for the
 // copy.
@@ -96,7 +97,7 @@ func CopyToFork(ctx context.Context, q dbstore.Queries, c Copy) (Checkpoint, err
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return Checkpoint{}, fmt.Errorf("map history checkpoint position: %w", err)
 		}
-		return create(ctx, q, forkID, Checkpoint{}, messagepkg.HistoryPosition{Turn: position.TurnPosition, Seq: position.TurnMessageSeq}, items)
+		return create(ctx, q, forkID, Checkpoint{}, messagepkg.HistoryPosition{Turn: position.TurnPosition, Seq: position.TurnMessageSeq}, source.Omitted, items)
 	}
 	return Checkpoint{}, nil
 }

@@ -48,7 +48,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Pass{}, false, failed(ReasonInputOverflow, fmt.Errorf("%w: window=%d", ErrSummaryWindowTooSmall, cfg.SummaryWindowTokens))
 	}
 
-	readMaxBytes := compactionReadMaxBytes(promptWindow)
+	readMaxBytes := passReadMaxBytes(cfg.SummaryWindowTokens)
 	parent, err := s.checkpoints.Active(ctx, cfg.SessionID)
 	if err != nil {
 		return Pass{}, false, err

@@ -20,9 +20,11 @@ import (
 
 // compactForBudget folds the session history before the protected tail into
 // one summary that fits historyBudget, in as many passes as the summarizer
-// needs to read it all. It reports why when the history could not be folded;
-// a failed pass leaves the history it did not commit as it was.
-func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) error {
+// needs to read it all, once the history from before checkpoints is stepped
+// over that the history load following it, within loadMaxBytes, cannot
+// render. It reports why when the history could not be folded; a failed pass
+// leaves the history it did not commit as it was.
+func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, loadMaxBytes int64, turnModelID string) error {
 	if s.compactionService == nil || s.settingsService == nil {
 		return errors.New("compaction service unavailable")
 	}
@@ -62,17 +64,27 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 	}
 	cfg.ReplacedTurnID = cut.replacedTurnID
 	cfg.HistoryBudgetTokens = historyBudget
+	cfg.LoadMaxBytes = loadMaxBytes
 
 	start := time.Now()
 	passes, err := s.compactionService.Compact(ctx, cfg)
+	folds, steppedOver := 0, int64(0)
+	for _, pass := range passes {
+		if pass.ArtifactID != "" {
+			folds++
+		}
+		steppedOver += pass.SteppedOver
+	}
 	if err != nil {
 		s.logger.WarnContext(ctx, "compaction failed",
 			slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
-			slog.Int("passes", len(passes)), slog.Int64("duration_ms", time.Since(start).Milliseconds()), slog.Any("error", err))
+			slog.Int("passes", folds), slog.Int64("stepped_over_rows", steppedOver),
+			slog.Int64("duration_ms", time.Since(start).Milliseconds()), slog.Any("error", err))
 		return err
 	}
 	s.logger.InfoContext(ctx, "compaction finished",
-		slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID), slog.Int("passes", len(passes)),
+		slog.String("bot_id", req.BotID), slog.String("session_id", req.ThreadID),
+		slog.Int("passes", folds), slog.Int64("stepped_over_rows", steppedOver),
 		slog.Int("input_tokens", inputTokens), slog.Int("history_budget_tokens", historyBudget),
 		slog.Int64("duration_ms", time.Since(start).Milliseconds()))
 	if len(passes) == 0 {

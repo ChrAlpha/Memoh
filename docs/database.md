@@ -55,7 +55,7 @@ The canonical source of truth for the full PostgreSQL schema is `db/postgres/mig
 - `bot_history_messages` — Unified message history under bot scope
 - `bot_history_message_assets` — Message → content_hash asset links (with name and metadata)
 - `bot_history_message_compacts` — Compaction logs and the summaries they wrote
-- `bot_history_checkpoints` — What stands in a request for a session's history up to a position (`turn_position`, `turn_message_seq`): rows kept by reference and summaries, in order, always at least one summary. Each names its parent; `memoh_rewind_history_checkpoint` moves a session back along that chain when rows its active checkpoint depends on are removed (see `docs/agent-runtime.md`)
+- `bot_history_checkpoints` — What stands in a request for a session's history up to a position (`turn_position`, `turn_message_seq`): rows kept by reference and summaries, in order, and the count and time range of the history it omits without a summary (`omitted_count`, `omitted_first_at`, `omitted_last_at`, carried over by every checkpoint folded onto it); at least a summary or an omission. Each names its parent; `memoh_rewind_history_checkpoint` moves a session back along that chain when rows its active checkpoint depends on are removed (see `docs/agent-runtime.md`)
 - `bot_history_appeared_rows` — Context rows written or made visible at or before the position of the checkpoint their session had active then (`memoh_history_row_appeared`); the next read of the session's checkpoint moves it back before them and forgets them
 
 **User Input**

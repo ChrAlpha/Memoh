@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/chat/timeline"
 	"github.com/felinics/memoh/internal/contextview"
 )
 
@@ -118,16 +120,17 @@ func TestPrepareContinuationRunConfigReplacesStaleContextAndSetsCapabilities(t *
 	}
 }
 
-// A continuation resumes on the history as a request renders it: what the
-// checkpoint holds, and the rows after it.
+// A continuation resumes on the history as a request renders it: the notice
+// of what the checkpoint omits, what it holds, and the rows after it.
 func TestPrepareContinuationRunConfigRendersTheCheckpoint(t *testing.T) {
 	t.Parallel()
 
+	omitted := checkpoint.Omitted{Count: 1, First: time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC), Last: time.Date(2026, 6, 1, 8, 0, 0, 0, time.UTC)}
 	queries := &historyCheckpointQueries{}
-	queries.activate(historyCheckpointRow(t, checkpointTestID, historyTestPosition(1),
-		checkpoint.Item{SummaryID: queries.summary(t, checkpointTestSummaryID, "earlier work")}))
+	queries.activate(omitting(historyCheckpointRow(t, checkpointTestID, historyTestPosition(1),
+		checkpoint.Item{SummaryID: queries.summary(t, checkpointTestSummaryID, "earlier work")}), omitted))
 	resolver := checkpointTestService(&memoryQueryMessageService{messages: []messagepkg.Message{
-		persistedHistoryMessage(t, "earlier", "user", "earlier"),
+		persistedHistoryMessage(t, "omitted", "user", "omitted"),
 		persistedHistoryMessage(t, "folded", "assistant", "folded"),
 		persistedHistoryMessage(t, "request-row", "user", "resumed request"),
 	}}, queries)
@@ -147,7 +150,7 @@ func TestPrepareContinuationRunConfigRendersTheCheckpoint(t *testing.T) {
 	for _, message := range got.Messages {
 		texts = append(texts, messageContentTextForTest(message))
 	}
-	if want := []string{"<summary>\nearlier work\n</summary>", "resumed request"}; !slices.Equal(texts, want) {
+	if want := []string{timeline.HistoryNotice(omitted), "<summary>\nearlier work\n</summary>", "resumed request"}; !slices.Equal(texts, want) {
 		t.Fatalf("continuation messages = %q, want %q", texts, want)
 	}
 	var summaries []int
@@ -156,8 +159,8 @@ func TestPrepareContinuationRunConfigRendersTheCheckpoint(t *testing.T) {
 			summaries = append(summaries, frag.Provenance.Index)
 		}
 	}
-	if !slices.Equal(summaries, []int{0}) {
-		t.Fatalf("summary frags at messages %v, want the summary at message 0", summaries)
+	if !slices.Equal(summaries, []int{1}) {
+		t.Fatalf("summary frags at messages %v, want the summary at message 1", summaries)
 	}
 }
 

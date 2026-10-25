@@ -19,6 +19,8 @@ import (
 type HistoryCheckpoint struct {
 	// Position is where the turn responses composed after it start.
 	Position messagepkg.HistoryPosition
+	// Omitted is what the checkpoint leaves out without a summary.
+	Omitted checkpoint.Omitted
 	// Items are what the checkpoint holds, in its order.
 	Items []CheckpointItem
 	// Messages tells, for each inbound message of the composed segments that
@@ -60,13 +62,21 @@ type CheckpointItem struct {
 }
 
 // composes reports whether a segment the checkpoint does not hold composes
-// after it: one whose message has no context rows, or one whose rows the
-// checkpoint leaves raw, or one whose rows a summary folded when the message
-// changed since. A summary never read such a change, so the segment carries
-// it.
+// after it: one whose message has context rows when the checkpoint leaves
+// one of them raw, or when a summary folded them and the message changed
+// since; one without unless the checkpoint omits what was received by then.
+// A summary never read such a change, so the segment carries it.
 func (c HistoryCheckpoint) composes(segment RenderedSegment) bool {
+	omitted := c.Omitted.Omits() && segment.ReceivedAtMs <= c.Omitted.Last.UnixMilli()
 	message, ok := c.Messages[strings.TrimSpace(segment.MessageID)]
-	return !ok || message.Kept || message.changedSince(segment)
+	switch {
+	case !ok:
+		return !omitted
+	case message.Kept:
+		return true
+	default:
+		return !omitted && message.changedSince(segment)
+	}
 }
 
 // CheckpointRows reads the rows a history checkpoint keeps by reference.
@@ -87,6 +97,14 @@ func NewCheckpointSource(log *slog.Logger, queries dbstore.Queries, rows Checkpo
 	return &CheckpointSource{checkpoints: checkpoint.NewStore(log, queries), queries: queries, rows: rows}
 }
 
+// StepOver lets the session's active checkpoint step over the history its
+// bot recorded before keeping history under checkpoints that a composition
+// within limits cannot render (checkpoint.Store.StepOver), before Load reads
+// it.
+func (s *CheckpointSource) StepOver(ctx context.Context, sessionID string, limits checkpoint.StepOverLimits) (int64, error) {
+	return s.checkpoints.StepOver(ctx, sessionID, nil, limits)
+}
+
 // Load reads the session's active checkpoint for composing rc: what it
 // holds, the rows it keeps as they render, and how it stands for the inbound
 // messages of rc. A kept user row that records no inbound message renders
@@ -96,7 +114,7 @@ func (s *CheckpointSource) Load(ctx context.Context, sessionID string, rc Render
 	if err != nil || active.ID == "" {
 		return HistoryCheckpoint{}, err
 	}
-	projection := HistoryCheckpoint{Position: active.Position}
+	projection := HistoryCheckpoint{Position: active.Position, Omitted: active.Omitted}
 	kept := make(map[string]messagepkg.Message)
 	if rows := active.RowIDs(); len(rows) > 0 {
 		messages, err := s.rows.ListTurnResponseSourcesByIDs(ctx, sessionID, rows)

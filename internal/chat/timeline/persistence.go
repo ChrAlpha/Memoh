@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"slices"
 	"strings"
 
@@ -110,7 +111,7 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 // LoadEventsForReplay loads the newest event tail of a session within a
 // hard byte budget, leaving out in SQL what the session's history checkpoint
 // stands for: the events of every inbound message whose context rows it
-// folds.
+// folds, and the events without a context row it omits.
 func (s *EventStore) LoadEventsForReplay(ctx context.Context, botID, sessionID string) ([]CanonicalEvent, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
@@ -121,6 +122,10 @@ func (s *EventStore) LoadEventsForReplay(ctx context.Context, botID, sessionID s
 		return nil, fmt.Errorf("load replay history checkpoint: %w", err)
 	}
 	keptIDs := active.RowUUIDs()
+	omittedThroughMs := int64(math.MinInt64)
+	if active.Omitted.Omits() {
+		omittedThroughMs = active.Omitted.Last.UnixMilli()
+	}
 
 	remaining := int64(defaultReplayMaxBytes)
 	rows := make([]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow, 0, defaultReplayPageSize)
@@ -129,6 +134,7 @@ func (s *EventStore) LoadEventsForReplay(ctx context.Context, botID, sessionID s
 		AfterTurnPosition:   active.Position.Turn,
 		AfterTurnMessageSeq: active.Position.Seq,
 		KeptIds:             keptIDs,
+		OmittedThroughMs:    omittedThroughMs,
 		MaxBytes:            remaining,
 		PageSize:            defaultReplayPageSize,
 	}

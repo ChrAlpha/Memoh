@@ -36,10 +36,12 @@ ORDER BY received_at_ms ASC, created_at ASC, id ASC;
 -- What the session's checkpoint stands for is excluded in SQL before
 -- event_data reaches the process: every event of a message whose context
 -- rows all lie at or before the checkpoint's position without being kept by
--- reference. A folded message that changed after its rows were written
--- replays whole: its summary read the rows, never the change. The change is
--- the events after the one its rows were written from or, when that cursor
--- is unknown, an edit.
+-- reference, and every event without a context row received by the last
+-- message the checkpoint omits (omitted_through_ms). A folded message that
+-- changed after its rows were written replays whole unless the checkpoint
+-- omits it: its summary read the rows, never the change. The change is the
+-- events after the one its rows were written from or, when that cursor is
+-- unknown, an edit.
 WITH message_rows AS MATERIALIZED (
   SELECT
     m.source_message_id AS external_message_id,
@@ -66,7 +68,8 @@ WITH message_rows AS MATERIALIZED (
    AND event.external_message_id = message.external_message_id
   WHERE NOT message.kept
   GROUP BY message.external_message_id, message.event_cursor
-  HAVING CASE
+  HAVING MIN(event.received_at_ms) > sqlc.arg(omitted_through_ms)::BIGINT
+    AND CASE
       WHEN message.event_cursor > 0
         THEN MAX(COALESCE((event.event_data->>'event_cursor')::bigint, 0)) > message.event_cursor
       ELSE bool_or(event.event_kind = 'edit')
@@ -95,7 +98,7 @@ WITH message_rows AS MATERIALIZED (
     AND (
       message.kept
       OR changed.external_message_id IS NOT NULL
-      OR message.external_message_id IS NULL
+      OR message.external_message_id IS NULL AND event.received_at_ms > sqlc.arg(omitted_through_ms)::BIGINT
     )
 ), ranked AS MATERIALIZED (
   SELECT

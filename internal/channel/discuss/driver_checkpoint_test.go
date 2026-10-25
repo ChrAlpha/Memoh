@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
 
@@ -15,6 +16,10 @@ type fakeCheckpointSource struct {
 	sessionID  string
 	rc         timeline.RenderedContext
 	calls      int
+}
+
+func (*fakeCheckpointSource) StepOver(context.Context, string, checkpoint.StepOverLimits) (int64, error) {
+	return 0, nil
 }
 
 func (f *fakeCheckpointSource) Load(_ context.Context, sessionID string, rc timeline.RenderedContext) (timeline.HistoryCheckpoint, error) {

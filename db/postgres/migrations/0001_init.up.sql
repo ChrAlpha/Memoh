@@ -2284,9 +2284,10 @@ CREATE INDEX IF NOT EXISTS idx_bot_history_messages_run
 -- ---------------------------------------------------------------------------
 -- A checkpoint is a position in a session's turn order and what stands for
 -- the session's history up to it: ordered items, each a row kept by
--- reference or a summary. A request's context is the items and every context
--- row after the position. Each checkpoint builds on its parent; bot_sessions
--- points at the active one.
+-- reference or a summary, and a record of the history it omits without a
+-- summary. A request's context is a notice of what it omits, the items, and
+-- every context row after the position. Each checkpoint builds on its parent;
+-- bot_sessions points at the active one.
 CREATE TABLE IF NOT EXISTS public.bot_history_checkpoints (
     id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id          UUID        NOT NULL DEFAULT public.memoh_current_team_id()
@@ -2298,10 +2299,19 @@ CREATE TABLE IF NOT EXISTS public.bot_history_checkpoints (
     turn_message_seq BIGINT      NOT NULL,
     items            JSONB       NOT NULL DEFAULT '[]'::jsonb,
     created_at       TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    omitted_count    BIGINT      NOT NULL DEFAULT 0,
+    omitted_first_at TIMESTAMPTZ,
+    omitted_last_at  TIMESTAMPTZ,
     CONSTRAINT memoh_team_key_c3970c8700e1 UNIQUE (team_id, id),
     CONSTRAINT bot_history_checkpoints_position_check CHECK (turn_position >= 0 AND turn_message_seq >= 0),
     CONSTRAINT bot_history_checkpoints_items_check CHECK (pg_catalog.jsonb_typeof(items) = 'array'),
-    CONSTRAINT bot_history_checkpoints_summary_check CHECK (pg_catalog.jsonb_path_exists(items, '$[*].summary')),
+    CONSTRAINT bot_history_checkpoints_omitted_check CHECK (
+        (omitted_count = 0 AND omitted_first_at IS NULL AND omitted_last_at IS NULL)
+        OR (omitted_count > 0 AND omitted_first_at <= omitted_last_at)
+    ),
+    CONSTRAINT bot_history_checkpoints_stands_check CHECK (
+        pg_catalog.jsonb_path_exists(items, '$[*].summary') OR omitted_count > 0
+    ),
     CONSTRAINT bot_history_checkpoints_bot_id_fkey
         FOREIGN KEY (team_id, bot_id)
         REFERENCES public.bots(team_id, id) ON DELETE CASCADE,

@@ -371,6 +371,9 @@ func (f *fakeQueries) CreateHistoryCheckpoint(_ context.Context, arg sqlc.Create
 		ParentID:       arg.ParentID,
 		TurnPosition:   arg.TurnPosition,
 		TurnMessageSeq: arg.TurnMessageSeq,
+		OmittedCount:   arg.OmittedCount,
+		OmittedFirstAt: arg.OmittedFirstAt,
+		OmittedLastAt:  arg.OmittedLastAt,
 		Items:          arg.Items,
 		CreatedAt:      pgtype.Timestamptz{Time: time.Now(), Valid: true},
 	}

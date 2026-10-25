@@ -9,6 +9,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/chat/timeline"
@@ -20,6 +21,10 @@ import (
 type movingCheckpointSource struct {
 	oversized bool
 	calls     int
+}
+
+func (*movingCheckpointSource) StepOver(context.Context, string, checkpoint.StepOverLimits) (int64, error) {
+	return 0, nil
 }
 
 func (s *movingCheckpointSource) Load(context.Context, string, timeline.RenderedContext) (timeline.HistoryCheckpoint, error) {
@@ -154,6 +159,10 @@ func TestDiscussSkippedAgentTurnConsumesOverflowingInput(t *testing.T) {
 type failingCheckpointSource struct {
 	ok    int
 	calls int
+}
+
+func (*failingCheckpointSource) StepOver(context.Context, string, checkpoint.StepOverLimits) (int64, error) {
+	return 0, nil
 }
 
 func (s *failingCheckpointSource) Load(context.Context, string, timeline.RenderedContext) (timeline.HistoryCheckpoint, error) {

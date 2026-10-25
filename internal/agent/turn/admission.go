@@ -34,8 +34,8 @@ type AdmissionEntry struct {
 	Source *ContextMessageSource
 	// Cost is the entry's estimate in shared-estimator tokens.
 	Cost int
-	// Pinned entries (what the session's history checkpoint holds) are always
-	// selected.
+	// Pinned entries (the history notice and what the session's history
+	// checkpoint holds) are always selected.
 	Pinned bool
 	// ToolResponse marks a raw tool-response entry. The selected window must
 	// never open on one, because its tool call would fall outside the window.
