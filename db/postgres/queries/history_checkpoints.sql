@@ -589,3 +589,27 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND m.source_message_id = ANY(sqlc.arg(external_message_ids)::text[])
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 GROUP BY m.source_message_id;
+
+-- name: GetForkHistoryPosition :one
+-- The fork's position of the newest row it copied from at or before a
+-- source position.
+WITH pair AS (
+  SELECT
+    unnest(sqlc.arg(source_message_ids)::uuid[]) AS source_id,
+    unnest(sqlc.arg(fork_message_ids)::uuid[]) AS fork_id
+)
+SELECT copy.turn_position::bigint AS turn_position, copy.turn_message_seq::bigint AS turn_message_seq
+FROM pair
+JOIN bot_history_messages source
+  ON source.team_id = public.memoh_current_team_id()
+ AND source.id = pair.source_id
+JOIN bot_history_messages copy
+  ON copy.team_id = public.memoh_current_team_id()
+ AND copy.id = pair.fork_id
+WHERE source.turn_position IS NOT NULL
+  AND source.turn_message_seq IS NOT NULL
+  AND copy.turn_position IS NOT NULL
+  AND copy.turn_message_seq IS NOT NULL
+  AND (source.turn_position, source.turn_message_seq) <= (sqlc.arg(turn_position)::bigint, sqlc.arg(turn_message_seq)::bigint)
+ORDER BY source.turn_position DESC, source.turn_message_seq DESC
+LIMIT 1;

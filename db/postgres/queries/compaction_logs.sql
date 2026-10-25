@@ -26,6 +26,25 @@ WHERE team_id = public.memoh_current_team_id()
   AND status = 'pending'
 RETURNING *;
 
+-- name: CopyCompactionSummary :one
+-- A fork carries a summary of its source as its own: the same text, model,
+-- count and timing, and no usage, so the summarizer call that wrote it is
+-- counted once.
+INSERT INTO bot_history_message_compacts (
+  bot_id, session_id, team_id, status, summary, message_count, model_id, started_at, completed_at
+)
+SELECT fork.bot_id, fork.id, fork.team_id, 'ok', source.summary, source.message_count,
+  source.model_id, source.started_at, source.completed_at
+FROM bot_history_message_compacts source
+JOIN bot_sessions fork
+  ON fork.team_id = public.memoh_current_team_id()
+ AND fork.id = sqlc.arg(session_id)
+ AND fork.bot_id = source.bot_id
+WHERE source.team_id = public.memoh_current_team_id()
+  AND source.id = sqlc.arg(source_compact_id)
+  AND source.status = 'ok'
+RETURNING id;
+
 -- name: ListCompactionLogsByBot :many
 SELECT *
 FROM bot_history_message_compacts

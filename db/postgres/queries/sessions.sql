@@ -23,6 +23,10 @@ VALUES (
 RETURNING *;
 
 -- name: ForkSessionFromAssistantTurn :one
+-- The fork copies the source's visible history through the target turn. It
+-- returns the fork's id, the ids of the source rows it copied beside the ids
+-- of their copies, in the same order, and the source position of the target
+-- turn. The caller carries the history checkpoint that holds for the copy.
 WITH source_session AS (
   SELECT s.*
   FROM bot_sessions s
@@ -245,9 +249,20 @@ copied_assets AS (
   WHERE a.team_id = public.memoh_current_team_id()
   RETURNING id
 )
-SELECT cs.*
+SELECT cs.id,
+  copied.source_message_ids,
+  copied.fork_message_ids,
+  tt.position::bigint AS through_turn_position
 FROM created_session cs
-CROSS JOIN (SELECT count(*) AS copied_asset_count FROM copied_assets) copied_asset_counts;
+CROSS JOIN (SELECT count(*) AS copied_asset_count FROM copied_assets) copied_asset_counts
+CROSS JOIN target_turn tt
+CROSS JOIN (
+  SELECT
+    COALESCE(array_agg(cm.old_message_id ORDER BY cm.old_message_id), '{}')::uuid[] AS source_message_ids,
+    COALESCE(array_agg(cm.new_message_id ORDER BY cm.old_message_id), '{}')::uuid[] AS fork_message_ids
+  FROM copy_messages cm
+  JOIN inserted_messages im ON im.id = cm.new_message_id
+) copied;
 
 
 -- name: GetSessionByID :one

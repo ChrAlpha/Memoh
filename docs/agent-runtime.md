@@ -143,9 +143,16 @@ active summaries, with the rows in their span they left raw, into its
 checkpoint. A session restored by a bot import brings its history without
 summaries, so its first request that does not fit compacts it.
 
+A fork copies the source's visible history through its turn and carries the
+newest checkpoint on the source's active chain that holds for the copy
+(`compaction.ForkHistoryCarrier`): one that accounts for no history past the
+fork point and whose kept rows the fork copied. Its summaries are copied, its
+kept rows named by their copies, and its position mapped to the copy's, so a
+fork's first request does not fold again what the source had folded.
+
 Candidate payloads are read within byte bounds. A request reads the active
-checkpoint and walks its chain only to repair it; an edit or retry and a
-rewind walk it for the checkpoint they keep. In-run recovery does not
+checkpoint and walks its chain only to repair it; an edit or retry, a rewind
+and a fork walk it for the checkpoint they keep. In-run recovery does not
 load the raw history span or reread ancestor summaries. Owner fencing and
 cancellation remain authoritative. Failed passes publish nothing; successful
 earlier passes and tool effects stay committed.

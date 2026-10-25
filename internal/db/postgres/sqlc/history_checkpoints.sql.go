@@ -261,6 +261,55 @@ func (q *Queries) GetActiveHistoryCheckpoint(ctx context.Context, sessionID pgty
 	return i, err
 }
 
+const getForkHistoryPosition = `-- name: GetForkHistoryPosition :one
+WITH pair AS (
+  SELECT
+    unnest($3::uuid[]) AS source_id,
+    unnest($4::uuid[]) AS fork_id
+)
+SELECT copy.turn_position::bigint AS turn_position, copy.turn_message_seq::bigint AS turn_message_seq
+FROM pair
+JOIN bot_history_messages source
+  ON source.team_id = public.memoh_current_team_id()
+ AND source.id = pair.source_id
+JOIN bot_history_messages copy
+  ON copy.team_id = public.memoh_current_team_id()
+ AND copy.id = pair.fork_id
+WHERE source.turn_position IS NOT NULL
+  AND source.turn_message_seq IS NOT NULL
+  AND copy.turn_position IS NOT NULL
+  AND copy.turn_message_seq IS NOT NULL
+  AND (source.turn_position, source.turn_message_seq) <= ($1::bigint, $2::bigint)
+ORDER BY source.turn_position DESC, source.turn_message_seq DESC
+LIMIT 1
+`
+
+type GetForkHistoryPositionParams struct {
+	TurnPosition     int64         `json:"turn_position"`
+	TurnMessageSeq   int64         `json:"turn_message_seq"`
+	SourceMessageIds []pgtype.UUID `json:"source_message_ids"`
+	ForkMessageIds   []pgtype.UUID `json:"fork_message_ids"`
+}
+
+type GetForkHistoryPositionRow struct {
+	TurnPosition   int64 `json:"turn_position"`
+	TurnMessageSeq int64 `json:"turn_message_seq"`
+}
+
+// The fork's position of the newest row it copied from at or before a
+// source position.
+func (q *Queries) GetForkHistoryPosition(ctx context.Context, arg GetForkHistoryPositionParams) (GetForkHistoryPositionRow, error) {
+	row := q.db.QueryRow(ctx, getForkHistoryPosition,
+		arg.TurnPosition,
+		arg.TurnMessageSeq,
+		arg.SourceMessageIds,
+		arg.ForkMessageIds,
+	)
+	var i GetForkHistoryPositionRow
+	err := row.Scan(&i.TurnPosition, &i.TurnMessageSeq)
+	return i, err
+}
+
 const getHistoryCheckpoint = `-- name: GetHistoryCheckpoint :one
 SELECT id, team_id, bot_id, session_id, parent_id, turn_position, turn_message_seq, items, created_at
 FROM bot_history_checkpoints

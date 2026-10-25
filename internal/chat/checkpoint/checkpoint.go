@@ -7,9 +7,9 @@
 // the items in their order, and then the session's context rows after the
 // checkpoint's position: its visible rows of complete turns, other than
 // legacy passive_sync rows. Compaction folds onto the active checkpoint and
-// makes the result active. Every checkpoint names its parent, so a change to
-// the history the active one depends on moves the session back to the newest
-// one that does not.
+// makes the result active; a fork takes a copy of its source's. Every
+// checkpoint names its parent, so a change to the history the active one
+// depends on moves the session back to the newest one that does not.
 package checkpoint
 
 import (

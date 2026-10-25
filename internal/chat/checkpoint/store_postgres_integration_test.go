@@ -585,6 +585,82 @@ func TestPostgresKeptBeforeTurnIsWhatAReplacementKeeps(t *testing.T) {
 	}
 }
 
+// A fork carries the newest checkpoint of its source's chain that accounts
+// for no history past the copy and keeps only rows it copied: its summaries
+// become the fork's own, its rows are named by their copies, and it sits at
+// the copy's place for its position, with no parent.
+func TestPostgresCopyToForkCarriesTheNewestCheckpointTheCopyHolds(t *testing.T) {
+	f := newHistoryFixture(t)
+	turn := func(position int64) [2]string {
+		return [2]string{f.row(f.session, position, 1), f.row(f.session, position, 2)}
+	}
+	source := [4][2]string{turn(1), turn(2), turn(3), turn(4)}
+	first := f.mustFold(Checkpoint{}, "first", source[0][1])
+	second := f.mustFold(first, "second", source[0][0], source[1][0], source[1][1], source[2][0])
+	if !slices.Contains(first.RowIDs(), source[0][0]) || len(second.Items) != 1 {
+		t.Fatalf("chain = %+v / %+v, want the first keeping its user row and the second only a summary", first.Items, second.Items)
+	}
+
+	// fork copies the source's rows of the given turns into a new session,
+	// ten turns later, as a thread fork binds its copies.
+	fork := func(throughTurn int, skip ...string) (string, Copy, map[string]string) {
+		session := f.newSession()
+		copies := make(map[string]string)
+		c := Copy{SourceSessionID: f.session, ForkSessionID: session, ThroughTurnPosition: int64(throughTurn)}
+		for turn := 0; turn < throughTurn; turn++ {
+			for seq, id := range source[turn] {
+				if slices.Contains(skip, id) {
+					continue
+				}
+				copied := f.row(session, int64(turn+11), int64(seq+1))
+				copies[id] = copied
+				c.SourceMessageIDs = append(c.SourceMessageIDs, dbpkg.ParseUUIDOrEmpty(id))
+				c.ForkMessageIDs = append(c.ForkMessageIDs, dbpkg.ParseUUIDOrEmpty(copied))
+			}
+		}
+		return session, c, copies
+	}
+	copyToFork := func(c Copy) Checkpoint {
+		t.Helper()
+		var copied Checkpoint
+		if err := f.queries.InTx(f.ctx, func(q dbstore.Queries) error {
+			var err error
+			copied, err = CopyToFork(f.ctx, q, c)
+			return err
+		}); err != nil {
+			t.Fatalf("copy to fork: %v", err)
+		}
+		return copied
+	}
+
+	session, c, copies := fork(2)
+	copied := copyToFork(c)
+	if copied.ParentID != "" || copied.SessionID != session || copied.Position != (messagepkg.HistoryPosition{Turn: 11, Seq: 2}) {
+		t.Fatalf("copy = session %q parent %q at %+v, want %q without parent at 11.2", copied.SessionID, copied.ParentID, copied.Position, session)
+	}
+	if len(copied.Items) != 2 || copied.Items[0].RowID != copies[source[0][0]] || copied.Items[1].SummaryID == "" || copied.Items[1].SummaryID == first.SummaryIDs()[0] {
+		t.Fatalf("copy items = %+v, want the copied row then a summary of the fork's own", copied.Items)
+	}
+	if got := f.pointer(session); got != copied.ID {
+		t.Fatalf("fork active = %q, want %q", got, copied.ID)
+	}
+	f.session = session
+	if got := f.active(); got.ID != copied.ID || got.Items[1].Summary != "first" {
+		t.Fatalf("fork Active = %+v, want %q holding the source's summary text", got, copied.ID)
+	}
+	f.session = c.SourceSessionID
+	if got := f.pointer(f.session); got != second.ID {
+		t.Fatalf("source active = %q, want %q", got, second.ID)
+	}
+
+	if _, c, _ = fork(3); copyToFork(c).Position != (messagepkg.HistoryPosition{Turn: 13, Seq: 1}) {
+		t.Fatal("a fork through turn 3 did not carry the checkpoint through 3.1")
+	}
+	if session, c, _ = fork(2, source[0][0]); copyToFork(c).ID != "" || f.pointer(session) != "" {
+		t.Fatal("a fork that did not copy a kept row carried a checkpoint")
+	}
+}
+
 // Checkpoints go with their session; one removed under the session leaves it
 // with the history it rendered raw, and its descendants go with it.
 func TestPostgresCheckpointsGoWithTheirSession(t *testing.T) {

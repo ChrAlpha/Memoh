@@ -67,6 +67,38 @@ func (q *Queries) CompleteCompactionLog(ctx context.Context, arg CompleteCompact
 	return i, err
 }
 
+const copyCompactionSummary = `-- name: CopyCompactionSummary :one
+INSERT INTO bot_history_message_compacts (
+  bot_id, session_id, team_id, status, summary, message_count, model_id, started_at, completed_at
+)
+SELECT fork.bot_id, fork.id, fork.team_id, 'ok', source.summary, source.message_count,
+  source.model_id, source.started_at, source.completed_at
+FROM bot_history_message_compacts source
+JOIN bot_sessions fork
+  ON fork.team_id = public.memoh_current_team_id()
+ AND fork.id = $1
+ AND fork.bot_id = source.bot_id
+WHERE source.team_id = public.memoh_current_team_id()
+  AND source.id = $2
+  AND source.status = 'ok'
+RETURNING id
+`
+
+type CopyCompactionSummaryParams struct {
+	SessionID       pgtype.UUID `json:"session_id"`
+	SourceCompactID pgtype.UUID `json:"source_compact_id"`
+}
+
+// A fork carries a summary of its source as its own: the same text, model,
+// count and timing, and no usage, so the summarizer call that wrote it is
+// counted once.
+func (q *Queries) CopyCompactionSummary(ctx context.Context, arg CopyCompactionSummaryParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, copyCompactionSummary, arg.SessionID, arg.SourceCompactID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const countCompactionLogsByBot = `-- name: CountCompactionLogsByBot :one
 SELECT count(*) FROM bot_history_message_compacts WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
 `

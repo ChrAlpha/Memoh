@@ -81,6 +81,7 @@ type Queries interface {
 	CompleteScheduleLog(ctx context.Context, arg dbsqlc.CompleteScheduleLogParams) (dbsqlc.ScheduleLog, error)
 	CountAccounts(ctx context.Context) (int64, error)
 	CountCompactionLogsByBot(ctx context.Context, botID pgtype.UUID) (int64, error)
+	CopyCompactionSummary(ctx context.Context, arg dbsqlc.CopyCompactionSummaryParams) (pgtype.UUID, error)
 	ReleasePendingCompactionLogsBySession(ctx context.Context, arg dbsqlc.ReleasePendingCompactionLogsBySessionParams) error
 
 	CheckHistoryCheckpoint(ctx context.Context, id pgtype.UUID) (dbsqlc.CheckHistoryCheckpointRow, error)
@@ -88,6 +89,7 @@ type Queries interface {
 	CreateHistoryCheckpoint(ctx context.Context, arg dbsqlc.CreateHistoryCheckpointParams) (dbsqlc.BotHistoryCheckpoint, error)
 	ForgetHistoryAppearedRows(ctx context.Context, arg dbsqlc.ForgetHistoryAppearedRowsParams) (int64, error)
 	GetActiveHistoryCheckpoint(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.BotHistoryCheckpoint, error)
+	GetForkHistoryPosition(ctx context.Context, arg dbsqlc.GetForkHistoryPositionParams) (dbsqlc.GetForkHistoryPositionRow, error)
 	GetHistoryCheckpoint(ctx context.Context, id pgtype.UUID) (dbsqlc.BotHistoryCheckpoint, error)
 	GetHistoryCheckpointKeptBeforeTurn(ctx context.Context, arg dbsqlc.GetHistoryCheckpointKeptBeforeTurnParams) (pgtype.UUID, error)
 	ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context, arg dbsqlc.ListHistoryCheckpointCandidatesWithinBytesParams) ([]dbsqlc.ListHistoryCheckpointCandidatesWithinBytesRow, error)
