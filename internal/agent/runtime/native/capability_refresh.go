@@ -130,12 +130,16 @@ func (r refreshedTools) apply(dispatch *generateDispatch, params *sdk.Request, m
 	dispatch.execTools = r.exec
 	dispatch.approve = r.approve
 	params.Tools = r.defs
-	if !dispatch.systemPrepended {
+	if dispatch.systemPrepended {
+		params.Messages = replacePromotedSystem(params.Messages, r.system)
+		messages = replacePromotedSystem(messages, r.system)
+	} else {
 		params.System = r.system
-		return messages
 	}
-	params.Messages = replacePromotedSystem(params.Messages, r.system)
-	return replacePromotedSystem(messages, r.system)
+	// A step's bound is what the request has beside its system prompt and
+	// tools, which the refresh just replaced.
+	dispatch.stepOutputBytes = stepOutputBudget(dispatch.inputAllowance, *params, dispatch.systemPrepended)
+	return messages
 }
 
 // replacePromotedSystem rewrites the text of the system message the

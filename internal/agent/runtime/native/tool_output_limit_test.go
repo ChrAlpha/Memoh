@@ -179,8 +179,9 @@ func TestAgentGenerateBoundsAStepsResultsTogether(t *testing.T) {
 		t.Fatalf("Generate() text = %q, want done", result.Text)
 	}
 	allowance := plan.Window - plan.OutputReserve
+	room := allowance - contextfrag.ProviderEnvelopeTokens(next.System, nil, next.Tools)
 	var sizes []int
-	total := 0
+	results := 0
 	for _, message := range next.Messages {
 		for _, part := range message.Content {
 			if result, ok := part.(sdk.ToolResultPart); ok {
@@ -188,12 +189,15 @@ func TestAgentGenerateBoundsAStepsResultsTogether(t *testing.T) {
 					t.Fatalf("result %s was sent whole", result.ToolCallID)
 				}
 				sizes = append(sizes, len(result.Result.String()))
-				total += len(result.Result.String())
 			}
 		}
+		if message.Role == sdk.MessageRoleTool {
+			results += contextfrag.ProviderEnvelopeTokens("", []sdk.Message{message}, nil)
+		}
 	}
-	if len(sizes) != 4 || slices.Min(sizes) != slices.Max(sizes) || total > int(contextfrag.BudgetBytesForTokens(allowance/2)) {
-		t.Fatalf("result sizes = %v, want four equal shares within half of the %d-token allowance", sizes, allowance)
+	// Each result carries its call's id and name beside the share it takes.
+	if len(sizes) != 4 || slices.Min(sizes) != slices.Max(sizes) || results > room/2+4*32 {
+		t.Fatalf("result sizes = %v (%d tokens), want four equal shares within half of the %d-token room", sizes, results, room)
 	}
 	if tokens := contextfrag.ProviderEnvelopeTokens(next.System, next.Messages, next.Tools); tokens > allowance {
 		t.Fatalf("next request = %d tokens, want it within the %d-token allowance", tokens, allowance)
