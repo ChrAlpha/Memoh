@@ -14,8 +14,8 @@ func starvationCorpus(t *testing.T) []candidateRow {
 	t.Helper()
 	return []candidateRow{
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"internal chain of thought"}]`, 400),                                       // 0: renders empty
-		mkRow(t, "assistant", `[{"type":"tool-call","toolCallId":"U","toolName":"ask_user","input":{}}]`, 40),                         // 1: must-keep call
-		mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"U","toolName":"ask_user","output":"user said yes"}]`, 40),              // 2: must-keep result
+		mkRow(t, "assistant", `[{"type":"tool-call","toolCallId":"U","toolName":"ask_user","input":{}}]`, 40),                         // 1: ask_user call
+		mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"U","toolName":"ask_user","output":"user said yes"}]`, 40),              // 2: its answer
 		mkRow(t, "user", `"old question about the migration plan with enough surrounding detail to be worth compressing"`, 400),       // 3
 		mkRow(t, "assistant", `"old answer walking through every step of the plan in enough words to outweigh a short summary"`, 400), // 4
 		mkRow(t, "user", `"current question"`, 40), // 5: protected current turn
@@ -56,13 +56,16 @@ func TestDoCompactionNoopsWithoutModelCallWhenOnlyUnmarkableRowsRemain(t *testin
 	t.Parallel()
 
 	rows := starvationCorpus(t)
-	// The reasoning row renders nothing and the unanswered ask_user call stays.
-	remaining := append([]candidateRow{}, rows[0], rows[1], rows[5])
+	// The reasoning row renders nothing and the ask_user call the run waits
+	// on stays, ahead of an input not stored yet.
+	remaining := append([]candidateRow{}, rows[0], rows[1])
 	q := &fakeQueries{history: remaining}
 	stub := &stubModel{summary: "should never be produced"}
 	svc := newMachineryService(q)
 
-	res, err := svc.compactOnce(context.Background(), currentConfig(stub, 100, rows[5]))
+	cfg := machineryConfig(stub, 100)
+	cfg.CurrentRequest = "current question"
+	res, err := svc.compactOnce(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}
@@ -188,6 +191,40 @@ func TestCompactionCoversThePrefixPastAnsweredAskUserAndReasoningRows(t *testing
 		}
 	}
 	for _, frag := range []string{"answer ask-00", "dbdfc538", "EXEC_OUTPUT"} {
+		if !strings.Contains(stub.prompt, frag) {
+			t.Fatalf("summarizer prompt missing %q", frag)
+		}
+	}
+}
+
+// An ask_user call the conversation moved on from without an answer heads
+// the uncompacted history. The rows after it closed the call, so a pass
+// folds it with them rather than ending before it with nothing to fold.
+func TestCompactionCoversAnAskUserCallLaterHistoryClosed(t *testing.T) {
+	t.Parallel()
+
+	rows := []candidateRow{
+		mkRow(t, "assistant", `[{"type":"tool-call","toolCallId":"U","toolName":"ask_user","input":{"question":"which plan?"}}]`, 20),
+		mkRow(t, "user", `"skip that and run the next migration step"`, 0),
+		mkRow(t, "assistant", `"EXEC_OUTPUT `+strings.Repeat("migration detail ", 60)+`"`, 400),
+		mkRow(t, "user", `"current question"`, 0),
+	}
+	q := &fakeQueries{history: rows}
+	stub := &stubModel{summary: "SUMMARY the user skipped the plan question and ran the migration step"}
+	res, err := newMachineryService(q).compactOnce(context.Background(), currentConfig(stub, 100000, rows[3]))
+	if err != nil || res.Status != passOK {
+		t.Fatalf("an unanswered ask_user call at the head stalled compaction: result=%+v err=%v", res, err)
+	}
+	want := rows[:3]
+	if len(q.folded) != len(want) {
+		t.Fatalf("folded %d rows, want the %d-row prefix before the current input", len(q.folded), len(want))
+	}
+	for i, row := range want {
+		if q.folded[i] != row.ID {
+			t.Fatalf("folded[%d] is not prefix row %d: the summary must stand for one contiguous span", i, i)
+		}
+	}
+	for _, frag := range []string{"which plan?", "skip that", "EXEC_OUTPUT"} {
 		if !strings.Contains(stub.prompt, frag) {
 			t.Fatalf("summarizer prompt missing %q", frag)
 		}

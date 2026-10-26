@@ -134,62 +134,49 @@ func TestCandidatesFromRowsKeepsOnlyPendingAskUserCall(t *testing.T) {
 
 	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100)
 	askResult := mkRow(t, "tool", `[{"type":"tool-result","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","result":{"status":"submitted"}}]`, 100)
-	answered, _ := candidatesFromRows([]candidateRow{askCall, askResult, mkRow(t, "user", `"current"`, 100)})
+	answered, _ := candidatesFromRows([]candidateRow{askCall, askResult})
 	for _, idx := range []int{0, 1} {
 		assertNoPolicy(t, answered[idx], CompactPolicyMustKeep)
 		assertPolicy(t, answered[idx], CompactPolicyPreserveToolClosure)
 	}
-	pending, _ := candidatesFromRows([]candidateRow{askCall, mkRow(t, "user", `"current"`, 100)})
-	assertPolicy(t, pending[0], CompactPolicyMustKeep)
+	pending, _ := candidatesFromRows([]candidateRow{mkRow(t, "user", `"question"`, 100), askCall})
+	assertPolicy(t, pending[1], CompactPolicyMustKeep)
+	closed, _ := candidatesFromRows([]candidateRow{askCall, mkRow(t, "user", `"current"`, 100)})
+	assertNoPolicy(t, closed[0], CompactPolicyMustKeep)
 	twoCalls := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{}},{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-2","input":{}}]`, 100)
-	half, _ := candidatesFromRows([]candidateRow{twoCalls, askResult, mkRow(t, "user", `"current"`, 100)})
+	half, _ := candidatesFromRows([]candidateRow{twoCalls, askResult})
 	for _, idx := range []int{0, 1} {
 		assertPolicy(t, half[idx], CompactPolicyMustKeep)
 	}
-}
-
-func TestGuardedSelectionStopsAtAMustKeepAskExchange(t *testing.T) {
-	t.Parallel()
-
-	// The session renders one rolling summary, so no pass folds rows behind
-	// an exchange it must keep: a summary there would be a second one.
-	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100)
-	rows := []candidateRow{
-		askCall,
-		mkRow(t, "user", `"question 2"`, 100),
-		mkRow(t, "assistant", `"answer 2"`, 100),
-		mkRow(t, "user", `"current question"`, 100),
-		mkRow(t, "assistant", `"current answer"`, 100),
-	}
-	if _, ids := buildEntriesAndIDs(foldBefore(rows, rows[3])); len(ids) != 0 {
-		t.Fatalf("marked %d rows behind a pending ask_user exchange, want none", len(ids))
+	halfClosed, _ := candidatesFromRows([]candidateRow{twoCalls, askResult, mkRow(t, "user", `"current"`, 100)})
+	for _, idx := range []int{0, 1} {
+		assertNoPolicy(t, halfClosed[idx], CompactPolicyMustKeep)
 	}
 }
 
 func TestParallelToolCallsPropagateMustKeepToSiblingResult(t *testing.T) {
 	t.Parallel()
 
-	// One assistant message carries two parallel tool calls (ask_user + calc).
-	// The row is must-keep because of ask_user, but the calc result is a
-	// separate row that only carries the tool-closure policy on its own.
+	// One assistant message carries two parallel tool calls (ask_user + calc)
+	// and the run waits on the ask_user one. The row is must-keep because of
+	// ask_user, but the calc result is a separate row that only carries the
+	// tool-closure policy on its own.
 	assistantCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}},`+
 		`{"type":"tool-call","toolName":"calc","toolCallId":"calc-1","input":{}}]`, 100)
 	calcResult := mkRow(t, "tool", `[{"type":"tool-result","toolName":"calc","toolCallId":"calc-1","output":{"type":"text","value":"42"}}]`, 100)
 	rows := []candidateRow{
 		mkRow(t, "user", `"question 1"`, 100),
+		mkRow(t, "assistant", `"answer 1"`, 100),
+		mkRow(t, "user", `"question 2"`, 100),
 		assistantCall,
 		calcResult,
-		mkRow(t, "user", `"question 2"`, 100),
-		mkRow(t, "assistant", `"answer 2"`, 100),
-		mkRow(t, "user", `"current question"`, 100),
-		mkRow(t, "assistant", `"current answer"`, 100),
 	}
 	items, _ := candidatesFromRows(rows)
-	assertPolicy(t, items[2], CompactPolicyMustKeep)
+	assertPolicy(t, items[4], CompactPolicyMustKeep)
 
-	_, ids := buildEntriesAndIDs(foldBefore(rows, rows[5]))
-	if len(ids) == 0 {
-		t.Fatal("compaction should still proceed around the must-keep exchange")
+	_, ids := buildEntriesAndIDs(foldBefore(rows))
+	if len(ids) != 3 {
+		t.Fatalf("marked %d rows, want the three before the exchange the run waits on", len(ids))
 	}
 	for _, id := range ids {
 		if id == assistantCall.ID {
@@ -198,39 +185,6 @@ func TestParallelToolCallsPropagateMustKeepToSiblingResult(t *testing.T) {
 		if id == calcResult.ID {
 			t.Fatalf("sibling tool-result row of a must-keep exchange was marked for compaction")
 		}
-	}
-}
-
-func TestGuardedSelectionKeepsCompactRunContiguousAcrossMustKeepIsland(t *testing.T) {
-	t.Parallel()
-
-	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"`+userinput.ToolNameAskUser+`","toolCallId":"ask-1","input":{"questions":[]}}]`, 100)
-	rows := []candidateRow{
-		mkRow(t, "user", `"old q"`, 100),          // 0 run before island
-		mkRow(t, "assistant", `"old a"`, 100),     // 1
-		askCall,                                   // 2 must-keep island: unanswered
-		mkRow(t, "user", `"mid q"`, 100),          // 3 run after island
-		mkRow(t, "assistant", `"mid a"`, 100),     // 4
-		mkRow(t, "user", `"current q"`, 100),      // 5 protected recent
-		mkRow(t, "assistant", `"current a"`, 100), // 6
-	}
-	// A pass folds only the rows before the first must-keep island, never
-	// straddling ask_user into "mid q"/"mid a".
-	_, gotIDs := buildEntriesAndIDs(foldBefore(rows, rows[5]))
-	wantIDs := []pgtype.UUID{rows[0].ID, rows[1].ID}
-	if len(gotIDs) != len(wantIDs) {
-		t.Fatalf("selected %d rows, want the contiguous pre-island run [old q, old a]", len(gotIDs))
-	}
-	for i := range wantIDs {
-		if gotIDs[i] != wantIDs[i] {
-			t.Fatalf("selected run must be the contiguous pre-island run, got id[%d]=%s", i, formatUUID(gotIDs[i]))
-		}
-	}
-
-	// Once the pre-island run is folded, the island ends what a later pass
-	// may fold: the rows behind it stay raw.
-	if _, nextIDs := buildEntriesAndIDs(foldBefore(rows[2:], rows[5])); len(nextIDs) != 0 {
-		t.Fatalf("marked %d rows behind the must-keep island, want none", len(nextIDs))
 	}
 }
 
