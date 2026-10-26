@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -100,5 +101,62 @@ func TestMissingSessionNeverLoadsHistory(t *testing.T) {
 		if query.Query != "current question" || query.RecentMessages != 0 {
 			t.Fatalf("memory query=%+v", query)
 		}
+	}
+}
+
+// positionedHistory is the raw history of one session in its order: each
+// row's place is its index, and a window cut loads only the rows before it.
+type positionedHistory struct {
+	recordingMessageService
+	rows []messagepkg.Message
+}
+
+func (h *positionedHistory) position(i int) messagepkg.HistoryPosition {
+	return messagepkg.HistoryPosition{Turn: int64(i + 1), Seq: 1}
+}
+
+func (h *positionedHistory) HistoryPositionByID(_ context.Context, _ string, messageID string) (messagepkg.HistoryPosition, error) {
+	for i, row := range h.rows {
+		if row.ID == messageID {
+			return h.position(i), nil
+		}
+	}
+	return messagepkg.HistoryPosition{}, errors.New("history cutoff not found")
+}
+
+func (h *positionedHistory) ListHistoryWithinBytes(_ context.Context, _ string, window messagepkg.HistoryWindow) (messagepkg.HistoryLoad, error) {
+	var rows []messagepkg.Message
+	for i, row := range h.rows {
+		if window.After.Before(h.position(i)) && (window.Before == nil || h.position(i).Before(*window.Before)) {
+			rows = append(rows, row)
+		}
+	}
+	return messagepkg.HistoryLoad{Messages: rows}, nil
+}
+
+// A failed turn's empty assistant row can be the retry cutoff. The cut is
+// placed at that row before the load, so the cleanup that drops empty error
+// rows afterwards can neither lose the prior history nor let later rows in.
+func TestRetryEmptyFailureKeepsPriorHistoryAndExcludesLaterRows(t *testing.T) {
+	old := time.Now().Add(-72 * time.Hour)
+	prior := persistedHistoryMessage(t, "prior", "user", "retain PRIOR_CODEWORD")
+	prior.CreatedAt = old
+	earlierFailure := persistedHistoryMessage(t, "earlier-failure", "assistant", "")
+	earlierFailure.CreatedAt = old.Add(time.Second)
+	earlierFailure.Metadata = map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "context.budget_unsatisfied"}
+	request := persistedHistoryMessage(t, "request", "user", "retry this question")
+	request.CreatedAt = time.Now().Add(-time.Minute)
+	cutoff := persistedHistoryMessage(t, "cutoff", "assistant", "")
+	cutoff.CreatedAt = request.CreatedAt.Add(time.Second)
+	cutoff.Metadata = map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "context.budget_unsatisfied"}
+	later := persistedHistoryMessage(t, "later", "user", "exclude FUTURE_CODEWORD")
+	later.CreatedAt = time.Now()
+	svc := &Service{messageService: &positionedHistory{rows: []messagepkg.Message{prior, earlierFailure, request, cutoff, later}}, logger: slog.New(slog.DiscardHandler)}
+	prepared, err := svc.prepareHistoryContext(t.Context(), ChatRequest{BotID: "bot", ThreadID: "thread", HistoryCutoffBeforeMessageID: cutoff.ID}, historyfrag.ScopeFallback{}, 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.records) != 2 || prepared.records[0].DBMessageID != prior.ID || prepared.records[1].DBMessageID != request.ID {
+		t.Fatalf("retry history lost the prefix or crossed its boundary: %+v", prepared.records)
 	}
 }

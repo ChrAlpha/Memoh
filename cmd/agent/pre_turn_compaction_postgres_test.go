@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -16,7 +18,8 @@ import (
 // from the oldest row no summary replaces however old it is, into one active
 // summary that the next compaction folds again. A summary as long as the prompt allows is
 // answered without another compaction. When the summarizer fails, the turn
-// fails before any provider call and leaves history whole; once the
+// fails before any provider call and leaves history whole, naming the quota
+// when the provider refused the summarizer for it; once the
 // summarizer is back, the next turn runs on a summary that also covers the
 // failed input a bounded chat view no longer loads.
 func TestPostgresPreTurnCompaction(t *testing.T) {
@@ -64,8 +67,9 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 				t.Fatalf("a failed summary changed history: raw=%d compacted=%d active=%d", raw, compacted, f.activeSummaries())
 			}
 			f.appendRound(entry, "failedb-")
-			if code := send("failedb-current", "failedb-current message"); code != "context.budget_unsatisfied" {
-				t.Fatalf("summarizer still down: code=%q", code)
+			f.failStatus.Store(http.StatusPaymentRequired)
+			if code := send("failedb-current", "failedb-current message"); code != "agent.provider_quota_exhausted" {
+				t.Fatalf("summarizer out of quota: code=%q, want the quota named", code)
 			}
 			f.failSummary.Store(false)
 			calls = f.modelCalls.Load()
@@ -77,6 +81,50 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 				t.Fatalf("summarizer back: raw=%d compacted=%d current=%d active=%d", raw, compacted, strings.Count(request, "next-current message"), f.activeSummaries())
 			}
 		})
+	}
+}
+
+// An ask_user call whose run was aborted before anyone answered stays in
+// history without a result. Once the history the conversation went on with
+// no longer fits, the next turn folds the closed call with it and is
+// answered, instead of finding nothing it may summarize.
+func TestPostgresPreTurnCompactionFoldsAnAskUserCallItsRunAbandoned(t *testing.T) {
+	s := newEffectLoop(t, runEntryNamed("ask-user"))
+	f := s.f
+	const asked = "ASK_FIRST pick a plan"
+	s.mu.Lock()
+	s.marker, s.steps, s.pendingDecision = asked, 1, true
+	s.mu.Unlock()
+	if code := s.chat(asked); code != "" {
+		t.Fatalf("the asking turn failed with %s", code)
+	}
+	if err := f.service.AbortSessionRuns(f.ctx, f.botID, f.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	var results int
+	if err := f.pool.QueryRow(f.ctx, `SELECT status, (SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='tool') FROM user_input_requests WHERE session_id=$1`, f.sessionID).Scan(&status, &results); err != nil {
+		t.Fatal(err)
+	}
+	if status != userinput.StatusCanceled || results != 0 {
+		t.Fatalf("request status=%q tool rows=%d, want the abort to cancel the call and leave it without a result", status, results)
+	}
+	// The conversation goes on after the call.
+	if _, err := f.pool.Exec(f.ctx, `UPDATE bot_history_messages SET created_at=created_at - interval '2 hours' WHERE session_id=$1`, f.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	f.persistHistory("after-", 12, 2800, time.Now().Add(-time.Hour))
+
+	summaries := f.summaries.Load()
+	if code := s.chat("NEXT_TURN after the abandoned question"); code != "" || f.summaries.Load() == summaries {
+		t.Fatalf("code=%q summaries=%d, want the turn answered after a summary", code, f.summaries.Load()-summaries)
+	}
+	var raw int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND compact_id IS NULL AND content::text LIKE '%ask_user%'`, f.sessionID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw != 0 {
+		t.Fatalf("%d ask_user rows stayed raw, want the closed call folded", raw)
 	}
 }
 
