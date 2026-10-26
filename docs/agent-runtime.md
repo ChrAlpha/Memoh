@@ -212,9 +212,14 @@ continuations use the same phase-aware application watchdog:
   when recovery returns. Cancellation and execution budgets still apply.
 
 Conversation messages only append between compaction events. A tool result is
-bounded once, when the tool returns (`tool_output_max_bytes`, 32 KiB by default, and
-`tool_output_max_lines`, keeping its head and tail), and every later request
-carries it as stored. No run prunes, stubs, or drops a stored conversation message
+bounded once, when the tool returns, keeping its head and tail, and every later
+request carries it as stored. Its bound is the tool's own (`tool_output_max_bytes`,
+32 KiB by default, and `tool_output_max_lines`) or its share of its step's bound,
+whichever is smaller. The results of one step together take at most half of what
+the run's request has beside its system prompt and tools, parallel results in
+equal shares, so a step always fits next to a summary and a fork that reads it
+has room to answer. A call run after its decision is the one result of the step
+it was deferred from. No run prunes, stubs, or drops a stored conversation message
 it already sent. Dynamic background-task snapshots and before-model hooks keep
 their existing refresh behavior.
 When the next call does not fit, a run armed for in-run compaction folds its
