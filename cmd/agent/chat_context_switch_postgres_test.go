@@ -102,6 +102,8 @@ type effectLoop struct {
 	downFrom            int32
 	// resultBytes sizes each effect's result; zero keeps the default.
 	resultBytes int
+	// parallel is how many effects one step calls at once; zero is one.
+	parallel int
 	// prose fills each result with words the summarizer reads instead of a
 	// repeated character run it treats as a media blob.
 	prose bool
@@ -336,31 +338,41 @@ func (s *effectLoop) serve(w http.ResponseWriter, body []byte) {
 	s.folds = append(s.folds, s.f.summaries.Load())
 	s.runs = append(s.runs, s.activeRun())
 	reply := fmt.Sprintf("REPLY_%03d", len(s.requests))
-	call, arguments := "", ""
+	var calls []any
+	addCall := func(name, arguments string) {
+		id := fmt.Sprintf("call_%03d", len(s.requests))
+		if len(calls) > 0 {
+			id += fmt.Sprintf("_%d", len(calls))
+		}
+		calls = append(calls, map[string]any{"index": len(calls), "id": id, "type": "function", "function": map[string]any{"name": name, "arguments": arguments}})
+	}
 	if s.marker != "" && strings.Contains(request, s.marker) {
 		switch {
 		case s.pendingDecision && s.calls >= s.decisionAfter:
-			s.pendingDecision, call, arguments = false, "exec", `{"command":"ls"}`
+			s.pendingDecision = false
 			if s.askUser {
-				call, arguments = "ask_user", `{"questions":[{"text":"How should we proceed?","kind":"text"}]}`
+				addCall("ask_user", `{"questions":[{"text":"How should we proceed?","kind":"text"}]}`)
+			} else {
+				addCall("exec", `{"command":"ls"}`)
 			}
 		case s.calls < s.steps:
-			s.calls++
-			call, arguments = "numbered_effect", fmt.Sprintf(`{"index":%d}`, s.calls)
+			for range max(s.parallel, 1) {
+				if s.calls == s.steps {
+					break
+				}
+				s.calls++
+				addCall("numbered_effect", fmt.Sprintf(`{"index":%d}`, s.calls))
+			}
 		}
 	}
-	id := fmt.Sprintf("call_%03d", len(s.requests))
 	hold := s.hold
 	s.mu.Unlock()
 	if hold != nil && strings.Contains(request, busyInput) {
 		<-hold
 	}
 	delta, finish := map[string]any{"role": "assistant", "content": reply}, "stop"
-	if call != "" {
-		delta = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{
-			"index": 0, "id": id, "type": "function", "function": map[string]any{"name": call, "arguments": arguments},
-		}}}
-		finish = "tool_calls"
+	if len(calls) > 0 {
+		delta, finish = map[string]any{"role": "assistant", "tool_calls": calls}, "tool_calls"
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	for _, choice := range []map[string]any{{"index": 0, "delta": delta, "finish_reason": nil}, {"index": 0, "delta": map[string]any{}, "finish_reason": finish}} {
