@@ -50,14 +50,34 @@ that comes back without a durable cursor still answers the input of a run that
 failed after committing steps. The answer, the completed step that calls no
 tool, is that proof.
 
-`compaction.Service.Compact` executes one event that folds the summaries of the
-session's active checkpoint and every eligible source into one rolling summary. A pass folds what one
-summarizer call can read; the event passes again only for what that call could
-not, and each further pass absorbs the summary before it. The current request and
-steers are verbatim anchors, not independent summary segments. The latest
-tool/reasoning closure is protected. At approval or ask_user resume, the deferred
-call/result is the tail; earlier committed work remains eligible. The summarizer
-sees anchors inline but never folds them.
+An armed run compacts with `compaction.Service.Fold`: one event over the
+request the run sends next, whose tail, the latest committed step and
+everything after it, stays verbatim after the summary. Each pass forks that
+request before its tail and asks the run's own model for the summary that
+replaces everything foldable there, the active checkpoint's summaries
+included. The fork keeps the run's system prompt, tools, cache key and
+reasoning settings and ends with one compaction instruction, so the summarizer
+reads what it replaces in place and the fork shares the run's prompt cache. It
+streams outside the run's call observer, and a stream that sends nothing for
+the run's model window is cut off; a transient failure is asked once more, and
+an answer that calls a tool once more with a firmer instruction. A fork that
+does not fit the window reads a shorter prefix ending at a tool-group boundary,
+and the event passes again over the request the native runtime spliced, each
+pass absorbing the summary before it. Every message of the request names what
+it renders: a history row, an inbound message or a summary. The run's query
+names the row that holds the run's request, which admission or the run's first
+step writes; runtime context the run rebuilds for every request names nothing
+and stays where it is. The run's input and steers are verbatim anchors, kept
+newest first within a cap, which the summarizer reads but never folds.
+
+Before a run's first step, `compaction.Service.Compact` executes one event that
+folds the summaries of the session's active checkpoint and every eligible
+source into one rolling summary. A pass folds what one summarizer call can
+read; the event passes again only for what that call could not, and each
+further pass absorbs the summary before it. The current request is a verbatim
+anchor, not an independent summary segment. The latest tool/reasoning closure
+is protected. At approval or ask_user resume, the deferred call/result is the
+tail; earlier committed work remains eligible.
 
 The native runtime applies each committed fold to its own request snapshot by
 `turn.PlaceSummary`: messages the fold does not cover keep their bytes, and

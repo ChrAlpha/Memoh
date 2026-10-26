@@ -416,3 +416,7 @@ func TestDiscussSummariesOverTheModelBudgetAreCompactedInTheRun(t *testing.T) {
 		t.Fatalf("recompose=%v errors=%v compactions=%d provider=%d, want the summaries folded once before dispatch", recomposed, failures, len(compactor.configs), provider.callCount())
 	}
 }
+
+func (*discussBudgetCompactor) Fold(context.Context, compaction.Event) ([]compaction.Pass, error) {
+	return nil, errors.New("pre-turn recovery compacts history")
+}

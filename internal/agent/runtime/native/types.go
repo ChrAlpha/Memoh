@@ -233,6 +233,10 @@ type RunConfig struct {
 	SwitchContext     func(context.Context, ContextSwitch) (string, error)
 	ContextProvenance []MessageProvenance
 	contextSwitch     *contextSwitchState
+	// ModelIdleWindow is the silence the run's watchdog allows a model
+	// request. The watchdog does not watch a compaction event, so each fork
+	// request of one ends after as long a silence; zero is five minutes.
+	ModelIdleWindow time.Duration
 
 	// BackgroundManager provides access to the background task system.
 	// When non-nil, the agent loop refreshes running task summaries at step

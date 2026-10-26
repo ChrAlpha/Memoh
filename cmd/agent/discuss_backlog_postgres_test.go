@@ -45,6 +45,37 @@ import (
 // summaryLimitPattern reads the summary bound the compaction prompt states.
 var summaryLimitPattern = regexp.MustCompile(`must stay under (\d+) tokens`)
 
+// summaryRequest reports whether a provider request asks for a summary: the
+// compaction model's own request, which does not stream, or a fork of the
+// run's request, which ends with the compaction instruction. stream is
+// whether the answer is expected as a stream.
+func summaryRequest(body []byte) (summarizes, stream bool, err error) {
+	var request struct {
+		Stream   bool              `json:"stream"`
+		Messages []json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &request); err != nil {
+		return false, false, err
+	}
+	n := len(request.Messages)
+	fork := n > 0 && bytes.Contains(request.Messages[n-1], []byte("[Context compaction]"))
+	return !request.Stream || fork, request.Stream, nil
+}
+
+// writeAnswer answers a chat completion request with text that finishes
+// naturally, as a stream when the request asked for one.
+func writeAnswer(w http.ResponseWriter, stream bool, id, text string) {
+	content, _ := json.Marshal(text)
+	if stream {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, `data: {"id":%q,"object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":%s},"finish_reason":null}]}`+"\n\n"+
+			`data: {"id":%q,"object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n", id, content, id)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"id":%q,"object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":%s},"finish_reason":"stop"}]}`, id, content)
+}
+
 type recordingFailureBroadcaster struct {
 	failures chan string
 }
@@ -109,22 +140,19 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 			t.Error(err)
 			return
 		}
-		var request struct {
-			Stream bool `json:"stream"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
+		summarizes, stream, err := summaryRequest(body)
+		if err != nil {
 			t.Error(err)
 			return
 		}
-		if request.Stream {
+		if !summarizes {
 			f.modelCalls.Add(1)
 			f.lastRequest.Store(string(body))
 			if f.stream != nil {
 				f.stream(w, body)
 				return
 			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, "data: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"BACKLOG_OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+			writeAnswer(w, stream, "reply", "BACKLOG_OK")
 			return
 		}
 		f.summaries.Add(1)
@@ -140,9 +168,7 @@ func newBacklogFixture(t *testing.T) *backlogFixture {
 			limit, _ := strconv.Atoi(string(stated[1]))
 			summary += strings.Repeat(" kept", limit*4/5-len(summary)/5)
 		}
-		content, _ := json.Marshal(summary)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":%s},"finish_reason":"stop"}]}`, content)
+		writeAnswer(w, stream, "summary", summary)
 	}))
 	t.Cleanup(server.Close)
 	f.providerURL = server.URL

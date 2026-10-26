@@ -122,7 +122,7 @@ func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolve
 	// no longer fits. A retry or edit folds what its request renders like
 	// any other run: the history before its cutoff, and the steps of the
 	// attempt its first step selected.
-	if committer != nil && s.compactionService != nil && s.settingsService != nil {
+	if committer != nil && s.compactionService != nil {
 		cfg.SwitchContext = s.switchContext(req, committer, cfg.CurrentModelUUID)
 	}
 	return committer
@@ -431,8 +431,9 @@ func (c *agentStepCommitter) inputSources() []turn.ContextMessageSource {
 }
 
 // currentSources names sources the run rendered by the rows that hold them
-// now: a retry's request by the copy its first step wrote, with the same
-// content.
+// now: the run's request by the row admission persisted or its first step
+// wrote, and a retry's request by the copy its first step wrote, with the
+// same content.
 func (c *agentStepCommitter) currentSources(sources []turn.ContextMessageSource) []turn.ContextMessageSource {
 	out := slices.Clone(sources)
 	if c == nil {
@@ -441,7 +442,11 @@ func (c *agentStepCommitter) currentSources(sources []turn.ContextMessageSource)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i, source := range out {
-		if c.requestCopy != "" && source.Kind == "history" && source.ID == c.retriedRequest {
+		switch {
+		case source.Kind != "history":
+		case source == requestSource && len(c.inputSourceIDs) > 0:
+			out[i] = turn.ContextMessageSource{Kind: "history", ID: c.inputSourceIDs[0]}
+		case c.requestCopy != "" && source.ID == c.retriedRequest:
 			out[i].ID = c.requestCopy
 		}
 	}

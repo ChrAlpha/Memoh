@@ -683,3 +683,11 @@ func TestPausesIdleDuringInRunCompaction(t *testing.T) {
 		}
 	})
 }
+
+func (*recoveryCompactionRunner) Fold(context.Context, compaction.Event) ([]compaction.Pass, error) {
+	return nil, errors.New("pre-turn recovery compacts history")
+}
+
+func (*delayedRecoveryCompactor) Fold(context.Context, compaction.Event) ([]compaction.Pass, error) {
+	return nil, errors.New("pre-turn recovery compacts history")
+}

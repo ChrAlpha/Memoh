@@ -29,7 +29,11 @@ type chatHistoryLayout struct {
 	usePipeline bool
 }
 
+// pauseIdleDuringBudgetRecovery pauses the watchdog while the run recovers
+// its context budget, work that owns its bound: a compaction fork request
+// ends after as long a silence as the watchdog allows a model request.
 func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) native.RunConfig {
+	cfg.ModelIdleWindow = idle.modelWindow()
 	if switchContext := cfg.SwitchContext; switchContext != nil {
 		cfg.SwitchContext = func(ctx context.Context, sw native.ContextSwitch) (string, error) {
 			idle.Pause()
@@ -143,6 +147,22 @@ func (l chatHistoryLayout) availableHistoryBudget(cfg native.RunConfig) (int, in
 	return max(0, available), pressure
 }
 
+// provenanceAmong is the provenance of messages, in order, as provenance
+// names it.
+func provenanceAmong(provenance []native.MessageProvenance, messages []sdk.Message) []native.MessageProvenance {
+	var out []native.MessageProvenance
+	next := 0
+	for _, message := range messages {
+		for j := next; j < len(provenance); j++ {
+			if reflect.DeepEqual(provenance[j].Message, message) {
+				out, next = append(out, provenance[j]), j+1
+				break
+			}
+		}
+	}
+	return out
+}
+
 func (l chatHistoryLayout) replaceHistory(ctx context.Context, cfg native.RunConfig, req ChatRequest, history []ModelMessage, records []historyfrag.HistoryRecord) (native.RunConfig, error) {
 	if l.forkCount < 0 || l.historyCount < l.forkCount || l.historyCount > len(cfg.Messages) {
 		return cfg, errors.New("context recovery history boundary is invalid")
@@ -160,7 +180,10 @@ func (l chatHistoryLayout) replaceHistory(ctx context.Context, cfg native.RunCon
 	cfg.ContextMemoryMessageIndex = shiftRecoveryIndex(cfg.ContextMemoryMessageIndex, l.historyCount, delta)
 	cfg.ContextCurrentUserMessageIndex = shiftRecoveryIndex(cfg.ContextCurrentUserMessageIndex, l.historyCount, delta)
 	cfg.ContextFrags = historyContextFragsForMessages(messages, records)
-	cfg.ContextProvenance = contextProvenance(history, records, append(compactionProtectedSources(req), req.continuationAnchors...))
+	// The messages after the history stay as they were, and so does what
+	// they render.
+	cfg.ContextProvenance = append(contextProvenance(history, records, append(compactionProtectedSources(req), req.continuationAnchors...)),
+		provenanceAmong(old.ContextProvenance, old.Messages[l.historyCount:])...)
 	cfg.ForkContextSourceMessageIDs = make([]string, l.forkCount, len(cfg.Messages))
 	cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, historySourceMessageIDsForMessages(history, records)...)
 	copy(cfg.ForkContextSourceMessageIDs[:l.forkCount], old.ForkContextSourceMessageIDs[:min(l.forkCount, len(old.ForkContextSourceMessageIDs))])
@@ -188,6 +211,12 @@ func (l chatHistoryLayout) replaceHistory(ctx context.Context, cfg native.RunCon
 			return old, errors.New("context recovery changed the current request")
 		}
 		cfg.Messages[*current] = old.Messages[*index]
+		for j := range cfg.ContextProvenance {
+			if reflect.DeepEqual(cfg.ContextProvenance[j].Message, candidate) {
+				cfg.ContextProvenance[j].Message = original
+				break
+			}
+		}
 		cfg.ForkContextSourceMessageIDs[*current] = ""
 		if *index < len(old.ForkContextSourceMessageIDs) {
 			cfg.ForkContextSourceMessageIDs[*current] = old.ForkContextSourceMessageIDs[*index]

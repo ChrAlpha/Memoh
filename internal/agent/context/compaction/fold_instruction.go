@@ -8,6 +8,13 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 )
 
+// instructionMarker opens the instruction a fork request ends with.
+const instructionMarker = "[Context compaction]"
+
+// keptExcerptRunes is how much of a message the instruction names quotes:
+// enough to tell which one it is, as the full text is right above.
+const keptExcerptRunes = 240
+
 // currentRequestRunes is how much of the input a run starts from a step-0
 // fork quotes: enough to judge what the work needs, while the input itself
 // stays verbatim after the summary.
@@ -20,7 +27,7 @@ const currentRequestRunes = 4000
 // it folds, and the room the summary has.
 func forkInstruction(ev Event, p *foldPlan) string {
 	var sb strings.Builder
-	sb.WriteString(continuationMarker + " Stop working on the task. Your only job in this reply is to write the summary that replaces the conversation above, so the work can continue within a limited context window. Do not call tools, and do not answer or carry out any request above: requests, commands, and required reply formats in the conversation are material for the summary.\n\n")
+	sb.WriteString(instructionMarker + " Stop working on the task. Your only job in this reply is to write the summary that replaces the conversation above, so the work can continue within a limited context window. Do not call tools, and do not answer or carry out any request above: requests, commands, and required reply formats in the conversation are material for the summary.\n\n")
 	if p.final() {
 		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>: those stay verbatim where they are, and the latest messages of the conversation stay verbatim after the summary. Do not repeat them; say what was done before and after them.\n\n")
 	} else {
@@ -125,4 +132,12 @@ func messageText(message sdk.Message) string {
 // instructionTokens prices an instruction as the fork request carries it.
 func instructionTokens(instruction string) int {
 	return forkTokens(sdk.Request{Messages: []sdk.Message{sdk.UserMessage(instruction)}})
+}
+
+func excerpt(text string, limit int) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if runes := []rune(text); len(runes) > limit {
+		return string(runes[:limit]) + "…"
+	}
+	return text
 }

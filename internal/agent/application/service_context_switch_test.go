@@ -45,6 +45,20 @@ func TestBudgetRecoveryRetainsContinuationAnchors(t *testing.T) {
 	}
 }
 
+// A reload replaces the history a run renders and keeps the messages after
+// it, the run's query among them, with what they render.
+func TestBudgetRecoveryKeepsWhatTheMessagesAfterTheHistoryRender(t *testing.T) {
+	older := []ModelMessage{{Role: "user", Content: turn.NewTextContent("older")}, {Role: "assistant", Content: turn.NewTextContent("older answer")}}
+	query := native.MessageProvenance{Message: sdk.UserMessage("question"), Sources: []turn.ContextMessageSource{requestSource}, Anchor: true}
+	cfg := native.RunConfig{Messages: append(modelMessagesToSDKMessages(older), query.Message), ContextProvenance: []native.MessageProvenance{query}}
+	summary := []ModelMessage{{Role: "user", Content: turn.NewTextContent("<summary>\nolder\n</summary>")}}
+	records := []historyfrag.HistoryRecord{{SourceKind: historyfrag.SourceCompactionLog, Ref: contextfrag.ContextRef{ID: "a1"}, ModelMessage: summary[0]}}
+	got, err := (chatHistoryLayout{historyCount: 2}).replaceHistory(t.Context(), cfg, ChatRequest{}, summary, records)
+	if err != nil || len(got.ContextProvenance) != 2 || got.ContextProvenance[0].Sources[0].ID != "a1" || !reflect.DeepEqual(got.ContextProvenance[1], query) {
+		t.Fatalf("provenance after reload = %+v err=%v, want the summary and the query", got.ContextProvenance, err)
+	}
+}
+
 func TestContextProvenanceSurvivesToolResultNormalization(t *testing.T) {
 	t.Parallel()
 
@@ -161,21 +175,34 @@ func TestContextProvenanceNamesWhatEachMessageRenders(t *testing.T) {
 }
 
 type switchRunner struct {
-	cfg    compaction.TriggerConfig
+	event  compaction.Event
 	passes []compaction.Pass
 	err    error
 }
 
-func (r *switchRunner) Compact(_ context.Context, cfg compaction.TriggerConfig) ([]compaction.Pass, error) {
-	r.cfg = cfg
-	return r.passes, r.err
+func (*switchRunner) Compact(context.Context, compaction.TriggerConfig) ([]compaction.Pass, error) {
+	return nil, errors.New("an armed run folds its request")
 }
 
-// The event an armed run asks for reads the sources its request renders, not
-// a window of the session, keeps the run's input and steers in place and its
-// latest step outside the history budget, and splices every pass it commits
-// into the request, which must then fit. A failed event names its reason.
-func TestSwitchContextFoldsTheRequestView(t *testing.T) {
+// Fold commits its passes the way the engine does: each is spliced into the
+// caller's request as it commits.
+func (r *switchRunner) Fold(_ context.Context, ev compaction.Event) ([]compaction.Pass, error) {
+	r.event = ev
+	if r.err != nil {
+		return nil, r.err
+	}
+	for _, pass := range r.passes {
+		ev.Request, ev.Sources, ev.Cut = ev.Apply(pass)
+	}
+	return r.passes, nil
+}
+
+// The event an armed run asks for forks the request the run holds: its
+// sources as the rows hold them, the run's input and steers kept in place,
+// the latest step as the tail, and the run's own model as summarizer. Every
+// pass it commits is spliced into the request, which must then fit. A failed
+// event names its reason.
+func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
 	t.Parallel()
 
 	rows := func(ids ...string) []turn.ContextMessageSource {
@@ -186,8 +213,11 @@ func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 		return sources
 	}
 	passes := []compaction.Pass{
-		{ArtifactID: "a1", Summary: "first", Covered: rows("old-user")},
-		{ArtifactID: "a2", Summary: "second", Covered: rows("old-user", "call"), Absorbed: []string{"a1"}},
+		{ArtifactID: "a1", Summary: "first", Covered: rows("old-user"), More: true},
+		{ArtifactID: "a2", Summary: "second", Covered: rows("call"), Absorbed: []string{"a1"}},
+	}
+	provenance := []*native.MessageProvenance{
+		{Sources: rows("old-user")}, {Sources: rows("request"), Anchor: true}, {Sources: rows("call")}, nil, {Sources: rows("steer")}, {Sources: rows("latest")},
 	}
 	for _, tc := range []struct {
 		name   string
@@ -205,28 +235,38 @@ func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 			t.Parallel()
 			service, _ := newControllerPolicyService(t)
 			runner := &switchRunner{passes: passes, err: tc.err}
-			if tc.err != nil {
-				runner.passes = nil
-			}
 			service.compactionService = runner
-			committer := &agentStepCommitter{inputSourceIDs: []string{"input"}}
+			committer := &agentStepCommitter{inputSourceIDs: []string{"steer"}}
 			var folds []native.ContextFold
+			request := sdk.Request{Model: "run-model", Messages: make([]sdk.Message, len(provenance))}
+			summarized := false
 			sw := native.ContextSwitch{
-				View: rows("old-user", "request", "call", "steer", "latest"), Anchors: rows("request", "steer"), Tail: rows("latest"),
-				HistoryBudgetTokens: 900, UsageTokens: 3000, AllowanceTokens: 2000,
-				Fold: func(fold native.ContextFold) int {
+				Request: request, Provenance: provenance, Cut: 5,
+				UsageTokens: 3000, AllowanceTokens: 2000, WindowTokens: 4000, OutputTokens: 1000,
+				Summarize: func(context.Context, sdk.Request) (sdk.ModelResult, error) {
+					summarized = true
+					return sdk.ModelResult{}, nil
+				},
+				Fold: func(fold native.ContextFold) native.ContextSplice {
 					folds = append(folds, fold)
-					return 3000 - tc.saved*len(folds)
+					return native.ContextSplice{Request: request, Provenance: provenance, Cut: 5, Tokens: 3000 - tc.saved*len(folds)}
 				},
 			}
 			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
 
-			detail, err := service.switchContext(req, committer, "")(t.Context(), sw)
-			cfg := runner.cfg
-			tail := turn.ContextMessageSource{Kind: "history", ID: "latest", Current: true}
-			if !reflect.DeepEqual(cfg.View, sw.View) || !reflect.DeepEqual(cfg.Anchors, rows("request", "steer", "input")) ||
-				!reflect.DeepEqual(cfg.ProtectedSources, []turn.ContextMessageSource{tail}) || cfg.HistoryBudgetTokens != 900 {
-				t.Fatalf("event config view=%v anchors=%v protected=%v budget=%d", cfg.View, cfg.Anchors, cfg.ProtectedSources, cfg.HistoryBudgetTokens)
+			detail, err := service.switchContext(req, committer, "model-row")(t.Context(), sw)
+			ev := runner.event
+			anchors := []bool{false, true, false, false, true, false}
+			for i, source := range ev.Sources {
+				if source.Anchor != anchors[i] || (provenance[i] == nil) != (len(source.Sources) == 0) {
+					t.Fatalf("source %d = %+v, want anchor=%v and runtime context only where the run rebuilds it", i, source, anchors[i])
+				}
+			}
+			if ev.Cut != 5 || ev.Window != 4000 || ev.MaxOutputTokens != 1000 || ev.Allowance != 2000 || ev.ModelRecordID != "model-row" || ev.Request.Model != "run-model" {
+				t.Fatalf("event = %+v, want the run's request, window, output and allowance", ev)
+			}
+			if _, _ = ev.Summarizer(t.Context(), sdk.Request{}); !summarized {
+				t.Fatal("the event does not ask the run's own model")
 			}
 			if tc.want == nil {
 				if err != nil || len(folds) != 2 || folds[1].Artifact != "a2" || !reflect.DeepEqual(folds[1].Summary, compaction.SummaryMessage("second")) ||
@@ -243,8 +283,8 @@ func TestSwitchContextFoldsTheRequestView(t *testing.T) {
 }
 
 // A retry renders its input from the request it replaces, which its first
-// step hides; the event reads and keeps in place the copy that step wrote,
-// with the same content.
+// step hides; the event folds onto and keeps in place the copy that step
+// wrote, with the same content.
 func TestSwitchContextReadsARetriedRequestFromItsCopy(t *testing.T) {
 	t.Parallel()
 
@@ -254,19 +294,59 @@ func TestSwitchContextReadsARetriedRequestFromItsCopy(t *testing.T) {
 	committer := &agentStepCommitter{inputSourceIDs: []string{"copy"}, retriedRequest: "request", requestCopy: "copy"}
 	request := turn.ContextMessageSource{Kind: "history", ID: "request", ContentHash: "h"}
 	older := turn.ContextMessageSource{Kind: "history", ID: "older"}
+	provenance := []*native.MessageProvenance{{Sources: []turn.ContextMessageSource{older}}, {Sources: []turn.ContextMessageSource{request}, Anchor: true}, {Sources: []turn.ContextMessageSource{{Kind: "history", ID: "latest"}}}}
 	sw := native.ContextSwitch{
-		View: []turn.ContextMessageSource{older, request}, Anchors: []turn.ContextMessageSource{request},
-		Tail: []turn.ContextMessageSource{{Kind: "history", ID: "latest"}}, HistoryBudgetTokens: 900, UsageTokens: 3000, AllowanceTokens: 2000,
-		Fold: func(native.ContextFold) int { return 1000 },
+		Request: sdk.Request{Messages: make([]sdk.Message, 3)}, Provenance: provenance, Cut: 2, UsageTokens: 3000, AllowanceTokens: 2000,
+		Fold: func(native.ContextFold) native.ContextSplice { return native.ContextSplice{Tokens: 1000} },
 	}
 	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
 	if _, err := service.switchContext(req, committer, "")(t.Context(), sw); err != nil {
 		t.Fatal(err)
 	}
 	copied := turn.ContextMessageSource{Kind: "history", ID: "copy", ContentHash: "h"}
-	if !reflect.DeepEqual(runner.cfg.View, []turn.ContextMessageSource{older, copied}) ||
-		!reflect.DeepEqual(runner.cfg.Anchors, []turn.ContextMessageSource{copied, {Kind: "history", ID: "copy"}}) ||
-		!reflect.DeepEqual(sw.View, []turn.ContextMessageSource{older, request}) {
-		t.Fatalf("view=%v anchors=%v run view=%v, want the copy read and kept in place of the hidden request", runner.cfg.View, runner.cfg.Anchors, sw.View)
+	sources := runner.event.Sources
+	if !reflect.DeepEqual(sources[0].Sources, []turn.ContextMessageSource{older}) || !reflect.DeepEqual(sources[1].Sources, []turn.ContextMessageSource{copied}) || !sources[1].Anchor ||
+		!reflect.DeepEqual(provenance[1].Sources, []turn.ContextMessageSource{request}) {
+		t.Fatalf("sources=%+v run provenance=%+v, want the copy folded and kept in place of the hidden request", sources, provenance[1])
+	}
+}
+
+// The run's query renders the row that holds its request: the event names
+// that row once the run's first step wrote it, so a fold reads the request
+// and keeps it in place before the summary it commits.
+func TestSwitchContextNamesTheRunsRequestByItsRow(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		inputs []string
+		want   turn.ContextMessageSource
+	}{
+		{name: "written", inputs: []string{"request-row", "steer-row"}, want: turn.ContextMessageSource{Kind: "history", ID: "request-row"}},
+		{name: "not written yet", want: requestSource},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			service, _ := newControllerPolicyService(t)
+			runner := &switchRunner{passes: []compaction.Pass{{ArtifactID: "a1", Summary: "s"}}}
+			service.compactionService = runner
+			committer := &agentStepCommitter{inputSourceIDs: tc.inputs}
+			provenance := []*native.MessageProvenance{
+				{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "older"}}},
+				{Sources: []turn.ContextMessageSource{requestSource}, Anchor: true},
+				{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "latest"}}},
+			}
+			sw := native.ContextSwitch{
+				Request: sdk.Request{Messages: make([]sdk.Message, 3)}, Provenance: provenance, Cut: 2, UsageTokens: 3000, AllowanceTokens: 2000,
+				Fold: func(native.ContextFold) native.ContextSplice { return native.ContextSplice{Tokens: 1000} },
+			}
+			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
+			if _, err := service.switchContext(req, committer, "")(t.Context(), sw); err != nil {
+				t.Fatal(err)
+			}
+			if source := runner.event.Sources[1]; !source.Anchor || !reflect.DeepEqual(source.Sources, []turn.ContextMessageSource{tc.want}) {
+				t.Fatalf("request source = %+v, want %+v kept in place", source, tc.want)
+			}
+		})
 	}
 }

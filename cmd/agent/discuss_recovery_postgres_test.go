@@ -54,23 +54,19 @@ func TestPostgresDiscussRecoveryPreservesBatchAcrossCompactorRestart(t *testing.
 			t.Error(err)
 			return
 		}
-		var request struct {
-			Stream bool `json:"stream"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
+		summarizes, stream, err := summaryRequest(body)
+		if err != nil {
 			t.Error(err)
 			return
 		}
-		if request.Stream {
+		if !summarizes {
 			modelCalls.Add(1)
 			lastRequest.Store(string(body))
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = fmt.Fprint(w, "data: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"DRIVER_RECOVERY_OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"reply\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
-		} else {
-			summaries.Add(1)
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"Earlier history preserved."},"finish_reason":"stop"}]}`)
+			writeAnswer(w, stream, "reply", "DRIVER_RECOVERY_OK")
+			return
 		}
+		summaries.Add(1)
+		writeAnswer(w, stream, "summary", "Earlier history preserved.")
 	}))
 	defer server.Close()
 	chatModel, providerID := uuid.NewString(), uuid.NewString()

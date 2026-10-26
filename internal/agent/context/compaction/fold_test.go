@@ -116,10 +116,11 @@ func (s *foldSession) request() request {
 }
 
 func (s *foldSession) event(r request, summarizer *scriptedSummarizer) Event {
+	req := sdk.Request{Model: "run-model", System: "You are the bot.", Messages: r.messages, Tools: []sdk.ToolDefinition{{Name: "read", Description: "read a file"}}}
 	return Event{
 		BotID:           s.botID,
 		SessionID:       s.session,
-		Request:         sdk.Request{Model: "run-model", System: "You are the bot.", Messages: r.messages, Tools: []sdk.ToolDefinition{{Name: "read", Description: "read a file"}}},
+		Request:         req,
 		Sources:         r.sources,
 		Cut:             r.cut,
 		Window:          32000,
@@ -127,9 +128,9 @@ func (s *foldSession) event(r request, summarizer *scriptedSummarizer) Event {
 		MaxOutputTokens: 8000,
 		Summarizer:      summarizer.summarize,
 		Apply: func(pass Pass) (sdk.Request, []Source, int) {
-			messages, sources, cut := Splice(r.messages, r.sources, r.cut, pass)
-			r.messages, r.sources, r.cut = messages, sources, cut
-			return sdk.Request{Model: "run-model", System: "You are the bot.", Messages: messages}, sources, cut
+			messages, sources, cut := Splice(req.Messages, r.sources, r.cut, pass)
+			req.Messages, r.sources, r.cut = messages, sources, cut
+			return req, sources, cut
 		},
 	}
 }
@@ -159,7 +160,7 @@ func TestFoldForksTheRequestBeforeItsTail(t *testing.T) {
 		t.Fatalf("fork messages are not the run's prefix plus an instruction: %d messages", len(fork.Messages))
 	}
 	instruction := messageText(fork.Messages[r.cut])
-	for _, want := range []string{continuationMarker, "<kept>", "RUN_INPUT: fix the casts", "ref=" + r.rows[2].ID + ":0"} {
+	for _, want := range []string{instructionMarker, "<kept>", "RUN_INPUT: fix the casts", "ref=" + r.rows[2].ID + ":0"} {
 		if !strings.Contains(instruction, want) {
 			t.Fatalf("instruction lacks %q:\n%s", want, instruction)
 		}

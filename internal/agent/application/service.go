@@ -13,6 +13,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -100,6 +101,7 @@ type workspaceTargetResolver interface {
 
 type compactionRunner interface {
 	Compact(context.Context, compaction.TriggerConfig) ([]compaction.Pass, error)
+	Fold(context.Context, compaction.Event) ([]compaction.Pass, error)
 }
 
 // Service orchestrates chat with the internal agent.
@@ -401,6 +403,11 @@ func runIDForChatRequest(admittedRunID string) string {
 func contextBudgetFromChatModel(chatModel models.GetResponse) int {
 	return chatModel.Config.ContextBudgetMaxTokens()
 }
+
+// requestSource is what the run's materialized query renders: the row that
+// holds the run's request, which admission persisted or the run's first step
+// writes. The step committer names that row.
+var requestSource = turnpkg.ContextMessageSource{Kind: "history", Current: true}
 
 func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID string) {
 	if cfg == nil {
@@ -1426,6 +1433,11 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		index := len(cfg.Messages) - 1
 		cfg.ContextCurrentUserMessageIndex = &index
 		cfg.ContextQueryMaterialized = true
+		cfg.ContextProvenance = append(cfg.ContextProvenance, native.MessageProvenance{
+			Message: cfg.Messages[index],
+			Sources: []turnpkg.ContextMessageSource{requestSource},
+			Anchor:  true,
+		})
 	} else if len(cfg.InlineImages) > 0 || len(cfg.InlineAttachments) > 0 {
 		// Pipeline path: the user query is already embedded in the RC messages,
 		// but media parts are not rendered by the pipeline renderer. Inject the
@@ -1445,9 +1457,17 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			)
 			if currentIndex != nil {
 				i := *currentIndex
+				rendered := cfg.Messages[i]
 				cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
 				if i < len(cfg.ForkContextSourceMessageIDs) {
 					cfg.ForkContextSourceMessageIDs[i] = ""
+				}
+				// The input renders the same sources with its media.
+				for j := range cfg.ContextProvenance {
+					if reflect.DeepEqual(cfg.ContextProvenance[j].Message, rendered) {
+						cfg.ContextProvenance[j].Message = cfg.Messages[i]
+						break
+					}
 				}
 			} else {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))

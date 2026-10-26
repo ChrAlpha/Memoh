@@ -172,7 +172,6 @@ func (s *Service) doCompaction(ctx context.Context, sessionUUID pgtype.UUID, cfg
 		}
 	}
 	entries, keptAfter := keptAfterSummary(entries)
-	kept := append(keptInPlace(entries), keptAfter...)
 	current = append(keptAfter, current...)
 	readTokens := entriesPromptCost(entries) + earlierCost
 	if readTokens > inputTokens {
@@ -192,12 +191,6 @@ func (s *Service) doCompaction(ctx context.Context, sessionUUID pgtype.UUID, cfg
 	summarizerTokens := contextfrag.ProviderEnvelopeTokens(systemPrompt, []sdk.Message{sdk.UserMessage(userPrompt)}, nil)
 	if summarizerTokens+maxTokens > cfg.SummaryWindowTokens {
 		return Pass{}, false, failed(ReasonInputOverflow, fmt.Errorf("%w: request_tokens=%d max_tokens=%d window=%d", errCompactionInputOverflow, summarizerTokens, maxTokens, cfg.SummaryWindowTokens))
-	}
-	// A pass that folds everything the request renders may ask for the
-	// summary at the end of that request instead.
-	var extended *sdk.Request
-	if len(remaining) == 0 {
-		extended = continuationRequest(cfg, buildContinuationPrompt(kept, toolResultRefs(toCompact), room), room.SummaryTokens, capability)
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -246,32 +239,11 @@ func (s *Service) doCompaction(ctx context.Context, sessionUUID pgtype.UUID, cfg
 		Messages:  sdkMessages,
 		MaxTokens: &maxTokens,
 	}
-	generate := func(request sdk.Request) (sdk.ModelResult, error) {
-		// A transient failure gets one immediate retry, or the wait the
-		// provider asks for; a rejected request is not made again.
-		return modelretry.Do(models.WithModelSession(ctx, cfg.SessionID), s.logger, "agent.compaction",
-			modelretry.Config{MaxAttempts: 1, FastAttempts: 1}, modelretry.Retryable,
-			func(ctx context.Context) (sdk.ModelResult, error) { return model.Generate(ctx, request) })
-	}
-	var result sdk.ModelResult
-	if extended != nil {
-		s.logger.InfoContext(ctx, "compaction: summary asked at the end of the run's request",
-			slog.String("session_id", cfg.SessionID),
-			slog.Int("request_tokens", contextfrag.ProviderEnvelopeTokens(extended.System, extended.Messages, extended.Tools)),
-			slog.Int("summarizer_request_tokens", summarizerTokens))
-		result, err = generate(*extended)
-		if err == nil && (len(result.ToolCalls) > 0 || result.FinishReason != sdk.FinishReasonStop || strings.TrimSpace(result.Text) == "") {
-			err = fmt.Errorf("finish_reason=%s tool_calls=%d", result.FinishReason, len(result.ToolCalls))
-		}
-		if err != nil && ctx.Err() == nil {
-			s.logger.WarnContext(ctx, "compaction: extended request gave no summary, asking the summarizer",
-				slog.String("session_id", cfg.SessionID), slog.Any("error", err))
-			extended = nil
-		}
-	}
-	if extended == nil {
-		result, err = generate(request)
-	}
+	// A transient failure gets one immediate retry, or the wait the provider
+	// asks for; a rejected request is not made again.
+	result, err := modelretry.Do(models.WithModelSession(ctx, cfg.SessionID), s.logger, "agent.compaction",
+		modelretry.Config{MaxAttempts: 1, FastAttempts: 1}, modelretry.Retryable,
+		func(ctx context.Context) (sdk.ModelResult, error) { return model.Generate(ctx, request) })
 	if err != nil {
 		return fail(failed(ReasonSummarizerFailed, err))
 	}
@@ -471,24 +443,4 @@ func (s *Service) completeLog(ctx context.Context, q dbstore.Queries, logID pgty
 		return err
 	}
 	return nil
-}
-
-// continuationRequest appends the summary instruction to the run's last
-// request. It preserves the prefix when the model is
-// unchanged and the request leaves enough room for the summary.
-func continuationRequest(cfg TriggerConfig, prompt string, summaryTokens, capability int) *sdk.Request {
-	c := cfg.Continuation
-	if c == nil || c.Model != cfg.ModelID {
-		return nil
-	}
-	base := contextfrag.ProviderEnvelopeTokens(c.System, c.Messages, c.Tools)
-	ask := contextfrag.ProviderEnvelopeTokens("", []sdk.Message{sdk.UserMessage(prompt)}, nil)
-	maxTokens := min(capability, cfg.SummaryWindowTokens-base-ask)
-	if maxTokens < summaryTokens {
-		return nil
-	}
-	request := *c
-	request.Messages = append(slices.Clip(c.Messages), sdk.UserMessage(prompt))
-	request.MaxTokens = &maxTokens
-	return &request
 }

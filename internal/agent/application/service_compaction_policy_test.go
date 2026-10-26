@@ -150,3 +150,7 @@ func TestCompactForBudgetBoundsALiveRequestByItsOwnTurn(t *testing.T) {
 func (*controllerQueries) UpgradeModelConfig(context.Context, sqlc.UpgradeModelConfigParams) (int64, error) {
 	return 0, nil
 }
+
+func (*recordingCompactionRunner) Fold(context.Context, compaction.Event) ([]compaction.Pass, error) {
+	return nil, errors.New("pre-turn recovery compacts history")
+}

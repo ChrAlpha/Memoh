@@ -23,23 +23,31 @@ type MessageProvenance struct {
 }
 
 // ContextSwitch is the compaction event an armed run asks for when the
-// request before a step does not fit its allowance. View is every source the
-// request renders, Anchors the ones it keeps in place, and Tail those of the
-// latest committed step, which stays with everything after it.
-// HistoryBudgetTokens is the room the request leaves for the summary and the
-// history before the tail. Fold applies a pass the event committed to the
-// request and reports the tokens it then takes.
+// request before a step does not fit its allowance. Request is that request,
+// Provenance what each of its messages renders (nil for runtime context the
+// run rebuilds), and Cut the first message of its tail: the latest committed
+// step and everything after it, which stays verbatim after the summary.
+// Summarize answers a fork request through the run's own model; Fold applies
+// a pass the event committed to the request and reports the request as it
+// then is.
 type ContextSwitch struct {
-	View                []turn.ContextMessageSource
-	Anchors             []turn.ContextMessageSource
-	Tail                []turn.ContextMessageSource
-	HistoryBudgetTokens int
-	UsageTokens         int
-	AllowanceTokens     int
-	Fold                func(ContextFold) int
-	// Previous is the request the run sent last: this one without the
-	// latest step.
-	Previous *sdk.Request
+	Request         sdk.Request
+	Provenance      []*MessageProvenance
+	Cut             int
+	UsageTokens     int
+	AllowanceTokens int
+	WindowTokens    int
+	OutputTokens    int
+	Summarize       func(context.Context, sdk.Request) (sdk.ModelResult, error)
+	Fold            func(ContextFold) ContextSplice
+}
+
+// ContextSplice is a request after the passes an event applied to it so far.
+type ContextSplice struct {
+	Request    sdk.Request
+	Provenance []*MessageProvenance
+	Cut        int
+	Tokens     int
 }
 
 // ContextFold is one pass an event committed: the summary that replaces the
@@ -136,31 +144,28 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	if tailStart < 0 {
 		return false, nil
 	}
-	previous := *params
-	previous.Messages = slices.Clone(params.Messages[:tailStart])
-	sw := ContextSwitch{Tail: slices.Clone(s.tail), UsageTokens: usage, AllowanceTokens: allowance, Previous: &previous}
-	var kept []sdk.Message
-	for i, p := range provenance {
-		if p != nil {
-			sw.View = append(sw.View, p.Sources...)
-			if p.Anchor {
-				sw.Anchors = append(sw.Anchors, p.Sources...)
-			}
-		}
-		if p == nil || p.Anchor || i >= tailStart {
-			kept = append(kept, params.Messages[i])
-		}
-	}
-	sw.HistoryBudgetTokens = allowance - contextfrag.ProviderEnvelopeTokens(params.System, kept, params.Tools)
-	splice := requestSplice{messages: params.Messages, provenance: provenance, from: make([]int, len(params.Messages)), tail: sw.Tail}
+	window, reserve := providerWindow(cfg)
+	splice := requestSplice{messages: params.Messages, provenance: provenance, from: make([]int, len(params.Messages)), tail: slices.Clone(s.tail), cut: tailStart}
 	for i := range splice.from {
 		splice.from[i] = i
 	}
 	tokens := usage
-	sw.Fold = func(fold ContextFold) int {
-		splice.apply(fold)
-		tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
-		return tokens
+	sw := ContextSwitch{
+		Request:         *params,
+		Provenance:      provenance,
+		Cut:             tailStart,
+		UsageTokens:     usage,
+		AllowanceTokens: allowance,
+		WindowTokens:    window,
+		OutputTokens:    reserve,
+		Summarize:       forkSummarizer(cfg.Model, cfg.ModelIdleWindow),
+		Fold: func(fold ContextFold) ContextSplice {
+			splice.apply(fold)
+			tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
+			request := *params
+			request.Messages = splice.messages
+			return ContextSplice{Request: request, Provenance: splice.provenance, Cut: splice.cut, Tokens: tokens}
+		},
 	}
 	detail, err := cfg.SwitchContext(ctx, sw)
 	if err == nil {
@@ -205,6 +210,8 @@ type requestSplice struct {
 	provenance []*MessageProvenance
 	from       []int
 	tail       []turn.ContextMessageSource
+	// cut is the first message of the tail.
+	cut int
 }
 
 // apply removes the messages whose every source the pass covers and places
@@ -238,13 +245,19 @@ func (sp *requestSplice) apply(fold ContextFold) {
 		return
 	}
 	summary := &MessageProvenance{Message: fold.Summary, Sources: []turn.ContextMessageSource{{Kind: "summary", ID: fold.Artifact}}}
-	next := requestSplice{tail: sp.tail}
+	next := requestSplice{tail: sp.tail, cut: -1}
 	for _, i := range order {
+		if i == sp.cut {
+			next.cut = len(next.messages)
+		}
 		if i < 0 {
 			next.messages, next.provenance, next.from = append(next.messages, fold.Summary), append(next.provenance, summary), append(next.from, -1)
 			continue
 		}
 		next.messages, next.provenance, next.from = append(next.messages, sp.messages[i]), append(next.provenance, sp.provenance[i]), append(next.from, sp.from[i])
+	}
+	if next.cut < 0 {
+		next.cut = len(next.messages)
 	}
 	*sp = next
 }

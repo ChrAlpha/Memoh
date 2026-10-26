@@ -636,10 +636,10 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 	}
 }
 
-// Even without provider cache usage, a fold asks for its summary
-// at the end of the request the run sent last instead of in a request of its
-// own: the same tools, cache key and messages, then the compaction request.
-func TestPostgresInRunFoldExtendsTheRunRequest(t *testing.T) {
+// A fold asks for its summary by forking the request the run sends next
+// before its latest step, which is the request the run sent last: the same
+// tools, cache key and messages, then the compaction request.
+func TestPostgresInRunFoldForksTheRunRequest(t *testing.T) {
 	const steps = 14
 	web := runEntryNamed("web")
 	s := newEffectLoop(t, web)
@@ -676,7 +676,7 @@ func TestPostgresInRunFoldExtendsTheRunRequest(t *testing.T) {
 				slices.EqualFunc(r.Messages, ask.Messages[:len(ask.Messages)-1], func(a, b json.RawMessage) bool { return string(a) == string(b) })
 		})
 		if !extends {
-			t.Fatalf("summary request %d does not extend a request the run sent", i+1)
+			t.Fatalf("summary request %d does not fork a request the run sent", i+1)
 		}
 	}
 }
@@ -946,12 +946,8 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	}
 	code, requests = s.run(entry, "SUMMARIZER_DOWN_INPUT", steps)
 	f.onSummary = nil
-	wantAttempts := []bool{false, false}
-	if len(summaryAttempts) > 0 && summaryAttempts[0] {
-		wantAttempts = []bool{true, true, false, false}
-	}
-	if code != "context.budget_unsatisfied" || !slices.Equal(summaryAttempts, wantAttempts) || len(s.effects) == 0 || len(s.effects) >= steps || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) {
-		t.Fatalf("summarizer down: code=%q summary_attempts=%v provider_calls=%d effects=%v, want budget_unsatisfied after each attempted summary path was retried once, with the effects so far run once", code, summaryAttempts, len(requests), s.effects)
+	if code != "context.budget_unsatisfied" || !slices.Equal(summaryAttempts, []bool{true, true}) || len(s.effects) == 0 || len(s.effects) >= steps || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) {
+		t.Fatalf("summarizer down: code=%q summary_attempts=%v provider_calls=%d effects=%v, want budget_unsatisfied after the fork request was retried once, with the effects so far run once", code, summaryAttempts, len(requests), s.effects)
 	}
 	var reasons, failedRows int
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, f.sessionID).Scan(&reasons); err != nil {

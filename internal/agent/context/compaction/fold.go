@@ -21,6 +21,7 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/models/modelretry"
 )
 
 // errCompactionInFlight marks an event that found another event of its
@@ -70,8 +71,8 @@ type Event struct {
 	// moves the session to the checkpoint its replacement keeps.
 	ReplacedTurnID string
 	Summarizer     Summarizer
-	// Apply splices a committed pass into the caller's request and returns
-	// the request, sources and cut the next pass reads.
+	// Apply splices every committed pass into the caller's request as it
+	// commits, and returns the request, sources and cut a further pass reads.
 	Apply func(Pass) (sdk.Request, []Source, int)
 }
 
@@ -128,10 +129,13 @@ func (s *Service) Fold(ctx context.Context, ev Event) ([]Pass, error) {
 			return passes, nil
 		}
 		passes = append(passes, pass)
-		if !pass.More || ev.Apply == nil {
+		if ev.Apply == nil {
 			return passes, nil
 		}
 		ev.Request, ev.Sources, ev.Cut = ev.Apply(pass)
+		if !pass.More {
+			return passes, nil
+		}
 	}
 }
 
@@ -239,16 +243,23 @@ func rendersCheckpoint(ev Event, parent checkpoint.Checkpoint) error {
 	return nil
 }
 
-// summarize asks for the summary. A model that answers with a tool call is
-// asked once more, with the same prefix and a firmer instruction; the answer
-// must finish naturally and say something.
+// summarize asks for the summary. A transient failure gets one immediate
+// retry, or the wait the provider asks for; a rejected request is not made
+// again. A model that answers with a tool call is asked once more, with the
+// same prefix and a firmer instruction; the answer must finish naturally and
+// say something.
 func (s *Service) summarize(ctx context.Context, ev Event, fork sdk.Request, plan foldPlan) (sdk.ModelResult, error) {
-	result, err := ev.Summarizer(models.WithModelSession(ctx, ev.SessionID), fork)
+	ask := func(fork sdk.Request) (sdk.ModelResult, error) {
+		return modelretry.Do(models.WithModelSession(ctx, ev.SessionID), s.logger, "agent.compaction",
+			modelretry.Config{MaxAttempts: 1, FastAttempts: 1}, modelretry.Retryable,
+			func(ctx context.Context) (sdk.ModelResult, error) { return ev.Summarizer(ctx, fork) })
+	}
+	result, err := ask(fork)
 	if err == nil && len(result.ToolCalls) > 0 {
 		s.logger.WarnContext(ctx, "compaction: the summarizer called a tool, asking again",
 			slog.String("session_id", ev.SessionID), slog.Int("tool_calls", len(result.ToolCalls)))
 		fork.Messages = append(slices.Clip(fork.Messages[:len(fork.Messages)-1]), sdk.UserMessage(plan.instruction+"\n\n"+noToolsReminder))
-		result, err = ev.Summarizer(models.WithModelSession(ctx, ev.SessionID), fork)
+		result, err = ask(fork)
 	}
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {

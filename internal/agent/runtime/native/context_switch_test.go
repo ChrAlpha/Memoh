@@ -101,38 +101,57 @@ func switchDetails(cfg RunConfig) []string {
 	return details
 }
 
-// The event sees what the request renders, keeps the input, the steer and the
-// latest step out of the fold, and the request the run sends next is the one
-// it had with the covered messages replaced by the summary at rule P: every
-// other message is the same message, in its order.
+// The event sees the request the run would send, what each of its messages
+// renders and where its tail starts, and the request the run sends next is
+// the one it had with the covered messages replaced by the summary at rule
+// P: every other message is the same message, in its order.
 func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
 	t.Parallel()
 
 	messages, provenance := switchRequest()
 	summary := sdk.UserMessage("<summary>\nnew\n")
+	want := []sdk.Message{messages[2], messages[3], messages[5], summary, messages[8], messages[9], messages[10]}
 	var seen ContextSwitch
+	var spliced ContextSplice
 	cfg, failure := armedRun(t, messages, provenance, []int{2, 3, 5, 8, 9, 10}, func(_ context.Context, sw ContextSwitch) (string, error) {
 		seen = sw
-		if tokens := sw.Fold(ContextFold{Artifact: "A1", Summary: summary, Covered: rowSources("h1", "h2", "c1", "r1"), Absorbed: []string{"A0"}}); tokens > sw.AllowanceTokens {
-			t.Errorf("the spliced request takes %d tokens, over its %d allowance", tokens, sw.AllowanceTokens)
-		}
+		spliced = sw.Fold(ContextFold{Artifact: "A1", Summary: summary, Covered: rowSources("h1", "h2", "c1", "r1"), Absorbed: []string{"A0"}})
 		return "trigger=in_run passes=1", nil
 	})
 	cfg.ContextCachePlan = contextfrag.CachePlan{StablePrefixHash: "compiled", StableMessageCount: 5, StablePrefixTokenEstimate: 4000}
 	params := prepareArmed(cfg, messages)
 
-	want := []sdk.Message{messages[2], messages[3], messages[5], summary, messages[8], messages[9], messages[10]}
 	if *failure != nil || !reflect.DeepEqual(params.Messages, want) {
 		t.Fatalf("failure=%v messages=%d, want the request spliced at rule P with every other message unchanged", *failure, len(params.Messages))
 	}
-	view := append(append([]turn.ContextMessageSource{{Kind: "summary", ID: "A0"}}, rowSources("h1")...), turn.ContextMessageSource{Kind: "external", ID: "rc1"})
-	view = append(view, rowSources("h2", "input", "c1", "r1", "steer", "c2", "r2")...)
-	if !reflect.DeepEqual(seen.View, view) || !reflect.DeepEqual(seen.Anchors, rowSources("input", "steer")) || !reflect.DeepEqual(seen.Tail, rowSources("c2", "r2")) {
-		t.Fatalf("view=%v anchors=%v tail=%v", seen.View, seen.Anchors, seen.Tail)
+	rendered := make([][]turn.ContextMessageSource, len(seen.Provenance))
+	var anchors []int
+	for i, p := range seen.Provenance {
+		if p != nil {
+			rendered[i] = p.Sources
+			if p.Anchor {
+				anchors = append(anchors, i)
+			}
+		}
 	}
-	kept := contextfrag.ProviderEnvelopeTokens("", []sdk.Message{messages[3], messages[5], messages[8], messages[9], messages[10]}, nil)
-	if seen.HistoryBudgetTokens != seen.AllowanceTokens-kept || !reflect.DeepEqual(switchDetails(cfg), []string{"trigger=in_run passes=1"}) {
-		t.Fatalf("history budget=%d (allowance %d, kept %d) details=%q", seen.HistoryBudgetTokens, seen.AllowanceTokens, kept, switchDetails(cfg))
+	sources := [][]turn.ContextMessageSource{
+		{{Kind: "summary", ID: "A0"}},
+		rowSources("h1"),
+		{{Kind: "external", ID: "rc1"}},
+		nil, rowSources("h2"),
+		rowSources("input"), rowSources("c1"), rowSources("r1"), rowSources("steer"), rowSources("c2"), rowSources("r2"),
+	}
+	if !reflect.DeepEqual(seen.Request.Messages, messages) || !reflect.DeepEqual(rendered, sources) || !reflect.DeepEqual(anchors, []int{5, 8}) || seen.Cut != 9 {
+		t.Fatalf("the event saw %d messages rendering %v, anchors %v and cut %d", len(seen.Request.Messages), rendered, anchors, seen.Cut)
+	}
+	if seen.WindowTokens != cfg.ContextManifest.BudgetPlan.Window || seen.UsageTokens <= seen.AllowanceTokens || seen.Summarize == nil {
+		t.Fatalf("window=%d usage=%d allowance=%d summarize=%v", seen.WindowTokens, seen.UsageTokens, seen.AllowanceTokens, seen.Summarize != nil)
+	}
+	if !reflect.DeepEqual(spliced.Request.Messages, want) || spliced.Cut != 5 || spliced.Tokens > seen.AllowanceTokens || spliced.Provenance[3].Sources[0].ID != "A1" {
+		t.Fatalf("splice = %d messages, cut %d, %d tokens over a %d allowance", len(spliced.Request.Messages), spliced.Cut, spliced.Tokens, seen.AllowanceTokens)
+	}
+	if !reflect.DeepEqual(switchDetails(cfg), []string{"trigger=in_run passes=1"}) {
+		t.Fatalf("details=%q", switchDetails(cfg))
 	}
 
 	cfg.Messages = messages
@@ -306,7 +325,7 @@ func TestArmedRunContinuesOnItsSplicedRequest(t *testing.T) {
 			} else if _, err := a.Generate(context.Background(), cfg); err != nil {
 				t.Fatal(err)
 			}
-			if len(requests) != 5 || len(events) != 1 || !reflect.DeepEqual(events[0].Tail, rowSources("s2.0", "s2.1")) {
+			if len(requests) != 5 || len(events) != 1 || events[0].Cut != 5 || !reflect.DeepEqual(events[0].Provenance[5].Sources, rowSources("s2.0")) {
 				t.Fatalf("provider calls=%d events=%d, want one event before the fourth call with the third step as its tail", len(requests), len(events))
 			}
 			spliced, next := requests[3].Messages, requests[4].Messages
