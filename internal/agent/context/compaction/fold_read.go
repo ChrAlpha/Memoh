@@ -1,6 +1,7 @@
 package compaction
 
 import (
+	"encoding/json"
 	"slices"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -43,15 +44,16 @@ func forkMessageCap(ev Event) int {
 	return max(ev.Window-envelope-ev.Allowance/summaryShareOfAllowance-forkInstructionReserve-minForkOutputTokens, minForkOutputTokens)
 }
 
-// cutForFork renders message within capTokens for a fork: its text and the
-// results it carries keep their head and tail, and the media it carries are
-// named instead of sent. Its role and its tool calls and results stay, so the
-// fork pairs them the way the request does.
+// cutForFork renders message within capTokens for a fork: its text, the
+// arguments of the calls it makes and the results it carries keep their head
+// and tail, and the media it carries are named instead of sent. Its role and
+// its tool calls and results stay, so the fork pairs them the way the request
+// does.
 func cutForFork(message sdk.Message, capTokens int) sdk.Message {
 	texts := 0
 	for _, part := range message.Content {
 		switch part.(type) {
-		case sdk.TextPart, sdk.ToolResultPart:
+		case sdk.TextPart, sdk.ToolResultPart, sdk.ToolCallPart:
 			texts++
 		}
 	}
@@ -67,6 +69,14 @@ func cutForFork(message sdk.Message, capTokens int) sdk.Message {
 			cut.Content = append(cut.Content, p)
 		case sdk.ToolResultPart:
 			p.Result = sdk.TextOutput(contextlimit.LimitString(p.Result.String(), "tool result", limit))
+			cut.Content = append(cut.Content, p)
+		case sdk.ToolCallPart:
+			if arguments := p.Input.String(); len(arguments) > limit.MaxBytes {
+				// The fork sends a call's arguments as a JSON object, so the
+				// cut ones travel as one string field of one.
+				encoded, _ := json.Marshal(map[string]string{"truncated_arguments": contextlimit.LimitString(arguments, "tool call arguments", limit)})
+				p.Input = sdk.ParseToolArguments(string(encoded))
+			}
 			cut.Content = append(cut.Content, p)
 		case sdk.ReasoningPart:
 			// A summary stands for what was said and done, not how it was

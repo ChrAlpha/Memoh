@@ -304,6 +304,33 @@ func TestFoldReadsAMessageLargerThanItsWindowByItsHeadAndTail(t *testing.T) {
 	}
 }
 
+// A call whose arguments are larger than the window is folded the same way:
+// the fork sends the head and tail of its arguments under the same call, so
+// its result still pairs with it.
+func TestFoldReadsACallWithArgumentsLargerThanItsWindow(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	content := "CONTENT_HEAD " + strings.Repeat("line of the file ", 8000) + " CONTENT_TAIL"
+	r.messages[2] = sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+		ToolCallID: "call_1", ToolName: "write", Input: sdk.ParseToolArguments(`{"path":"big.txt","content":` + strconv.Quote(content) + `}`),
+	}}}
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("A large file was written.")}}
+	ev := s.event(r, summarizer)
+	ev.Window, ev.Allowance, ev.MaxOutputTokens = 8000, 6000, 2000
+
+	passes, err := s.svc.Fold(context.Background(), ev)
+	if err != nil || len(passes) != 1 || !slices.Contains(passes[0].Covered, r.rows[1]) {
+		t.Fatalf("passes=%+v err=%v, want one pass that stands for the large call", passes, err)
+	}
+	fork := summarizer.requests[0]
+	call, ok := fork.Messages[2].Content[0].(sdk.ToolCallPart)
+	if !ok || call.ToolCallID != "call_1" || !call.Input.Valid() || forkTokens(fork) > ev.Window ||
+		!strings.Contains(call.Input.String(), "CONTENT_HEAD") || !strings.Contains(call.Input.String(), "CONTENT_TAIL") {
+		t.Fatalf("fork = %d tokens, call = %+v, want the call kept with the head and tail of its arguments", forkTokens(fork), fork.Messages[2])
+	}
+}
+
 // A summarizer that calls a tool is asked once more with the same prefix; a
 // second tool call fails the event.
 func TestFoldAsksAgainOnceWhenTheSummarizerCallsATool(t *testing.T) {

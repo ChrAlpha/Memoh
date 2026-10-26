@@ -69,9 +69,11 @@ failure is asked once more, and an answer that calls a tool once more with a
 firmer instruction. A fork that does not fit the window reads a shorter prefix
 ending at a tool-group boundary, and the event passes again over the request
 the native runtime spliced, each pass absorbing the summary before it. A
-message larger than a third of what the window has beside the system prompt
-and tools reaches the summarizer by its head and tail, so no message is too
-large to fold.
+message larger than what the window leaves one message beside the system
+prompt, tools, the longest summary, the instruction and the least output
+reaches the summarizer by its head and tail: its text, the arguments of its
+calls and its results. No message is too large to fold, and a step's results,
+bounded below half the room, reach the fork whole.
 
 Every message of the request names what it renders: a history row, an inbound
 or self-sent message, or a summary. The run's query names the row that holds
