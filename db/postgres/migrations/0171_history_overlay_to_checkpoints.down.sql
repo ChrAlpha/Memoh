@@ -127,5 +127,3 @@ BEGIN
   ALTER TABLE public.bot_sessions FORCE ROW LEVEL SECURITY;
 END
 $retire_summaries$;
-
-ALTER TABLE public.bots DROP COLUMN IF EXISTS history_checkpoints_since;

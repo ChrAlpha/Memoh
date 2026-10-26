@@ -5,13 +5,6 @@
 -- its context: its active summaries, with the rows in their span they left
 -- raw, become its checkpoint.
 
--- When each bot's history started being kept under checkpoints: this
--- migration's time for the bots it finds, its creation time for every later
--- one. A context row created before it was written while a sliding window
--- decided what a request saw, so nothing guarantees that a summary covers it
--- or that a request ever rendered it.
-ALTER TABLE public.bots ADD COLUMN IF NOT EXISTS history_checkpoints_since TIMESTAMPTZ NOT NULL DEFAULT now();
-
 -- Convert each session's overlay. Only a schema that still has it holds any:
 -- a fresh install builds the final schema in 0001 and the earlier
 -- migrations it replays write no rows.
