@@ -810,7 +810,7 @@ func TestPostgresInRunFoldForksTheRunRequest(t *testing.T) {
 // decision's result raw. Each result keeps within its step's bound, so it is
 // the progress together with the result that does not fit.
 func decisionAfterProgressScenario(t *testing.T, entry runEntry, s *effectLoop) {
-	s.decisionAfter, s.resultBytes, s.decisionResultBytes = 2, 6000, 7000
+	s.decisionAfter, s.resultBytes, s.decisionResultBytes = 2, 5000, 6000
 	code, requests := s.run(entry, loopInput, 4)
 	if code != "" || !slices.Equal(s.effects, []int{1, 2, 3, 4}) || len(requests) != 6 {
 		t.Fatalf("resume: code=%q effects=%v calls=%d, want all four effects completed once", code, s.effects, len(requests))
@@ -965,7 +965,7 @@ func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	summaries := f.summaries.Load()
 	// The result keeps within its step's bound; with the history before it,
 	// it does not fit.
-	s.resultBytes = 7000
+	s.resultBytes = 5500
 	code, requests := s.run(entry, loopInput, 1)
 	if code != "" || !slices.Equal(s.effects, []int{1}) || len(requests) != 2+entry.extra {
 		t.Fatalf("code=%q effects=%v provider_calls=%d summary_calls=%d, want the run answered after one effect", code, s.effects, len(requests), f.summaries.Load()-summaries)
@@ -973,7 +973,7 @@ func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	before, last := requests[len(requests)-2], requests[len(requests)-1]
 	summary := summaryContents(t, last)
 	if strings.Contains(before, loopSummary) || f.summaries.Load()-summaries != 1 || len(summary) != 1 || strings.Count(last, loopInput) != 1 ||
-		!strings.Contains(last, "TOOL_RESULT_001 ") || strings.Contains(last, "PREFIX_TURN_0 ") || strings.Contains(last, "[tool result pruned") {
+		!strings.Contains(last, effectResult(1, s.resultBytes)) || strings.Contains(last, "PREFIX_TURN_0 ") || strings.Contains(last, "[tool result pruned") {
 		t.Fatalf("summary_calls=%d summaries=%q input=%d result=%v raw_prefix=%v, want the earlier turns folded in one call at the step that did not fit, and the input and result raw",
 			f.summaries.Load()-summaries, summary, strings.Count(last, loopInput), strings.Contains(last, "TOOL_RESULT_001 "), strings.Contains(last, "PREFIX_TURN_0 "))
 	}
