@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -309,6 +310,47 @@ func TestSwitchContextReadsARetriedRequestFromItsCopy(t *testing.T) {
 	if !reflect.DeepEqual(sources[0].Sources, []turn.ContextMessageSource{older}) || !reflect.DeepEqual(sources[1].Sources, []turn.ContextMessageSource{copied}) || !sources[1].Anchor ||
 		!reflect.DeepEqual(provenance[1].Sources, []turn.ContextMessageSource{request}) {
 		t.Fatalf("sources=%+v run provenance=%+v, want the copy folded and kept in place of the hidden request", sources, provenance[1])
+	}
+}
+
+// A pass covers rows by their names, and the run's request renders some of
+// them under another one: its query under the request placeholder, a retried
+// request under the row it replaces. The splice the run applies is told
+// those names too, so the request loses what the fold covers.
+func TestSwitchContextCoversWhatTheRequestRendersUnderItsOwnNames(t *testing.T) {
+	t.Parallel()
+
+	service, _ := newControllerPolicyService(t)
+	copied := turn.ContextMessageSource{Kind: "history", ID: "copy"}
+	older := turn.ContextMessageSource{Kind: "history", ID: "older"}
+	runner := &switchRunner{passes: []compaction.Pass{{ArtifactID: "a1", Summary: "s", Covered: []turn.ContextMessageSource{older, copied}}}}
+	service.compactionService = runner
+	for _, tc := range []struct {
+		name      string
+		committer *agentStepCommitter
+		input     turn.ContextMessageSource
+	}{
+		{name: "query", committer: &agentStepCommitter{inputSourceIDs: []string{"copy"}}, input: requestSource},
+		{name: "retry", committer: &agentStepCommitter{inputSourceIDs: []string{"copy"}, retriedRequest: "request", requestCopy: "copy"}, input: turn.ContextMessageSource{Kind: "history", ID: "request"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var covered []turn.ContextMessageSource
+			sw := native.ContextSwitch{
+				Request: sdk.Request{Messages: make([]sdk.Message, 3)}, Cut: 2, UsageTokens: 3000, AllowanceTokens: 2000,
+				Provenance: []*native.MessageProvenance{{Sources: []turn.ContextMessageSource{older}}, {Sources: []turn.ContextMessageSource{tc.input}, Anchor: true}, {Sources: []turn.ContextMessageSource{{Kind: "history", ID: "latest"}}}},
+				Fold: func(fold native.ContextFold) native.ContextSplice {
+					covered = fold.Covered
+					return native.ContextSplice{Tokens: 1000}
+				},
+			}
+			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
+			if _, err := service.switchContext(req, tc.committer, "")(t.Context(), sw); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Contains(covered, older) || !slices.Contains(covered, tc.input) {
+				t.Fatalf("covered = %+v, want the older row and the input under the name the request gives it", covered)
+			}
+		})
 	}
 }
 

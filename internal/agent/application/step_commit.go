@@ -453,6 +453,30 @@ func (c *agentStepCommitter) currentSources(sources []turn.ContextMessageSource)
 	return out
 }
 
+// requestNames is covered as the run's request names it: every row a fold
+// covers, and for a row the request renders under another name
+// (currentSources) that name as well.
+func (c *agentStepCommitter) requestNames(covered []turn.ContextMessageSource) []turn.ContextMessageSource {
+	out := slices.Clone(covered)
+	if c == nil {
+		return out
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, source := range covered {
+		if source.Kind != "history" {
+			continue
+		}
+		if len(c.inputSourceIDs) > 0 && source.ID == c.inputSourceIDs[0] {
+			out = append(out, requestSource)
+		}
+		if c.requestCopy != "" && source.ID == c.requestCopy {
+			out = append(out, turn.ContextMessageSource{Kind: "history", ID: c.retriedRequest})
+		}
+	}
+	return out
+}
+
 // replacedTurn is the turn an edit or retry replaces, until the run's first
 // step replaces it.
 func (c *agentStepCommitter) replacedTurn() string {

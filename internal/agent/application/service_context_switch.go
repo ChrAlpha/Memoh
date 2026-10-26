@@ -51,7 +51,7 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 				splice := sw.Fold(native.ContextFold{
 					Artifact: pass.ArtifactID,
 					Summary:  compaction.SummaryMessage(pass.Summary),
-					Covered:  pass.Covered,
+					Covered:  committer.requestNames(pass.Covered),
 					Absorbed: pass.Absorbed,
 				})
 				tokens = splice.Tokens
