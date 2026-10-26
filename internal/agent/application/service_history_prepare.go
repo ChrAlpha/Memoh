@@ -51,11 +51,13 @@ func (s *Service) prepareHistoryWindow(
 	if err != nil {
 		return preparedHistoryContext{}, err
 	}
+	// A failed turn's empty assistant row may be the retry cutoff. Resolve
+	// and apply that boundary before cleanup removes the anchor itself.
+	boundary := s.loadCompactionArtifactBoundary(ctx, loaded, req.ThreadID, req.HistoryCutoffBeforeMessageID)
+	loaded = filterMessagesBeforeID(loaded, req.HistoryCutoffBeforeMessageID)
 	loaded = pruneHistoryForGateway(loaded)
 	loaded = dropPreflightFailureTurns(loaded)
 	loaded = dropEmptyHistoryFailures(loaded)
-	boundary := s.loadCompactionArtifactBoundary(ctx, loaded, req.ThreadID, req.HistoryCutoffBeforeMessageID)
-	loaded = filterMessagesBeforeID(loaded, req.HistoryCutoffBeforeMessageID)
 	loaded = dedupePersistedCurrentUserMessage(loaded, req)
 	loaded, err = s.ensureRequiredHistoryMessage(ctx, loaded, req)
 	if err != nil {

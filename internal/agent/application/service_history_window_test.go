@@ -104,3 +104,29 @@ func TestMissingSessionNeverLoadsHistoryOrSummaries(t *testing.T) {
 		}
 	}
 }
+
+// Failed assistant rows can be the retry cutoff. Resolve that boundary before
+// filtering empty error rows, or a valid retry silently loses its prior history.
+func TestRetryEmptyFailureKeepsPriorHistoryAndExcludesLaterRows(t *testing.T) {
+	old := time.Now().Add(-72 * time.Hour)
+	prior := persistedHistoryMessage(t, "prior", "user", "retain PRIOR_CODEWORD")
+	prior.CreatedAt = old
+	earlierFailure := persistedHistoryMessage(t, "earlier-failure", "assistant", "")
+	earlierFailure.CreatedAt = old.Add(time.Second)
+	earlierFailure.Metadata = map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "context.budget_unsatisfied"}
+	request := persistedHistoryMessage(t, "request", "user", "retry this question")
+	request.CreatedAt = time.Now().Add(-time.Minute)
+	cutoff := persistedHistoryMessage(t, "cutoff", "assistant", "")
+	cutoff.CreatedAt = request.CreatedAt.Add(time.Second)
+	cutoff.Metadata = map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "context.budget_unsatisfied"}
+	later := persistedHistoryMessage(t, "later", "user", "exclude FUTURE_CODEWORD")
+	later.CreatedAt = time.Now()
+	svc := &Service{messageService: &ageFilteredHistory{rows: []messagepkg.Message{prior, earlierFailure, request, cutoff, later}}, logger: slog.New(slog.DiscardHandler)}
+	prepared, err := svc.prepareHistoryContext(t.Context(), ChatRequest{BotID: "bot", ThreadID: "thread", HistoryCutoffBeforeMessageID: cutoff.ID}, historyfrag.ScopeFallback{}, 10000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prepared.records) != 2 || prepared.records[0].DBMessageID != prior.ID || prepared.records[1].DBMessageID != request.ID {
+		t.Fatalf("retry history lost the prefix or crossed its boundary: %+v", prepared.records)
+	}
+}

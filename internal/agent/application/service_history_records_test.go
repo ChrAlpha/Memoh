@@ -170,13 +170,13 @@ func TestReplaceCompactedHistoryRecordsKeepsOriginalGroupWithoutSummary(t *testi
 	}
 }
 
-func TestReplaceCompactedHistoryRecordsKeepsMustKeepIslandOrdering(t *testing.T) {
+func TestReplaceCompactedHistoryRecordsKeepsRawRowsAfterTheSummaryInOrder(t *testing.T) {
 	t.Parallel()
 
-	// The selector now marks only the contiguous run before a must-keep island
-	// (the ask_user exchange) under one compact_id; the island and the run after
-	// it stay raw. The read path must drop the summary in place and preserve
-	// order — "mid q" stays AFTER the ask_user exchange, never folded before it.
+	// A pass marks one contiguous run under one compact_id and leaves the rows
+	// after it raw. The read path must drop the summary in place and preserve
+	// their order — "mid q" stays AFTER the ask_user exchange, never folded
+	// before it.
 	records := []historyfrag.HistoryRecord{
 		historyRecord("row-old", ModelMessage{Role: "user", Content: newTextContent("old q")}, func(r *historyfrag.HistoryRecord) {
 			r.CompactID = "compact-1"
@@ -196,7 +196,7 @@ func TestReplaceCompactedHistoryRecordsKeepsMustKeepIslandOrdering(t *testing.T)
 		{Role: "user", Content: newTextContent("current")},
 	}
 	if gotMessages := historyfrag.ToModelMessages(got); !reflect.DeepEqual(gotMessages, want) {
-		t.Fatalf("must-keep island ordering broken:\ngot  %#v\nwant %#v", gotMessages, want)
+		t.Fatalf("raw rows after the summary reordered:\ngot  %#v\nwant %#v", gotMessages, want)
 	}
 }
 
