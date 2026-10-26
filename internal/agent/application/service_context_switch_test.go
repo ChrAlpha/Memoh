@@ -17,6 +17,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
 
 func TestContextProvenanceKeepsStoredVersionThroughReasoningProjection(t *testing.T) {
@@ -346,6 +347,48 @@ func TestSwitchContextNamesTheRunsRequestByItsRow(t *testing.T) {
 			}
 			if source := runner.event.Sources[1]; !source.Anchor || !reflect.DeepEqual(source.Sources, []turn.ContextMessageSource{tc.want}) {
 				t.Fatalf("request source = %+v, want %+v kept in place", source, tc.want)
+			}
+		})
+	}
+}
+
+// A Discuss run keeps the batch it answers while it leaves the summary room;
+// any other run keeps its input and steers within a cap. An edit or retry
+// that folds before its first step replaces the turn names that turn, so the
+// event moves the session to the checkpoint the replacement keeps first.
+func TestSwitchContextChoosesWhatAFoldKeeps(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		req      ChatRequest
+		started  bool
+		anchors  compaction.AnchorPolicy
+		replaced string
+	}{
+		{name: "chat", anchors: compaction.AnchorsCapped},
+		{name: "discuss", req: ChatRequest{SessionType: sessionpkg.TypeDiscuss}, anchors: compaction.AnchorsFirst},
+		{name: "retry before its first step", req: ChatRequest{TurnReplacement: &messagepkg.TurnReplacement{OldTurnID: "old-turn"}}, anchors: compaction.AnchorsCapped, replaced: "old-turn"},
+		{name: "retry after its first step", req: ChatRequest{TurnReplacement: &messagepkg.TurnReplacement{OldTurnID: "old-turn"}}, started: true, anchors: compaction.AnchorsCapped},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			service, _ := newControllerPolicyService(t)
+			runner := &switchRunner{passes: []compaction.Pass{{ArtifactID: "a1", Summary: "s"}}}
+			service.compactionService = runner
+			req := tc.req
+			req.BotID, req.ChatID, req.ThreadID, req.RunID = syncCompactBotID, syncCompactBotID, syncCompactThreadID, "run"
+			committer := &agentStepCommitter{req: req, replacementStarted: tc.started}
+			sw := native.ContextSwitch{
+				Request: sdk.Request{Messages: make([]sdk.Message, 1)}, Provenance: []*native.MessageProvenance{{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "row"}}}},
+				Cut: 1, UsageTokens: 3000, AllowanceTokens: 2000,
+				Fold: func(native.ContextFold) native.ContextSplice { return native.ContextSplice{Tokens: 1000} },
+			}
+			if _, err := service.switchContext(req, committer, "")(t.Context(), sw); err != nil {
+				t.Fatal(err)
+			}
+			if ev := runner.event; ev.Anchors != tc.anchors || ev.ReplacedTurnID != tc.replaced {
+				t.Fatalf("anchors=%v replaced=%q, want %v and %q", ev.Anchors, ev.ReplacedTurnID, tc.anchors, tc.replaced)
 			}
 		})
 	}

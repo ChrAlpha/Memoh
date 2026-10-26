@@ -246,6 +246,36 @@ func TestChatBudgetRecoveryCompactsATruncatedLoad(t *testing.T) {
 	}
 }
 
+// An armed run folds its own request before its first step: its history is
+// compacted from rows first only when the load left rows out, which the
+// request cannot render.
+func TestChatBudgetRecoveryLeavesAnArmedRunToItsOwnFold(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		truncated       bool
+		wantCompactions int
+	}{
+		{name: "complete load over the budget"},
+		{name: "truncated load", truncated: true, wantCompactions: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, history, runner, cfg := chatRecoveryFixture(t)
+			runner.run = func() ([]compaction.Pass, error) {
+				history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent("compacted history")}}
+				history.truncated = false
+				return []compaction.Pass{{}}, nil
+			}
+			cfg.SwitchContext = func(context.Context, native.ContextSwitch) (string, error) { return "", nil }
+			cfg.ContextManifest.BudgetPlan = &contextfrag.ContextBudgetPlan{HistoryBudget: 1000}
+			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, Query: "current request"}
+			cfg.RecoverContextBudget = s.chatBudgetRecovery(req, chatHistoryLayout{forkCount: 1, historyCount: 22, pressureTokens: 2500, truncated: tc.truncated})
+			if _, _, err := cfg.RecoverContextBudget(t.Context(), cfg); err != nil || len(runner.configs) != tc.wantCompactions {
+				t.Fatalf("compactions=%d err=%v, want %d", len(runner.configs), err, tc.wantCompactions)
+			}
+		})
+	}
+}
+
 type recoverySilentProvider struct {
 	triggerCaptureProvider
 	calls atomic.Int32
@@ -623,7 +653,11 @@ func TestShedOlderBatchImagesShedsOnlyTheImagesNeeded(t *testing.T) {
 		discussHistoryFrag(1, "newest", contextfrag.KindCurrentUserMessage, sdk.UserMessage("newest input")),
 	}
 	batch := map[string]turn.ContextMessageSource{"album": {Kind: "external", ID: "album", Current: true}, "newest": {Kind: "external", ID: "newest", Current: true}}
-	cfg := native.RunConfig{ContextSourceFrags: frags, Messages: []sdk.Message{album, sdk.UserMessage("newest input")}, ContextMutations: contextfrag.NewMutationLedger()}
+	provenance := []native.MessageProvenance{
+		{Message: album, Sources: []turn.ContextMessageSource{{Kind: "external", ID: "album"}}, Anchor: true},
+		{Message: sdk.UserMessage("newest input"), Sources: []turn.ContextMessageSource{{Kind: "external", ID: "newest"}}, Anchor: true},
+	}
+	cfg := native.RunConfig{ContextSourceFrags: frags, Messages: []sdk.Message{album, sdk.UserMessage("newest input")}, ContextProvenance: provenance, ContextMutations: contextfrag.NewMutationLedger()}
 	budget := contextfrag.ResolveProviderBudgetFragTokens(frags[0]) - contextfrag.EstimateImageTokens
 	shed, ok := shedOlderBatchImages(cfg, batch, budget)
 	if !ok {
@@ -637,6 +671,9 @@ func TestShedOlderBatchImagesShedsOnlyTheImagesNeeded(t *testing.T) {
 	}
 	if len(kept) != 2 || kept[0] != image("Mg==").Image {
 		t.Fatalf("album kept %v, want only its oldest image shed", kept)
+	}
+	if !reflect.DeepEqual(shed.ContextProvenance[0].Message, shed.Messages[0]) || !reflect.DeepEqual(cfg.ContextProvenance[0].Message, album) {
+		t.Fatal("the album without its image no longer renders what it named")
 	}
 	if records := cfg.ContextMutations.Records(); len(records) != 1 || records[0].Detail != "sources=album" {
 		t.Fatalf("mutations = %+v", records)

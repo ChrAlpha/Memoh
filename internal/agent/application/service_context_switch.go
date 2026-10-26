@@ -14,15 +14,19 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
+	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/errs"
 )
 
 // switchContext is the compaction event an armed run asks for when the
-// request before a step does not fit: one compaction.Fold over that request,
-// whose passes it splices into the run's own request as they commit, before
-// the run measures it once. The run's input and steers stay where they are,
-// and the latest step with everything after it stays raw after the summary.
-// The summary comes from the run's own model, forked from its request.
+// request before a step, the first one included, does not fit: one
+// compaction.Fold over that request, whose passes it splices into the run's
+// own request as they commit, before the run measures it once. The run's
+// input and steers stay where they are, and the tail with everything after
+// it stays raw after the summary. The summary comes from the run's own model,
+// forked from its request. An edit or retry that folds before its first step
+// replaces the turn first moves the session to the checkpoint the
+// replacement keeps.
 func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, turnModelID string) func(context.Context, native.ContextSwitch) (string, error) {
 	return func(ctx context.Context, sw native.ContextSwitch) (string, error) {
 		start := time.Now()
@@ -35,10 +39,13 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 			Request:         sw.Request,
 			Sources:         foldSources(committer, sw.Provenance, inputs),
 			Cut:             sw.Cut,
+			Current:         sw.Current,
+			Anchors:         anchorPolicy(req),
 			Window:          sw.WindowTokens,
 			MaxOutputTokens: sw.OutputTokens,
 			Allowance:       sw.AllowanceTokens,
 			Pressure:        sw.UsageTokens,
+			ReplacedTurnID:  committer.replacedTurn(),
 			Summarizer:      sw.Summarize,
 			Apply: func(pass compaction.Pass) (sdk.Request, []compaction.Source, int) {
 				splice := sw.Fold(native.ContextFold{
@@ -77,6 +84,16 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 		}
 		return detail, fmt.Errorf("%w: %w", contextfrag.ErrBudgetUnsatisfied, err)
 	}
+}
+
+// anchorPolicy is how much of its anchors a run's fold keeps: a Discuss run
+// keeps the batch it answers while it leaves the summary room, any other run
+// keeps its input and steers within a cap.
+func anchorPolicy(req ChatRequest) compaction.AnchorPolicy {
+	if req.SessionType == sessionpkg.TypeDiscuss {
+		return compaction.AnchorsFirst
+	}
+	return compaction.AnchorsCapped
 }
 
 // foldSources is what each message of the run's request stands for in a

@@ -339,3 +339,117 @@ func TestArmedRunContinuesOnItsSplicedRequest(t *testing.T) {
 		})
 	}
 }
+
+// A run whose first request does not fit folds it before its first dispatch,
+// in both loops: the event sees the request the run would send, its input as
+// the tail and as the current request, and the run dispatches the spliced
+// request once.
+func TestArmedRunFoldsBeforeItsFirstStep(t *testing.T) {
+	t.Parallel()
+
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			t.Parallel()
+			var requests []sdk.Request
+			provider := &atomicMockProvider{handler: func(_ int, params sdk.Request) (sdk.ModelResult, error) {
+				requests = append(requests, params)
+				return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+			}}
+			older := sdk.UserMessage("older" + strings.Repeat(" h", 2000))
+			answer := sdk.AssistantMessage("answer" + strings.Repeat(" h", 2000))
+			input := sdk.UserMessage("INPUT")
+			summary := sdk.UserMessage("<summary>\nolder\n")
+			request := turn.ContextMessageSource{Kind: "history", Current: true}
+			current := 2
+			var events []ContextSwitch
+			cfg := RunConfig{
+				Model: &sdk.Model{ID: "mock-model", Provider: provider}, Messages: []sdk.Message{older, answer, input},
+				Identity: SessionContext{BotID: "bot-1", SessionID: "sess-1"}, ContextMutations: contextfrag.NewMutationLedger(),
+				ContextManifest:                contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 1200}},
+				ContextCurrentUserMessageIndex: &current,
+				ContextTail:                    []turn.ContextMessageSource{request},
+				ContextProvenance: []MessageProvenance{
+					{Message: older, Sources: rowSources("older")},
+					{Message: answer, Sources: rowSources("answer")},
+					{Message: input, Sources: []turn.ContextMessageSource{request}, Anchor: true},
+				},
+				SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
+					events = append(events, sw)
+					sw.Fold(ContextFold{Artifact: "a1", Summary: summary, Covered: rowSources("older", "answer")})
+					return "trigger=in_run passes=1", nil
+				},
+			}
+			if stream {
+				for event := range New(Deps{}).Stream(context.Background(), cfg) {
+					if event.Type == EventError {
+						t.Fatalf("stream failed: %v", event.Cause)
+					}
+				}
+			} else if _, err := New(Deps{}).Generate(context.Background(), cfg); err != nil {
+				t.Fatal(err)
+			}
+			if len(events) != 1 || len(requests) != 1 {
+				t.Fatalf("events=%d provider calls=%d, want one event before the only call", len(events), len(requests))
+			}
+			sw := events[0]
+			if sw.Cut != 2 || !reflect.DeepEqual(sw.Current, []sdk.Message{input}) || sw.Request.Model != "mock-model" || len(sw.Request.Messages) != 3 {
+				t.Fatalf("event cut=%d current=%d model=%q messages=%d, want the run's whole first request with its input as the tail", sw.Cut, len(sw.Current), sw.Request.Model, len(sw.Request.Messages))
+			}
+			if got := requests[0].Messages; len(got) != 2 || !reflect.DeepEqual(got[0], summary) || !reflect.DeepEqual(got[1], input) {
+				t.Fatalf("first call sent %d messages, want the summary and the input", len(got))
+			}
+		})
+	}
+}
+
+// A run that starts from no tail, such as a Discuss run answering a batch,
+// may fold its whole first request but its anchors: the event reads it to
+// its end with no current request, and a pass that covers an input with
+// images records them omitted, as no summary carries an image.
+func TestArmedRunWithoutATailFoldsItsWholeRequest(t *testing.T) {
+	t.Parallel()
+
+	var requests []sdk.Request
+	provider := &atomicMockProvider{handler: func(_ int, params sdk.Request) (sdk.ModelResult, error) {
+		requests = append(requests, params)
+		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+	}}
+	pictured := sdk.UserMessage("older input"+strings.Repeat(" o", 1000), sdk.ImagePart{Image: "data:image/png;base64,AAAA", MediaType: "image/png"})
+	answered := sdk.AssistantMessage("answered" + strings.Repeat(" a", 1000))
+	newest := sdk.UserMessage("NEWEST")
+	summary := sdk.UserMessage("<summary>\nolder\n")
+	var events []ContextSwitch
+	cfg := RunConfig{
+		Model: &sdk.Model{ID: "mock-model", Provider: provider}, Messages: []sdk.Message{pictured, answered, newest},
+		Identity: SessionContext{BotID: "bot-1", SessionID: "sess-1"}, ContextMutations: contextfrag.NewMutationLedger(),
+		ContextManifest: contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 600}},
+		ContextProvenance: []MessageProvenance{
+			{Message: pictured, Sources: []turn.ContextMessageSource{{Kind: "external", ID: "older"}}, Anchor: true},
+			{Message: answered, Sources: rowSources("answered")},
+			{Message: newest, Sources: []turn.ContextMessageSource{{Kind: "external", ID: "newest"}}, Anchor: true},
+		},
+		SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
+			events = append(events, sw)
+			sw.Fold(ContextFold{Artifact: "a1", Summary: summary, Covered: append(rowSources("answered"), turn.ContextMessageSource{Kind: "external", ID: "older"})})
+			return "trigger=in_run passes=1", nil
+		},
+	}
+	if _, err := New(Deps{}).Generate(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Cut != 3 || events[0].Current != nil {
+		t.Fatalf("events=%d cut=%d current=%d, want one event over the whole request", len(events), events[0].Cut, len(events[0].Current))
+	}
+	if got := requests[0].Messages; len(got) != 2 || !reflect.DeepEqual(got[0], summary) || !reflect.DeepEqual(got[1], newest) {
+		t.Fatalf("first call sent %d messages, want the summary and the newest input", len(got))
+	}
+	var omitted []string
+	for _, record := range cfg.ContextMutations.Records() {
+		if record.Kind == contextfrag.MutationCurrentInputImagesOmitted {
+			omitted = append(omitted, record.Detail)
+		}
+	}
+	if !reflect.DeepEqual(omitted, []string{"sources=older"}) {
+		t.Fatalf("omitted images = %q, want the folded input's", omitted)
+	}
+}

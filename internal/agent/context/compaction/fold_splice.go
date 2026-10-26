@@ -8,9 +8,10 @@ import (
 
 // Splice applies a committed pass to a request the way a run applies it to
 // its own: a message goes when every source it renders is covered or
-// absorbed, anchors and the tail from cut on stay, and the summary takes
-// the place turn.PlaceSummary gives it. It returns the spliced messages,
-// their sources and the cut moved with them.
+// absorbed, the tail from cut on and runtime context stay, and the summary
+// takes the place turn.PlaceSummary gives it. A pass covers only the anchors
+// beyond its cap. It returns the spliced messages, their sources and the cut
+// moved with them.
 func Splice(messages []sdk.Message, sources []Source, cut int, pass Pass) ([]sdk.Message, []Source, int) {
 	covered := make(map[turn.ContextMessageSource]bool, len(pass.Covered)+len(pass.Absorbed))
 	for _, source := range pass.Covered {
@@ -21,7 +22,7 @@ func Splice(messages []sdk.Message, sources []Source, cut int, pass Pass) ([]sdk
 	}
 	removed := func(i int) bool {
 		source := sources[i]
-		if i >= cut || source.Anchor || len(source.Sources) == 0 {
+		if i >= cut || len(source.Sources) == 0 {
 			return false
 		}
 		for _, s := range source.Sources {

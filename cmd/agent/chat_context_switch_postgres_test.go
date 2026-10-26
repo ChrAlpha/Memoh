@@ -949,9 +949,16 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	if code != "context.budget_unsatisfied" || !slices.Equal(summaryAttempts, []bool{true, true}) || len(s.effects) == 0 || len(s.effects) >= steps || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) {
 		t.Fatalf("summarizer down: code=%q summary_attempts=%v provider_calls=%d effects=%v, want budget_unsatisfied after the fork request was retried once, with the effects so far run once", code, summaryAttempts, len(requests), s.effects)
 	}
+	// A run's lifecycle is written once session_runs took its terminal
+	// transition, which is what an entry that polls the run waits for.
 	var reasons, failedRows int
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, f.sessionID).Scan(&reasons); err != nil {
-		t.Fatal(err)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, f.sessionID).Scan(&reasons); err != nil {
+			t.Fatal(err)
+		}
+		if reasons > 0 || time.Now().After(deadline) {
+			break
+		}
 	}
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='tool' AND content::text LIKE '%TOOL_RESULT_%' AND created_at >= (SELECT max(created_at) FROM bot_history_messages WHERE session_id=$1 AND role='user' AND content::text LIKE '%SUMMARIZER_DOWN_INPUT%')`, f.sessionID).Scan(&failedRows); err != nil {
 		t.Fatal(err)

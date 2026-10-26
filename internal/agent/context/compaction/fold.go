@@ -60,6 +60,8 @@ type Event struct {
 	// Current is the input a run starts from when the tail holds it: the
 	// summarizer reads it to judge what the work needs.
 	Current []sdk.Message
+	// Anchors is how much of the request's anchors the fold keeps verbatim.
+	Anchors AnchorPolicy
 	// Window is the summarizer's context window and MaxOutputTokens its
 	// output cap; Allowance is what the caller's next request may take.
 	Window          int
@@ -156,7 +158,11 @@ func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
 	if err := rendersCheckpoint(ev, parent); err != nil {
 		return Pass{}, false, err
 	}
-	plan, err := planFold(ev)
+	rows, err := s.requestRows(ctx, ev)
+	if err != nil {
+		return Pass{}, false, err
+	}
+	plan, err := planFold(ev, rows.unfoldable(ev))
 	if err != nil || !plan.folds() {
 		return Pass{}, false, err
 	}
@@ -182,22 +188,19 @@ func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
 	switch {
 	case replay >= plan.replaced:
 		return fail(failed(ReasonIneffective, fmt.Errorf("%w: summary_tokens=%d replaced_tokens=%d", errIneffectiveSummary, replay, plan.replaced)))
-	case plan.final() && replay > plan.room:
+	case plan.bounded() && replay > plan.room:
 		return fail(failed(ReasonStillOver, fmt.Errorf("%w: replay=%d room=%d", errNoSummaryRoom, replay, plan.room)))
 	}
 
-	rows, err := s.foldedRows(persistCtx, ev.SessionID, plan)
-	if err != nil {
-		return fail(err)
-	}
+	folds := rows.of(plan)
 	commit := checkpoint.Fold{
 		BotID:     ev.BotID,
 		SessionID: ev.SessionID,
 		Parent:    parent,
 		SummaryID: formatUUID(logID),
 		Summary:   summary,
-		Folded:    rows.folded,
-		Read:      rows.read,
+		Folded:    folds.folded,
+		Read:      folds.read,
 	}
 	usage, _ := json.Marshal(result.Usage)
 	if err := s.inSession(ctx, ev.BotID, ev.SessionID, func(q dbstore.Queries) error {
@@ -207,14 +210,14 @@ func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
 		if _, err := s.checkpoints.Commit(ctx, q, commit); err != nil {
 			return err
 		}
-		return s.completeLog(ctx, q, logID, "ok", summary, "", len(rows.folded), usage, db.ParseUUIDOrEmpty(ev.ModelRecordID))
+		return s.completeLog(ctx, q, logID, "ok", summary, "", len(folds.folded), usage, db.ParseUUIDOrEmpty(ev.ModelRecordID))
 	}); err != nil {
 		return fail(staleSource(err))
 	}
 	return Pass{
 		ArtifactID: commit.SummaryID,
 		Summary:    summary,
-		Covered:    rows.covered,
+		Covered:    folds.covered,
 		Absorbed:   plan.absorbed,
 		More:       !plan.final(),
 	}, true, nil
@@ -278,66 +281,108 @@ func (s *Service) summarize(ctx context.Context, ev Event, fork sdk.Request, pla
 	return result, nil
 }
 
+// requestRows is where the sources a request renders before its cut stand
+// in the history: the context rows that hold each one, by the source as the
+// request names it. A history source names its row; an inbound or a
+// self-sent message names the rows it was written to.
+type requestRows map[turn.ContextMessageSource][]checkpoint.Row
+
+func (s *Service) requestRows(ctx context.Context, ev Event) (requestRows, error) {
+	sessionUUID, err := db.ParseUUID(ev.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []pgtype.UUID
+	var external []string
+	for _, source := range ev.Sources[:ev.Cut] {
+		for _, s := range source.Sources {
+			switch s.Kind {
+			case "history":
+				if id, err := db.ParseUUID(s.ID); err == nil {
+					ids = append(ids, id)
+				}
+			case "external", "self":
+				if s.ID != "" {
+					external = append(external, s.ID)
+				}
+			}
+		}
+	}
+	if len(ids) == 0 && len(external) == 0 {
+		return nil, nil
+	}
+	found, err := s.queries.ListHistoryRowsBySources(ctx, sqlc.ListHistoryRowsBySourcesParams{SessionID: sessionUUID, Ids: ids, ExternalMessageIds: external})
+	if err != nil {
+		return nil, fmt.Errorf("load the rows the request renders: %w", err)
+	}
+	rows := requestRows{}
+	for _, row := range found {
+		held := checkpoint.Row{ID: formatUUID(row.ID), Position: messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}}
+		key := turn.ContextMessageSource{Kind: "history", ID: held.ID}
+		rows[key] = append(rows[key], held)
+		if message := strings.TrimSpace(row.SourceMessageID.String); message != "" {
+			for _, kind := range []string{"external", "self"} {
+				key := turn.ContextMessageSource{Kind: kind, ID: message}
+				rows[key] = append(rows[key], held)
+			}
+		}
+	}
+	return rows, nil
+}
+
+// unfoldable marks the messages before ev's cut a fold cannot stand for: one
+// that renders a source no context row holds stays where it is, as the
+// checkpoint has nothing to fold for it.
+func (r requestRows) unfoldable(ev Event) map[int]bool {
+	out := map[int]bool{}
+	for i, source := range ev.Sources[:ev.Cut] {
+		if isSummarySource(source) {
+			continue
+		}
+		for _, s := range source.Sources {
+			if len(r[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}]) == 0 {
+				out[i] = true
+				break
+			}
+		}
+	}
+	return out
+}
+
 // foldRows is what a pass read and folds, named the ways a checkpoint and
-// the caller's splice need.
+// the caller's splice need: the rows it folds, the rows it read, and every
+// source it folds as the request names it, with each folded row's history
+// ID.
 type foldRows struct {
 	folded  []checkpoint.Row
 	read    []string
 	covered []turn.ContextMessageSource
 }
 
-// foldedRows resolves the sources a pass folds and reads to context rows at
-// their places in the history. A source with no row cannot be folded: the
-// checkpoint has nothing to stand for, so it stays where it is.
-func (s *Service) foldedRows(ctx context.Context, sessionID string, plan foldPlan) (foldRows, error) {
-	sessionUUID, err := db.ParseUUID(sessionID)
-	if err != nil {
-		return foldRows{}, err
-	}
-	var ids []pgtype.UUID
-	var external []string
-	for _, source := range plan.read {
-		switch source.Kind {
-		case "history":
-			if id, err := db.ParseUUID(source.ID); err == nil {
-				ids = append(ids, id)
-			}
-		case "external":
-			external = append(external, source.ID)
-		}
-	}
-	if len(ids) == 0 && len(external) == 0 {
-		return foldRows{}, nil
-	}
-	rows, err := s.queries.ListHistoryRowsBySources(ctx, sqlc.ListHistoryRowsBySourcesParams{SessionID: sessionUUID, Ids: ids, ExternalMessageIds: external})
-	if err != nil {
-		return foldRows{}, fmt.Errorf("load folded rows: %w", err)
-	}
-	folds := make(map[turn.ContextMessageSource]bool, len(plan.folded))
-	for _, source := range plan.folded {
-		folds[turn.ContextMessageSource{Kind: source.Kind, ID: source.ID}] = true
-	}
+func (r requestRows) of(plan foldPlan) foldRows {
 	var out foldRows
-	seen := map[string]bool{}
-	for _, row := range rows {
-		id := formatUUID(row.ID)
-		if seen[id] {
-			continue
-		}
-		seen[id] = true
-		out.read = append(out.read, id)
-		history := turn.ContextMessageSource{Kind: "history", ID: id}
-		external := turn.ContextMessageSource{Kind: "external", ID: strings.TrimSpace(row.SourceMessageID.String)}
-		if !folds[history] && (external.ID == "" || !folds[external]) {
-			continue
-		}
-		out.folded = append(out.folded, checkpoint.Row{ID: id, Position: messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}})
-		out.covered = append(out.covered, history)
-		if external.ID != "" {
-			out.covered = append(out.covered, external)
+	read, folded := map[string]bool{}, map[string]bool{}
+	for _, source := range plan.read {
+		for _, row := range r[turn.ContextMessageSource{Kind: source.Kind, ID: source.ID}] {
+			if !read[row.ID] {
+				read[row.ID] = true
+				out.read = append(out.read, row.ID)
+			}
 		}
 	}
-	return out, nil
+	for _, source := range plan.folded {
+		out.covered = append(out.covered, turn.ContextMessageSource{Kind: source.Kind, ID: source.ID})
+		for _, row := range r[turn.ContextMessageSource{Kind: source.Kind, ID: source.ID}] {
+			if !folded[row.ID] {
+				folded[row.ID] = true
+				out.folded = append(out.folded, row)
+				if source.Kind != "history" {
+					out.covered = append(out.covered, turn.ContextMessageSource{Kind: "history", ID: row.ID})
+				}
+			}
+		}
+	}
+	return out
 }
 
 // noToolsReminder is what a second fork request adds after a tool call.

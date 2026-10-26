@@ -51,9 +51,13 @@ func pauseIdleDuringBudgetRecovery(cfg native.RunConfig, idle *idleCancel) nativ
 	return cfg
 }
 
+// chatBudgetRecovery compacts a chat run's history from its rows before the
+// run starts and reloads it. An armed run folds its own request before its
+// first step instead; only a load the byte budget truncated is compacted
+// first, since the request does not render the rows it left out.
 func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) func(context.Context, native.RunConfig) (native.RunConfig, bool, error) {
 	return func(ctx context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || cfg.SwitchContext != nil && !layout.truncated {
 			return cfg, false, nil
 		}
 		budget, pressure := layout.availableHistoryBudget(cfg)
@@ -306,8 +310,16 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 			newestTokens = discussMessageTokens(message)
 		}
 	}
-	cfg, shed := shedOlderBatchImages(cfg, batch, plan.HistoryBudget)
-	if *compacted {
+	budget := plan.HistoryBudget
+	if cfg.SwitchContext != nil {
+		// An armed run keeps the batch while it leaves a tenth of the room
+		// for the summary of what precedes it.
+		budget -= budget / 10
+	}
+	cfg, shed := shedOlderBatchImages(cfg, batch, budget)
+	// An armed run folds its own request before its first step; only input
+	// Channel left out of the request is compacted from rows first.
+	if *compacted || cfg.SwitchContext != nil && len(cmd.DiscussOmittedSources) == 0 {
 		return cfg, shed, nil
 	}
 	type batchInput struct {
@@ -367,10 +379,10 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 
 // shedOlderBatchImages strips images of older input of the batch, oldest
 // first, until what must stay fits the budget. Answered history before the
-// batch is what selection trims first, so it does not count; an image costs
-// far more than its message's text and no summary can carry it, so the text
-// survives its images. The newest input keeps its own. It reports whether
-// any were shed.
+// batch is what selection trims, or an armed run folds, first, so it does not
+// count; an image costs far more than its message's text and no summary can
+// carry it, so the text survives its images. The newest input keeps its own.
+// It reports whether any were shed.
 func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMessageSource, historyBudget int) (native.RunConfig, bool) {
 	excess, total, trimmable, inBatch := -historyBudget, -historyBudget, false, false
 	for _, frag := range cfg.ContextSourceFrags {
@@ -390,11 +402,11 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 	if total <= 0 {
 		return cfg, false
 	}
-	if trimmable {
+	if trimmable && cfg.SwitchContext == nil {
 		excess += contextfrag.ResolveProviderBudgetFragTokens(contextview.TrimNoticeFrag(contextfrag.Scope{}))
 	}
 	var shed []string
-	frags, messages := slices.Clone(cfg.ContextSourceFrags), slices.Clone(cfg.Messages)
+	frags, messages, provenance := slices.Clone(cfg.ContextSourceFrags), slices.Clone(cfg.Messages), slices.Clone(cfg.ContextProvenance)
 	for i, frag := range frags {
 		if excess <= 0 {
 			break
@@ -423,6 +435,13 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 			continue
 		}
 		if index := frag.Provenance.Index; index >= 0 && index < len(messages) {
+			// The input renders the same sources without its images.
+			for j := range provenance {
+				if reflect.DeepEqual(provenance[j].Message, messages[index]) {
+					provenance[j].Message = kept
+					break
+				}
+			}
 			messages[index] = kept
 		}
 		shed = append(shed, frag.Provenance.SourceID)
@@ -430,7 +449,7 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 	if len(shed) == 0 {
 		return cfg, false
 	}
-	cfg.ContextSourceFrags, cfg.Messages = frags, messages
+	cfg.ContextSourceFrags, cfg.Messages, cfg.ContextProvenance = frags, messages, provenance
 	if cfg.ContextMutations != nil {
 		cfg.ContextMutations.Record(contextfrag.MutationCurrentInputImagesOmitted, "sources="+strings.Join(shed, ","))
 	}

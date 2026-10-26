@@ -14,9 +14,9 @@ import (
 type Pass struct {
 	ArtifactID string
 	Summary    string
-	// Covered names each row the summary folds, by history ID and, when the
-	// row has one, by external ID. Absorbed names the earlier summaries it
-	// folds.
+	// Covered names what the summary folds: each source as the request named
+	// it, and each row it folds by history ID. Absorbed names the earlier
+	// summaries it folds.
 	Covered  []turn.ContextMessageSource
 	Absorbed []string
 	// More reports candidates left that the pass could not read; the event

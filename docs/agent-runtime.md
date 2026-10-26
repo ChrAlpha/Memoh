@@ -44,40 +44,55 @@ stored reply or summary Channel rendered it from, at the version it rendered;
 the version crosses the internal RPC with the command. The inputs of the batch
 the run answers are anchors, so a fold reads only what the run's request
 renders: a message that arrives during the run is the next batch's input, not
-part of the summary. The steps before the run's answer mark their rows as such:
+part of the summary, and a row no timeline event renders stays raw for the chat
+view instead of being summarized unread. The steps before the run's answer mark their rows as such:
 they are context for later runs but do not prove the batch consumed, so a worker
 that comes back without a durable cursor still answers the input of a run that
 failed after committing steps. The answer, the completed step that calls no
 tool, is that proof.
 
-An armed run compacts with `compaction.Service.Fold`: one event over the
-request the run sends next, whose tail, the latest committed step and
-everything after it, stays verbatim after the summary. Each pass forks that
-request before its tail and asks the run's own model for the summary that
-replaces everything foldable there, the active checkpoint's summaries
-included. The fork keeps the run's system prompt, tools, cache key and
-reasoning settings and ends with one compaction instruction, so the summarizer
-reads what it replaces in place and the fork shares the run's prompt cache. It
-streams outside the run's call observer, and a stream that sends nothing for
-the run's model window is cut off; a transient failure is asked once more, and
-an answer that calls a tool once more with a firmer instruction. A fork that
-does not fit the window reads a shorter prefix ending at a tool-group boundary,
-and the event passes again over the request the native runtime spliced, each
-pass absorbing the summary before it. Every message of the request names what
-it renders: a history row, an inbound message or a summary. The run's query
-names the row that holds the run's request, which admission or the run's first
-step writes; runtime context the run rebuilds for every request names nothing
-and stays where it is. The run's input and steers are verbatim anchors, kept
-newest first within a cap, which the summarizer reads but never folds.
+An armed run compacts with `compaction.Service.Fold`, before any step whose
+request does not fit, the first one included: one event over the request the
+run sends next, whose tail stays verbatim after the summary with everything
+after it. The tail is the latest committed step; before the first one it is the
+input the run answers, or the deferred call and answer a decision continuation
+resumes from, and a Discuss run, whose inputs are anchors, starts from none.
+Each pass forks that request before its tail and asks the run's own model for
+the summary that replaces everything foldable there, the active checkpoint's
+summaries included. Before the run's first step the instruction also quotes
+the input, which follows the summary verbatim. The fork keeps the run's system
+prompt, tools, cache key and reasoning settings and ends with one compaction
+instruction, so the summarizer reads what it replaces in place and the fork
+shares the run's prompt cache. It streams outside the run's call observer, and
+a stream that sends nothing for the run's model window is cut off; a transient
+failure is asked once more, and an answer that calls a tool once more with a
+firmer instruction. A fork that does not fit the window reads a shorter prefix
+ending at a tool-group boundary, and the event passes again over the request
+the native runtime spliced, each pass absorbing the summary before it.
 
-Before a run's first step, `compaction.Service.Compact` executes one event that
+Every message of the request names what it renders: a history row, an inbound
+or self-sent message, or a summary. The run's query names the row that holds
+the run's request, which admission or the run's first step writes; runtime
+context the run rebuilds for every request names nothing and stays where it
+is, and so does a message no context row holds, which no checkpoint can stand
+for. Anchors are kept newest first: a run's input and steers within
+`min(20000, allowance/4)` tokens, the inputs a Discuss run answers while they
+leave a tenth of the room for the summary; older ones fold, and a folded input
+records the images it carried as omitted. When nothing but summaries is left,
+they are rewritten only if they do not fit the room the next request has, and
+a remainder too small for any summary to replace ends the event once the
+request fits. The context view keeps an armed run's whole history, without
+trimming, and every dispatch checks the allowance.
+
+`compaction.Service.Compact` folds history from rows instead: for a run that
+is not armed, for a chat load the byte budget truncated, whose request cannot
+render the rows it left out, and for Discuss input Channel omitted. One event
 folds the summaries of the session's active checkpoint and every eligible
 source into one rolling summary. A pass folds what one summarizer call can
 read; the event passes again only for what that call could not, and each
 further pass absorbs the summary before it. The current request is a verbatim
 anchor, not an independent summary segment. The latest tool/reasoning closure
-is protected. At approval or ask_user resume, the deferred call/result is the
-tail; earlier committed work remains eligible.
+is protected.
 
 The native runtime applies each committed fold to its own request snapshot by
 `turn.PlaceSummary`: messages the fold does not cover keep their bytes, and
@@ -110,18 +125,19 @@ units after it into one summary and commits a checkpoint on top of the active
 one (`checkpoint.Store.Commit`): its position is the last row it folds, and it
 keeps every context row up to there it does not fold, in history order: the ones
 the pass read before its summary, where the request that read them places it,
-and the ones it never read after it. Kept rows are a run's inputs and steers,
-which the summarizer reads but never folds, so a run that folds its own earlier
-steps leaves `[input, summary, latest steps]`; once the run is over the input is
-an ordinary candidate and the next compaction folds it. A pass that cannot read
+and the ones it never read after it. Kept rows are the anchors a fold keeps, a
+run's inputs and steers newest first, which the summarizer reads but does not
+fold, so a run that folds its own earlier steps leaves `[input, summary, latest
+steps]`; once the run is over the input is an ordinary candidate and the next
+compaction folds it. A pass that cannot read
 everything at once repeats the step, and each further pass folds onto the
 summary the one before wrote: an event whose session moved back between passes
 fails instead of folding the same history again. Only a commit moves the
-position; neither a byte window nor a cutoff does. Before a run's first step,
-candidates end where the caller's history does: before the cutoff of an edit or
-retry, else before the turn the request runs as, so a fold never reaches a row
-admitted after the request's own; within a run, a fold reads only what the run's
-request renders. A commit whose parent is no longer the session's active
+position; neither a byte window nor a cutoff does. A fold over a run's request
+reads only what that request renders. A fold from rows reads candidates that end
+where the caller's history does: before the cutoff of an edit or retry, else
+before the turn the request runs as, so a fold never reaches a row admitted
+after the request's own. A commit whose parent is no longer the session's active
 checkpoint, or whose folded rows are no longer context rows, fails with
 `checkpoint.ErrMoved`. A row it keeps that the pass never read is logged and
 counted (`history.checkpoint.unseen_rows_total`).
@@ -175,8 +191,8 @@ fork's first request does not fold again what the source had folded.
 
 Candidate payloads are read within byte bounds. A request reads the active
 checkpoint and walks its chain only to repair it; an edit or retry, a rewind
-and a fork walk it for the checkpoint they keep. In-run recovery does not
-load the raw history span or reread ancestor summaries. Owner fencing and
+and a fork walk it for the checkpoint they keep. A fold over a run's request
+does not load the raw history span or reread ancestor summaries. Owner fencing and
 cancellation remain authoritative. Failed passes publish nothing; successful
 earlier passes and tool effects stay committed.
 

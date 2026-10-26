@@ -453,6 +453,20 @@ func (c *agentStepCommitter) currentSources(sources []turn.ContextMessageSource)
 	return out
 }
 
+// replacedTurn is the turn an edit or retry replaces, until the run's first
+// step replaces it.
+func (c *agentStepCommitter) replacedTurn() string {
+	if c == nil {
+		return ""
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.replacementStarted || c.req.TurnReplacement == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.req.TurnReplacement.OldTurnID)
+}
+
 // stampSteerTurn files this step's injected steer input under the turn drawn
 // when the input was claimed, instead of letting persistence mint a second name
 // for it. The row is identified by position rather than by text, and the

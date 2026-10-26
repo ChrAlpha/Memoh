@@ -14,9 +14,10 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-// History that does not fit the model window is summarized before the turn,
-// from the oldest row no summary replaces however old it is, into one active
-// summary that the next compaction folds again. A summary as long as the prompt allows is
+// History that does not fit the model window is summarized before the run's
+// first step, however old it is: what the request renders from the oldest row
+// no summary replaces, into one active summary that the next compaction folds
+// again. A summary as long as the prompt allows is
 // answered without another compaction. When the summarizer fails, the turn
 // fails before any provider call and leaves history whole, naming the quota
 // when the provider refused the summarizer for it; once the
@@ -54,8 +55,15 @@ func TestPostgresPreTurnCompaction(t *testing.T) {
 				}
 			}
 			f.longSummary.Store(false)
-			if raw, compacted := f.backlogRowsPrefixed("old-"); raw != 0 || compacted != 4 {
-				t.Fatalf("history older than a day: raw=%d compacted=%d, want it summarized", raw, compacted)
+			// Discuss composes inbound messages from the timeline, and a fold
+			// summarizes what its request renders: rows no timeline event
+			// renders stay raw for the chat view, never summarized unread.
+			wantRaw := 0
+			if entry == "discuss" {
+				wantRaw = 4
+			}
+			if raw, compacted := f.backlogRowsPrefixed("old-"); raw != wantRaw || compacted != 4-wantRaw {
+				t.Fatalf("history older than a day: raw=%d compacted=%d, want %d raw", raw, compacted, wantRaw)
 			}
 			f.failSummary.Store(true)
 			f.appendRound(entry, "failed-")

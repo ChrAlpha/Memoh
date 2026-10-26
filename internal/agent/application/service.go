@@ -636,6 +636,10 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	forkMessages := nonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
 	runCfg.ContextProvenance = contextProvenance(forkMessages, historyRecords, compactionProtectedSources(req))
+	// A fold before the run's first step keeps the input it answers verbatim:
+	// the row or inbound message that holds it, or the query the run
+	// materializes before its first step writes it.
+	runCfg.ContextTail = append(compactionProtectedSources(req), requestSource)
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {

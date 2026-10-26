@@ -13,9 +13,9 @@ const (
 	// next request may take, so a fold leaves room for the turns after it
 	// instead of refilling the request it just emptied.
 	summaryShareOfAllowance = 4
-	// anchorCapTokens is the most a fold keeps of a run's anchors verbatim,
-	// newest first; older anchors fold like any other message. A small
-	// window keeps at most a quarter of its allowance.
+	// anchorCapTokens is the most a fold keeps of a run's input and steers
+	// verbatim, newest first; older anchors fold like any other message. A
+	// small window keeps at most a quarter of its allowance.
 	anchorCapTokens = 20000
 	// minForkOutputTokens is the least output a fork request asks for. A pass
 	// reads less of the request rather than ask for less.
@@ -24,6 +24,34 @@ const (
 	// the numbers it states.
 	instructionNumberSlack = 8
 )
+
+// AnchorPolicy is how much of a request's anchors a fold keeps verbatim,
+// newest first; the rest fold like any other message.
+type AnchorPolicy int
+
+const (
+	// AnchorsCapped keeps a run's input and steers within anchorCapTokens, so
+	// the summary keeps room for the steps after it.
+	AnchorsCapped AnchorPolicy = iota
+	// AnchorsFirst keeps the inputs a run answers, a Discuss batch, while they
+	// leave a tenth of the room beside the tail for the summary.
+	AnchorsFirst
+)
+
+// anchorCap is the most a fold keeps of ev's anchors.
+func anchorCap(ev Event) int {
+	if ev.Anchors != AnchorsFirst {
+		return min(anchorCapTokens, ev.Allowance/4)
+	}
+	var fixed []sdk.Message
+	for i, message := range ev.Request.Messages {
+		if i >= ev.Cut || len(ev.Sources[i].Sources) == 0 {
+			fixed = append(fixed, message)
+		}
+	}
+	room := ev.Allowance - forkTokens(sdk.Request{System: ev.Request.System, Messages: fixed, Tools: ev.Request.Tools})
+	return room - room/10
+}
 
 // foldPlan is one pass worked out before the summarizer is asked: what it
 // reads and folds, and how long its summary may be.
@@ -47,8 +75,12 @@ type foldPlan struct {
 	maxTokens   int
 	stated      int
 	instruction string
-	// keep marks the anchors before end the pass leaves verbatim.
+	// keep marks the messages before end the pass leaves verbatim: the
+	// anchors it keeps and the messages no context row holds.
 	keep map[int]bool
+	// rewrite marks a request with nothing left to fold but its summaries:
+	// a pass only rewrites them to fit the room the next request has.
+	rewrite bool
 }
 
 func (p foldPlan) folds() bool { return len(p.folded) > 0 || len(p.absorbed) > 0 }
@@ -57,15 +89,25 @@ func (p foldPlan) folds() bool { return len(p.folded) > 0 || len(p.absorbed) > 0
 // one the caller's next request carries.
 func (p foldPlan) final() bool { return p.end == p.cut }
 
+// bounded reports whether the pass's summary must fit the room the next
+// request has for it: the final pass's, and a rewrite's, which makes
+// progress only by leaving a summary that fits.
+func (p foldPlan) bounded() bool { return p.final() || p.rewrite }
+
 // planFold decides one pass over ev. Every message before the cut folds
-// except runtime context, which has no sources, and the anchors the cap
-// keeps; summaries are absorbed. The pass reads the longest prefix of the
+// except runtime context, which has no sources, the messages no context row
+// holds, and the anchors ev's policy keeps; summaries are absorbed. When
+// nothing but summaries is left, a pass rewrites them only if they do not fit
+// the room the next request has. The pass reads the longest prefix of the
 // request, ending at a tool-group boundary, that leaves the fork room to
 // answer: at least half of the summary what it reads may need, and never
 // less than minForkOutputTokens.
-func planFold(ev Event) (foldPlan, error) {
+func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	messages, sources := ev.Request.Messages, ev.Sources
-	kept := keptAnchors(messages, sources, ev.Cut, min(anchorCapTokens, ev.Allowance/4))
+	kept := keptAnchors(messages, sources, ev.Cut, anchorCap(ev), unfoldable)
+	for i := range unfoldable {
+		kept[i] = true
+	}
 	capability := ev.MaxOutputTokens
 	if capability <= 0 {
 		capability = ev.Allowance / summaryShareOfAllowance
@@ -78,6 +120,7 @@ func planFold(ev Event) (foldPlan, error) {
 			summariesEnd = i + 1
 		}
 	}
+	rewrite := len(spanPlan(ev, kept, ev.Cut).folded) == 0
 	var smaller error
 	for end := ev.Cut; end > 0; end-- {
 		if end < summariesEnd || !foldBoundary(messages, end) {
@@ -87,19 +130,20 @@ func planFold(ev Event) (foldPlan, error) {
 		if !plan.folds() {
 			continue
 		}
+		plan.rewrite = rewrite
 		err := plan.size(ev, capability)
 		switch {
 		case ReasonOf(err) == ReasonProtectedOverflow:
 			return foldPlan{}, err
+		case rewrite && plan.replaced <= plan.room:
+			// Only summaries are left, and they fit: folding them again
+			// would only rewrite them.
+			return foldPlan{}, nil
 		case err != nil:
 			if smaller == nil {
 				smaller = err
 			}
 			continue
-		case len(plan.folded) == 0 && (!plan.final() || plan.replaced <= plan.room):
-			// Only summaries are left, and they fit: folding them again
-			// would only rewrite them.
-			return foldPlan{}, nil
 		}
 		need := max(minForkOutputTokens, min(ev.Allowance/summaryShareOfAllowance, plan.replaced)/2)
 		if plan.maxTokens >= min(capability, need) {
@@ -107,6 +151,11 @@ func planFold(ev Event) (foldPlan, error) {
 		}
 	}
 	if smaller != nil {
+		// What is left is too little for any summary to replace; once the
+		// request fits, the event is done.
+		if forkTokens(ev.Request) <= ev.Allowance {
+			return foldPlan{}, nil
+		}
 		return foldPlan{}, smaller
 	}
 	if !spanPlan(ev, kept, ev.Cut).folds() {
@@ -116,12 +165,13 @@ func planFold(ev Event) (foldPlan, error) {
 }
 
 // keptAnchors marks the anchors before the cut a fold keeps verbatim: the
-// newest ones, while they fit the cap.
-func keptAnchors(messages []sdk.Message, sources []Source, cut, capTokens int) map[int]bool {
+// newest ones, while they fit the cap. An anchor the fold cannot stand for
+// stays anyway and takes none of it.
+func keptAnchors(messages []sdk.Message, sources []Source, cut, capTokens int, unfoldable map[int]bool) map[int]bool {
 	kept := map[int]bool{}
 	tokens := 0
 	for i := cut - 1; i >= 0; i-- {
-		if !sources[i].Anchor {
+		if !sources[i].Anchor || unfoldable[i] {
 			continue
 		}
 		cost := forkTokens(sdk.Request{Messages: messages[i : i+1]})
@@ -205,10 +255,10 @@ func (p *foldPlan) size(ev Event, capability int) error {
 	p.instruction = forkInstruction(ev, p)
 	p.maxTokens = min(capability, ev.Window-prefix-instructionTokens(p.instruction)-instructionNumberSlack)
 	p.stated = min(p.maxTokens*3/4, ev.Allowance/summaryShareOfAllowance, summaryOutputLimit(p.replaced-1, capability))
-	if p.final() {
+	if p.bounded() {
 		p.stated = min(p.stated, summaryOutputLimit(p.room, capability))
 	}
-	if p.final() && summaryOutputLimit(p.room, capability) < minSummaryTokens {
+	if p.bounded() && summaryOutputLimit(p.room, capability) < minSummaryTokens {
 		return failed(ReasonProtectedOverflow, fmt.Errorf("%w: allowance=%d room=%d", errNoSummaryRoom, ev.Allowance, p.room))
 	}
 	if p.stated < minSummaryTokens && p.maxTokens >= minForkOutputTokens {

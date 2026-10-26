@@ -64,7 +64,7 @@ func forkInstruction(ev Event, p *foldPlan) string {
 		}
 		sb.WriteString("\n")
 	}
-	if p.final() {
+	if p.bounded() {
 		fmt.Fprintf(&sb, "The next request has room for about %d tokens beside what it keeps verbatim, so the summary must stay under %d tokens; it can be much shorter when the content allows. Output only the summary, with no preamble.\n", p.room, p.stated)
 	} else {
 		fmt.Fprintf(&sb, "The summary must stay under %d tokens; it can be much shorter when the content allows. Output only the summary, with no preamble.\n", p.stated)

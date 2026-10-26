@@ -123,6 +123,7 @@ func (s *Service) prepareContinuationRunConfig(
 	outgoing := repairToolCallClosures(nonNilModelMessages(messages), syntheticToolClosureError)
 	base.ContextProvenance = contextProvenance(outgoing, retained, append(compactionProtectedSources(req), req.continuationAnchors...))
 	base.Messages = modelMessagesToSDKMessages(outgoing)
+	base.ContextTail = req.continuationTail
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil
 	base.Query = ""

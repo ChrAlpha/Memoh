@@ -386,3 +386,162 @@ func TestFoldBoundsTheSummaryBelowTheRoom(t *testing.T) {
 		t.Fatalf("stated limit %d, max_tokens %d: want at most %d and below the output cap", stated, *fork.MaxTokens, ev.Allowance/summaryShareOfAllowance)
 	}
 }
+
+// inbound adds a context row written from an inbound or self-sent message
+// and returns the message's external ID.
+func (s *foldSession) inbound(external string) string {
+	id := pgtype.UUID{Bytes: uuid.New(), Valid: true}
+	s.q.history = append(s.q.history, candidateRow{ID: id, Role: "user", Content: []byte(`"row"`), ExternalMessageID: pgtype.Text{String: external, Valid: true}})
+	return external
+}
+
+// A message that renders a source no context row holds cannot be folded:
+// the checkpoint has nothing to stand for, so it stays where it is and the
+// summary leaves it alone. A self-sent message folds by the row it was
+// written to, and the pass names it as the request did, so the request's own
+// splice removes it.
+func TestFoldStandsOnlyForWhatRowsHold(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	echo := turn.ContextMessageSource{Kind: "self", ID: s.inbound("echo-1")}
+	ghost := turn.ContextMessageSource{Kind: "external", ID: "never-written"}
+	r.messages = slices.Insert(r.messages, 1, sdk.UserMessage("the bot said so"+strings.Repeat(" e", 400)), sdk.UserMessage("a message no row holds"))
+	r.sources = slices.Insert(r.sources, 1, historySource(echo), historySource(ghost))
+	r.cut += 2
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The parser audit and the bot's note are summarized.")}}
+
+	passes, err := s.svc.Fold(context.Background(), s.event(r, summarizer))
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("passes=%+v err=%v, want one pass", passes, err)
+	}
+	if !slices.Contains(passes[0].Covered, echo) || slices.Contains(passes[0].Covered, ghost) {
+		t.Fatalf("covered = %v, want the self-sent message folded by its row and the rowless one left", passes[0].Covered)
+	}
+	instruction := messageText(summarizer.requests[0].Messages[len(summarizer.requests[0].Messages)-1])
+	if !strings.Contains(instruction, "a message no row holds") {
+		t.Fatalf("the instruction does not name the message that stays:\n%s", instruction)
+	}
+	messages, _, _ := Splice(r.messages, r.sources, r.cut, passes[0])
+	if slices.ContainsFunc(messages, func(m sdk.Message) bool { return strings.HasPrefix(messageText(m), "the bot said so") }) ||
+		!slices.ContainsFunc(messages, func(m sdk.Message) bool { return messageText(m) == "a message no row holds" }) {
+		t.Fatal("the splice did not remove the folded self-sent message and keep the rowless one")
+	}
+}
+
+// When nothing but summaries is left to fold, an event rewrites them only
+// when they do not fit the room the next request has, and the rewrite must
+// fit it; summaries that fit are left alone.
+func TestFoldRewritesSummariesOnlyToFitTheRoom(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		allowance int
+		passes    int
+	}{
+		{name: "fits", allowance: 24000},
+		{name: "over the room", allowance: 1000, passes: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newFoldSession(t)
+			earlier := strings.Repeat("The earlier work is long. ", 200)
+			held := s.q.hold(earlier)
+			input := s.row()
+			messages := []sdk.Message{SummaryMessage(earlier), sdk.UserMessage("RUN_INPUT"), callMessage("call_1"), resultMessage("call_1", "done")}
+			sources := []Source{historySource(turn.ContextMessageSource{Kind: "summary", ID: summaryIDs(held)[0]}), {Sources: []turn.ContextMessageSource{input}, Anchor: true}, historySource(s.row()), historySource(s.row())}
+			summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("Earlier work, shortened.")}}
+			ev := s.event(request{messages: messages, sources: sources, cut: 2}, summarizer)
+			ev.Allowance = tc.allowance
+
+			passes, err := s.svc.Fold(context.Background(), ev)
+			if err != nil || len(passes) != tc.passes {
+				t.Fatalf("passes=%d err=%v, want %d", len(passes), err, tc.passes)
+			}
+			if tc.passes == 0 {
+				return
+			}
+			if len(passes[0].Covered) != 0 || !slices.Equal(passes[0].Absorbed, summaryIDs(held)) || passes[0].More {
+				t.Fatalf("pass = %+v, want the summary rewritten and nothing else folded", passes[0])
+			}
+			if limit := summaryLimitIn(t, summarizer.requests[0]); limit > tc.allowance {
+				t.Fatalf("the rewrite may take %d tokens, over the %d the request has", limit, tc.allowance)
+			}
+		})
+	}
+}
+
+// A residue too small for any summary to replace ends the event once the
+// request fits, rather than failing it as ineffective.
+func TestFoldLeavesAResidueTooSmallToSummarize(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	held := s.q.hold("Earlier work summarized.")
+	input := s.row()
+	messages := []sdk.Message{SummaryMessage("Earlier work summarized."), sdk.AssistantMessage("ok"), sdk.UserMessage("RUN_INPUT"), callMessage("call_1"), resultMessage("call_1", "done")}
+	sources := []Source{historySource(turn.ContextMessageSource{Kind: "summary", ID: summaryIDs(held)[0]}), historySource(s.row()), {Sources: []turn.ContextMessageSource{input}, Anchor: true}, historySource(s.row()), historySource(s.row())}
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("unused")}}
+
+	passes, err := s.svc.Fold(context.Background(), s.event(request{messages: messages, sources: sources, cut: 3}, summarizer))
+	if err != nil || len(passes) != 0 || len(summarizer.requests) != 0 {
+		t.Fatalf("passes=%d err=%v summarizer calls=%d, want the fitting request left alone", len(passes), err, len(summarizer.requests))
+	}
+}
+
+// A Discuss run keeps the inputs it answers while they leave a tenth of the
+// room for the summary; the default cap keeps a run's input and steers
+// within a quarter of the allowance. Older anchors fold either way.
+func TestFoldKeepsAnchorsByPolicy(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		policy AnchorPolicy
+		folded int
+	}{
+		{name: "capped", policy: AnchorsCapped, folded: 3},
+		{name: "inputs first", policy: AnchorsFirst, folded: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newFoldSession(t)
+			held := s.q.hold("Earlier talk summarized.")
+			messages := []sdk.Message{SummaryMessage("Earlier talk summarized.")}
+			sources := []Source{historySource(turn.ContextMessageSource{Kind: "summary", ID: summaryIDs(held)[0]})}
+			var inputs []turn.ContextMessageSource
+			for i := range 4 {
+				input := turn.ContextMessageSource{Kind: "external", ID: s.inbound("input-" + strconv.Itoa(i))}
+				inputs = append(inputs, input)
+				messages = append(messages, sdk.UserMessage("input "+strconv.Itoa(i)+strings.Repeat(" i", 1200)))
+				sources = append(sources, Source{Sources: []turn.ContextMessageSource{input}, Anchor: true})
+			}
+			summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("Earlier talk and the oldest inputs summarized.")}}
+			ev := s.event(request{messages: messages, sources: sources, cut: len(messages)}, summarizer)
+			ev.Request.Tools, ev.Allowance, ev.Window, ev.Anchors = nil, 3200, 12000, tc.policy
+
+			passes, err := s.svc.Fold(context.Background(), ev)
+			if err != nil || len(passes) != 1 {
+				t.Fatalf("passes=%d err=%v, want one pass", len(passes), err)
+			}
+			for i, input := range inputs {
+				if folded := slices.Contains(passes[0].Covered, input); folded != (i < tc.folded) {
+					t.Fatalf("input %d folded=%v, want the %d oldest folded", i, folded, tc.folded)
+				}
+			}
+		})
+	}
+}
+
+// summaryLimitIn is the summary length a fork request's instruction states.
+func summaryLimitIn(t *testing.T, fork sdk.Request) int {
+	t.Helper()
+	instruction := messageText(fork.Messages[len(fork.Messages)-1])
+	_, after, ok := strings.Cut(instruction, "must stay under ")
+	if !ok {
+		t.Fatalf("the instruction states no summary limit:\n%s", instruction)
+	}
+	limit, err := strconv.Atoi(strings.Fields(after)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return limit
+}
