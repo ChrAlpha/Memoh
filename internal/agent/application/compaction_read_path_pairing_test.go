@@ -138,14 +138,14 @@ func pairingRow(i int, role, content string) sqlc.ListHistoryCheckpointCandidate
 	}
 }
 
-// TestSelectorToReadPathPreservesOrderEndToEnd drives the real compaction
-// selector over a history with a pending ask_user island, commits its
-// checkpoint, and reads the history back through it. It pins the pair of
-// invariants that live in different packages: the selector folds only the
-// run before the island, which ends what any pass folds, and the read path
-// renders the summary in that run's place — content behind the island (like
-// "mid q") must never fold in front of it.
-func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
+// TestSelectorToReadPathFoldsAClosedAskUserCall drives the real compaction
+// selector over a history whose ask_user call the conversation moved on from
+// without an answer, commits its checkpoint, and reads the history back
+// through it. It pins the pair of invariants that live in different
+// packages: the selector folds the closed call with the history around it as
+// one contiguous run, and the read path renders the summary in that run's
+// place, ahead of the current input it never covers.
+func TestSelectorToReadPathFoldsAClosedAskUserCall(t *testing.T) {
 	t.Parallel()
 
 	rows := []sqlc.ListHistoryCheckpointCandidatesWithinBytesRow{
@@ -176,7 +176,7 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		HistoryBudgetTokens: 1000,
 	})
 	if err != nil || len(passes) != 1 || passes[0].More {
-		t.Fatalf("passes = %+v err = %v, want one pass that stops at the island", passes, err)
+		t.Fatalf("passes = %+v err = %v, want one pass that folds the history before the current input", passes, err)
 	}
 
 	committed := q.checkpoints[q.active]
@@ -185,9 +185,9 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	compactID := uuid.UUID(q.logID.Bytes).String()
-	if position := (messagepkg.HistoryPosition{Turn: committed.TurnPosition, Seq: committed.TurnMessageSeq}); position != pairingPosition(rows[1]) ||
+	if position := (messagepkg.HistoryPosition{Turn: committed.TurnPosition, Seq: committed.TurnMessageSeq}); position != pairingPosition(rows[3]) ||
 		!reflect.DeepEqual(items, []checkpoint.Item{{SummaryID: compactID}}) {
-		t.Fatalf("checkpoint at %+v holds %+v, want the summary of exactly the contiguous pre-island run [old q, old a]", position, items)
+		t.Fatalf("checkpoint at %+v holds %+v, want the summary of the contiguous run [old q, old a, ask_user call, mid q]", position, items)
 	}
 
 	messages := make([]messagepkg.Message, 0, len(rows))
@@ -203,7 +203,7 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{compactID, messages[2].ID, messages[3].ID, messages[4].ID}
+	want := []string{compactID, messages[4].ID}
 	if gotIDs := recordSequenceIDs(got); !reflect.DeepEqual(gotIDs, want) {
 		t.Fatalf("selector output broke read-path ordering:\ngot  %v\nwant %v", gotIDs, want)
 	}

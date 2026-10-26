@@ -148,26 +148,6 @@ func TestTrimCompactMessagesNeverCutsAnOversizedFirstGroup(t *testing.T) {
 	}
 }
 
-func TestTrimCompactMessagesMustKeepRowsCostNoBudget(t *testing.T) {
-	t.Parallel()
-
-	askCall := mkRow(t, "assistant", `[{"type":"tool-call","toolName":"ask_user","toolCallId":"a","input":{}}]`, 600)
-	rows := []candidateRow{
-		askCall,
-		textRow(t, "user", 100),
-		textRow(t, "assistant", 100),
-		textRow(t, "user", 100),
-	}
-	items, _ := candidatesFromRows(rows)
-	trimmed := trimCompactMessages(items, 300)
-	if len(trimmed) != 3 {
-		t.Fatalf("trimmed = %d, want must-keep island (free) plus two rows within budget", len(trimmed))
-	}
-	if !trimmed[0].HasPolicy(CompactPolicyMustKeep) {
-		t.Fatalf("must-keep island must stay in place at the head")
-	}
-}
-
 func TestAdjustForToolBoundaryIgnoresZeroCutoff(t *testing.T) {
 	t.Parallel()
 

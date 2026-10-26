@@ -266,10 +266,6 @@ CREATE TABLE IF NOT EXISTS bots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   acl_default_effect TEXT NOT NULL DEFAULT 'allow',
-  -- When the bot's history started being kept under history checkpoints: its
-  -- creation, or for an older bot the migration that introduced them. A
-  -- context row created before it predates them (0171).
-  history_checkpoints_since TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT bots_type_check CHECK (type IN ('personal', 'public')),
   CONSTRAINT bots_status_check CHECK (status IN ('creating', 'ready', 'deleting', 'failed')),
   CONSTRAINT bots_acl_default_effect_check CHECK (acl_default_effect IN ('allow', 'deny')),
