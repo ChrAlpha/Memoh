@@ -275,6 +275,35 @@ func TestFoldReadsLessWhenThePrefixFillsTheWindow(t *testing.T) {
 	}
 }
 
+// A message larger than the window the summarizer reads in is no wall: the
+// fork reads its head and tail, and the summary stands for all of it.
+func TestFoldReadsAMessageLargerThanItsWindowByItsHeadAndTail(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	huge := "HUGE_HEAD " + strings.Repeat("payload ", 12000) + " HUGE_TAIL"
+	r.messages[1] = sdk.UserMessage(huge)
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The audit request and its findings are summarized.")}}
+	ev := s.event(r, summarizer)
+	ev.Window, ev.Allowance, ev.MaxOutputTokens = 8000, 6000, 2000
+	if tokens := forkTokens(sdk.Request{Messages: r.messages[1:2]}); tokens <= ev.Window {
+		t.Fatalf("the message takes %d tokens, want more than the %d-token window", tokens, ev.Window)
+	}
+
+	passes, err := s.svc.Fold(context.Background(), ev)
+	if err != nil || len(passes) != 1 || !slices.Contains(passes[0].Covered, r.rows[0]) {
+		t.Fatalf("passes=%+v err=%v, want one pass that stands for the large message", passes, err)
+	}
+	fork := summarizer.requests[0]
+	read := messageText(fork.Messages[1])
+	if forkTokens(fork) > ev.Window || !strings.Contains(read, "HUGE_HEAD") || !strings.Contains(read, "HUGE_TAIL") || !strings.Contains(read, "[memoh pruned]") {
+		t.Fatalf("fork = %d tokens, read %d bytes of the message, want its head and tail within the window", forkTokens(fork), len(read))
+	}
+	if messageText(fork.Messages[0]) != messageText(r.messages[0]) || len(fork.Messages) != r.cut+1 {
+		t.Fatalf("the fork changed a message it can read whole")
+	}
+}
+
 // A summarizer that calls a tool is asked once more with the same prefix; a
 // second tool call fails the event.
 func TestFoldAsksAgainOnceWhenTheSummarizerCallsATool(t *testing.T) {

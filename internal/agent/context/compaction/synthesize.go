@@ -66,13 +66,15 @@ func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis,
 		BeforeTurnPosition:   beforeTurn,
 		BeforeTurnMessageSeq: beforeSeq,
 		MaxBytes:             readMaxBytes,
+		MaxRowBytes:          maxCompactionReadBytes,
 	})
 	if err != nil {
 		return synthesis{}, fmt.Errorf("load the rows to compact: %w", err)
 	}
 	if len(rows) == 0 {
-		// The read admits rows oldest first; one larger than the bound
-		// admits none, though rows are left.
+		// The read admits rows oldest first, a leading one larger than the
+		// bound alone; one larger than any read admits none, though rows
+		// are left.
 		measure, err := s.queries.MeasureHistoryCheckpointCandidates(ctx, sqlc.MeasureHistoryCheckpointCandidatesParams{
 			SessionID:            sessionUUID,
 			AfterTurnPosition:    parent.Position.Turn,
@@ -85,7 +87,7 @@ func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis,
 			return synthesis{}, err
 		}
 		if measure.CandidateCount > 0 {
-			return synthesis{}, failed(ReasonInputOverflow, fmt.Errorf("%w: largest_candidate_bytes=%d read_max_bytes=%d", errCompactionInputOverflow, measure.LargestCandidateBytes, readMaxBytes))
+			return synthesis{}, failed(ReasonInputOverflow, fmt.Errorf("%w: largest_candidate_bytes=%d max_row_bytes=%d", errCompactionInputOverflow, measure.LargestCandidateBytes, maxCompactionReadBytes))
 		}
 	}
 

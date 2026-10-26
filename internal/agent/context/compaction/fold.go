@@ -139,7 +139,7 @@ func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
 		return Pass{}, false, err
 	}
 	fork := ev.Request
-	fork.Messages = append(slices.Clip(ev.Request.Messages[:plan.end]), sdk.UserMessage(plan.instruction))
+	fork.Messages = append(slices.Clip(plan.fork), sdk.UserMessage(plan.instruction))
 	fork.MaxTokens = &plan.maxTokens
 
 	persistCtx := context.WithoutCancel(ctx)

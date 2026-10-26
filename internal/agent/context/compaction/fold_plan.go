@@ -23,6 +23,9 @@ const (
 	// instructionNumberSlack covers the instruction growing by the digits of
 	// the numbers it states.
 	instructionNumberSlack = 8
+	// forkInstructionReserve is what a fork keeps for its instruction when
+	// it bounds the messages it reads.
+	forkInstructionReserve = 1024
 )
 
 // AnchorPolicy is how much of a request's anchors a fold keeps verbatim,
@@ -81,6 +84,9 @@ type foldPlan struct {
 	// rewrite marks a request with nothing left to fold but its summaries:
 	// a pass only rewrites them to fit the room the next request has.
 	rewrite bool
+	// fork is what the pass sends its summarizer of the request before the
+	// instruction (forkRead).
+	fork []sdk.Message
 }
 
 func (p foldPlan) folds() bool { return len(p.folded) > 0 || len(p.absorbed) > 0 }
@@ -121,6 +127,7 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 		}
 	}
 	rewrite := len(spanPlan(ev, kept, ev.Cut).folded) == 0
+	read := forkRead(ev)
 	var smaller error
 	for end := ev.Cut; end > 0; end-- {
 		if end < summariesEnd || !foldBoundary(messages, end) {
@@ -130,7 +137,7 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 		if !plan.folds() {
 			continue
 		}
-		plan.rewrite = rewrite
+		plan.rewrite, plan.fork = rewrite, read[:end]
 		err := plan.size(ev, capability)
 		switch {
 		case ReasonOf(err) == ReasonProtectedOverflow:
@@ -251,7 +258,7 @@ func (p *foldPlan) size(ev Event, capability int) error {
 	}
 	p.replaced = forkTokens(sdk.Request{Messages: replaced})
 	p.room = ev.Allowance - forkTokens(sdk.Request{System: ev.Request.System, Messages: keptMessages, Tools: ev.Request.Tools})
-	prefix := forkTokens(sdk.Request{System: ev.Request.System, Messages: messages[:p.end], Tools: ev.Request.Tools})
+	prefix := forkTokens(sdk.Request{System: ev.Request.System, Messages: p.fork, Tools: ev.Request.Tools})
 	p.instruction = forkInstruction(ev, p)
 	p.maxTokens = min(capability, ev.Window-prefix-instructionTokens(p.instruction)-instructionNumberSlack)
 	p.stated = min(p.maxTokens*3/4, ev.Allowance/summaryShareOfAllowance, summaryOutputLimit(p.replaced-1, capability))

@@ -51,6 +51,35 @@ func TestCompactFoldsTheRowsBeforeTheCurrentInput(t *testing.T) {
 	}
 }
 
+// A row larger than one bounded read is read alone, and the summarizer reads
+// its head and tail: the event folds it like any other row.
+func TestCompactReadsARowLargerThanTheReadBoundAlone(t *testing.T) {
+	t.Parallel()
+
+	huge := "HUGE_HEAD " + strings.Repeat("payload ", 80000) + " HUGE_TAIL"
+	rows := []candidateRow{
+		mkRow(t, "user", `[{"type":"text","text":"`+huge+`"}]`, 100),
+		mkRow(t, "assistant", `[{"type":"text","text":"read it"}]`, 100),
+		mkRow(t, "user", `[{"type":"text","text":"recent question"}]`, 100),
+	}
+	q := &fakeQueries{history: rows}
+	stub := &stubModel{summary: "A long payload was shared and read."}
+	svc := newMachineryService(q)
+	cfg := currentConfig(stub, 4000, rows[2])
+	cfg.SummaryWindowTokens = 32000
+	if size := payloadBytesForTest(rows[0]); size <= compactionReadMaxBytes(cfg.SummaryWindowTokens) {
+		t.Fatalf("the row takes %d bytes, want more than one read admits", size)
+	}
+
+	passes, err := svc.Compact(context.Background(), cfg)
+	if err != nil || len(passes) == 0 || !slices.Contains(q.folded, rows[0].ID) {
+		t.Fatalf("passes=%d err=%v folded=%d rows, want the large row folded", len(passes), err, len(q.folded))
+	}
+	if !strings.Contains(stub.prompt, "HUGE_HEAD") || !strings.Contains(stub.prompt, "HUGE_TAIL") || len(stub.prompt) >= len(huge) {
+		t.Fatalf("the summarizer read %d bytes, want the row's head and tail", len(stub.prompt))
+	}
+}
+
 // An anchor a fold from rows keeps stays raw in its place: the checkpoint
 // keeps it by reference before the summary, which folds the rows around it.
 func TestCompactKeepsAnAnchorByReference(t *testing.T) {

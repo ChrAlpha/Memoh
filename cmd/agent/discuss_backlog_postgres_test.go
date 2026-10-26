@@ -393,9 +393,9 @@ func TestPostgresDiscussBacklogSummarizerFailureFailsExplicitly(t *testing.T) {
 }
 
 // A newest input that cannot fit even alone fails once, without consuming the
-// batch. Demoted to history, it is still more than the summarizer can read in
-// one call, so the next round fails explicitly instead of answering without it.
-func TestPostgresDiscussUnreadableOversizedInputFailsExplicitly(t *testing.T) {
+// batch. Demoted to history, it is more than the summarizer can read in one
+// call, so the next round folds it by its head and tail and answers.
+func TestPostgresDiscussOversizedInputFoldsByItsHeadAndTail(t *testing.T) {
 	for _, size := range []int{70_000, 600_000} {
 		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			f := newBacklogFixture(t)
@@ -404,11 +404,12 @@ func TestPostgresDiscussUnreadableOversizedInputFailsExplicitly(t *testing.T) {
 				t.Fatalf("oversized newest input: code=%q provider_calls=%d, want one bounded protected_overflow", code, f.modelCalls.Load())
 			}
 			f.appendMessage("next-round", "next-round small message")
-			if code := f.trigger(); code != "context.budget_unsatisfied" || f.modelCalls.Load() != 0 || f.summaries.Load() != 0 {
-				t.Fatalf("next round: code=%q provider_calls=%d summaries=%d, want budget_unsatisfied before any call", code, f.modelCalls.Load(), f.summaries.Load())
+			request := f.answer("next round", "next-round small message")
+			if f.summaries.Load() == 0 || !strings.Contains(request, "Earlier backlog summarized.") || strings.Contains(request, strings.Repeat("y", 1000)) {
+				t.Fatalf("next round: summaries=%d, want the oversized input folded into the summary it renders", f.summaries.Load())
 			}
-			if _, compacted := f.backlogRowsPrefixed("oversized"); compacted != 0 {
-				t.Fatal("an input the summarizer could not read was folded")
+			if _, compacted := f.backlogRowsPrefixed("oversized"); compacted != 1 {
+				t.Fatal("the oversized input was not folded")
 			}
 		})
 	}
