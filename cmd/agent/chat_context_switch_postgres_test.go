@@ -114,6 +114,14 @@ type effectLoop struct {
 	arrived  []timeline.RenderedSegment
 	effects  []int
 	requests []string
+	// folds is how many summaries the session had asked for when each
+	// request was sent, and runs the run that sent it; replaced marks the
+	// requests a turn replacement started from, and outOfBand the runs that
+	// a row was written beside without rendering it.
+	folds     []int32
+	runs      []string
+	replaced  map[int]bool
+	outOfBand map[string]bool
 }
 
 type approveExec struct{}
@@ -133,6 +141,7 @@ func newEffectLoop(t *testing.T, entry runEntry) *effectLoop {
 	f := newBacklogFixture(t)
 	s := &effectLoop{f: f}
 	f.stream = s.serve
+	t.Cleanup(func() { s.checkRequests(t) })
 	f.agent.SetToolProviders([]tools.ToolProvider{s})
 	if _, err := f.pool.Exec(f.ctx, `UPDATE models SET config=config || '{"compatibilities":["tool-call"]}'::jsonb WHERE id=$1`, f.chatModel); err != nil {
 		t.Fatal(err)
@@ -158,6 +167,94 @@ func newEffectLoop(t *testing.T, entry runEntry) *effectLoop {
 		}
 	}
 	return s
+}
+
+// checkRequests holds every request the session sent its model to the
+// contract: its tool calls and results pair in both directions, and between
+// two folds a request extends the one before it, whichever run sent it. A
+// turn replacement starts over from the request before the replaced turn,
+// and a row written beside a run without the run rendering it takes its
+// place in the next run's request.
+func (s *effectLoop) checkRequests(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, request := range s.requests {
+		if err := pairedToolParts(request); err != nil {
+			t.Errorf("request %d: %v", i+1, err)
+		}
+		if i == 0 || s.folds[i] != s.folds[i-1] || s.replaced[i] ||
+			s.runs[i] != s.runs[i-1] && s.outOfBand[s.runs[i-1]] {
+			continue
+		}
+		before, after := requestMessages(t, s.requests[i-1]), requestMessages(t, request)
+		if at := divergence(before, after); at >= 0 {
+			t.Errorf("request %d rewrote message %d of the request before it with no fold between them:\nbefore: %.300s\nafter:  %.300s", i+1, at, before[at], messageAt(after, at))
+		}
+	}
+}
+
+// activeRun is the run that holds the session's active slot.
+func (s *effectLoop) activeRun() string {
+	var run string
+	_ = s.f.pool.QueryRow(s.f.ctx, `SELECT run_id::text FROM session_runs WHERE session_id=$1 AND state IN ('accepted', 'running', 'waiting_decision', 'finishing') LIMIT 1`, s.f.sessionID).Scan(&run)
+	return run
+}
+
+// pairedToolParts reports a tool call a request leaves without its result,
+// or a result it sends without its call.
+func pairedToolParts(request string) error {
+	var body struct {
+		Messages []struct {
+			Role       string `json:"role"`
+			ToolCallID string `json:"tool_call_id"`
+			ToolCalls  []struct {
+				ID string `json:"id"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(request), &body); err != nil {
+		return err
+	}
+	var open []string
+	for i, message := range body.Messages {
+		if message.Role == "tool" {
+			at := slices.Index(open, message.ToolCallID)
+			if at < 0 {
+				return fmt.Errorf("message %d is a result for %q without its call", i, message.ToolCallID)
+			}
+			open = slices.Delete(open, at, at+1)
+			continue
+		}
+		if len(open) > 0 {
+			return fmt.Errorf("message %d follows calls %v left without results", i, open)
+		}
+		for _, call := range message.ToolCalls {
+			open = append(open, call.ID)
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("the request ends with calls %v left without results", open)
+	}
+	return nil
+}
+
+// divergence is the first message of before that after does not carry at
+// the same place, or -1 when after extends before.
+func divergence(before, after []string) int {
+	for i, message := range before {
+		if i >= len(after) || after[i] != message {
+			return i
+		}
+	}
+	return -1
+}
+
+func messageAt(messages []string, i int) string {
+	if i < len(messages) {
+		return messages[i]
+	}
+	return "(none)"
 }
 
 // window sets the context window of the model the runs use.
@@ -215,6 +312,12 @@ func (s *effectLoop) Tools(context.Context, tools.SessionContext) ([]toolexec.To
 // never renders.
 func (s *effectLoop) writeForeignRow(ctx context.Context) error {
 	f := s.f
+	s.mu.Lock()
+	if s.outOfBand == nil {
+		s.outOfBand = map[string]bool{}
+	}
+	s.outOfBand[s.runs[len(s.runs)-1]] = true
+	s.mu.Unlock()
 	content, err := historyfrag.MarshalStoredModelMessage(turn.ModelMessage{Role: "assistant", Content: turn.NewTextContent(foreignRow)})
 	if err != nil {
 		return err
@@ -230,6 +333,8 @@ func (s *effectLoop) serve(w http.ResponseWriter, body []byte) {
 	request := string(body)
 	s.mu.Lock()
 	s.requests = append(s.requests, request)
+	s.folds = append(s.folds, s.f.summaries.Load())
+	s.runs = append(s.runs, s.activeRun())
 	reply := fmt.Sprintf("REPLY_%03d", len(s.requests))
 	call, arguments := "", ""
 	if s.marker != "" && strings.Contains(request, s.marker) {
@@ -489,6 +594,12 @@ func (s *effectLoop) replace(first string, start replaceTurn) string {
 func (s *effectLoop) replaceLatest(start replaceTurn) string {
 	f := s.f
 	f.t.Helper()
+	s.mu.Lock()
+	if s.replaced == nil {
+		s.replaced = map[int]bool{}
+	}
+	s.replaced[len(s.requests)] = true
+	s.mu.Unlock()
 	var targetTurnID string
 	if err := f.pool.QueryRow(f.ctx, `SELECT turn_id FROM bot_history_messages WHERE session_id=$1 AND turn_id IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1`, f.sessionID).Scan(&targetTurnID); err != nil {
 		f.t.Fatal(err)
