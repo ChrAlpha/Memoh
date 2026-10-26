@@ -120,7 +120,7 @@ func TestPostgresPreTurnCompactionFoldsAnAskUserCallItsRunAbandoned(t *testing.T
 		t.Fatalf("code=%q summaries=%d, want the turn answered after a summary", code, f.summaries.Load()-summaries)
 	}
 	var raw int
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND compact_id IS NULL AND content::text LIKE '%ask_user%'`, f.sessionID).Scan(&raw); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM (`+historyRowsSQL+`) h WHERE NOT h.folded AND h.content::text LIKE '%ask_user%'`, f.sessionID).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
 	if raw != 0 {
