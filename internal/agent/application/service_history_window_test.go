@@ -111,14 +111,15 @@ type positionedHistory struct {
 	rows []messagepkg.Message
 }
 
-func (h *positionedHistory) position(i int) messagepkg.HistoryPosition {
+// historyPosition is the place of the i-th row of a positionedHistory.
+func historyPosition(i int) messagepkg.HistoryPosition {
 	return messagepkg.HistoryPosition{Turn: int64(i + 1), Seq: 1}
 }
 
 func (h *positionedHistory) HistoryPositionByID(_ context.Context, _ string, messageID string) (messagepkg.HistoryPosition, error) {
 	for i, row := range h.rows {
 		if row.ID == messageID {
-			return h.position(i), nil
+			return historyPosition(i), nil
 		}
 	}
 	return messagepkg.HistoryPosition{}, errors.New("history cutoff not found")
@@ -127,7 +128,7 @@ func (h *positionedHistory) HistoryPositionByID(_ context.Context, _ string, mes
 func (h *positionedHistory) ListHistoryWithinBytes(_ context.Context, _ string, window messagepkg.HistoryWindow) (messagepkg.HistoryLoad, error) {
 	var rows []messagepkg.Message
 	for i, row := range h.rows {
-		if window.After.Before(h.position(i)) && (window.Before == nil || h.position(i).Before(*window.Before)) {
+		if window.After.Before(historyPosition(i)) && (window.Before == nil || historyPosition(i).Before(*window.Before)) {
 			rows = append(rows, row)
 		}
 	}
