@@ -126,14 +126,14 @@ func pairingRow(t *testing.T, role, content string) sqlc.ListUncompactedMessages
 	}
 }
 
-// TestSelectorToReadPathPreservesOrderEndToEnd drives the real compaction
-// selector over a history with a pending ask_user island and feeds its
-// actual marked rows into replaceCompactedHistoryRecords. It pins the pair of
-// invariants that live in two packages: the selector folds only the run
-// before the island, which ends what any pass folds, and the read path
-// substitutes it in place — content behind the island (like "mid q") must
-// never fold in front of it.
-func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
+// TestSelectorToReadPathFoldsAClosedAskUserCall drives the real compaction
+// selector over a history whose ask_user call the conversation moved on from
+// without an answer, and feeds its actual marked rows into
+// replaceCompactedHistoryRecords. It pins the pair of invariants that live in
+// two packages: the selector folds the closed call with the history around
+// it as one contiguous run, and the read path substitutes the summary in
+// place, ahead of the current input it never covers.
+func TestSelectorToReadPathFoldsAClosedAskUserCall(t *testing.T) {
 	t.Parallel()
 
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
@@ -162,15 +162,15 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 		HistoryBudgetTokens: 1000,
 	})
 	if err != nil || len(passes) != 1 || passes[0].More {
-		t.Fatalf("passes = %+v err = %v, want one pass that stops at the island", passes, err)
+		t.Fatalf("passes = %+v err = %v, want one pass that folds the history before the current input", passes, err)
 	}
 
 	marked := make(map[pgtype.UUID]bool, len(q.markedIDs))
 	for _, id := range q.markedIDs {
 		marked[id] = true
 	}
-	if len(marked) != 2 || !marked[rows[0].ID] || !marked[rows[1].ID] {
-		t.Fatalf("marked = %v, want exactly the contiguous pre-island run [old q, old a]", q.markedIDs)
+	if len(marked) != 4 || !marked[rows[0].ID] || !marked[rows[1].ID] || !marked[rows[2].ID] || !marked[rows[3].ID] {
+		t.Fatalf("marked = %v, want the contiguous run [old q, old a, ask_user call, mid q]", q.markedIDs)
 	}
 
 	compactID := uuid.UUID(q.logID.Bytes).String()
@@ -192,8 +192,6 @@ func TestSelectorToReadPathPreservesOrderEndToEnd(t *testing.T) {
 	got := replaceCompactedHistoryRecords(records, map[string]string{compactID: passes[0].Summary}, contextfrag.Scope{})
 	want := []ModelMessage{
 		{Role: "user", Content: newTextContent("<summary>\n" + passes[0].Summary + "\n</summary>")},
-		{Role: "assistant", Content: newTextContent("ask you something")},
-		{Role: "user", Content: newTextContent("mid q")},
 		{Role: "user", Content: newTextContent("current q")},
 	}
 	if gotMessages := historyfrag.ToModelMessages(got); !reflect.DeepEqual(gotMessages, want) {

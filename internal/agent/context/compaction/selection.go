@@ -68,28 +68,34 @@ func toolExchangeGroups(items []CompactionCandidate) [][]int {
 	return groups
 }
 
-// protectPendingUserInput keeps an ask_user exchange in raw history while any
-// of its calls has no answer: the continuation still needs the open call. An
-// answered exchange is ordinary history the summary can cover.
+// protectPendingUserInput keeps the newest exchange in raw history while any
+// of its ask_user calls has no answer: the run waits on it, and the
+// continuation answers the open call. Any later row closes such a call — its
+// run ended or the conversation moved on — and every request renders it with
+// a synthetic result no answer replaces, so like an answered exchange it is
+// ordinary history the summary can cover.
 func protectPendingUserInput(items []CompactionCandidate) {
-	for _, group := range toolExchangeGroups(items) {
-		if isToolResultItem(items[group[0]]) {
-			continue
+	groups := toolExchangeGroups(items)
+	if len(groups) == 0 {
+		return
+	}
+	group := groups[len(groups)-1]
+	if isToolResultItem(items[group[0]]) {
+		return
+	}
+	pending := askUserCallIDs(items[group[0]].Record)
+	for _, idx := range group[1:] {
+		mm := items[idx].Record.ModelMessage
+		delete(pending, strings.TrimSpace(mm.ToolCallID))
+		for _, p := range parseEntryParts(mm.Content) {
+			delete(pending, strings.TrimSpace(p.ToolCallID))
 		}
-		pending := askUserCallIDs(items[group[0]].Record)
-		for _, idx := range group[1:] {
-			mm := items[idx].Record.ModelMessage
-			delete(pending, strings.TrimSpace(mm.ToolCallID))
-			for _, p := range parseEntryParts(mm.Content) {
-				delete(pending, strings.TrimSpace(p.ToolCallID))
-			}
-		}
-		if len(pending) == 0 {
-			continue
-		}
-		for _, idx := range group {
-			items[idx].Policies = appendPolicy(items[idx].Policies, CompactPolicyMustKeep)
-		}
+	}
+	if len(pending) == 0 {
+		return
+	}
+	for _, idx := range group {
+		items[idx].Policies = appendPolicy(items[idx].Policies, CompactPolicyMustKeep)
 	}
 }
 
@@ -311,10 +317,10 @@ func coveredEntries(entries []messageEntry) []messageEntry {
 // trimCompactMessages keeps the oldest tool-exchange groups whose rendered
 // entries fit maxTokens, deferring the rest to a later pass. Chewing
 // front-to-back reclaims the oldest raw rows first and keeps summary coverage
-// in chronological order. Must-keep groups and rows that render nothing cost
-// nothing, exactly as buildEntriesAndIDs feeds the summarizer; group-aligned
-// cuts never split a tool exchange. A first group that does not fit leaves
-// nothing: its content is never cut to make it fit.
+// in chronological order. Rows that render nothing cost nothing, exactly as
+// buildEntriesAndIDs feeds the summarizer; group-aligned cuts never split a
+// tool exchange. A first group that does not fit leaves nothing: its content
+// is never cut to make it fit.
 func trimCompactMessages(items []CompactionCandidate, maxTokens int) []CompactionCandidate {
 	accumulated, end := 0, 0
 	for _, group := range toolExchangeGroups(items) {
@@ -340,18 +346,15 @@ func leadingGroupCost(items []CompactionCandidate) int {
 }
 
 // markableGroupCost is the summarizer-prompt cost of one tool-exchange group:
-// zero for a must-keep group, otherwise the line buildUserPrompt emits for
-// each rendered entry, kept ones in their wrapper, as entriesPromptCost
-// prices it, so tiny-but-real entries can never ride along for free. Rows
-// that render nothing cost nothing. Costing the rendered bytes rather than
-// the raw usage estimate matters: a row whose generation cost five tokens
-// can still render a two-kilobyte tool outcome into the prompt.
+// the line buildUserPrompt emits for each rendered entry, kept ones in their
+// wrapper, as entriesPromptCost prices it, so tiny-but-real entries can never
+// ride along for free. Rows that render nothing cost nothing. Costing the
+// rendered bytes rather than the raw usage estimate matters: a row whose
+// generation cost five tokens can still render a two-kilobyte tool outcome
+// into the prompt.
 func markableGroupCost(items []CompactionCandidate, group []int) int {
 	cost := 0
 	for _, idx := range group {
-		if items[idx].HasPolicy(CompactPolicyMustKeep) {
-			return 0
-		}
 		if entry, ok := candidateEntry(items[idx]); ok {
 			cost += entryPromptCost(entry)
 		}
