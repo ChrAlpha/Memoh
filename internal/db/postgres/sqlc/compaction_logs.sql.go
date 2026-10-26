@@ -418,43 +418,6 @@ func (q *Queries) CreateCompactionLog(ctx context.Context, arg CreateCompactionL
 	return i, err
 }
 
-const deleteCompactionLogsByBot = `-- name: DeleteCompactionLogsByBot :exec
-WITH target_sessions AS MATERIALIZED (
-  SELECT session.id
-  FROM bot_sessions session
-  WHERE session.team_id = public.memoh_current_team_id()
-    AND session.bot_id = $1
-  ORDER BY session.id
-  FOR UPDATE
-),
-invalidated_sessions AS (
-  UPDATE bot_sessions session
-  SET compaction_epoch = session.compaction_epoch + 1
-  FROM target_sessions target
-  WHERE session.team_id = public.memoh_current_team_id()
-    AND session.id = target.id
-  RETURNING session.id
-),
-target_compaction_logs AS MATERIALIZED (
-  SELECT compact.id
-  FROM bot_history_message_compacts compact
-  WHERE compact.team_id = public.memoh_current_team_id()
-    AND compact.bot_id = $1
-    AND (SELECT count(*) FROM target_sessions) >= 0
-  ORDER BY compact.id
-  FOR UPDATE
-)
-DELETE FROM bot_history_message_compacts AS compacts
-USING target_compaction_logs target
-WHERE compacts.team_id = public.memoh_current_team_id()
-  AND compacts.id = target.id
-`
-
-func (q *Queries) DeleteCompactionLogsByBot(ctx context.Context, targetBotID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteCompactionLogsByBot, targetBotID)
-	return err
-}
-
 const getActiveCompactionArtifactWithinBytes = `-- name: GetActiveCompactionArtifactWithinBytes :one
 SELECT compact.id, compact.bot_id, compact.session_id, compact.status, compact.summary, compact.message_count, compact.error_message, compact.usage, compact.model_id, compact.artifact_version, compact.coverage, compact.anchor_start_ms, compact.anchor_end_ms, compact.artifact_level, compact.parent_ids, compact.superseded_by, compact.superseded_at, compact.compaction_epoch, compact.started_at, compact.completed_at, compact.team_id
 FROM bot_history_message_compacts compact

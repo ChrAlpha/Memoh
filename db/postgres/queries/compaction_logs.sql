@@ -310,37 +310,6 @@ WHERE c.team_id = public.memoh_current_team_id()
   )
 ORDER BY c.anchor_start_ms ASC, c.started_at ASC, c.id ASC;
 
--- name: DeleteCompactionLogsByBot :exec
-WITH target_sessions AS MATERIALIZED (
-  SELECT session.id
-  FROM bot_sessions session
-  WHERE session.team_id = public.memoh_current_team_id()
-    AND session.bot_id = sqlc.arg(target_bot_id)
-  ORDER BY session.id
-  FOR UPDATE
-),
-invalidated_sessions AS (
-  UPDATE bot_sessions session
-  SET compaction_epoch = session.compaction_epoch + 1
-  FROM target_sessions target
-  WHERE session.team_id = public.memoh_current_team_id()
-    AND session.id = target.id
-  RETURNING session.id
-),
-target_compaction_logs AS MATERIALIZED (
-  SELECT compact.id
-  FROM bot_history_message_compacts compact
-  WHERE compact.team_id = public.memoh_current_team_id()
-    AND compact.bot_id = sqlc.arg(target_bot_id)
-    AND (SELECT count(*) FROM target_sessions) >= 0
-  ORDER BY compact.id
-  FOR UPDATE
-)
-DELETE FROM bot_history_message_compacts AS compacts
-USING target_compaction_logs target
-WHERE compacts.team_id = public.memoh_current_team_id()
-  AND compacts.id = target.id;
-
 -- name: ReleasePendingCompactionClaimsBySession :exec
 -- A new runtime owner releases the compaction claims its predecessors left
 -- pending: their writes are fenced out, so those claims can never commit, and

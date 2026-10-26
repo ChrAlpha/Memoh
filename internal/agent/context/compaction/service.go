@@ -294,15 +294,6 @@ func (s *Service) ListLogs(ctx context.Context, botID string, limit, offset int)
 	return logs, total, nil
 }
 
-// DeleteLogs deletes all compaction logs for a bot.
-func (s *Service) DeleteLogs(ctx context.Context, botID string) error {
-	botUUID, err := db.ParseUUID(botID)
-	if err != nil {
-		return err
-	}
-	return s.queries.DeleteCompactionLogsByBot(ctx, botUUID)
-}
-
 func toLog(r sqlc.BotHistoryMessageCompact) Log {
 	l := Log{
 		ID:           formatUUID(r.ID),
