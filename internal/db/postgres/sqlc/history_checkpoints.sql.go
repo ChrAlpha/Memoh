@@ -391,9 +391,6 @@ WITH candidate_rows AS MATERIALIZED (
     )
     AND ($5::bigint IS NULL
       OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
-    AND ($7::uuid[] IS NULL
-      OR m.id = ANY($7::uuid[])
-      OR m.source_message_id = ANY($8::text[]))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
@@ -407,7 +404,7 @@ WITH candidate_rows AS MATERIALIZED (
 ), admitted_candidates AS MATERIALIZED (
   SELECT id, turn_position, turn_message_seq, created_at, payload_bytes, candidate_count, candidate_bytes, cumulative_bytes
   FROM ranked_candidates
-  WHERE cumulative_bytes <= $9::BIGINT
+  WHERE cumulative_bytes <= $7::BIGINT
 )
 SELECT
   m.id,
@@ -461,8 +458,6 @@ type ListHistoryCheckpointCandidatesWithinBytesParams struct {
 	KeptIds              []pgtype.UUID `json:"kept_ids"`
 	BeforeTurnPosition   pgtype.Int8   `json:"before_turn_position"`
 	BeforeTurnMessageSeq pgtype.Int8   `json:"before_turn_message_seq"`
-	MessageIds           []pgtype.UUID `json:"message_ids"`
-	ExternalMessageIds   []string      `json:"external_message_ids"`
 	MaxBytes             int64         `json:"max_bytes"`
 }
 
@@ -500,8 +495,7 @@ type ListHistoryCheckpointCandidatesWithinBytesRow struct {
 // when set. The cumulative filter is evaluated before the payload join, so an
 // oversized leading row returns no payload instead of crossing the
 // process-memory boundary. CandidateCount reports whether the prefix was
-// truncated. message_ids, when set, restricts candidates to those rows and
-// the rows of external_message_ids: what the caller's request renders.
+// truncated.
 func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context, arg ListHistoryCheckpointCandidatesWithinBytesParams) ([]ListHistoryCheckpointCandidatesWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listHistoryCheckpointCandidatesWithinBytes,
 		arg.SessionID,
@@ -510,8 +504,6 @@ func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context
 		arg.KeptIds,
 		arg.BeforeTurnPosition,
 		arg.BeforeTurnMessageSeq,
-		arg.MessageIds,
-		arg.ExternalMessageIds,
 		arg.MaxBytes,
 	)
 	if err != nil {
@@ -995,7 +987,7 @@ func (q *Queries) ListHistoryMessagesByIDs(ctx context.Context, arg ListHistoryM
 }
 
 const listHistoryRowsBySources = `-- name: ListHistoryRowsBySources :many
-SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq
+SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq, m.role, m.content, m.event_id
 FROM bot_visible_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
@@ -1017,10 +1009,14 @@ type ListHistoryRowsBySourcesRow struct {
 	SourceMessageID pgtype.Text `json:"source_message_id"`
 	TurnPosition    pgtype.Int8 `json:"turn_position"`
 	TurnMessageSeq  pgtype.Int8 `json:"turn_message_seq"`
+	Role            string      `json:"role"`
+	Content         []byte      `json:"content"`
+	EventID         pgtype.UUID `json:"event_id"`
 }
 
-// The context rows a fold read, named by row id or by the inbound message
-// they record, at their places in the history.
+// The context rows a fold reads, named by row id or by the inbound message
+// they record, at their places in the history, with the content and event
+// that name the version they hold.
 func (q *Queries) ListHistoryRowsBySources(ctx context.Context, arg ListHistoryRowsBySourcesParams) ([]ListHistoryRowsBySourcesRow, error) {
 	rows, err := q.db.Query(ctx, listHistoryRowsBySources, arg.SessionID, arg.Ids, arg.ExternalMessageIds)
 	if err != nil {
@@ -1035,6 +1031,9 @@ func (q *Queries) ListHistoryRowsBySources(ctx context.Context, arg ListHistoryR
 			&i.SourceMessageID,
 			&i.TurnPosition,
 			&i.TurnMessageSeq,
+			&i.Role,
+			&i.Content,
+			&i.EventID,
 		); err != nil {
 			return nil, err
 		}
@@ -1260,9 +1259,6 @@ WHERE m.team_id = public.memoh_current_team_id()
   )
   AND ($5::bigint IS NULL
     OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
-  AND ($7::uuid[] IS NULL
-    OR m.id = ANY($7::uuid[])
-    OR m.source_message_id = ANY($8::text[]))
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 `
 
@@ -1273,8 +1269,6 @@ type MeasureHistoryCheckpointCandidatesParams struct {
 	KeptIds              []pgtype.UUID `json:"kept_ids"`
 	BeforeTurnPosition   pgtype.Int8   `json:"before_turn_position"`
 	BeforeTurnMessageSeq pgtype.Int8   `json:"before_turn_message_seq"`
-	MessageIds           []pgtype.UUID `json:"message_ids"`
-	ExternalMessageIds   []string      `json:"external_message_ids"`
 }
 
 type MeasureHistoryCheckpointCandidatesRow struct {
@@ -1294,8 +1288,6 @@ func (q *Queries) MeasureHistoryCheckpointCandidates(ctx context.Context, arg Me
 		arg.KeptIds,
 		arg.BeforeTurnPosition,
 		arg.BeforeTurnMessageSeq,
-		arg.MessageIds,
-		arg.ExternalMessageIds,
 	)
 	var i MeasureHistoryCheckpointCandidatesRow
 	err := row.Scan(&i.CandidateCount, &i.CandidateBytes, &i.LargestCandidateBytes)

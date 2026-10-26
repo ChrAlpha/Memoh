@@ -11,7 +11,6 @@ type TriggerModel struct {
 	CodexAccountID        string
 	BaseURL               string
 	ChatCompletionsCompat string
-	PromptCacheTTL        string
 	WindowTokens          int // summarizer model's declared context window
 	MaxOutputTokens       int // summarizer model's declared output cap, zero when unknown
 }
@@ -26,7 +25,6 @@ func NewTriggerConfig(model TriggerModel) TriggerConfig {
 		CodexAccountID:        model.CodexAccountID,
 		BaseURL:               model.BaseURL,
 		ChatCompletionsCompat: model.ChatCompletionsCompat,
-		PromptCacheTTL:        model.PromptCacheTTL,
 		SummaryWindowTokens:   model.WindowTokens,
 		MaxOutputTokens:       model.MaxOutputTokens,
 	}

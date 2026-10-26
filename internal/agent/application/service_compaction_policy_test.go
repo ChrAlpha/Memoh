@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	"github.com/felinics/memoh/internal/models"
@@ -144,6 +147,38 @@ func TestCompactForBudgetBoundsALiveRequestByItsOwnTurn(t *testing.T) {
 	req.TurnPosition = nil
 	if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil || len(runner.configs) != 2 || runner.configs[1].CandidatesBefore != nil {
 		t.Fatalf("err=%v configs=%+v, want open candidates without a turn", err, runner.configs)
+	}
+}
+
+// A fold from rows streams its summaries through the client the runs stream
+// through: a long summary is bounded by silence, not by a deadline on its
+// first byte. A Discuss recovery keeps the batch it answers by the inputs-first
+// policy; a continuation keeps its input and steers within the cap and resumes
+// from its deferred call.
+func TestCompactForBudgetStreamsAndKeepsByEntry(t *testing.T) {
+	t.Parallel()
+
+	service, runner := newControllerPolicyService(t)
+	service.messageService = &cutoffMessageService{}
+	service.streamHTTPClient = &http.Client{}
+	batch := []turn.ContextMessageSource{{Kind: "external", ID: "older"}, {Kind: "external", ID: "newest"}}
+	anchors := []turn.ContextMessageSource{{Kind: "history", ID: "root"}}
+	tail := []turn.ContextMessageSource{{Kind: "history", ID: "call"}}
+	for _, req := range []ChatRequest{
+		{discussCurrentSources: batch},
+		{continuationTail: tail, continuationAnchors: anchors},
+	} {
+		req.BotID, req.ChatID, req.ThreadID = syncCompactBotID, syncCompactBotID, syncCompactThreadID
+		if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	discuss, continuation := runner.configs[0], runner.configs[1]
+	if discuss.HTTPClient != service.streamHTTPClient || discuss.AnchorPolicy != compaction.AnchorsFirst || !reflect.DeepEqual(discuss.Anchors, batch) || len(discuss.ProtectedSources) != 0 {
+		t.Fatalf("discuss config = %+v, want the batch kept inputs first through the stream client", discuss)
+	}
+	if continuation.AnchorPolicy != compaction.AnchorsCapped || !reflect.DeepEqual(continuation.ProtectedSources, tail) || !reflect.DeepEqual(continuation.Anchors, anchors) {
+		t.Fatalf("continuation config = %+v, want its anchors capped and its deferred call kept", continuation)
 	}
 }
 

@@ -227,8 +227,7 @@ FROM owner_session owner;
 -- when set. The cumulative filter is evaluated before the payload join, so an
 -- oversized leading row returns no payload instead of crossing the
 -- process-memory boundary. CandidateCount reports whether the prefix was
--- truncated. message_ids, when set, restricts candidates to those rows and
--- the rows of external_message_ids: what the caller's request renders.
+-- truncated.
 WITH candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
@@ -250,9 +249,6 @@ WITH candidate_rows AS MATERIALIZED (
     )
     AND (sqlc.narg(before_turn_position)::bigint IS NULL
       OR (m.turn_position, m.turn_message_seq) < (sqlc.narg(before_turn_position)::bigint, sqlc.narg(before_turn_message_seq)::bigint))
-    AND (sqlc.narg(message_ids)::uuid[] IS NULL
-      OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
-      OR m.source_message_id = ANY(sqlc.narg(external_message_ids)::text[]))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
@@ -339,9 +335,6 @@ WHERE m.team_id = public.memoh_current_team_id()
   )
   AND (sqlc.narg(before_turn_position)::bigint IS NULL
     OR (m.turn_position, m.turn_message_seq) < (sqlc.narg(before_turn_position)::bigint, sqlc.narg(before_turn_message_seq)::bigint))
-  AND (sqlc.narg(message_ids)::uuid[] IS NULL
-    OR m.id = ANY(sqlc.narg(message_ids)::uuid[])
-    OR m.source_message_id = ANY(sqlc.narg(external_message_ids)::text[]))
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
 
 -- name: ListHistoryMessagesAfterWithinBytes :many
@@ -449,9 +442,10 @@ LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_cur
 ORDER BY admitted.turn_position ASC, admitted.turn_message_seq ASC, admitted.created_at ASC, admitted.id ASC;
 
 -- name: ListHistoryRowsBySources :many
--- The context rows a fold read, named by row id or by the inbound message
--- they record, at their places in the history.
-SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq
+-- The context rows a fold reads, named by row id or by the inbound message
+-- they record, at their places in the history, with the content and event
+-- that name the version they hold.
+SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq, m.role, m.content, m.event_id
 FROM bot_visible_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)

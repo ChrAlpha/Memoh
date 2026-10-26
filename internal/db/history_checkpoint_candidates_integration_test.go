@@ -15,7 +15,7 @@ import (
 // TestHistoryCheckpointCandidateQueries exercises the real SQL that decides
 // what a compaction pass may fold onto a checkpoint: the rows the checkpoint
 // keeps by reference and the context rows after its position, before a
-// cutoff when one is set, restricted to a request's view when one is given.
+// cutoff when one is set.
 // Hidden rows and legacy passive_sync rows are never candidates, and the
 // bounded read admits rows oldest first within its byte budget.
 func TestHistoryCheckpointCandidateQueries(t *testing.T) {
@@ -107,13 +107,6 @@ func TestHistoryCheckpointCandidateQueries(t *testing.T) {
 	}
 	if measure.CandidateCount != 4 || measure.CandidateBytes <= 0 || measure.LargestCandidateBytes*4 < measure.CandidateBytes {
 		t.Fatalf("measure = %+v, want the four candidates", measure)
-	}
-
-	viewed := all
-	viewed.MessageIds = []pgtype.UUID{second}
-	viewed.ExternalMessageIds = []string{"ext-4"}
-	if got, want := read(viewed), []pgtype.UUID{second, external}; !slices.Equal(got, want) {
-		t.Fatalf("candidates in view = %v, want %v", got, want)
 	}
 
 	bounded := all

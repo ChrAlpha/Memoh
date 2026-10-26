@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/models/modelretry"
 )
 
@@ -51,7 +52,7 @@ func TestForkSummarizerCutsOffASilentStream(t *testing.T) {
 	}}
 
 	_, err := forkSummarizer(&sdk.Model{ID: "mock-model", Provider: provider}, 20*time.Millisecond)(context.Background(), sdk.Request{})
-	if !errors.Is(err, sdk.ErrStreamIncomplete) || !errors.Is(err, errForkIdle) {
+	if !errors.Is(err, sdk.ErrStreamIncomplete) || !errors.Is(err, models.ErrStreamSilent) {
 		t.Fatalf("err = %v, want an incomplete stream that fell silent", err)
 	}
 	if reason, ok := modelretry.Retryable(err); !ok || reason != modelretry.ReasonStreamIncomplete {

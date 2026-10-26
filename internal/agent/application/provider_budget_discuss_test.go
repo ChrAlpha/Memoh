@@ -175,7 +175,10 @@ func TestDiscussProviderBudgetRecoveryRecomposesBeforeProviderDispatch(t *testin
 	}
 }
 
-func TestDiscussProviderBudgetRecoveryCompactsOlderBatchBehindFittingSuffix(t *testing.T) {
+// A Discuss recovery keeps the batch where it is, newest first while it leaves
+// the summary room, and sizes the fold by everything the history renders,
+// the newest input included.
+func TestDiscussProviderBudgetRecoveryKeepsTheBatchByPolicy(t *testing.T) {
 	service, _, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
 	configureDiscussLifecycle(service)
 	cmd.DiscussMessages = cmd.DiscussMessages[:len(cmd.DiscussMessages)-1]
@@ -200,8 +203,8 @@ func TestDiscussProviderBudgetRecoveryCompactsOlderBatchBehindFittingSuffix(t *t
 	for _, source := range cfg.Anchors {
 		protected[source.ID] = true
 	}
-	if !protected["m4"] || !protected["m3"] || protected["m1"] || len(cfg.ProtectedSources) != 0 || cfg.HistoryBudgetTokens <= 0 || cfg.HistoryBudgetTokens >= 998 {
-		t.Fatalf("anchors=%v protected_tail=%v history_budget=%d; retained inputs stay raw at their own positions and their cost is counted once", protected, cfg.ProtectedSources, cfg.HistoryBudgetTokens)
+	if !protected["m4"] || !protected["m3"] || !protected["m1"] || cfg.AnchorPolicy != compaction.AnchorsFirst || len(cfg.ProtectedSources) != 0 || cfg.HistoryBudgetTokens <= 998 {
+		t.Fatalf("anchors=%v policy=%v protected_tail=%v history_budget=%d; the batch stays at its own positions newest first, priced once with the history it renders in", protected, cfg.AnchorPolicy, cfg.ProtectedSources, cfg.HistoryBudgetTokens)
 	}
 }
 

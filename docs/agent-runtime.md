@@ -84,15 +84,18 @@ a remainder too small for any summary to replace ends the event once the
 request fits. The context view keeps an armed run's whole history, without
 trimming, and every dispatch checks the allowance.
 
-`compaction.Service.Compact` folds history from rows instead: for a run that
-is not armed, for a chat load the byte budget truncated, whose request cannot
-render the rows it left out, and for Discuss input Channel omitted. One event
-folds the summaries of the session's active checkpoint and every eligible
-source into one rolling summary. A pass folds what one summarizer call can
-read; the event passes again only for what that call could not, and each
-further pass absorbs the summary before it. The current request is a verbatim
-anchor, not an independent summary segment. The latest tool/reasoning closure
-is protected.
+`compaction.Service.Compact` folds history from rows instead, with the same
+engine: for a run that is not armed, for a chat load the byte budget truncated,
+whose request cannot render the rows it left out, and for Discuss input Channel
+omitted or a batch it could not compose. It builds the request from the rows:
+the active checkpoint's items in their order, then the context rows after its
+position, oldest first within a byte bound, each row one text message under
+its role with tool calls, tool results and media written out, so the
+compaction model reads it whatever provider it runs on. The summarizer streams
+through the client the runs stream through. An event folds every row the
+caller does not keep into one rolling summary, reading again for what one
+bounded read left; the deferred call a continuation resumes from stays after
+the summary, and its input, steers or Discuss batch are anchors.
 
 The native runtime applies each committed fold to its own request snapshot by
 `turn.PlaceSummary`: messages the fold does not cover keep their bytes, and

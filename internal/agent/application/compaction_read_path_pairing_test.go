@@ -58,8 +58,14 @@ func (f *pairingQueries) ListHistoryCheckpointCandidatesWithinBytes(_ context.Co
 	return rows, nil
 }
 
-func (*pairingQueries) ListMessageAssetsBatch(context.Context, []pgtype.UUID) ([]sqlc.ListMessageAssetsBatchRow, error) {
-	return nil, nil
+func (f *pairingQueries) ListHistoryRowsBySources(_ context.Context, arg sqlc.ListHistoryRowsBySourcesParams) ([]sqlc.ListHistoryRowsBySourcesRow, error) {
+	var rows []sqlc.ListHistoryRowsBySourcesRow
+	for _, row := range f.rows {
+		if slices.Contains(arg.Ids, row.ID) {
+			rows = append(rows, sqlc.ListHistoryRowsBySourcesRow{ID: row.ID, TurnPosition: row.TurnPosition, TurnMessageSeq: row.TurnMessageSeq, Role: row.Role, Content: row.Content})
+		}
+	}
+	return rows, nil
 }
 
 func (f *pairingQueries) CreateCompactionLog(context.Context, sqlc.CreateCompactionLogParams) (sqlc.BotHistoryMessageCompact, error) {
@@ -114,13 +120,12 @@ func (f *pairingQueries) CompleteCompactionLog(_ context.Context, arg sqlc.Compl
 type pairingSummarizer struct{ summary string }
 
 func (s pairingSummarizer) RoundTrip(*http.Request) (*http.Response, error) {
-	body := `{"id":"stub","object":"chat.completion","created":0,"model":"stub",` +
-		`"choices":[{"index":0,"message":{"role":"assistant","content":"` + s.summary + `"},"finish_reason":"stop"}],` +
-		`"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`
+	body := `data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"` + s.summary + `"},"finish_reason":null}]}` + "\n\n" +
+		`data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}, nil
 }
 
@@ -138,13 +143,13 @@ func pairingRow(i int, role, content string) sqlc.ListHistoryCheckpointCandidate
 	}
 }
 
-// TestSelectorToReadPathFoldsAClosedAskUserCall drives the real compaction
-// selector over a history whose ask_user call the conversation moved on from
-// without an answer, commits its checkpoint, and reads the history back
-// through it. It pins the pair of invariants that live in different
-// packages: the selector folds the closed call with the history around it as
-// one contiguous run, and the read path renders the summary in that run's
-// place, ahead of the current input it never covers.
+// TestSelectorToReadPathFoldsAClosedAskUserCall drives a compaction from rows
+// over a history whose ask_user call the conversation moved on from without
+// an answer, commits its checkpoint, and reads the history back through it.
+// It pins the pair of invariants that live in different packages: the fold
+// takes the closed call with the history around it as one contiguous run,
+// and the read path renders the summary in that run's place, ahead of the
+// current input it never covers.
 func TestSelectorToReadPathFoldsAClosedAskUserCall(t *testing.T) {
 	t.Parallel()
 

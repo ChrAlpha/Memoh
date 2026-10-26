@@ -64,9 +64,6 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		if budget <= 0 {
 			return cfg, false, nil
 		}
-		// The summary shares the history budget with what compaction keeps
-		// raw in place, which it does not price.
-		budget -= anchoredTokens(cfg.ContextProvenance, req.compactionAnchors())
 		compactionReq := req
 		compactionReq.RunID = cfg.RunID
 		if err := s.compactForBudget(ctx, compactionReq, pressure, budget, cfg.CurrentModelUUID); err != nil {
@@ -101,21 +98,6 @@ func (s *Service) chatBudgetRecovery(req ChatRequest, layout chatHistoryLayout) 
 		layout.truncated = false
 		return recovered, true, nil
 	}
-}
-
-// anchoredTokens is what the messages the request renders for anchors take.
-func anchoredTokens(provenance []native.MessageProvenance, anchors []turn.ContextMessageSource) int {
-	tokens := 0
-	for _, p := range provenance {
-		if slices.ContainsFunc(p.Sources, func(source turn.ContextMessageSource) bool {
-			return slices.ContainsFunc(anchors, func(anchor turn.ContextMessageSource) bool {
-				return anchor.Kind == source.Kind && anchor.ID == source.ID
-			})
-		}) {
-			tokens += contextfrag.ProviderEnvelopeTokens("", []sdk.Message{p.Message}, nil)
-		}
-	}
-	return tokens
 }
 
 func (l chatHistoryLayout) owns(frag contextfrag.ContextFrag) bool {
@@ -322,30 +304,23 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 	if *compacted || cfg.SwitchContext != nil && len(cmd.DiscussOmittedSources) == 0 {
 		return cfg, shed, nil
 	}
-	type batchInput struct {
-		source turn.ContextMessageSource
-		cost   int
-	}
+	// The batch stays where it is, newest first while it leaves the summary
+	// room, and is priced with the rest of what the history renders.
 	var protected []turn.ContextMessageSource
-	var older []batchInput
 	available, pressure := plan.HistoryBudget, 0
 	for _, frag := range cfg.ContextSourceFrags {
 		source, inBatch := batch[frag.Provenance.SourceID]
+		if inBatch {
+			protected = append(protected, source)
+		}
 		switch {
 		case frag.Slot == contextfrag.SlotSystem:
 		case frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage:
 			if inBatch {
-				protected = append(protected, source)
+				available += contextfrag.ResolveProviderBudgetFragTokens(frag)
 			}
 		case frag.Kind == contextfrag.KindConversationSummary || (frag.Slot == contextfrag.SlotHistory && frag.Kind == contextfrag.KindConversationEvent):
 			pressure += contextfrag.ResolveProviderBudgetFragTokens(frag)
-			if inBatch {
-				// Priced by its text: its images go before it does.
-				if msg := contextfrag.FragMessage(frag); msg != nil {
-					frag = contextfrag.RebuildFragMessage(frag, withoutImages(*msg))
-				}
-				older = append(older, batchInput{source: source, cost: contextfrag.ResolveProviderBudgetFragTokens(frag)})
-			}
 		default:
 			available -= contextfrag.ResolveProviderBudgetFragTokens(frag)
 		}
@@ -355,14 +330,7 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 	if pressure <= available && len(cmd.DiscussOmittedSources) == 0 {
 		return cfg, shed, nil
 	}
-	// Older input of the batch stays raw while it fits, leaving a tenth of the
-	// allowance for the summary of what does not; only the rest is compacted.
-	historyBudget, limit := available, available-available/10
-	for i := len(older) - 1; i >= 0 && older[i].cost <= limit; i-- {
-		protected = append(protected, older[i].source)
-		limit -= older[i].cost
-		historyBudget -= older[i].cost
-	}
+	historyBudget := available
 	if historyBudget <= 0 {
 		if len(cmd.DiscussOmittedSources) > 0 {
 			return cfg, false, fmt.Errorf("%w: no history room for input Channel omitted", contextfrag.ErrBudgetUnsatisfied)
@@ -454,12 +422,4 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 		cfg.ContextMutations.Record(contextfrag.MutationCurrentInputImagesOmitted, "sources="+strings.Join(shed, ","))
 	}
 	return cfg.RefreshContextFrag(), true
-}
-
-func withoutImages(msg sdk.Message) sdk.Message {
-	msg.Content = slices.DeleteFunc(slices.Clone(msg.Content), func(part sdk.MessagePart) bool {
-		_, image := part.(sdk.ImagePart)
-		return image
-	})
-	return msg
 }

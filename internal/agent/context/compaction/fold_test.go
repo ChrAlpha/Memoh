@@ -21,7 +21,7 @@ func (f *fakeQueries) ListHistoryRowsBySources(_ context.Context, arg sqlc.ListH
 	var rows []sqlc.ListHistoryRowsBySourcesRow
 	for _, row := range f.ordered() {
 		if slices.Contains(arg.Ids, row.ID) || row.ExternalMessageID.Valid && slices.Contains(arg.ExternalMessageIds, row.ExternalMessageID.String) {
-			rows = append(rows, sqlc.ListHistoryRowsBySourcesRow{ID: row.ID, SourceMessageID: row.ExternalMessageID, TurnPosition: row.TurnPosition, TurnMessageSeq: row.TurnMessageSeq})
+			rows = append(rows, sqlc.ListHistoryRowsBySourcesRow{ID: row.ID, SourceMessageID: row.ExternalMessageID, TurnPosition: row.TurnPosition, TurnMessageSeq: row.TurnMessageSeq, Role: row.Role, Content: row.Content, EventID: row.EventID})
 		}
 	}
 	return rows, nil
@@ -544,4 +544,41 @@ func summaryLimitIn(t *testing.T, fork sdk.Request) int {
 		t.Fatal(err)
 	}
 	return limit
+}
+
+// A pass refuses a request that rendered a source at a version its row no
+// longer holds, before it asks for a summary: a stored message whose content
+// changed since, or an inbound message that took another event. A source
+// whose version the request did not record is taken as it is.
+func TestFoldRefusesASourceThatChangedSinceTheRequestRenderedIt(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		version func(*turn.ContextMessageSource)
+		stale   bool
+	}{
+		{name: "unrecorded"},
+		{name: "edited content", version: func(s *turn.ContextMessageSource) { s.ContentHash = "not-the-row" }, stale: true},
+		{name: "later event", version: func(s *turn.ContextMessageSource) { s.Kind, s.EventCursor = "external", 7 }, stale: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newFoldSession(t)
+			r := s.request()
+			source := r.sources[1].Sources[0]
+			if tc.version != nil {
+				tc.version(&source)
+				if source.Kind == "external" {
+					source.ID = s.inbound("inbound-1")
+				}
+			}
+			r.sources[1] = historySource(source)
+			summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The parser audit found one unsafe cast at parser.go:12.")}}
+
+			_, err := s.svc.Fold(context.Background(), s.event(r, summarizer))
+			if stale := ReasonOf(err) == ReasonStaleSource; stale != tc.stale || tc.stale && len(summarizer.requests) != 0 {
+				t.Fatalf("err=%v summarizer calls=%d, want stale=%v before any summary", err, len(summarizer.requests), tc.stale)
+			}
+		})
+	}
 }

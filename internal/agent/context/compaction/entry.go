@@ -45,10 +45,6 @@ func isToolResultPartType(value string) bool {
 	return strings.Contains(value, "tool-result") || strings.Contains(value, "tool_result")
 }
 
-func isToolPartType(value string) bool {
-	return isToolCallPartType(value) || isToolResultPartType(value)
-}
-
 // renderCandidateEntry renders a history row for the summarizer. Each tool
 // result a stored row holds cites the ref get_messages reads it back by.
 func renderCandidateEntry(record historyfrag.HistoryRecord) string {

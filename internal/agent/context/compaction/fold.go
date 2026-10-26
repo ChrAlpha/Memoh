@@ -3,7 +3,6 @@ package compaction
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -13,20 +12,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
-	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/models/modelretry"
 )
-
-// errCompactionInFlight marks an event that found another event of its
-// session running in this process.
-var errCompactionInFlight = errors.New("compaction: another compaction of the session is running")
 
 // Source is what one message of a folded request stands for.
 type Source struct {
@@ -78,53 +73,27 @@ type Event struct {
 	Apply func(Pass) (sdk.Request, []Source, int)
 }
 
-// Fold runs one compaction event: it forks the caller's request before its
-// tail and asks for the summary that replaces everything foldable there, the
-// summaries of the checkpoint the request renders included. A pass reads as
-// much of the request as the summarizer's window holds; the event passes
-// again only for what that left. It returns the passes it committed; a failed
-// pass ends the event with an *EventError and leaves the passes before it.
+// Fold runs one compaction event over a request its caller holds: it forks
+// the request before its tail and asks for the summary that replaces
+// everything foldable there, the summaries of the checkpoint the request
+// renders included. A pass reads as much of the request as the summarizer's
+// window holds; the event passes again only for what that left. It returns
+// the passes it committed; a failed pass ends the event with an *EventError
+// and leaves the passes before it.
 func (s *Service) Fold(ctx context.Context, ev Event) ([]Pass, error) {
-	run, ok := s.beginSessionCompaction(ev.SessionID)
-	if !ok {
-		return nil, failed(ReasonStaleSource, errCompactionInFlight)
-	}
-	defer func() {
-		s.endSessionCompaction(ev.SessionID)
-		s.publishActivity(ev.BotID)
-	}()
-	s.inflightMu.Lock()
-	run.botID = ev.BotID
-	s.inflightMu.Unlock()
-	s.publishActivity(ev.BotID)
-
 	scope := hookScope{BotID: ev.BotID, SessionID: ev.SessionID, ModelID: ev.Request.Model, InputTokens: ev.Pressure, BudgetTokens: ev.Allowance}
-	var foldErr error
-	preHookRan := false
-	defer func() {
-		if r := recover(); r != nil {
-			panic(r)
-		}
-		if preHookRan {
-			s.runPostCompactHook(context.WithoutCancel(ctx), scope, foldErr)
-		}
-	}()
-	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, scope, nil); err != nil {
-		return nil, err
-	}
-	preHookRan = true
-	if ev.ReplacedTurnID != "" {
-		if err := s.rewindReplacedTurn(ctx, ev.BotID, ev.SessionID, ev.ReplacedTurnID); err != nil {
-			foldErr = err
-			return nil, err
-		}
-	}
+	return s.event(ctx, scope, ev.ReplacedTurnID, func(ctx context.Context) ([]Pass, error) {
+		return s.passes(ctx, ev)
+	})
+}
 
+// passes runs ev's passes, splicing each into the caller's request through
+// ev.Apply, until one reads up to the tail or nothing is left to fold.
+func (s *Service) passes(ctx context.Context, ev Event) ([]Pass, error) {
 	var passes []Pass
 	for {
 		pass, folded, err := s.foldPass(ctx, ev)
 		if err != nil {
-			foldErr = err
 			return passes, err
 		}
 		if !folded {
@@ -164,6 +133,9 @@ func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
 	}
 	plan, err := planFold(ev, rows.unfoldable(ev))
 	if err != nil || !plan.folds() {
+		return Pass{}, false, err
+	}
+	if err := rows.changed(ev, plan.end); err != nil {
 		return Pass{}, false, err
 	}
 	fork := ev.Request
@@ -285,7 +257,16 @@ func (s *Service) summarize(ctx context.Context, ev Event, fork sdk.Request, pla
 // in the history: the context rows that hold each one, by the source as the
 // request names it. A history source names its row; an inbound or a
 // self-sent message names the rows it was written to.
-type requestRows map[turn.ContextMessageSource][]checkpoint.Row
+type requestRows map[turn.ContextMessageSource][]heldRow
+
+// heldRow is a context row at its place in the history, with the version it
+// holds: the hash of its stored message, and the cursor of the event it was
+// written from, zero when it has none.
+type heldRow struct {
+	checkpoint.Row
+	hash   string
+	cursor int64
+}
 
 func (s *Service) requestRows(ctx context.Context, ev Event) (requestRows, error) {
 	sessionUUID, err := db.ParseUUID(ev.SessionID)
@@ -315,10 +296,31 @@ func (s *Service) requestRows(ctx context.Context, ev Event) (requestRows, error
 	if err != nil {
 		return nil, fmt.Errorf("load the rows the request renders: %w", err)
 	}
+	var events []pgtype.UUID
+	for _, row := range found {
+		if row.EventID.Valid {
+			events = append(events, row.EventID)
+		}
+	}
+	cursors := map[pgtype.UUID]int64{}
+	if len(events) > 0 {
+		listed, err := s.queries.ListSessionEventCursors(ctx, sqlc.ListSessionEventCursorsParams{SessionID: sessionUUID, Ids: events})
+		if err != nil {
+			return nil, fmt.Errorf("load the events the request renders: %w", err)
+		}
+		for _, event := range listed {
+			cursors[event.ID] = event.EventCursor
+		}
+	}
 	rows := requestRows{}
 	for _, row := range found {
-		held := checkpoint.Row{ID: formatUUID(row.ID), Position: messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}}
-		key := turn.ContextMessageSource{Kind: "history", ID: held.ID}
+		id := formatUUID(row.ID)
+		held := heldRow{
+			Row:    checkpoint.Row{ID: id, Position: messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}},
+			hash:   historyfrag.MessageContentHash(historyfrag.DecodeStoredModelMessage(nil, id, row.Role, row.Content)),
+			cursor: cursors[row.EventID],
+		}
+		key := turn.ContextMessageSource{Kind: "history", ID: id}
 		rows[key] = append(rows[key], held)
 		if message := strings.TrimSpace(row.SourceMessageID.String); message != "" {
 			for _, kind := range []string{"external", "self"} {
@@ -349,6 +351,26 @@ func (r requestRows) unfoldable(ev Event) map[int]bool {
 	return out
 }
 
+// changed refuses a pass over a request that rendered a source at a version
+// its row no longer holds: a stored message whose content changed since, or
+// an inbound message that took another event. A summary of the version the
+// request showed would fold the row's current one unread. A source whose
+// version the request did not record is taken as it is.
+func (r requestRows) changed(ev Event, end int) error {
+	for _, source := range ev.Sources[:end] {
+		for _, s := range source.Sources {
+			for _, row := range r[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}] {
+				stale := s.Kind == "history" && s.ContentHash != "" && s.ContentHash != row.hash
+				stale = stale || (s.Kind == "external" || s.Kind == "self") && s.EventCursor > 0 && s.EventCursor != row.cursor
+				if stale {
+					return failed(ReasonStaleSource, fmt.Errorf("%w: %s %s changed since the request rendered it", errStaleSource, s.Kind, s.ID))
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // foldRows is what a pass read and folds, named the ways a checkpoint and
 // the caller's splice need: the rows it folds, the rows it read, and every
 // source it folds as the request names it, with each folded row's history
@@ -375,7 +397,7 @@ func (r requestRows) of(plan foldPlan) foldRows {
 		for _, row := range r[turn.ContextMessageSource{Kind: source.Kind, ID: source.ID}] {
 			if !folded[row.ID] {
 				folded[row.ID] = true
-				out.folded = append(out.folded, row)
+				out.folded = append(out.folded, row.Row)
 				if source.Kind != "history" {
 					out.covered = append(out.covered, turn.ContextMessageSource{Kind: "history", ID: row.ID})
 				}

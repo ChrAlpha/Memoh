@@ -100,31 +100,28 @@ type TriggerConfig struct {
 	MaxOutputTokens     int
 	// CandidatesBefore, when set, is where the caller's history ends: the
 	// cutoff an edit or retry replays history before, or the turn the request
-	// runs as. Rows from it on are not candidates.
+	// runs as. Rows from it on are not folded.
 	CandidatesBefore *messagepkg.HistoryPosition
 	// ReplacedTurnID is the turn an edit or retry replaces. The replacement
 	// rewinds the session to the checkpoint that does not depend on that
 	// turn when its first step commits; an event the request needs earlier
 	// rewinds first, so it folds onto the checkpoint the replacement keeps.
 	ReplacedTurnID string
-	// ProtectedSources stay raw, with everything after them. Current ones are
-	// the caller's current input, budgeted outside HistoryBudgetTokens; the
-	// rest are history it keeps.
+	// ProtectedSources stay raw after the summary, with every row after the
+	// first one that records them: the deferred call and answer a
+	// continuation resumes from.
 	ProtectedSources []turn.ContextMessageSource
-	// View, when set, is what the caller's request renders: only these
-	// history rows and inbound messages are candidates, whatever else the
-	// session holds. Anchors stay raw where they are without ending what a
-	// pass may fold; the summarizer reads them in place.
-	View    []turn.ContextMessageSource
-	Anchors []turn.ContextMessageSource
-	// CurrentRequest is the caller's current input, shown to the summarizer
-	// when no protected source is a history row yet.
+	// Anchors stay raw where they are, as AnchorPolicy keeps them, without
+	// ending what a pass may fold: a run's input and steers, or the inputs a
+	// Discuss run answers.
+	Anchors      []turn.ContextMessageSource
+	AnchorPolicy AnchorPolicy
+	// CurrentRequest is the caller's current input, which the summarizer
+	// reads to judge what the work needs.
 	CurrentRequest string
-	// HistoryBudgetTokens is the room the caller's request has for the
-	// summary and the protected history it keeps raw. Anchors and current
-	// sources are not in it: the caller prices what it renders for them.
+	// HistoryBudgetTokens is the room the caller's request has for what the
+	// history renders: the summary and the rows it keeps raw.
 	HistoryBudgetTokens int
-	PromptCacheTTL      string
 }
 
 // hookScope is what the compaction hooks are told about cfg's event.

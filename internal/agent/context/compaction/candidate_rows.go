@@ -2,128 +2,17 @@ package compaction
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
-	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
 // candidateRow is a compaction candidate as the database returns it.
 type candidateRow = sqlc.ListHistoryCheckpointCandidatesWithinBytesRow
-
-// candidatesFromRows classifies each candidate row into a typed
-// CompactionCandidate. A row that cannot be classified remains as a must-keep
-// barrier rather than aborting the whole compaction: no summary folds rows on
-// both sides of it. The current turn is named only through ProtectedSources.
-func candidatesFromRows(rows []candidateRow) ([]CompactionCandidate, int) {
-	items := make([]CompactionCandidate, 0, len(rows))
-	barrierCount := 0
-	for _, row := range rows {
-		record, err := historyfrag.FromDBMessage(rowToMessage(row), rowScopeFallback(row))
-		if err != nil {
-			barrierCount++
-			preserveToolClosure, toolResult := rawToolShape(row)
-			policies := []CompactPolicy{CompactPolicyMustKeep}
-			if preserveToolClosure {
-				policies = appendPolicy(policies, CompactPolicyPreserveToolClosure)
-			}
-			items = append(items, CompactionCandidate{
-				ID:           row.ID,
-				Position:     rowPosition(row),
-				RawContent:   row.Content,
-				Policies:     policies,
-				IsToolResult: toolResult,
-			})
-			continue
-		}
-		items = append(items, CompactionCandidate{
-			ID:           row.ID,
-			Position:     rowPosition(row),
-			RawContent:   row.Content,
-			Record:       record,
-			Policies:     candidatePolicies(record),
-			IsToolResult: strings.EqualFold(strings.TrimSpace(record.ModelMessage.Role), "tool"),
-		})
-	}
-	if len(items) > 0 {
-		protectPendingUserInput(items)
-		propagateMustKeepAcrossToolExchanges(items)
-	}
-	return items, barrierCount
-}
-
-func candidatesWithAssets(items []CompactionCandidate, rows []candidateRow, assetRows []sqlc.ListMessageAssetsBatchRow) ([]CompactionCandidate, error) {
-	rowByID := make(map[pgtype.UUID]candidateRow, len(rows))
-	for _, row := range rows {
-		rowByID[row.ID] = row
-	}
-	assets := assetsByMessageID(assetRows)
-	out := append([]CompactionCandidate(nil), items...)
-	for i := range out {
-		if out[i].Record.Ref.ID == "" {
-			continue
-		}
-		row, ok := rowByID[out[i].ID]
-		if !ok {
-			return nil, fmt.Errorf("compaction candidate %s missing source row", formatUUID(out[i].ID))
-		}
-		msg := rowToMessage(row)
-		msg.Assets = assets[row.ID]
-		record, err := historyfrag.FromDBMessage(msg, rowScopeFallback(row))
-		if err != nil {
-			return nil, fmt.Errorf("rebuild compaction candidate %s with assets: %w", formatUUID(out[i].ID), err)
-		}
-		out[i].Record = record
-	}
-	return out, nil
-}
-
-func assetsByMessageID(rows []sqlc.ListMessageAssetsBatchRow) map[pgtype.UUID][]messagepkg.MessageAsset {
-	assets := make(map[pgtype.UUID][]messagepkg.MessageAsset)
-	for _, row := range rows {
-		assets[row.MessageID] = append(assets[row.MessageID], messagepkg.MessageAsset{
-			ContentHash: strings.TrimSpace(row.ContentHash),
-			Role:        strings.TrimSpace(row.Role),
-			Ordinal:     int(row.Ordinal),
-			Name:        strings.TrimSpace(row.Name),
-			Metadata:    metadataMap(row.Metadata),
-		})
-	}
-	return assets
-}
-
-func rawToolShape(row candidateRow) (preserveToolClosure, toolResult bool) {
-	toolResult = strings.EqualFold(strings.TrimSpace(row.Role), "tool")
-	if toolResult {
-		return true, true
-	}
-
-	content := row.Content
-	var modelMessage turn.ModelMessage
-	if json.Unmarshal(row.Content, &modelMessage) == nil {
-		if len(modelMessage.ToolCalls) > 0 || strings.TrimSpace(modelMessage.ToolCallID) != "" {
-			return true, false
-		}
-		if modelMessage.HasContent() {
-			content = modelMessage.Content
-		}
-	}
-	var barePart entryPart
-	if json.Unmarshal(content, &barePart) == nil && isToolPartType(barePart.Type) {
-		return true, false
-	}
-	for _, part := range parseEntryParts(content) {
-		if isToolPartType(part.Type) {
-			return true, false
-		}
-	}
-	return false, false
-}
 
 func rowToMessage(row candidateRow) messagepkg.Message {
 	return messagepkg.Message{
@@ -145,12 +34,6 @@ func rowToMessage(row candidateRow) messagepkg.Message {
 		DisplayContent:          textValue(row.DisplayText),
 		CreatedAt:               row.CreatedAt.Time,
 	}
-}
-
-// rowPosition is where a candidate is in the history; every context row has
-// a position.
-func rowPosition(row candidateRow) messagepkg.HistoryPosition {
-	return messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}
 }
 
 func rowScopeFallback(row candidateRow) historyfrag.ScopeFallback {
@@ -177,13 +60,4 @@ func metadataMap(raw []byte) map[string]any {
 		return nil
 	}
 	return out
-}
-
-// markAnchors marks the rows the caller keeps raw in place.
-func markAnchors(items []CompactionCandidate, anchors []turn.ContextMessageSource) {
-	for i := range items {
-		if isProtectedSource(items[i], anchors) {
-			items[i].Policies = appendPolicy(items[i].Policies, CompactPolicyAnchor)
-		}
-	}
 }

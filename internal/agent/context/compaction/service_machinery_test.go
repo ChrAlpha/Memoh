@@ -4,8 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -19,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db"
@@ -31,16 +30,26 @@ import (
 type stubModel struct {
 	summary      string
 	finishReason string // defaults to "stop"
-	calls        int
-	prompt       string // decoded text of the captured request messages
-	maxTokens    int    // captured max_tokens of the last request
-	reasoning    int    // output tokens spent on reasoning before the summary text
+	// statuses answer the next calls in turn with an HTTP failure; zero
+	// answers normally.
+	statuses  []int
+	calls     int
+	prompt    string // decoded text of the captured request messages
+	maxTokens int    // captured max_tokens of the last request
+	reasoning int    // output tokens spent on reasoning before the summary text
 	// during runs while the summary is written, before the pass commits it.
 	during func()
 }
 
 func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
 	s.calls++
+	if len(s.statuses) > 0 {
+		status := s.statuses[0]
+		s.statuses = s.statuses[1:]
+		if status != 0 {
+			return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(`{"error":{"message":"stub failure"}}`)), Header: http.Header{"Content-Type": []string{"application/json"}}}, nil
+		}
+	}
 	if s.during != nil {
 		s.during()
 	}
@@ -61,13 +70,13 @@ func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
 	if s.reasoning > 0 && (s.maxTokens-s.reasoning)*4 < len(s.summary) {
 		finishReason = "length"
 	}
-	resp := `{"id":"stub","object":"chat.completion","created":0,"model":"stub",` +
-		`"choices":[{"index":0,"message":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":` + jsonStr(finishReason) + `}],` +
-		`"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`
+	// The summarizer streams its answer.
+	resp := `data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":null}]}` + "\n\n" +
+		`data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":` + jsonStr(finishReason) + `}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}` + "\n\ndata: [DONE]\n\n"
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(resp)),
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}, nil
 }
 
@@ -124,7 +133,6 @@ type fakeQueries struct {
 	listPanic   bool
 	listStarted chan struct{}
 	listRelease <-chan struct{}
-	assetsErr   error
 	createErr   error
 	completeErr error
 	// completeErrors fail the next completions in turn; a nil one passes.
@@ -203,14 +211,9 @@ func (f *fakeQueries) CompleteCompactionLog(_ context.Context, arg sqlc.Complete
 	return log, nil
 }
 
-func (f *fakeQueries) ListMessageAssetsBatch(_ context.Context, _ []pgtype.UUID) ([]sqlc.ListMessageAssetsBatchRow, error) {
-	f.queryCalls = append(f.queryCalls, "assets")
-	return nil, f.assetsErr
-}
-
 func (f *fakeQueries) MeasureHistoryCheckpointCandidates(_ context.Context, arg sqlc.MeasureHistoryCheckpointCandidatesParams) (sqlc.MeasureHistoryCheckpointCandidatesRow, error) {
 	var measure sqlc.MeasureHistoryCheckpointCandidatesRow
-	for _, row := range f.candidates(arg.AfterTurnPosition, arg.AfterTurnMessageSeq, arg.KeptIds, arg.BeforeTurnPosition, arg.BeforeTurnMessageSeq, arg.MessageIds, arg.ExternalMessageIds) {
+	for _, row := range f.candidates(arg.AfterTurnPosition, arg.AfterTurnMessageSeq, arg.KeptIds, arg.BeforeTurnPosition, arg.BeforeTurnMessageSeq) {
 		bytes := payloadBytesForTest(row)
 		measure.CandidateCount++
 		measure.CandidateBytes += bytes
@@ -233,7 +236,7 @@ func (f *fakeQueries) ListHistoryCheckpointCandidatesWithinBytes(_ context.Conte
 	if f.listRelease != nil {
 		<-f.listRelease
 	}
-	candidates := f.candidates(arg.AfterTurnPosition, arg.AfterTurnMessageSeq, arg.KeptIds, arg.BeforeTurnPosition, arg.BeforeTurnMessageSeq, arg.MessageIds, arg.ExternalMessageIds)
+	candidates := f.candidates(arg.AfterTurnPosition, arg.AfterTurnMessageSeq, arg.KeptIds, arg.BeforeTurnPosition, arg.BeforeTurnMessageSeq)
 	var total int64
 	for _, row := range candidates {
 		total += payloadBytesForTest(row)
@@ -251,9 +254,8 @@ func (f *fakeQueries) ListHistoryCheckpointCandidatesWithinBytes(_ context.Conte
 }
 
 // candidates are the rows a pass reads: the ones the checkpoint it folds
-// onto keeps and the ones after its position, before the cutoff and in the
-// view when there is one.
-func (f *fakeQueries) candidates(afterTurn, afterSeq int64, keptIDs []pgtype.UUID, beforeTurn, beforeSeq pgtype.Int8, viewIDs []pgtype.UUID, viewExternalIDs []string) []candidateRow {
+// onto keeps and the ones after its position, before the cutoff.
+func (f *fakeQueries) candidates(afterTurn, afterSeq int64, keptIDs []pgtype.UUID, beforeTurn, beforeSeq pgtype.Int8) []candidateRow {
 	after := messagepkg.HistoryPosition{Turn: afterTurn, Seq: afterSeq}
 	var rows []candidateRow
 	for _, row := range f.ordered() {
@@ -262,9 +264,6 @@ func (f *fakeQueries) candidates(afterTurn, afterSeq int64, keptIDs []pgtype.UUI
 			continue
 		}
 		if beforeTurn.Valid && !position.Before(messagepkg.HistoryPosition{Turn: beforeTurn.Int64, Seq: beforeSeq.Int64}) {
-			continue
-		}
-		if viewIDs != nil && !slices.Contains(viewIDs, row.ID) && (!row.ExternalMessageID.Valid || !slices.Contains(viewExternalIDs, row.ExternalMessageID.String)) {
 			continue
 		}
 		rows = append(rows, row)
@@ -464,43 +463,6 @@ func newMachineryService(q dbstore.Queries) *Service {
 	return NewService(slog.New(slog.DiscardHandler), q)
 }
 
-const (
-	passNoop     = "noop"
-	passOK       = "ok"
-	passProgress = "progress"
-)
-
-// passResult is the outcome of compactOnce: whether a pass committed and
-// left candidates behind, its summary and the rows it folded.
-type passResult struct {
-	Status       string
-	Summary      string
-	MessageCount int
-}
-
-// runPass runs one pass of an event on its own.
-func (s *Service) runPass(ctx context.Context, cfg TriggerConfig) (Pass, bool, error) {
-	return s.doCompaction(ctx, db.ParseUUIDOrEmpty(cfg.SessionID), cfg, "")
-}
-
-// compactOnce runs one pass of an event on its own and reports its outcome.
-func (s *Service) compactOnce(ctx context.Context, cfg TriggerConfig) (passResult, error) {
-	pass, folded, err := s.runPass(ctx, cfg)
-	if err != nil || !folded {
-		return passResult{Status: passNoop}, err
-	}
-	result := passResult{Status: passOK, Summary: pass.Summary}
-	if pass.More {
-		result.Status = passProgress
-	}
-	for _, source := range pass.Covered {
-		if source.Kind == "history" {
-			result.MessageCount++
-		}
-	}
-	return result, nil
-}
-
 func machineryConfig(stub *stubModel, historyBudgetTokens int) TriggerConfig {
 	return TriggerConfig{
 		BotID:               uuid.NewString(),
@@ -523,12 +485,12 @@ func currentConfig(stub *stubModel, historyBudgetTokens int, current candidateRo
 	return cfg
 }
 
-func idSet(ids []pgtype.UUID) map[pgtype.UUID]bool {
-	m := make(map[pgtype.UUID]bool, len(ids))
-	for _, id := range ids {
-		m[id] = true
+func historySources(rows ...candidateRow) []turn.ContextMessageSource {
+	sources := make([]turn.ContextMessageSource, 0, len(rows))
+	for _, row := range rows {
+		sources = append(sources, turn.ContextMessageSource{Kind: "history", ID: row.ID.String()})
 	}
-	return m
+	return sources
 }
 
 // machineryCorpus returns a deterministic session whose oldest portion contains
@@ -551,300 +513,7 @@ func machineryCorpus(t *testing.T) []candidateRow {
 	}
 }
 
-// --- tests --------------------------------------------------------------------
-
-// A pass that folds only what precedes an input the request keeps shows that
-// input after the summary, where the request keeps it, not as kept in place.
-func TestDoCompactionShowsAKeptInputAfterTheSummaryItFollows(t *testing.T) {
-	rows := []candidateRow{
-		mkRow(t, "user", `"old question"`, 100),
-		mkRow(t, "assistant", `"old answer"`, 100),
-		mkRow(t, "user", `"KEPT_INPUT"`, 100),
-		mkRow(t, "assistant", `"LATEST_STEP"`, 100),
-	}
-	q := &fakeQueries{history: rows}
-	stub := &stubModel{summary: "SUMMARY-OK"}
-	cfg := currentConfig(stub, 450, rows[3])
-	cfg.Anchors = historySources(rows[2])
-	if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err != nil {
-		t.Fatal(err)
-	}
-	folded := idSet(q.folded)
-	if len(folded) != 2 || !folded[rows[0].ID] || !folded[rows[1].ID] {
-		t.Fatalf("folded %d rows, want the two before the input", len(folded))
-	}
-	_, rendered, _ := strings.Cut(stub.prompt, "<conversation>")
-	conversation, current, _ := strings.Cut(rendered, "<current_request>")
-	if strings.Contains(conversation, "KEPT_INPUT") || !strings.Contains(current, "user: KEPT_INPUT\nassistant: LATEST_STEP") {
-		t.Fatalf("the kept input must read after the summary, before the latest step:\n%s", stub.prompt)
-	}
-}
-
-func TestDoCompactionFoldsToolAwareWindowAndRendersCleanPrompt(t *testing.T) {
-	rows := machineryCorpus(t)
-	q := &fakeQueries{history: rows}
-	stub := &stubModel{summary: "SUMMARY-OK"}
-	svc := newMachineryService(q)
-
-	// Everything before the current input (row 7) is folded, with both tool
-	// exchanges kept whole on the folded side.
-	cfg := machineryConfig(stub, 450)
-	cfg.ProtectedSources = historySources(rows[7])
-	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-
-	if stub.calls != 1 {
-		t.Fatalf("summarizer called %d times, want 1", stub.calls)
-	}
-	if len(q.folded) != 7 {
-		t.Fatalf("folded %d messages, want 7 (0..6, tool exchange kept whole)", len(q.folded))
-	}
-	folded := idSet(q.folded)
-	for i := 0; i <= 6; i++ {
-		if !folded[rows[i].ID] {
-			t.Fatalf("row %d should be folded", i)
-		}
-	}
-	for i := 7; i <= 9; i++ {
-		if folded[rows[i].ID] {
-			t.Fatalf("row %d (recent) should NOT be folded", i)
-		}
-	}
-	if !folded[rows[6].ID] {
-		t.Fatalf("tool result B must be pulled into the fold with its call")
-	}
-	if q.completed.Status != "ok" || q.completed.Summary != "SUMMARY-OK" || q.completed.MessageCount != 7 {
-		t.Fatalf("complete log = status=%q summary=%q count=%d", q.completed.Status, q.completed.Summary, q.completed.MessageCount)
-	}
-	// The rows after the last one it folds stay after the checkpoint, which
-	// holds only the summary.
-	if held := q.held(); len(held) != 1 || held[0].SummaryID != formatUUID(q.createdLogID) {
-		t.Fatalf("checkpoint holds %+v, want only the summary", held)
-	}
-	if position := q.checkpoints[q.active]; position.TurnPosition != rows[6].TurnPosition.Int64 || position.TurnMessageSeq != rows[6].TurnMessageSeq.Int64 {
-		t.Fatalf("checkpoint at (%d, %d), want the last folded row's position", position.TurnPosition, position.TurnMessageSeq)
-	}
-
-	// The summarizer prompt must carry clean rendered outcomes, no media, no noise.
-	if !strings.Contains(stub.prompt, "build ok done") {
-		t.Fatalf("structured tool outcome missing from prompt:\n%s", stub.prompt)
-	}
-	if !strings.Contains(stub.prompt, `"cmd":"make"`) {
-		t.Fatalf("tool call arguments missing from prompt:\n%s", stub.prompt)
-	}
-	if !strings.Contains(stub.prompt, "[media]") || strings.Contains(stub.prompt, "QUJDQUJDQUJD") {
-		t.Fatalf("base64 image result not scrubbed in prompt")
-	}
-	if strings.Contains(stub.prompt, `{"type":"text"`) || strings.Contains(stub.prompt, `"toolCallId"`) {
-		t.Fatalf("raw JSON-envelope noise leaked into prompt:\n%s", stub.prompt)
-	}
-}
-
-// TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget drives one
-// unsplittable tool exchange larger than the summarizer can read: sending it
-// anyway would overflow the summarizer window, so the attempt must fail
-// closed with no log and zero provider calls.
-func TestDoCompactionFailsClosedWhenEntryFloorsExceedBudget(t *testing.T) {
-	const fanout = 40
-	callParts := make([]string, 0, fanout)
-	for i := 0; i < fanout; i++ {
-		callParts = append(callParts, fmt.Sprintf(`{"type":"tool-call","toolCallId":"c%d","toolName":"probe","input":{}}`, i))
-	}
-	rows := []candidateRow{
-		mkRow(t, "assistant", "["+strings.Join(callParts, ",")+"]", 100),
-	}
-	for i := 0; i < fanout; i++ {
-		rows = append(rows, mkRow(t, "tool", fmt.Sprintf(`[{"type":"tool-result","toolCallId":"c%d","toolName":"probe","output":{"type":"text","value":"ok"}}]`, i), 100))
-	}
-	rows = append(rows, mkRow(t, "user", `[{"type":"text","text":"recent question"}]`, 100))
-
-	q := &fakeQueries{history: rows}
-	stub := &stubModel{summary: "SUMMARY-OK"}
-	svc := newMachineryService(q)
-
-	cfg := machineryConfig(stub, 100)
-	cfg.SummaryWindowTokens = 1000
-
-	_, err := svc.compactOnce(context.Background(), cfg)
-	if !errors.Is(err, errCompactionInputOverflow) {
-		t.Fatalf("compact error = %v, want errCompactionInputOverflow", err)
-	}
-	if stub.calls != 0 {
-		t.Fatalf("summarizer calls = %d, want 0: an oversized selection must not reach the provider", stub.calls)
-	}
-	if q.created {
-		t.Fatal("a log was opened: fail closed before the pass starts")
-	}
-	if q.active.Valid {
-		t.Fatalf("checkpoint = %v, want none", q.active)
-	}
-}
-
-func TestDoCompactionAllEmptyWindowSkipsModelAndFolding(t *testing.T) {
-	rows := []candidateRow{
-		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking a"}]`, 100),
-		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking b"}]`, 100),
-		mkRow(t, "assistant", `[{"type":"text","text":"recent kept"}]`, 100),
-	}
-	q := &fakeQueries{history: rows}
-	stub := &stubModel{summary: "unused"}
-	svc := newMachineryService(q)
-
-	cfg := machineryConfig(stub, 150)
-	cfg.ProtectedSources = historySources(rows[2])
-	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if stub.calls != 0 {
-		t.Fatalf("summarizer should not be called for an all-empty window (calls=%d)", stub.calls)
-	}
-	if q.active.Valid {
-		t.Fatalf("nothing should be folded for an all-empty window (checkpoint=%v)", q.active)
-	}
-	if q.created {
-		t.Fatal("a no-op compaction must not create a log row")
-	}
-}
-
-func TestDoCompactionCoversToolExchangeWhoseResultRendersEmpty(t *testing.T) {
-	rows := []candidateRow{
-		toolCallRow(t, 100),
-		mkRow(t, "tool", `[]`, 100),
-		mkRow(t, "assistant", `[{"type":"text","text":"recent kept"}]`, 100),
-	}
-	q := &fakeQueries{history: rows}
-	stub := &stubModel{summary: "unused"}
-	svc := newMachineryService(q)
-
-	cfg := machineryConfig(stub, 150)
-	cfg.ProtectedSources = historySources(rows[2])
-	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if stub.calls != 1 || len(q.folded) != 2 || q.folded[0] != rows[0].ID || q.folded[1] != rows[1].ID {
-		t.Fatalf("calls=%d folded=%d, want the call and its empty result covered together", stub.calls, len(q.folded))
-	}
-}
-
-func TestDoCompactionCoversEmptyMiddleRowWithItsNeighbours(t *testing.T) {
-	// Window: an empty-rendering reasoning row sits between two rendered rows.
-	// All three fold together, so the summary stands for one contiguous run
-	// and the checkpoint keeps none of them.
-	rows := []candidateRow{
-		mkRow(t, "user", `[{"type":"text","text":"old question about a long-running project with plenty of detail to summarize"}]`, 100), // 0
-		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking"}]`, 100),                                                           // 1 renders empty
-		mkRow(t, "assistant", `[{"type":"text","text":"old answer covering the whole project state in enough words to compress"}]`, 100), // 2
-		mkRow(t, "user", `[{"type":"text","text":"recent question"}]`, 100),                                                              // 3 kept
-		mkRow(t, "assistant", `[{"type":"text","text":"recent answer"}]`, 100),                                                           // 4 kept
-	}
-	q := &fakeQueries{history: rows}
-	stub := &stubModel{summary: "SUMMARY"}
-	svc := newMachineryService(q)
-
-	cfg := machineryConfig(stub, 250)
-	cfg.ProtectedSources = historySources(rows[3])
-	if _, err := svc.compactOnce(context.Background(), cfg); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if len(q.folded) != 3 || q.folded[0] != rows[0].ID || q.folded[1] != rows[1].ID || q.folded[2] != rows[2].ID {
-		t.Fatalf("folded = %d ids, want rows 0-2 as one contiguous run", len(q.folded))
-	}
-	if q.completed.Status != "ok" || q.completed.MessageCount != 3 {
-		t.Fatalf("complete log = status=%q count=%d, want ok/3", q.completed.Status, q.completed.MessageCount)
-	}
-}
-
-func TestDoCompactionEmptyHistoryNoOp(t *testing.T) {
-	q := &fakeQueries{}
-	stub := &stubModel{summary: "unused"}
-	svc := newMachineryService(q)
-
-	if _, err := svc.compactOnce(context.Background(), machineryConfig(stub, 100)); err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if stub.calls != 0 || q.active.Valid {
-		t.Fatalf("empty history must be a no-op (calls=%d checkpoint=%v)", stub.calls, q.active)
-	}
-	if q.created {
-		t.Fatal("empty history must not create a log row")
-	}
-}
-
-// failingModel refuses every request with an answer the summarizer does not
-// retry, so each compaction attempt makes exactly one call.
-type failingModel struct{ calls int }
-
-func (f *failingModel) RoundTrip(*http.Request) (*http.Response, error) {
-	f.calls++
-	return &http.Response{
-		StatusCode: http.StatusBadRequest,
-		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"boom"}}`)),
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-	}, nil
-}
-
-// rateLimitedOnce answers the first request with a rate limit and passes the
-// rest to the stub.
-type rateLimitedOnce struct {
-	stub  *stubModel
-	calls int
-}
-
-func (r *rateLimitedOnce) RoundTrip(req *http.Request) (*http.Response, error) {
-	r.calls++
-	if r.calls == 1 {
-		return &http.Response{
-			StatusCode: http.StatusTooManyRequests,
-			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"slow down","type":"rate_limit_error"}}`)),
-			Header:     http.Header{"Content-Type": []string{"application/json"}},
-		}, nil
-	}
-	return r.stub.RoundTrip(req)
-}
-
-// A summarizer call the provider rate-limits is made again, and the pass
-// completes with the retried call's summary.
-func TestDoCompactionRetriesRateLimitedSummarizerCall(t *testing.T) {
-	t.Parallel()
-
-	q := &fakeQueries{history: machineryCorpus(t)}
-	stub := &stubModel{summary: "SUMMARY-RETRIED"}
-	transport := &rateLimitedOnce{stub: stub}
-	cfg := machineryConfig(stub, 450)
-	cfg.HTTPClient = &http.Client{Transport: transport}
-
-	res, err := newMachineryService(q).compactOnce(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("compact: %v", err)
-	}
-	if transport.calls != 2 || res.Status != passOK || res.Summary != "SUMMARY-RETRIED" {
-		t.Fatalf("result = %+v after %d calls, want the retried summary after 2", res, transport.calls)
-	}
-}
-
-// A pass whose summarizer fails settles its log as an error and commits
-// nothing: the session keeps its checkpoint and the rows stay candidates.
-func TestDoCompactionSummarizerFailureRecordsErrorAndKeepsTheCheckpoint(t *testing.T) {
-	for name, transport := range map[string]http.RoundTripper{
-		"failed call":   &failingModel{},
-		"empty summary": &stubModel{summary: "   "},
-	} {
-		t.Run(name, func(t *testing.T) {
-			q := &fakeQueries{history: machineryCorpus(t)}
-			parent := q.hold("earlier summary")
-			cfg := machineryConfig(&stubModel{}, 450)
-			cfg.HTTPClient = &http.Client{Transport: transport}
-
-			if _, err := newMachineryService(q).compactOnce(context.Background(), cfg); err == nil {
-				t.Fatal("a failed summary must surface an error")
-			}
-			if !q.created || q.completed.Status != "error" || q.logs[q.createdLogID].Status != "error" {
-				t.Fatalf("a failed attempt must leave an error log row (created=%v status=%q)", q.created, q.completed.Status)
-			}
-			if q.active != parent.ID || len(q.folded) != 0 {
-				t.Fatalf("checkpoint = %v folded=%d, want %v kept with nothing folded", q.active, len(q.folded), parent.ID)
-			}
-		})
-	}
+// rowPosition is where a row stands in the session's history.
+func rowPosition(row candidateRow) messagepkg.HistoryPosition {
+	return messagepkg.HistoryPosition{Turn: row.TurnPosition.Int64, Seq: row.TurnMessageSeq.Int64}
 }

@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"slices"
 	"sort"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	"github.com/felinics/memoh/internal/db"
@@ -32,13 +30,9 @@ var (
 	// errIneffectiveSummary marks a summary that would replay at least as many
 	// tokens as the raw entries it replaces.
 	errIneffectiveSummary = errors.New("compaction: summary does not reduce replay tokens")
-	// ErrSummaryWindowTooSmall marks a summarizer whose declared window cannot
-	// hold the fixed prompt plus the output reserve; running it would overflow
-	// on every attempt, so it fails closed before calling it.
-	ErrSummaryWindowTooSmall = errors.New("compaction: summarizer window too small for the compaction prompt")
 	// errCompactionInputOverflow marks content the summarizer cannot read in one
-	// call: an unsplittable tool exchange, or the earlier summary beside the
-	// oldest one. Its text is never cut to fit, so it fails before calling the
+	// call: a prefix no fork leaves room to answer, or a row larger than the
+	// read bound. Its text is never cut to fit, so it fails before calling the
 	// summarizer.
 	errCompactionInputOverflow = errors.New("compaction: content exceeds the summarizer input")
 	// errNoSummaryRoom marks a request whose kept history leaves no room for a
@@ -50,6 +44,9 @@ var (
 	// errStaleSource marks a pass whose request rendered another checkpoint
 	// or another version of a row than the pass reads.
 	errStaleSource = errors.New("compaction: the request rendered history that changed since")
+	// errCompactionInFlight marks an event that found another event of its
+	// session running in this process.
+	errCompactionInFlight = errors.New("compaction: another compaction of the session is running")
 )
 
 // inflightRun marks one session's running compaction for activity reporting.
@@ -131,92 +128,62 @@ func (s *Service) publishActivity(botID string) {
 	}
 }
 
-// Compact runs one compaction event for the caller's request: it folds the
-// summaries of the session's active checkpoint and every candidate the
-// request does not keep raw into one summary. A pass folds as much as one
-// summarizer call can read and commits it as the session's next checkpoint;
-// the event passes again only while candidates are left that the call could
-// not read. An edit or retry's event first rewinds the session to the
-// checkpoint its replacement keeps, as the replacement's first step does. It
-// returns the passes it committed: none when there was nothing to fold or the
-// session's compaction was already in flight. A failed pass ends the event
-// with an *EventError and leaves the passes before it committed.
+// Compact runs one compaction event over a session's history read from its
+// rows, for a caller whose request cannot render them: a load the byte budget
+// truncated, a run that is not armed, input a Discuss composer left out. It
+// folds the summaries of the session's active checkpoint and every row the
+// caller does not keep into one summary, each pass forking a request built
+// from the rows (see synthesize) through the compaction model. An edit or
+// retry's event first rewinds the session to the checkpoint its replacement
+// keeps, as the replacement's first step does. It returns the passes it
+// committed; a failed pass ends the event with an *EventError and leaves the
+// passes before it committed.
 func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
-	run, ok := s.beginSessionCompaction(cfg.SessionID)
+	return s.event(ctx, cfg.hookScope(), cfg.ReplacedTurnID, func(ctx context.Context) ([]Pass, error) {
+		return s.compactRows(ctx, cfg)
+	})
+}
+
+// event runs one compaction event for a session: alone in this process,
+// between the PreCompact and PostCompact hooks, after an edit or retry's
+// session moved to the checkpoint its replacement keeps.
+func (s *Service) event(ctx context.Context, scope hookScope, replacedTurnID string, run func(context.Context) ([]Pass, error)) ([]Pass, error) {
+	inflight, ok := s.beginSessionCompaction(scope.SessionID)
 	if !ok {
-		s.logger.InfoContext(ctx, "compaction: already in flight for session",
-			slog.String("bot_id", cfg.BotID),
-			slog.String("session_id", cfg.SessionID),
-		)
-		return nil, nil
+		return nil, failed(ReasonStaleSource, errCompactionInFlight)
 	}
 	defer func() {
-		s.endSessionCompaction(cfg.SessionID)
-		s.publishActivity(cfg.BotID)
+		s.endSessionCompaction(scope.SessionID)
+		s.publishActivity(scope.BotID)
 	}()
-
 	s.inflightMu.Lock()
-	run.botID = cfg.BotID
+	inflight.botID = scope.BotID
 	s.inflightMu.Unlock()
-	s.publishActivity(cfg.BotID)
+	s.publishActivity(scope.BotID)
 
-	var compactErr error
+	var eventErr error
 	preHookRan := false
 	defer func() {
 		if r := recover(); r != nil {
 			panic(r)
 		}
-		if !preHookRan {
-			return
+		if preHookRan {
+			s.runPostCompactHook(context.WithoutCancel(ctx), scope, eventErr)
 		}
-		s.runPostCompactHook(context.WithoutCancel(ctx), cfg.hookScope(), compactErr)
 	}()
-
-	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, cfg.hookScope(), nil); err != nil {
+	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, scope, nil); err != nil {
 		return nil, err
 	}
 	preHookRan = true
-	if _, err := db.ParseUUID(cfg.BotID); err != nil {
-		compactErr = err
-		return nil, err
-	}
-	sessionUUID, err := db.ParseUUID(cfg.SessionID)
-	if err != nil {
-		compactErr = err
-		return nil, err
-	}
-	if cfg.ReplacedTurnID != "" {
-		if err := s.rewindReplacedTurn(ctx, cfg.BotID, cfg.SessionID, cfg.ReplacedTurnID); err != nil {
-			compactErr = err
+	if replacedTurnID != "" {
+		if err := s.rewindReplacedTurn(ctx, scope.BotID, scope.SessionID, replacedTurnID); err != nil {
+			eventErr = err
 			return nil, err
 		}
 	}
-
-	var passes []Pass
-	for {
-		previous := ""
-		if len(passes) > 0 {
-			previous = passes[len(passes)-1].ArtifactID
-		}
-		pass, folded, err := s.doCompaction(ctx, sessionUUID, cfg, previous)
-		if err != nil {
-			compactErr = err
-			return passes, err
-		}
-		if !folded {
-			return passes, nil
-		}
-		passes = append(passes, pass)
-		if cfg.View != nil {
-			cfg.View = slices.DeleteFunc(slices.Clone(cfg.View), func(source turn.ContextMessageSource) bool {
-				return source.Kind == "summary" && slices.Contains(pass.Absorbed, source.ID)
-			})
-			cfg.View = append(cfg.View, turn.ContextMessageSource{Kind: "summary", ID: pass.ArtifactID})
-		}
-		if !pass.More || len(pass.Covered) == 0 {
-			return passes, nil
-		}
-	}
+	passes, err := run(ctx)
+	eventErr = err
+	return passes, err
 }
 
 // runPostCompactHook dispatches PostCompact after the compaction outcome is

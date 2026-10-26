@@ -3,7 +3,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -176,9 +175,6 @@ func TestPostgresCompactionEventFoldsTheWholeBacklog(t *testing.T) {
 		t.Fatalf("passes=%d summarizer calls=%d err=%v, want one call per pass and a backlog one call cannot read", len(passes), f.summaries.Load(), err)
 	}
 	for i, pass := range passes {
-		if pass.More != (i < len(passes)-1) {
-			t.Fatalf("pass %d More=%t, want only the last pass to leave nothing to read", i, pass.More)
-		}
 		if i > 0 && !slices.Equal(pass.Absorbed, []string{passes[i-1].ArtifactID}) {
 			t.Fatalf("pass %d absorbed %v, want the summary of pass %d", i, pass.Absorbed, i-1)
 		}
@@ -190,70 +186,6 @@ func TestPostgresCompactionEventFoldsTheWholeBacklog(t *testing.T) {
 	}
 	if raw, compacted := f.backlogRows(); raw != 0 || compacted != len(foldedRows(passes...)) {
 		t.Fatalf("backlog raw=%d compacted=%d after %d passes, want all of it folded", raw, compacted, len(passes))
-	}
-}
-
-// A pass folds only what the caller's request renders. Rows the request does
-// not show stay raw. Anchors stay raw in place, and the summarizer reads them
-// there, marked as kept. The tail the request keeps ends what is folded.
-func TestPostgresCompactionFoldsTheViewAroundItsAnchors(t *testing.T) {
-	f := newBacklogFixture(t)
-	for _, id := range []string{"old-0", "old-1", "input", "step-0", "outside", "step-1", "tail"} {
-		f.appendMessage(id, id+" "+strings.Repeat("x", 200))
-	}
-	external := make(map[string]turn.ContextMessageSource)
-	for _, segment := range f.rc {
-		external[segment.MessageID] = turn.ContextMessageSource{Kind: "external", ID: segment.MessageID, EventCursor: segment.LastEventCursor}
-	}
-	var read strings.Builder
-	f.onSummary = func(body []byte) {
-		var request struct {
-			Messages []struct {
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			t.Error(err)
-		}
-		for _, message := range request.Messages {
-			read.WriteString(message.Content)
-		}
-	}
-	history := func(id string) turn.ContextMessageSource {
-		return turn.ContextMessageSource{Kind: "history", ID: f.rowID(id)}
-	}
-	cfg := compaction.TriggerConfig{
-		View: []turn.ContextMessageSource{
-			history("old-0"), external["old-1"], history("step-0"), external["step-1"], history("tail"),
-		},
-		Anchors:          []turn.ContextMessageSource{history("input")},
-		ProtectedSources: []turn.ContextMessageSource{history("tail")},
-	}
-	passes, err := f.fold(f.ctx, cfg)
-	if err != nil || len(passes) != 1 {
-		t.Fatalf("passes=%+v err=%v", passes, err)
-	}
-	want := []string{f.rowID("old-0"), f.rowID("old-1"), f.rowID("step-0"), f.rowID("step-1")}
-	if got := foldedRows(passes...); !slices.Equal(got, want) {
-		t.Fatalf("folded %v, want %v", got, want)
-	}
-	for _, id := range []string{"input", "outside", "tail"} {
-		if raw, _ := f.backlogRowsPrefixed(id); raw != 1 {
-			t.Fatalf("%s was folded", id)
-		}
-	}
-	prompt := read.String()
-	order := []string{"old-1 ", "<kept>\nuser: [message_id: input]\n", "\ninput ", "</kept>", "step-0 "}
-	at := 0
-	for _, text := range order {
-		next := strings.Index(prompt[at:], text)
-		if next < 0 {
-			t.Fatalf("summarizer prompt lacks %q after offset %d:\n%s", text, at, prompt)
-		}
-		at += next
-	}
-	if strings.Contains(prompt, "outside ") {
-		t.Fatal("the summarizer read a row the request does not render")
 	}
 }
 

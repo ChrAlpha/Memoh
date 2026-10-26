@@ -137,7 +137,6 @@ type Service struct {
 	pipeline                *timeline.Pipeline
 	streamHTTPClient        *http.Client
 	nonStreamingHTTPClient  *http.Client
-	compactionHTTPClient    *http.Client
 	streamIdleTimeout       time.Duration
 	streamIdleTimeoutMax    time.Duration
 	bgManager               *background.Manager
@@ -212,15 +211,6 @@ func NewService(
 		Transport: nonStreamingTransport,
 		Timeout:   10 * time.Minute,
 	}
-	// The summarizer sends one large cold prompt whose first byte routinely
-	// takes 60-93s upstream; the interactive 30s header deadline would kill
-	// every pass.
-	compactionTransport := streamTransport.Clone()
-	compactionTransport.ResponseHeaderTimeout = 3 * time.Minute
-	compactionHTTPClient := &http.Client{
-		Transport: compactionTransport,
-		Timeout:   10 * time.Minute,
-	}
 
 	service := &Service{
 		agent:                  a,
@@ -232,7 +222,6 @@ func NewService(
 		accountService:         accountService,
 		streamHTTPClient:       streamHTTPClient,
 		nonStreamingHTTPClient: nonStreamingHTTPClient,
-		compactionHTTPClient:   compactionHTTPClient,
 		timeout:                timeout,
 		memorySearchTimeout:    defaultMemorySearchTimeout,
 		clockLocation:          clockLocation,
