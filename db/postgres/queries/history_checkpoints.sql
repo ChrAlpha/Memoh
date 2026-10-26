@@ -224,9 +224,9 @@ FROM owner_session owner;
 -- A compaction pass reads its candidates oldest first within a hard payload
 -- budget: the rows the checkpoint it folds onto keeps by reference and the
 -- context rows after that checkpoint's position, before the cutoff position
--- when set. A leading row larger than the budget is read alone, up to
--- max_row_bytes, so every pass can read the next row. The cumulative filter
--- is evaluated before the payload join, so a leading row larger than that
+-- when set. The row that crosses the budget is read too, when it alone fits
+-- max_row_bytes, so every pass can read past what it has read. The cumulative
+-- filter is evaluated before the payload join, so a row larger than that
 -- returns no payload instead of crossing the process-memory boundary.
 -- CandidateCount reports whether the prefix was truncated.
 WITH candidate_rows AS MATERIALIZED (
@@ -258,16 +258,13 @@ WITH candidate_rows AS MATERIALIZED (
     COALESCE(SUM(payload_bytes) OVER (), 0)::BIGINT AS candidate_bytes,
     SUM(payload_bytes) OVER (
       ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
-    )::BIGINT AS cumulative_bytes,
-    ROW_NUMBER() OVER (
-      ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
-    ) AS candidate_position
+    )::BIGINT AS cumulative_bytes
   FROM candidate_rows
 ), admitted_candidates AS MATERIALIZED (
   SELECT *
   FROM ranked_candidates
   WHERE cumulative_bytes <= sqlc.arg(max_bytes)::BIGINT
-    OR (candidate_position = 1 AND payload_bytes <= sqlc.arg(max_row_bytes)::BIGINT)
+    OR (cumulative_bytes - payload_bytes <= sqlc.arg(max_bytes)::BIGINT AND payload_bytes <= sqlc.arg(max_row_bytes)::BIGINT)
 )
 SELECT
   m.id,

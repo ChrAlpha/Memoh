@@ -304,30 +304,80 @@ func TestFoldReadsAMessageLargerThanItsWindowByItsHeadAndTail(t *testing.T) {
 	}
 }
 
-// A call whose arguments are larger than the window is folded the same way:
-// the fork sends the head and tail of its arguments under the same call, so
-// its result still pairs with it.
-func TestFoldReadsACallWithArgumentsLargerThanItsWindow(t *testing.T) {
+// A call whose arguments are larger than the window, or a result that is, is
+// folded the same way: the fork sends their head and tail under the same call,
+// so the result still pairs with it, measured as the fork encodes them, where
+// markup and quotes grow.
+func TestFoldReadsToolPartsLargerThanItsWindow(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name, line string
+		inResult   bool
+	}{
+		{name: "plain arguments", line: "line of the file "},
+		{name: "markup arguments", line: `<div class="row"><a href="/x?a=1&b=2">item</a></div>`},
+		{name: "markup result", line: `<div class="row"><a href="/x?a=1&b=2">item</a></div>`, inResult: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newFoldSession(t)
+			r := s.request()
+			content := "CONTENT_HEAD " + strings.Repeat(tc.line, 160000/len(tc.line)) + " CONTENT_TAIL"
+			if tc.inResult {
+				r.messages[3] = sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "call_1", ToolName: "read", Result: toolexec.OutputFromValue(map[string]any{"page": content})})
+			} else {
+				r.messages[2] = sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+					ToolCallID: "call_1", ToolName: "write", Input: sdk.ParseToolArguments(`{"path":"big.html","content":` + strconv.Quote(content) + `}`),
+				}}}
+			}
+			summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("A large page was handled.")}}
+			ev := s.event(r, summarizer)
+			ev.Window, ev.Allowance, ev.MaxOutputTokens = 8000, 6000, 2000
+
+			passes, err := s.svc.Fold(context.Background(), ev)
+			if err != nil || len(passes) != 1 || !slices.Contains(passes[0].Covered, r.rows[1]) || !slices.Contains(passes[0].Covered, r.rows[2]) {
+				t.Fatalf("passes=%+v err=%v, want one pass that stands for the large call and its result", passes, err)
+			}
+			fork := summarizer.requests[0]
+			cut, read := fork.Messages[2], fork.Messages[2].Content[0].(sdk.ToolCallPart).Input.String()
+			if tc.inResult {
+				cut, read = fork.Messages[3], fork.Messages[3].Content[0].(sdk.ToolResultPart).Result.String()
+			}
+			if tokens := forkTokens(sdk.Request{Messages: []sdk.Message{cut}}); tokens > forkMessageCap(ev) {
+				t.Fatalf("the cut message takes %d tokens as the fork encodes it, want at most %d", tokens, forkMessageCap(ev))
+			}
+			if forkTokens(fork) > ev.Window || !strings.Contains(read, "CONTENT_HEAD") || !strings.Contains(read, "CONTENT_TAIL") ||
+				fork.Messages[2].Content[0].(sdk.ToolCallPart).ToolCallID != "call_1" || fork.Messages[3].Content[0].(sdk.ToolResultPart).ToolCallID != "call_1" {
+				t.Fatalf("fork = %d tokens in a %d-token window, read %d bytes, want the call and result paired with their head and tail", forkTokens(fork), ev.Window, len(read))
+			}
+		})
+	}
+}
+
+// A system prompt the prompt cache moved into the messages is read whole by
+// every pass: the fork leaves it as it is and cuts the message it cannot
+// read whole to what the window has beside it.
+func TestFoldReadsAPromotedSystemPromptWhole(t *testing.T) {
 	t.Parallel()
 	s := newFoldSession(t)
 	r := s.request()
-	content := "CONTENT_HEAD " + strings.Repeat("line of the file ", 8000) + " CONTENT_TAIL"
-	r.messages[2] = sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
-		ToolCallID: "call_1", ToolName: "write", Input: sdk.ParseToolArguments(`{"path":"big.txt","content":` + strconv.Quote(content) + `}`),
-	}}}
-	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("A large file was written.")}}
+	system := sdk.Message{Role: sdk.MessageRoleSystem, Content: []sdk.MessagePart{sdk.TextPart{Text: "You are the bot. " + strings.Repeat("Follow the house rules closely. ", 600)}}}
+	r.messages[1] = sdk.UserMessage("HUGE_HEAD " + strings.Repeat("payload ", 12000) + " HUGE_TAIL")
+	r.messages = append([]sdk.Message{system}, r.messages...)
+	r.sources = append([]Source{{}}, r.sources...)
+	r.cut++
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The audit request and its findings are summarized.")}}
 	ev := s.event(r, summarizer)
-	ev.Window, ev.Allowance, ev.MaxOutputTokens = 8000, 6000, 2000
+	ev.Request.System = ""
+	ev.Window, ev.Allowance, ev.MaxOutputTokens = 12000, 9000, 2000
 
 	passes, err := s.svc.Fold(context.Background(), ev)
-	if err != nil || len(passes) != 1 || !slices.Contains(passes[0].Covered, r.rows[1]) {
-		t.Fatalf("passes=%+v err=%v, want one pass that stands for the large call", passes, err)
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("passes=%+v err=%v, want one pass", passes, err)
 	}
 	fork := summarizer.requests[0]
-	call, ok := fork.Messages[2].Content[0].(sdk.ToolCallPart)
-	if !ok || call.ToolCallID != "call_1" || !call.Input.Valid() || forkTokens(fork) > ev.Window ||
-		!strings.Contains(call.Input.String(), "CONTENT_HEAD") || !strings.Contains(call.Input.String(), "CONTENT_TAIL") {
-		t.Fatalf("fork = %d tokens, call = %+v, want the call kept with the head and tail of its arguments", forkTokens(fork), fork.Messages[2])
+	if forkTokens(fork) > ev.Window || messageText(fork.Messages[0]) != messageText(system) || !strings.Contains(messageText(fork.Messages[2]), "HUGE_TAIL") {
+		t.Fatalf("fork = %d tokens in a %d-token window, want the system prompt whole and the large message cut beside it", forkTokens(fork), ev.Window)
 	}
 }
 

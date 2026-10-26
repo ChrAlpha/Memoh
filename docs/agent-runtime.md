@@ -94,10 +94,10 @@ engine: for a run that is not armed, for a chat load the byte budget truncated,
 whose request cannot render the rows it left out, and for Discuss input Channel
 omitted or a batch it could not compose. It builds the request from the rows:
 the active checkpoint's items in their order, then the context rows after its
-position, oldest first within a byte bound (a leading row larger than the bound
-is read alone, up to 8 MiB), each row one text message under
-its role with tool calls, tool results and media written out, so the
-compaction model reads it whatever provider it runs on. The summarizer streams
+position, oldest first within a byte bound and the row that crosses it, up to
+8 MiB, each row one text message under its role with tool calls, tool results
+and media written out, so the compaction model reads it whatever provider it
+runs on. The summarizer streams
 through the client the runs stream through. An event folds every row the
 caller does not keep into one rolling summary, reading again for what one
 bounded read left; the deferred call a continuation resumes from stays after

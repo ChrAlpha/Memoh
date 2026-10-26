@@ -126,4 +126,8 @@ func TestHistoryCheckpointCandidateQueries(t *testing.T) {
 	if got := read(bounded); !slices.Equal(got, []pgtype.UUID{kept}) {
 		t.Fatalf("a row bound that holds the oldest candidate admitted %v, want it alone", got)
 	}
+	bounded.MaxBytes = rows[0].CumulativeBytes
+	if got := read(bounded); !slices.Equal(got, []pgtype.UUID{kept, second}) {
+		t.Fatalf("a budget that holds the oldest candidate admitted %v, want it and the one that crosses the budget", got)
+	}
 }

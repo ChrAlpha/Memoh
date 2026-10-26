@@ -243,8 +243,9 @@ func (f *fakeQueries) ListHistoryCheckpointCandidatesWithinBytes(_ context.Conte
 	}
 	admitted := make([]candidateRow, 0, len(candidates))
 	var cumulative int64
-	for i, row := range candidates {
-		if cumulative += payloadBytesForTest(row); cumulative > arg.MaxBytes && (i > 0 || cumulative > arg.MaxRowBytes) {
+	for _, row := range candidates {
+		before := cumulative
+		if cumulative += payloadBytesForTest(row); cumulative > arg.MaxBytes && (before > arg.MaxBytes || payloadBytesForTest(row) > arg.MaxRowBytes) {
 			break
 		}
 		row.CandidateCount, row.CandidateBytes, row.CumulativeBytes = int64(len(candidates)), total, cumulative

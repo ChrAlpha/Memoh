@@ -72,9 +72,9 @@ func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis,
 		return synthesis{}, fmt.Errorf("load the rows to compact: %w", err)
 	}
 	if len(rows) == 0 {
-		// The read admits rows oldest first, a leading one larger than the
-		// bound alone; one larger than any read admits none, though rows
-		// are left.
+		// The read admits rows oldest first, and the one that crosses the
+		// bound; one larger than any read admits none, though rows are
+		// left.
 		measure, err := s.queries.MeasureHistoryCheckpointCandidates(ctx, sqlc.MeasureHistoryCheckpointCandidatesParams{
 			SessionID:            sessionUUID,
 			AfterTurnPosition:    parent.Position.Turn,
