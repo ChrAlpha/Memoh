@@ -128,7 +128,7 @@ func (s *foldSession) event(r request, summarizer *scriptedSummarizer) Event {
 		MaxOutputTokens: 8000,
 		Summarizer:      summarizer.summarize,
 		Apply: func(pass Pass) (sdk.Request, []Source, int) {
-			messages, sources, cut := Splice(req.Messages, r.sources, r.cut, pass)
+			messages, sources, cut := splice(req.Messages, r.sources, r.cut, pass)
 			req.Messages, r.sources, r.cut = messages, sources, cut
 			return req, sources, cut
 		},
@@ -217,7 +217,7 @@ func TestFoldLeavesRuntimeContextAndTakesClosuresWithTheirCalls(t *testing.T) {
 	if !slices.Contains(passes[0].Covered, callRow) {
 		t.Fatalf("covered = %v, want the abandoned call's row", passes[0].Covered)
 	}
-	messages, _, _ := Splice(r.messages, r.sources, r.cut, passes[0])
+	messages, _, _ := splice(r.messages, r.sources, r.cut, passes[0])
 	for _, message := range messages {
 		text := messageText(message)
 		if strings.Contains(text, "call_0") || message.Role == sdk.MessageRoleTool && strings.Contains(text, "interrupted") {
@@ -422,7 +422,7 @@ func TestFoldStandsOnlyForWhatRowsHold(t *testing.T) {
 	if !strings.Contains(instruction, "a message no row holds") {
 		t.Fatalf("the instruction does not name the message that stays:\n%s", instruction)
 	}
-	messages, _, _ := Splice(r.messages, r.sources, r.cut, passes[0])
+	messages, _, _ := splice(r.messages, r.sources, r.cut, passes[0])
 	if slices.ContainsFunc(messages, func(m sdk.Message) bool { return strings.HasPrefix(messageText(m), "the bot said so") }) ||
 		!slices.ContainsFunc(messages, func(m sdk.Message) bool { return messageText(m) == "a message no row holds" }) {
 		t.Fatal("the splice did not remove the folded self-sent message and keep the rowless one")

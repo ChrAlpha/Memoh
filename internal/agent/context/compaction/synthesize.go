@@ -205,7 +205,7 @@ func (s *Service) compactRows(ctx context.Context, cfg TriggerConfig) ([]Pass, e
 			Pressure:        cfg.TotalInputTokens,
 			Summarizer:      summarize,
 			Apply: func(pass Pass) (sdk.Request, []Source, int) {
-				request.Messages, sources, cut = Splice(request.Messages, sources, cut, pass)
+				request.Messages, sources, cut = splice(request.Messages, sources, cut, pass)
 				return request, sources, cut
 			},
 		})
