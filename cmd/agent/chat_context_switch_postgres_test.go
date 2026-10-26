@@ -664,6 +664,7 @@ type inRunScenario struct {
 }
 
 var inRunScenarios = []inRunScenario{
+	{name: "history-full", run: historyFullScenario},
 	{name: "prefix-full", run: prefixFullScenario},
 	{name: "long-loop", run: longLoopScenario},
 	{name: "decision-after-progress", run: decisionAfterProgressScenario},
@@ -897,6 +898,40 @@ func markersInOrder(request string, markers ...string) bool {
 		at += next
 	}
 	return true
+}
+
+// When the history a run starts with does not fit beside its input, the run
+// folds that history before its first step: the first request it sends
+// already carries one summary in place of the earlier turns and the input
+// verbatim, the effect runs once, and the next turn replays the same summary
+// without compacting.
+func historyFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
+	f := s.f
+	for i := range 3 {
+		if code, _ := s.run(entry, fmt.Sprintf("HISTORY_TURN_%d ", i)+strings.Repeat("h", 2400), 0); code != "" {
+			t.Fatalf("history turn %d failed with %s", i, code)
+		}
+	}
+	if f.summaries.Load() != 0 {
+		t.Fatalf("the history turns compacted %d times, want them to fit", f.summaries.Load())
+	}
+	// The input is larger than the anchor cap: the step after the first
+	// folds it too.
+	input := loopInput + " " + strings.Repeat("i", 10000)
+	code, requests := s.run(entry, input, 1)
+	if code != "" || !slices.Equal(s.effects, []int{1}) || len(requests) == 0 || f.summaries.Load() == 0 {
+		t.Fatalf("code=%q effects=%v summary_calls=%d, want the run answered after one effect and a fold", code, s.effects, f.summaries.Load())
+	}
+	first := requests[0]
+	if summary := summaryContents(t, first); len(summary) != 1 || strings.Contains(first, "HISTORY_TURN_0 ") || strings.Count(first, input) != 1 {
+		t.Fatalf("first request: summaries=%d raw_history=%v inputs=%d, want the history folded before the first step and the input verbatim",
+			len(summary), strings.Contains(first, "HISTORY_TURN_0 "), strings.Count(first, input))
+	}
+	summaries := f.summaries.Load()
+	code, requests = s.run(entry, "NEXT_ROUND_QUESTION", 0)
+	if code != "" || len(requests) == 0 || f.summaries.Load() != summaries || len(summaryContents(t, requests[0])) != 1 {
+		t.Fatalf("next turn: code=%q summary_calls=%d, want the summary replayed without compacting", code, f.summaries.Load()-summaries)
+	}
 }
 
 // When the history a run starts with fills the request, the first step that
