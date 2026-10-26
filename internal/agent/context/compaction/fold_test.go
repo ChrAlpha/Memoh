@@ -247,10 +247,15 @@ func TestFoldReadsLessWhenThePrefixFillsTheWindow(t *testing.T) {
 	ev.Window = forkTokens(sdk.Request{System: ev.Request.System, Messages: r.messages[:4], Tools: ev.Request.Tools}) + 1900
 	ev.Allowance = 20000
 	ev.MaxOutputTokens = 4000
+	apply, applied := ev.Apply, 0
+	ev.Apply = func(pass Pass) (sdk.Request, []Source, int) {
+		applied++
+		return apply(pass)
+	}
 
 	passes, err := s.svc.Fold(context.Background(), ev)
-	if err != nil || len(passes) != 2 {
-		t.Fatalf("passes=%d err=%v, want two passes", len(passes), err)
+	if err != nil || len(passes) != 2 || applied != 2 {
+		t.Fatalf("passes=%d applied=%d err=%v, want two passes, each spliced into the caller's request", len(passes), applied, err)
 	}
 	if !passes[0].More || passes[1].More {
 		t.Fatalf("more = %v,%v, want the first pass to leave work for the second", passes[0].More, passes[1].More)
@@ -261,6 +266,9 @@ func TestFoldReadsLessWhenThePrefixFillsTheWindow(t *testing.T) {
 	}
 	if !strings.Contains(messageText(next.Messages[0]), "The parser part of the audit is summarized.") {
 		t.Fatalf("the second pass did not read the first pass's summary: %q", messageText(next.Messages[0]))
+	}
+	if next.System != first.System || !slices.EqualFunc(next.Tools, first.Tools, func(a, b sdk.ToolDefinition) bool { return a.Name == b.Name }) || len(next.Tools) != 1 {
+		t.Fatalf("the second fork sends system %q and %d tools, want the run's", next.System, len(next.Tools))
 	}
 	if !slices.Equal(passes[1].Absorbed, []string{passes[0].ArtifactID}) || !slices.Contains(passes[1].Covered, secondResult) {
 		t.Fatalf("second pass absorbed %v and covered %v, want the first summary and the lexer audit", passes[1].Absorbed, passes[1].Covered)
