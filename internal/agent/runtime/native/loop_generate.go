@@ -364,6 +364,8 @@ type generateDispatch struct {
 	// prompt into the message prefix, where a capability refresh cannot
 	// replace it.
 	systemPrepended bool
+	// stepOutputBytes is what the tool results of one step may take together.
+	stepOutputBytes int
 }
 
 // buildGenerateDispatch assembles the single-call input for the Memoh-owned
@@ -474,6 +476,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	}
 
 	return generateDispatch{
+		stepOutputBytes:     stepOutputBudget(cfg, params, systemPrepended),
 		params:              params,
 		execTools:           executableTools,
 		prepareStep:         stepPrepare,
@@ -534,4 +537,24 @@ func joinFinalTexts(previous []string, last string) string {
 		return last
 	}
 	return strings.Join(parts, "\n")
+}
+
+// stepOutputBudget is what the tool results of one step may take together:
+// half of what the request has beside its system prompt and tools, so a step
+// fits the request next to a summary and the run's anchors, and a fork that
+// reads it as history has room to answer. Each result also keeps its tool's
+// own bound.
+//
+//nolint:gocritic // hugeParam: the request is read, not copied into anything.
+func stepOutputBudget(cfg RunConfig, params sdk.Request, systemPrepended bool) int {
+	allowance := providerInputAllowance(cfg)
+	if allowance <= 0 {
+		return 0
+	}
+	var system []sdk.Message
+	if systemPrepended && len(params.Messages) > 0 {
+		system = params.Messages[:1]
+	}
+	room := allowance - contextfrag.ProviderEnvelopeTokens(params.System, system, params.Tools)
+	return max(int(contextfrag.BudgetBytesForTokens(room/2)), 1)
 }
