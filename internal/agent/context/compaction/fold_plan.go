@@ -1,0 +1,223 @@
+package compaction
+
+import (
+	"fmt"
+
+	sdk "github.com/felinics/twilight/sdk"
+
+	"github.com/felinics/memoh/internal/agent/turn"
+)
+
+const (
+	// summaryShareOfAllowance bounds a summary to this fraction of what the
+	// next request may take, so a fold leaves room for the turns after it
+	// instead of refilling the request it just emptied.
+	summaryShareOfAllowance = 4
+	// anchorCapTokens is the most a fold keeps of a run's anchors verbatim,
+	// newest first; older anchors fold like any other message. A small
+	// window keeps at most a quarter of its allowance.
+	anchorCapTokens = 20000
+	// minForkOutputTokens is the least output a fork request asks for. A pass
+	// reads less of the request rather than ask for less.
+	minForkOutputTokens = 1024
+	// instructionNumberSlack covers the instruction growing by the digits of
+	// the numbers it states.
+	instructionNumberSlack = 8
+)
+
+// foldPlan is one pass worked out before the summarizer is asked: what it
+// reads and folds, and how long its summary may be.
+type foldPlan struct {
+	// end is how much of the request the pass reads; cut is where the
+	// caller's tail starts. A pass that reads less than the cut leaves the
+	// rest to a later pass.
+	end int
+	cut int
+	// folded are the sources the summary stands for, read every source of
+	// the messages the pass reads, absorbed the summaries it replaces.
+	folded   []turn.ContextMessageSource
+	read     []turn.ContextMessageSource
+	absorbed []string
+	// replaced is what the folded messages and absorbed summaries take in a
+	// request, room what the next request has left for the summary.
+	replaced int
+	room     int
+	// maxTokens is the fork's output cap and stated the summary length the
+	// instruction asks for, below it.
+	maxTokens   int
+	stated      int
+	instruction string
+	// keep marks the anchors before end the pass leaves verbatim.
+	keep map[int]bool
+}
+
+func (p foldPlan) folds() bool { return len(p.folded) > 0 || len(p.absorbed) > 0 }
+
+// final reports whether the pass reads up to the tail, so its summary is the
+// one the caller's next request carries.
+func (p foldPlan) final() bool { return p.end == p.cut }
+
+// planFold decides one pass over ev. Every message before the cut folds
+// except runtime context, which has no sources, and the anchors the cap
+// keeps; summaries are absorbed. The pass reads the longest prefix of the
+// request, ending at a tool-group boundary, that leaves the fork room to
+// answer: at least half of the summary what it reads may need, and never
+// less than minForkOutputTokens.
+func planFold(ev Event) (foldPlan, error) {
+	messages, sources := ev.Request.Messages, ev.Sources
+	kept := keptAnchors(messages, sources, ev.Cut, min(anchorCapTokens, ev.Allowance/4))
+	capability := ev.MaxOutputTokens
+	if capability <= 0 {
+		capability = ev.Allowance / summaryShareOfAllowance
+	}
+	// A checkpoint absorbs every summary of its parent, so a pass reads past
+	// the last one the request renders.
+	summariesEnd := 0
+	for i, source := range sources[:ev.Cut] {
+		if isSummarySource(source) {
+			summariesEnd = i + 1
+		}
+	}
+	var smaller error
+	for end := ev.Cut; end > 0; end-- {
+		if end < summariesEnd || !foldBoundary(messages, end) {
+			continue
+		}
+		plan := spanPlan(ev, kept, end)
+		if !plan.folds() {
+			continue
+		}
+		err := plan.size(ev, capability)
+		switch {
+		case ReasonOf(err) == ReasonProtectedOverflow:
+			return foldPlan{}, err
+		case err != nil:
+			if smaller == nil {
+				smaller = err
+			}
+			continue
+		case len(plan.folded) == 0 && (!plan.final() || plan.replaced <= plan.room):
+			// Only summaries are left, and they fit: folding them again
+			// would only rewrite them.
+			return foldPlan{}, nil
+		}
+		need := max(minForkOutputTokens, min(ev.Allowance/summaryShareOfAllowance, plan.replaced)/2)
+		if plan.maxTokens >= min(capability, need) {
+			return plan, nil
+		}
+	}
+	if smaller != nil {
+		return foldPlan{}, smaller
+	}
+	if !spanPlan(ev, kept, ev.Cut).folds() {
+		return foldPlan{}, nil
+	}
+	return foldPlan{}, failed(ReasonInputOverflow, fmt.Errorf("%w: no prefix of the request leaves the summarizer room to answer in a %d-token window", errCompactionInputOverflow, ev.Window))
+}
+
+// keptAnchors marks the anchors before the cut a fold keeps verbatim: the
+// newest ones, while they fit the cap.
+func keptAnchors(messages []sdk.Message, sources []Source, cut, capTokens int) map[int]bool {
+	kept := map[int]bool{}
+	tokens := 0
+	for i := cut - 1; i >= 0; i-- {
+		if !sources[i].Anchor {
+			continue
+		}
+		cost := forkTokens(sdk.Request{Messages: messages[i : i+1]})
+		if tokens+cost > capTokens {
+			break
+		}
+		tokens += cost
+		kept[i] = true
+	}
+	return kept
+}
+
+// foldBoundary reports whether a pass may end its read before message end: a
+// tool result never starts what a pass leaves, so a call and its results
+// stay on one side.
+func foldBoundary(messages []sdk.Message, end int) bool {
+	if end <= 0 || end > len(messages) {
+		return false
+	}
+	if end == len(messages) {
+		return true
+	}
+	for _, part := range messages[end].Content {
+		if _, ok := part.(sdk.ToolResultPart); ok {
+			return false
+		}
+	}
+	return true
+}
+
+// spanPlan classifies the messages a pass reading up to end folds.
+func spanPlan(ev Event, kept map[int]bool, end int) foldPlan {
+	plan := foldPlan{end: end, cut: ev.Cut, keep: map[int]bool{}}
+	read, folded := map[turn.ContextMessageSource]bool{}, map[turn.ContextMessageSource]bool{}
+	for i := range end {
+		source := ev.Sources[i]
+		switch {
+		case len(source.Sources) == 0:
+			continue
+		case isSummarySource(source):
+			plan.absorbed = append(plan.absorbed, source.Sources[0].ID)
+			continue
+		}
+		for _, s := range source.Sources {
+			key := turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}
+			if !read[key] {
+				read[key] = true
+				plan.read = append(plan.read, key)
+			}
+		}
+		if kept[i] {
+			plan.keep[i] = true
+			continue
+		}
+		for _, s := range source.Sources {
+			key := turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}
+			if !folded[key] {
+				folded[key] = true
+				plan.folded = append(plan.folded, key)
+			}
+		}
+	}
+	return plan
+}
+
+// size prices the pass: what it replaces, the room the next request leaves
+// its summary, the fork's output cap and the summary length to ask for.
+func (p *foldPlan) size(ev Event, capability int) error {
+	messages := ev.Request.Messages
+	var replaced, keptMessages []sdk.Message
+	for i, message := range messages {
+		if i < p.end && len(ev.Sources[i].Sources) > 0 && !p.keep[i] {
+			replaced = append(replaced, message)
+		} else {
+			keptMessages = append(keptMessages, message)
+		}
+	}
+	p.replaced = forkTokens(sdk.Request{Messages: replaced})
+	p.room = ev.Allowance - forkTokens(sdk.Request{System: ev.Request.System, Messages: keptMessages, Tools: ev.Request.Tools})
+	prefix := forkTokens(sdk.Request{System: ev.Request.System, Messages: messages[:p.end], Tools: ev.Request.Tools})
+	p.instruction = forkInstruction(ev, p)
+	p.maxTokens = min(capability, ev.Window-prefix-instructionTokens(p.instruction)-instructionNumberSlack)
+	p.stated = min(p.maxTokens*3/4, ev.Allowance/summaryShareOfAllowance, summaryOutputLimit(p.replaced-1, capability))
+	if p.final() {
+		p.stated = min(p.stated, summaryOutputLimit(p.room, capability))
+	}
+	if p.final() && summaryOutputLimit(p.room, capability) < minSummaryTokens {
+		return failed(ReasonProtectedOverflow, fmt.Errorf("%w: allowance=%d room=%d", errNoSummaryRoom, ev.Allowance, p.room))
+	}
+	if p.stated < minSummaryTokens && p.maxTokens >= minForkOutputTokens {
+		return failed(ReasonIneffective, fmt.Errorf("%w: replaced_tokens=%d", errIneffectiveSummary, p.replaced))
+	}
+	p.instruction = forkInstruction(ev, p)
+	return nil
+}
+
+func isSummarySource(source Source) bool {
+	return len(source.Sources) > 0 && source.Sources[0].Kind == "summary"
+}

@@ -33,7 +33,7 @@ const minSummaryTokens = 32
 // session's next checkpoint. previous is the summary the event's last pass
 // wrote, empty for its first. It reports false when there was nothing to
 // fold.
-func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, sessionUUID pgtype.UUID, cfg TriggerConfig, previous string) (Pass, bool, error) {
+func (s *Service) doCompaction(ctx context.Context, sessionUUID pgtype.UUID, cfg TriggerConfig, previous string) (Pass, bool, error) {
 	if cfg.HistoryBudgetTokens <= 0 || cfg.SummaryWindowTokens <= 0 {
 		return Pass{}, false, failed(ReasonProtectedOverflow, fmt.Errorf("%w: history_budget=%d window=%d", errCompactionUnsized, cfg.HistoryBudgetTokens, cfg.SummaryWindowTokens))
 	}
@@ -204,7 +204,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		return Pass{}, false, err
 	}
 	persistCtx := context.WithoutCancel(ctx)
-	logID, err := s.openLog(persistCtx, botUUID, sessionUUID, cfg)
+	logID, err := s.openLog(persistCtx, cfg.BotID, cfg.SessionID)
 	if err != nil {
 		return Pass{}, false, err
 	}
@@ -312,7 +312,7 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			fold.Folded = append(fold.Folded, checkpoint.Row{ID: formatUUID(item.ID), Position: item.Position})
 		}
 	}
-	if err := s.inSession(ctx, cfg, func(q dbstore.Queries) error {
+	if err := s.inSession(ctx, cfg.BotID, cfg.SessionID, func(q dbstore.Queries) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -368,13 +368,21 @@ func failed(reason Reason, err error) error {
 // ownership. The request renders the history before the replaced turn, which
 // only that checkpoint stands for; one that depends on the turn would fold
 // into the summary rows the request does not show.
-func (s *Service) rewindReplacedTurn(ctx context.Context, botUUID, sessionUUID pgtype.UUID, cfg TriggerConfig) error {
-	turnUUID, err := db.ParseUUID(cfg.ReplacedTurnID)
+func (s *Service) rewindReplacedTurn(ctx context.Context, botID, sessionID, turnID string) error {
+	botUUID, err := db.ParseUUID(botID)
+	if err != nil {
+		return err
+	}
+	sessionUUID, err := db.ParseUUID(sessionID)
+	if err != nil {
+		return err
+	}
+	turnUUID, err := db.ParseUUID(turnID)
 	if err != nil {
 		return err
 	}
 	var rewound bool
-	if err := s.inSession(ctx, cfg, func(q dbstore.Queries) error {
+	if err := s.inSession(ctx, botID, sessionID, func(q dbstore.Queries) error {
 		rewound, err = q.RewindHistoryCheckpointBeforeTurn(ctx, sqlc.RewindHistoryCheckpointBeforeTurnParams{
 			SessionID: sessionUUID, BotID: botUUID, TurnID: turnUUID,
 		})
@@ -384,8 +392,8 @@ func (s *Service) rewindReplacedTurn(ctx context.Context, botUUID, sessionUUID p
 	}
 	if rewound {
 		s.logger.InfoContext(ctx, "compaction: rewound the checkpoint that depends on the replaced turn",
-			slog.String("session_id", cfg.SessionID),
-			slog.String("turn_id", cfg.ReplacedTurnID),
+			slog.String("session_id", sessionID),
+			slog.String("turn_id", turnID),
 		)
 	}
 	return nil
@@ -393,9 +401,17 @@ func (s *Service) rewindReplacedTurn(ctx context.Context, botUUID, sessionUUID p
 
 // openLog records a pass before its summarizer call, fenced by the caller's
 // runtime ownership.
-func (s *Service) openLog(ctx context.Context, botUUID, sessionUUID pgtype.UUID, cfg TriggerConfig) (pgtype.UUID, error) {
+func (s *Service) openLog(ctx context.Context, botID, sessionID string) (pgtype.UUID, error) {
+	botUUID, err := db.ParseUUID(botID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	sessionUUID, err := db.ParseUUID(sessionID)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
 	var logID pgtype.UUID
-	if err := s.inSession(ctx, cfg, func(q dbstore.Queries) error {
+	if err := s.inSession(ctx, botID, sessionID, func(q dbstore.Queries) error {
 		row, err := q.CreateCompactionLog(ctx, sqlc.CreateCompactionLogParams{BotID: botUUID, SessionID: sessionUUID})
 		logID = row.ID
 		return err
@@ -415,13 +431,13 @@ type transactionRunner interface {
 // ownership when it holds one, so a run that lost it cannot write. Without a
 // fence the transaction locks the bot before the session, as fenced writes
 // do. A store without transactions runs fn directly.
-func (s *Service) inSession(ctx context.Context, cfg TriggerConfig, fn func(dbstore.Queries) error) error {
+func (s *Service) inSession(ctx context.Context, botID, sessionID string, fn func(dbstore.Queries) error) error {
 	if _, ok := runtimefence.FromContext(ctx); ok {
-		return runtimefence.InTransaction(ctx, s.queries, cfg.BotID, cfg.SessionID, fn)
+		return runtimefence.InTransaction(ctx, s.queries, botID, sessionID, fn)
 	}
 	if txer, ok := s.queries.(transactionRunner); ok && txer.SupportsTransactions() {
 		return txer.InTx(ctx, func(q dbstore.Queries) error {
-			if err := runtimefence.LockBotForSessionWrite(ctx, q, cfg.BotID); err != nil {
+			if err := runtimefence.LockBotForSessionWrite(ctx, q, botID); err != nil {
 				return err
 			}
 			return fn(q)

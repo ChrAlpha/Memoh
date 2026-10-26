@@ -133,3 +133,8 @@ type TriggerConfig struct {
 	// instead of sending the summarizer's own.
 	Continuation *sdk.Request
 }
+
+// hookScope is what the compaction hooks are told about cfg's event.
+func (cfg TriggerConfig) hookScope() hookScope {
+	return hookScope{BotID: cfg.BotID, SessionID: cfg.SessionID, ModelID: cfg.ModelID, InputTokens: cfg.TotalInputTokens, BudgetTokens: cfg.HistoryBudgetTokens}
+}

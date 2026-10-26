@@ -994,6 +994,58 @@ func (q *Queries) ListHistoryMessagesByIDs(ctx context.Context, arg ListHistoryM
 	return items, nil
 }
 
+const listHistoryRowsBySources = `-- name: ListHistoryRowsBySources :many
+SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq
+FROM bot_visible_history_messages m
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND (m.id = ANY($2::uuid[]) OR m.source_message_id = ANY($3::text[]))
+  AND m.turn_position IS NOT NULL
+  AND m.turn_message_seq IS NOT NULL
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+`
+
+type ListHistoryRowsBySourcesParams struct {
+	SessionID          pgtype.UUID   `json:"session_id"`
+	Ids                []pgtype.UUID `json:"ids"`
+	ExternalMessageIds []string      `json:"external_message_ids"`
+}
+
+type ListHistoryRowsBySourcesRow struct {
+	ID              pgtype.UUID `json:"id"`
+	SourceMessageID pgtype.Text `json:"source_message_id"`
+	TurnPosition    pgtype.Int8 `json:"turn_position"`
+	TurnMessageSeq  pgtype.Int8 `json:"turn_message_seq"`
+}
+
+// The context rows a fold read, named by row id or by the inbound message
+// they record, at their places in the history.
+func (q *Queries) ListHistoryRowsBySources(ctx context.Context, arg ListHistoryRowsBySourcesParams) ([]ListHistoryRowsBySourcesRow, error) {
+	rows, err := q.db.Query(ctx, listHistoryRowsBySources, arg.SessionID, arg.Ids, arg.ExternalMessageIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListHistoryRowsBySourcesRow
+	for rows.Next() {
+		var i ListHistoryRowsBySourcesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SourceMessageID,
+			&i.TurnPosition,
+			&i.TurnMessageSeq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTurnResponseSourcesAfterWithinBytes = `-- name: ListTurnResponseSourcesAfterWithinBytes :many
 WITH RECURSIVE history_window AS (
   (

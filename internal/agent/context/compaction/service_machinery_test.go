@@ -480,7 +480,7 @@ type passResult struct {
 
 // runPass runs one pass of an event on its own.
 func (s *Service) runPass(ctx context.Context, cfg TriggerConfig) (Pass, bool, error) {
-	return s.doCompaction(ctx, db.ParseUUIDOrEmpty(cfg.BotID), db.ParseUUIDOrEmpty(cfg.SessionID), cfg, "")
+	return s.doCompaction(ctx, db.ParseUUIDOrEmpty(cfg.SessionID), cfg, "")
 }
 
 // compactOnce runs one pass of an event on its own and reports its outcome.

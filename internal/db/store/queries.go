@@ -98,6 +98,7 @@ type Queries interface {
 	ListHistoryCheckpointSummaries(ctx context.Context, arg dbsqlc.ListHistoryCheckpointSummariesParams) ([]dbsqlc.ListHistoryCheckpointSummariesRow, error)
 	ListHistoryMessagesAfterWithinBytes(ctx context.Context, arg dbsqlc.ListHistoryMessagesAfterWithinBytesParams) ([]dbsqlc.ListHistoryMessagesAfterWithinBytesRow, error)
 	ListHistoryMessagesByIDs(ctx context.Context, arg dbsqlc.ListHistoryMessagesByIDsParams) ([]dbsqlc.ListHistoryMessagesByIDsRow, error)
+	ListHistoryRowsBySources(ctx context.Context, arg dbsqlc.ListHistoryRowsBySourcesParams) ([]dbsqlc.ListHistoryRowsBySourcesRow, error)
 	ListTurnResponseSourcesAfterWithinBytes(ctx context.Context, arg dbsqlc.ListTurnResponseSourcesAfterWithinBytesParams) ([]dbsqlc.ListTurnResponseSourcesAfterWithinBytesRow, error)
 	ListTurnResponseSourcesByIDs(ctx context.Context, arg dbsqlc.ListTurnResponseSourcesByIDsParams) ([]dbsqlc.ListTurnResponseSourcesByIDsRow, error)
 	LockHistoryCheckpointSession(ctx context.Context, arg dbsqlc.LockHistoryCheckpointSessionParams) (pgtype.UUID, error)

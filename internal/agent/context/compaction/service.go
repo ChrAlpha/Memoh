@@ -169,15 +169,14 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 		if !preHookRan {
 			return
 		}
-		s.runPostCompactHook(context.WithoutCancel(ctx), cfg, compactErr)
+		s.runPostCompactHook(context.WithoutCancel(ctx), cfg.hookScope(), compactErr)
 	}()
 
-	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, cfg, nil); err != nil {
+	if err := s.runCompactionHook(ctx, hooks.EventPreCompact, cfg.hookScope(), nil); err != nil {
 		return nil, err
 	}
 	preHookRan = true
-	botUUID, err := db.ParseUUID(cfg.BotID)
-	if err != nil {
+	if _, err := db.ParseUUID(cfg.BotID); err != nil {
 		compactErr = err
 		return nil, err
 	}
@@ -187,7 +186,7 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 		return nil, err
 	}
 	if cfg.ReplacedTurnID != "" {
-		if err := s.rewindReplacedTurn(ctx, botUUID, sessionUUID, cfg); err != nil {
+		if err := s.rewindReplacedTurn(ctx, cfg.BotID, cfg.SessionID, cfg.ReplacedTurnID); err != nil {
 			compactErr = err
 			return nil, err
 		}
@@ -199,7 +198,7 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 		if len(passes) > 0 {
 			previous = passes[len(passes)-1].ArtifactID
 		}
-		pass, folded, err := s.doCompaction(ctx, botUUID, sessionUUID, cfg, previous)
+		pass, folded, err := s.doCompaction(ctx, sessionUUID, cfg, previous)
 		if err != nil {
 			compactErr = err
 			return passes, err
@@ -223,29 +222,29 @@ func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error
 // runPostCompactHook dispatches PostCompact after the compaction outcome is
 // already decided. Post-hook failures are advisory, so an error only logs a
 // warning and a panic is contained here.
-func (s *Service) runPostCompactHook(ctx context.Context, cfg TriggerConfig, compactErr error) {
+func (s *Service) runPostCompactHook(ctx context.Context, scope hookScope, compactErr error) {
 	defer func() {
 		if r := recover(); r != nil && s.logger != nil {
-			s.logger.WarnContext(ctx, "post compaction hook panicked", slog.String("bot_id", cfg.BotID), slog.Any("panic", r))
+			s.logger.WarnContext(ctx, "post compaction hook panicked", slog.String("bot_id", scope.BotID), slog.Any("panic", r))
 		}
 	}()
 	extra := map[string]any{}
 	if compactErr != nil {
 		extra["error"] = compactErr.Error()
 	}
-	if err := s.runCompactionHook(ctx, hooks.EventPostCompact, cfg, extra); err != nil && s.logger != nil {
-		s.logger.WarnContext(ctx, "post compaction hook failed", slog.String("bot_id", cfg.BotID), slog.Any("error", err))
+	if err := s.runCompactionHook(ctx, hooks.EventPostCompact, scope, extra); err != nil && s.logger != nil {
+		s.logger.WarnContext(ctx, "post compaction hook failed", slog.String("bot_id", scope.BotID), slog.Any("error", err))
 	}
 }
 
-func (s *Service) runCompactionHook(ctx context.Context, eventName string, cfg TriggerConfig, extra map[string]any) error {
+func (s *Service) runCompactionHook(ctx context.Context, eventName string, scope hookScope, extra map[string]any) error {
 	if s == nil || s.hookService == nil {
 		return nil
 	}
 	payload := map[string]any{
-		"input_tokens":          cfg.TotalInputTokens,
-		"history_budget_tokens": cfg.HistoryBudgetTokens,
-		"model_id":              cfg.ModelID,
+		"input_tokens":          scope.InputTokens,
+		"history_budget_tokens": scope.BudgetTokens,
+		"model_id":              scope.ModelID,
 	}
 	for key, value := range extra {
 		payload[key] = value
@@ -253,8 +252,8 @@ func (s *Service) runCompactionHook(ctx context.Context, eventName string, cfg T
 	req := hooks.Request{
 		Version:   1,
 		Event:     eventName,
-		BotID:     cfg.BotID,
-		SessionID: cfg.SessionID,
+		BotID:     scope.BotID,
+		SessionID: scope.SessionID,
 		Workspace: hooks.WorkspaceInfo{
 			CWD: hooks.DefaultWorkDir,
 		},

@@ -448,6 +448,19 @@ LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.t
 LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
 ORDER BY admitted.turn_position ASC, admitted.turn_message_seq ASC, admitted.created_at ASC, admitted.id ASC;
 
+-- name: ListHistoryRowsBySources :many
+-- The context rows a fold read, named by row id or by the inbound message
+-- they record, at their places in the history.
+SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq
+FROM bot_visible_history_messages m
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = sqlc.arg(session_id)
+  AND (m.id = ANY(sqlc.arg(ids)::uuid[]) OR m.source_message_id = ANY(sqlc.arg(external_message_ids)::text[]))
+  AND m.turn_position IS NOT NULL
+  AND m.turn_message_seq IS NOT NULL
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
+
 -- name: ListHistoryMessagesByIDs :many
 -- The rows a checkpoint keeps by reference, as context rows, in turn order.
 SELECT
