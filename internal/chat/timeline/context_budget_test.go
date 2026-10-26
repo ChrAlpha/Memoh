@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/felinics/memoh/internal/agent/turn"
 )
 
 func budgetTestRC(texts ...string) RenderedContext {
@@ -111,7 +113,7 @@ func TestComposeBudgetedKeepsWhatTheCheckpointHolds(t *testing.T) {
 		t.Fatalf("composed=%v admission=%+v, want only the older raw response dropped", composed, admission)
 	}
 	want := []string{
-		"user:<summary>\nearlier conversation summary\n</summary>",
+		"user:" + turn.SummaryText("earlier conversation summary"),
 		"user:kept input",
 		"assistant:calls a tool",
 		"tool:tool result",

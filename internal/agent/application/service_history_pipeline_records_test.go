@@ -8,6 +8,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -69,7 +70,7 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 	got, _ := historyMessagesFromRecords(records)
 
 	want := []ModelMessage{
-		{Role: "user", Content: newTextContent("<summary>\ncondensed\n</summary>")},
+		{Role: "user", Content: newTextContent(turn.SummaryText("condensed"))},
 		{Role: "user", Content: newTextContent("plain string content")},
 		assistantToolCall,
 		toolResult,
@@ -78,7 +79,7 @@ func TestHistoryRecordPathPreservesLegacyServiceMessagePipeline(t *testing.T) {
 
 	repaired := repairToolCallClosures(sanitizeMessages(got), syntheticToolClosureError)
 	assertSameJSON(t, modelMessagesToSDKMessages(nonNilModelMessages(repaired)), []sdk.Message{
-		sdk.UserMessage("<summary>\ncondensed\n</summary>"),
+		sdk.UserMessage(turn.SummaryText("condensed")),
 		sdk.UserMessage("plain string content"),
 		assistantToolCallSDK,
 		toolResultSDK,

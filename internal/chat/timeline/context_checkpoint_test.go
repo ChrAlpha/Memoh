@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -75,10 +76,10 @@ func TestComposeContextWithCheckpointPinsWhatItHolds(t *testing.T) {
 		t.Fatal("expected a composed result")
 	}
 	want := []string{
-		"user:<summary>\nearlier work\n</summary>",
+		"user:" + turn.SummaryText("earlier work"),
 		"user:kept input",
 		"assistant:kept reply",
-		"user:<summary>\nlater work\n</summary>",
+		"user:" + turn.SummaryText("later work"),
 		"user:new input",
 		"assistant:tail reply",
 	}
@@ -121,7 +122,7 @@ func TestComposeContextWithCheckpointComposesWhatItLeavesRaw(t *testing.T) {
 	}
 	composed := ComposeContextWithCheckpoint(rc, nil, held)
 	want := []string{
-		"user:<summary>\nfolded\n</summary>",
+		"user:" + turn.SummaryText("folded"),
 		"user:early chatter",
 		"user:late chatter",
 		"user:raw input",
@@ -159,7 +160,7 @@ func TestComposeContextWithCheckpointComposesAFoldedMessageThatChangedSince(t *t
 	}
 	composed := ComposeContextWithCheckpoint(rc, nil, held)
 	want := []string{
-		"user:<summary>\nfolded\n</summary>",
+		"user:" + turn.SummaryText("folded"),
 		"user:edited without cursor",
 		"user:edited later",
 		"user:new input",
@@ -180,7 +181,7 @@ func TestComposeContextWithCheckpointSkipsAKeptInputItCannotRender(t *testing.T)
 		},
 	}
 	composed := ComposeContextWithCheckpoint(RenderedContext{textSegment("m-new", 3000, "new input")}, nil, held)
-	want := []string{"user:<summary>\nfirst\n</summary>", "user:<summary>\nsecond\n</summary>", "user:new input"}
+	want := []string{"user:" + turn.SummaryText("first"), "user:" + turn.SummaryText("second"), "user:new input"}
 	if composed == nil || !reflect.DeepEqual(messageTexts(composed.Messages), want) {
 		t.Fatalf("composed %q, want %q", messageTexts(composed.Messages), want)
 	}
@@ -196,7 +197,7 @@ func TestComposeContextWithCheckpointOrdersTheRestByTime(t *testing.T) {
 	held := HistoryCheckpoint{Items: []CheckpointItem{{SummaryID: "s1", Summary: "folded"}}}
 
 	composed := ComposeContextWithCheckpoint(RenderedContext{textSegment("m1", 1000, "input")}, []TurnResponseEntry{first, second}, held)
-	want := []string{"user:<summary>\nfolded\n</summary>", "user:input", "assistant:first reply", "assistant:second reply"}
+	want := []string{"user:" + turn.SummaryText("folded"), "user:input", "assistant:first reply", "assistant:second reply"}
 	if composed == nil || !reflect.DeepEqual(messageTexts(composed.Messages), want) {
 		t.Fatalf("composed %q, want %q", messageTexts(composed.Messages), want)
 	}
@@ -209,7 +210,7 @@ func TestComposeContextWithCheckpointEmptyInputs(t *testing.T) {
 	// A summary alone is history.
 	summarized := HistoryCheckpoint{Items: []CheckpointItem{{SummaryID: "s1", Summary: "folded"}}}
 	composed := ComposeContextWithCheckpoint(nil, nil, summarized)
-	want := []string{"user:<summary>\nfolded\n</summary>"}
+	want := []string{"user:" + turn.SummaryText("folded")}
 	if composed == nil || !reflect.DeepEqual(messageTexts(composed.Messages), want) {
 		t.Fatalf("composed %q, want %q", messageTexts(composed.Messages), want)
 	}

@@ -1,5 +1,23 @@
 package turn
 
+import "strings"
+
+// summaryPreamble says what a rendered summary stands for and what wins over
+// it. The text is model-visible and part of every request prefix that holds a
+// summary; change it only deliberately.
+const summaryPreamble = "The summary below stands for earlier messages of this conversation that are no longer shown; the messages shown verbatim before it and everything after it take precedence over it."
+
+// SummaryText is the text a summary renders as wherever a request carries
+// it: the preamble, then the summary in its tags.
+func SummaryText(summary string) string {
+	return summaryPreamble + "\n<summary>\n" + strings.TrimSpace(summary) + "\n</summary>"
+}
+
+// IsSummaryText reports whether text is a summary as SummaryText renders it.
+func IsSummaryText(text string) bool {
+	return strings.HasPrefix(strings.TrimSpace(text), summaryPreamble+"\n<summary>")
+}
+
 // PlaceSummary renders summary in place of the items it covers. Every other
 // item keeps its order. The summary goes right after the last kept item
 // inside the covered span, or where the first covered item was when no kept

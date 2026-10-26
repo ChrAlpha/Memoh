@@ -25,7 +25,7 @@ func SummaryRecord(compactID string, summary string, scope contextfrag.Scope) Hi
 		SourceKind: SourceCompactionLog,
 		ModelMessage: turn.ModelMessage{
 			Role:    "user",
-			Content: turn.NewTextContent("<summary>\n" + summary + "\n</summary>"),
+			Content: turn.NewTextContent(turn.SummaryText(summary)),
 		},
 		Scope: scope,
 		Provenance: contextfrag.Provenance{

@@ -147,7 +147,7 @@ func TestPrepareContinuationRunConfigRendersTheCheckpoint(t *testing.T) {
 	for _, message := range got.Messages {
 		texts = append(texts, messageContentTextForTest(message))
 	}
-	if want := []string{"<summary>\nearlier work\n</summary>", "resumed request"}; !slices.Equal(texts, want) {
+	if want := []string{turn.SummaryText("earlier work"), "resumed request"}; !slices.Equal(texts, want) {
 		t.Fatalf("continuation messages = %q, want %q", texts, want)
 	}
 	var summaries []int

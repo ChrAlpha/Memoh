@@ -13,6 +13,7 @@ import (
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/partmeta"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
@@ -253,7 +254,7 @@ func TestBuildMessagesFromPipelinePinsWhatTheCheckpointHolds(t *testing.T) {
 	for _, message := range got {
 		texts = append(texts, message.TextContent())
 	}
-	if want := []string{"kept input", "<summary>\nfolded work\n</summary>", "later question", "later answer"}; len(texts) != len(want) ||
+	if want := []string{"kept input", turn.SummaryText("folded work"), "later question", "later answer"}; len(texts) != len(want) ||
 		!strings.Contains(texts[0], want[0]) || texts[1] != want[1] || !strings.Contains(texts[2], want[2]) || texts[3] != want[3] {
 		t.Fatalf("composed %q, want %q in order", texts, want)
 	}

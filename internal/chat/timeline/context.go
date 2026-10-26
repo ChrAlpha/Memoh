@@ -231,7 +231,7 @@ func composeMergeEntries(rc RenderedContext, trs []TurnResponseEntry, checkpoint
 		case item.SummaryID != "":
 			entry = mergeEntry{
 				kind:              "summary",
-				summaryContent:    "<summary>\n" + strings.TrimSpace(item.Summary) + "\n</summary>",
+				summaryContent:    turn.SummaryText(item.Summary),
 				summaryArtifactID: item.SummaryID,
 			}
 		case item.Response != nil:

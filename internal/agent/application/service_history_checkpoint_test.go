@@ -13,6 +13,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -165,7 +166,7 @@ func TestLoadHistoryRecordsRendersTheCheckpointBeforeTheRowsAfterIt(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"kept input", "<summary>\ncondensed history\n</summary>", "next question", "next answer"}
+	want := []string{"kept input", turn.SummaryText("condensed history"), "next question", "next answer"}
 	if got := recordTexts(records); !reflect.DeepEqual(got, want) {
 		t.Fatalf("history = %#v, want %#v", got, want)
 	}
@@ -219,7 +220,7 @@ func TestPrepareHistoryContextRendersTheCheckpointAReplacementKeeps(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"<summary>\nthe summary before the turn\n</summary>", "between"}; !reflect.DeepEqual(recordTexts(cut.records), want) {
+	if want := []string{turn.SummaryText("the summary before the turn"), "between"}; !reflect.DeepEqual(recordTexts(cut.records), want) {
 		t.Fatalf("edited history = %#v, want %#v", recordTexts(cut.records), want)
 	}
 	if len(queries.replacedTurns) != 1 || queries.replacedTurns[0] != mustPGUUID(t, checkpointTestTurnID) {
@@ -233,7 +234,7 @@ func TestPrepareHistoryContextRendersTheCheckpointAReplacementKeeps(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"<summary>\nthe rolling summary through the turn\n</summary>"}; !reflect.DeepEqual(recordTexts(live.records), want) {
+	if want := []string{turn.SummaryText("the rolling summary through the turn")}; !reflect.DeepEqual(recordTexts(live.records), want) {
 		t.Fatalf("live history = %#v, want %#v", recordTexts(live.records), want)
 	}
 }

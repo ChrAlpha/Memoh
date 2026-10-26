@@ -14,7 +14,7 @@ func TestComposeBudgetedPreservesSourceBoundariesAndFitsReadmission(t *testing.T
 	for i := range rc {
 		rc[i] = textSegment(fmt.Sprintf("m%d", i), int64(i+1), strings.Repeat("x", 400))
 	}
-	held := HistoryCheckpoint{Items: []CheckpointItem{{SummaryID: "summary", Summary: strings.Repeat("s", 400000-len("<summary>\n\n</summary>"))}}}
+	held := HistoryCheckpoint{Items: []CheckpointItem{{SummaryID: "summary", Summary: strings.Repeat("s", 400000-len(turn.SummaryText("")))}}}
 	composed, admission := ComposeContextWithCheckpointBudgeted(rc, nil, held, ComposeBudget{MaxTokens: 200000})
 	if composed == nil || admission.ProtectedOverflow {
 		t.Fatalf("source messages should fit: %+v", admission)

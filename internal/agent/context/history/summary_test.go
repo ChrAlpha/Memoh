@@ -30,7 +30,7 @@ func TestSummaryRecordIsTypedCoveredAndRenderingEquivalent(t *testing.T) {
 		t.Fatalf("coverage mismatch: %#v", rec.Coverage)
 	}
 
-	want := turn.ModelMessage{Role: "user", Content: turn.NewTextContent("<summary>\ncondensed text\n</summary>")}
+	want := turn.ModelMessage{Role: "user", Content: turn.NewTextContent(turn.SummaryText("condensed text"))}
 	if rec.ModelMessage.Role != want.Role || string(rec.ModelMessage.Content) != string(want.Content) {
 		t.Fatalf("summary model message changed: %#v", rec.ModelMessage)
 	}

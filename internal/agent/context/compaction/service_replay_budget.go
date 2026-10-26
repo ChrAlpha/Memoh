@@ -6,11 +6,12 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/turn"
 )
 
 // SummaryMessage is the message a summary renders as in a request.
 func SummaryMessage(summary string) sdk.Message {
-	return sdk.UserMessage("<summary>\n" + strings.TrimSpace(summary) + "\n</summary>")
+	return sdk.UserMessage(turn.SummaryText(summary))
 }
 
 // summaryReplayTokens prices a summary as the request it lands in carries

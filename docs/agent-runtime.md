@@ -100,7 +100,10 @@ the summary, and its input, steers or Discuss batch are anchors.
 The native runtime applies each committed fold to its own request snapshot by
 `turn.PlaceSummary`: messages the fold does not cover keep their bytes, and
 those inside the folded span precede the summary, the order its checkpoint
-keeps them in. A result the read path writes for a deferred call whose decision
+keeps them in. Every request renders a summary by `turn.SummaryText`: one
+fixed sentence saying it stands for earlier messages no longer shown and that
+the verbatim messages before it and everything after it take precedence, then
+the summary in `<summary>` tags. The engine prices it that way too. A result the read path writes for a deferred call whose decision
 ended without one renders from the call's row, so a fold that covers the call
 removes it too; a splice that leaves a call without its result, or a result
 without its call, fails the event. A pass refuses a request whose view no

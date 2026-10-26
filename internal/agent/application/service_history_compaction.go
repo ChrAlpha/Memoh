@@ -43,8 +43,7 @@ func historyContextFragsForMessages(messages []ModelMessage, records []historyfr
 }
 
 func looksLikeSummaryMessage(msg ModelMessage) bool {
-	return strings.EqualFold(strings.TrimSpace(msg.Role), "user") &&
-		strings.HasPrefix(strings.TrimSpace(msg.TextContent()), "<summary>")
+	return strings.EqualFold(strings.TrimSpace(msg.Role), "user") && turn.IsSummaryText(msg.TextContent())
 }
 
 func sameModelMessage(a ModelMessage, b ModelMessage) bool {

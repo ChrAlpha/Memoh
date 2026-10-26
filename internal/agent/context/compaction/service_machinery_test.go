@@ -500,7 +500,7 @@ func machineryCorpus(t *testing.T) []candidateRow {
 	t.Helper()
 	b64 := strings.Repeat("QUJD", 100) // 400 base64 chars
 	return []candidateRow{
-		mkRow(t, "user", `[{"type":"text","text":"deploy please"}]`, 100),                                                                                          // 0
+		mkRow(t, "user", `[{"type":"text","text":"deploy please`+strings.Repeat(", with the usual checks", 20)+`"}]`, 100),                                         // 0
 		mkRow(t, "assistant", `[{"type":"text","text":"on it"},{"type":"tool-call","toolCallId":"A","toolName":"screenshot","input":{}}]`, 100),                    // 1 call A
 		mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"A","toolName":"screenshot","result":{"mime":"image/png","data":"`+b64+`"}}]`, 100),                  // 2 result A (base64)
 		mkRow(t, "assistant", `[{"type":"text","text":"captured the screen"}]`, 100),                                                                               // 3

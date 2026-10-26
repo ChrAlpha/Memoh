@@ -154,8 +154,8 @@ func TestSelectorToReadPathFoldsAClosedAskUserCall(t *testing.T) {
 	t.Parallel()
 
 	rows := []sqlc.ListHistoryCheckpointCandidatesWithinBytesRow{
-		pairingRow(0, "user", `"old q with plenty of extra descriptive words so the raw exchange clearly outweighs its summary"`),
-		pairingRow(1, "assistant", `"old a walking through the answer in enough detail that compaction genuinely shrinks it"`),
+		pairingRow(0, "user", `"old q with plenty of extra descriptive words`+strings.Repeat(" so the raw exchange clearly outweighs its summary", 4)+`"`),
+		pairingRow(1, "assistant", `"old a walking through the answer`+strings.Repeat(" in enough detail that compaction genuinely shrinks it", 4)+`"`),
 		pairingRow(2, "assistant", `[{"type":"tool-call","toolCallId":"ask-1","toolName":"ask_user","input":{"questions":[]}}]`),
 		pairingRow(3, "user", `"mid q"`),
 		pairingRow(4, "user", `"current q"`),
@@ -212,7 +212,7 @@ func TestSelectorToReadPathFoldsAClosedAskUserCall(t *testing.T) {
 	if gotIDs := recordSequenceIDs(got); !reflect.DeepEqual(gotIDs, want) {
 		t.Fatalf("selector output broke read-path ordering:\ngot  %v\nwant %v", gotIDs, want)
 	}
-	if text := got[0].ModelMessage.TextContent(); text != "<summary>\n"+passes[0].Summary+"\n</summary>" {
+	if text := got[0].ModelMessage.TextContent(); text != turn.SummaryText(passes[0].Summary) {
 		t.Fatalf("summary renders as %q", text)
 	}
 }
