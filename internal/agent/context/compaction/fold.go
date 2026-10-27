@@ -28,8 +28,8 @@ type Source struct {
 	// renders. A message with none is runtime context the caller rebuilds
 	// for every request: it stays where it is and no summary stands for it.
 	Sources []turn.ContextMessageSource
-	// Anchor keeps the message verbatim: the run's input or a steer. A fold
-	// keeps anchors newest first up to the anchor cap and folds the rest.
+	// Anchor marks the run's input or a steer, which a fold keeps verbatim
+	// where it is before anything else it keeps (retain).
 	Anchor bool
 }
 
@@ -45,16 +45,14 @@ type Event struct {
 	// ModelRecordID names the summarizer's model row in the compaction log.
 	ModelRecordID string
 	// Request is what the caller sends next and Sources what each of its
-	// messages renders. Messages from Cut on are the tail the caller keeps
-	// verbatim after the summary: the latest step, or the input a run starts
-	// from. A step folds too when the request cannot keep it (tailFolds).
+	// messages renders. The event decides what of it stays verbatim (retain).
 	Request sdk.Request
 	Sources []Source
-	Cut     int
-	// Current is the input a run starts from when the tail holds it: the
-	// summarizer reads it to judge what the work needs.
+	// Current is the input the caller's next request answers when the
+	// request does not hold it: the summarizer reads it to judge what the
+	// work needs.
 	Current []sdk.Message
-	// Anchors is how much of the request's anchors the fold keeps verbatim.
+	// Anchors is how a fold keeps the request's anchors.
 	Anchors AnchorPolicy
 	// Window is the summarizer's context window and MaxOutputTokens its
 	// output cap; Allowance is what the caller's next request may take.
@@ -68,13 +66,17 @@ type Event struct {
 	ReplacedTurnID string
 	Summarizer     Summarizer
 	// Apply splices every committed pass into the caller's request as it
-	// commits, and returns the request, sources and cut a further pass reads.
-	Apply func(Pass) (sdk.Request, []Source, int)
+	// commits, and returns the request and sources a further pass reads.
+	Apply func(Pass) (sdk.Request, []Source)
+
+	// retention is what the event keeps verbatim, decided before its first
+	// pass.
+	retention
 }
 
-// Fold runs one compaction event over a request its caller holds: it forks
-// the request before its tail and asks for the summary that replaces
-// everything foldable there, the summaries of the checkpoint the request
+// Fold runs one compaction event over a request its caller holds: it decides
+// what of the request stays verbatim, forks the request before the newest
+// messages it keeps and asks for the summary that replaces everything else, the summaries of the checkpoint the request
 // renders included. A pass reads as much of the request as the summarizer's
 // window holds; the event passes again only for what that left. It returns
 // the passes it committed; a failed pass ends the event with an *EventError
@@ -86,18 +88,25 @@ func (s *Service) Fold(ctx context.Context, ev Event) ([]Pass, error) {
 	})
 }
 
-// passes runs ev's passes, splicing each into the caller's request through
-// ev.Apply, until one reads up to the tail or nothing is left to fold. A tail
-// that leaves the request over its allowance once nothing before it is left
-// to fold, or that leaves a summary no room, folds too (tailFolds).
+// passes decides what ev keeps verbatim and runs its passes, splicing each
+// into the caller's request through ev.Apply, until one reads up to the
+// newest messages it keeps or nothing is left to fold.
 func (s *Service) passes(ctx context.Context, ev Event) ([]Pass, error) {
+	if len(ev.Sources) != len(ev.Request.Messages) {
+		return nil, fmt.Errorf("compaction: request of %d messages has %d sources", len(ev.Request.Messages), len(ev.Sources))
+	}
+	rows, err := s.requestRows(ctx, ev)
+	if err != nil {
+		return nil, err
+	}
+	ev.retention = retain(ev, rows.unfoldable(ev))
+	s.logger.InfoContext(ctx, "compaction retention",
+		slog.String("bot_id", ev.BotID), slog.String("session_id", ev.SessionID),
+		slog.Int("verbatim_budget_tokens", verbatimBudget(ev)), slog.Int("kept_groups", ev.keptGroups),
+		slog.Int("latest_group_tokens", ev.latestGroupTokens))
 	var passes []Pass
 	for {
-		pass, folded, err := s.foldPass(ctx, ev)
-		if (err == nil && !folded || ReasonOf(err) == ReasonProtectedOverflow) && tailFolds(ev) {
-			ev.Cut, ev.Current = len(ev.Request.Messages), nil
-			continue
-		}
+		pass, folded, err := s.foldPass(ctx, ev, rows)
 		if err != nil {
 			return passes, err
 		}
@@ -105,7 +114,8 @@ func (s *Service) passes(ctx context.Context, ev Event) ([]Pass, error) {
 			return passes, nil
 		}
 		passes = append(passes, pass)
-		ev.Request, ev.Sources, ev.Cut = ev.Apply(pass)
+		ev.Request, ev.Sources = ev.Apply(pass)
+		ev.cut = pass.cut
 		if !pass.More {
 			return passes, nil
 		}
@@ -113,21 +123,14 @@ func (s *Service) passes(ctx context.Context, ev Event) ([]Pass, error) {
 }
 
 // foldPass forks the request once and commits the summary it gets as the
-// session's next checkpoint. It reports false when nothing before the tail
-// can be folded.
-func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
-	if ev.Cut < 0 || ev.Cut > len(ev.Request.Messages) || len(ev.Sources) != len(ev.Request.Messages) {
-		return Pass{}, false, fmt.Errorf("compaction: request of %d messages has %d sources and cut %d", len(ev.Request.Messages), len(ev.Sources), ev.Cut)
-	}
+// session's next checkpoint. It reports false when nothing before the
+// messages the event keeps can be folded.
+func (s *Service) foldPass(ctx context.Context, ev Event, rows requestRows) (Pass, bool, error) {
 	parent, err := s.checkpoints.Active(ctx, ev.SessionID)
 	if err != nil {
 		return Pass{}, false, err
 	}
 	if err := rendersCheckpoint(ev, parent); err != nil {
-		return Pass{}, false, err
-	}
-	rows, err := s.requestRows(ctx, ev)
-	if err != nil {
 		return Pass{}, false, err
 	}
 	plan, err := planFold(ev, rows.unfoldable(ev))
@@ -186,23 +189,9 @@ func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
 		SummaryID: commit.SummaryID,
 		Summary:   summary,
 		Order:     order,
-		Cut:       cut,
+		cut:       cut,
 		More:      !plan.final(),
 	}, true, nil
-}
-
-// tailFolds reports whether ev's tail folds with what is before it: the
-// request is over its allowance and the tail holds a completed step, whose
-// calls and results the summary can stand for and get_messages reads back.
-// A tail that holds only the input a run starts from stays, so the event
-// fails as protected rather than summarize the input it answers.
-func tailFolds(ev Event) bool {
-	if ev.Cut >= len(ev.Request.Messages) || forkTokens(ev.Request) <= ev.Allowance {
-		return false
-	}
-	return slices.ContainsFunc(ev.Sources[ev.Cut:], func(source Source) bool {
-		return len(source.Sources) > 0 && !source.Anchor && !isSummarySource(source)
-	})
 }
 
 // rendersCheckpoint refuses a request composed on a checkpoint the session
@@ -268,8 +257,7 @@ func (s *Service) summarize(ctx context.Context, ev Event, fork sdk.Request, pla
 	return result, nil
 }
 
-// requestRows is where the sources a request renders before its cut stand
-// in the history: the context rows that hold each one, by the source as the
+// requestRows is where the sources a request renders stand in the history: the context rows that hold each one, by the source as the
 // request names it. A history source names its row; an inbound or a
 // self-sent message names the rows it was written to.
 type requestRows map[turn.ContextMessageSource][]checkpoint.Row
@@ -281,7 +269,7 @@ func (s *Service) requestRows(ctx context.Context, ev Event) (requestRows, error
 	}
 	var ids []pgtype.UUID
 	var external []string
-	for _, source := range ev.Sources[:ev.Cut] {
+	for _, source := range ev.Sources {
 		for _, s := range source.Sources {
 			switch s.Kind {
 			case "history":
@@ -318,12 +306,12 @@ func (s *Service) requestRows(ctx context.Context, ev Event) (requestRows, error
 	return rows, nil
 }
 
-// unfoldable marks the messages before ev's cut a fold cannot stand for: one
-// that renders a source no context row holds stays where it is, as the
-// checkpoint has nothing to fold for it.
+// unfoldable marks the messages of ev a fold cannot stand for: one that
+// renders a source no context row holds stays where it is, as the checkpoint
+// has nothing to fold for it.
 func (r requestRows) unfoldable(ev Event) map[int]bool {
 	out := map[int]bool{}
-	for i, source := range ev.Sources[:ev.Cut] {
+	for i, source := range ev.Sources {
 		if isSummarySource(source) {
 			continue
 		}

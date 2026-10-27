@@ -152,7 +152,7 @@ func TestSelectorToReadPathFoldsAClosedAskUserCall(t *testing.T) {
 		pairingRow(0, "user", `"old q with plenty of extra descriptive words`+strings.Repeat(" so the raw exchange clearly outweighs its summary", 4)+`"`),
 		pairingRow(1, "assistant", `"old a walking through the answer`+strings.Repeat(" in enough detail that compaction genuinely shrinks it", 4)+`"`),
 		pairingRow(2, "assistant", `[{"type":"tool-call","toolCallId":"ask-1","toolName":"ask_user","input":{"questions":[]}}]`),
-		pairingRow(3, "user", `"mid q"`),
+		pairingRow(3, "user", `"mid q`+strings.Repeat(" with the context the history around it needs", 60)+`"`),
 		pairingRow(4, "user", `"current q"`),
 	}
 	q := &pairingQueries{
@@ -171,7 +171,7 @@ func TestSelectorToReadPathFoldsAClosedAskUserCall(t *testing.T) {
 		APIKey:              "test",
 		BaseURL:             "http://stub.invalid",
 		HTTPClient:          &http.Client{Transport: pairingSummarizer{summary: "condensed old exchange"}},
-		ProtectedSources:    []turn.ContextMessageSource{{Kind: "history", ID: uuid.UUID(rows[4].ID.Bytes).String(), Current: true}},
+		Anchors:             []turn.ContextMessageSource{{Kind: "history", ID: uuid.UUID(rows[4].ID.Bytes).String(), Current: true}},
 		SummaryWindowTokens: 128000,
 		HistoryBudgetTokens: 1000,
 	})

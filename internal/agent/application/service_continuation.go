@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
-
-	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
@@ -84,19 +81,6 @@ func (s *Service) prepareContinuationRunConfig(
 	}
 	req.inputInHistory = true
 	if req.continuationToolCallID != "" && req.RunHandle.RunID != "" {
-		start := slices.IndexFunc(retained, func(record historyfrag.HistoryRecord) bool {
-			return slices.ContainsFunc(extractAssistantToolCallParts(record.ModelMessage), func(call sdk.ToolCallPart) bool {
-				return call.ToolCallID == req.continuationToolCallID
-			})
-		})
-		if start < 0 {
-			return native.RunConfig{}, fmt.Errorf("%w: deferred call missing from continuation", contextfrag.ErrBudgetUnsatisfied)
-		}
-		for _, record := range retained[start:] {
-			if record.DBMessageID != "" {
-				req.continuationTail = append(req.continuationTail, turn.ContextMessageSource{Kind: "history", ID: record.DBMessageID})
-			}
-		}
 		ids, err := s.queries.ListRunHistoryTurnRequestMessageIDs(ctx, sqlc.ListRunHistoryTurnRequestMessageIDsParams{
 			SessionID: db.ParseUUIDOrEmpty(req.ThreadID), RunID: db.ParseUUIDOrEmpty(req.RunHandle.RunID), RootTurnID: db.ParseUUIDOrEmpty(req.RunHandle.TurnID),
 		})
@@ -110,8 +94,7 @@ func (s *Service) prepareContinuationRunConfig(
 	if truncated {
 		// A load the byte budget truncated would start later than its
 		// checkpoint's position: the rows it left out fold from rows first,
-		// keeping what the continuation resumes from, and the history loads
-		// again.
+		// and the history loads again.
 		pressure := 0
 		for _, message := range messages {
 			pressure += estimateMessageTokens(message)
@@ -144,9 +127,8 @@ func (s *Service) prepareContinuationRunConfig(
 	// deferred tool call. Provenance names the outgoing messages, closures
 	// included, so a fold removes each closure with its call.
 	outgoing := repairToolCallClosures(nonNilModelMessages(messages), syntheticToolClosureError)
-	base.ContextProvenance = contextProvenance(outgoing, retained, append(compactionProtectedSources(req), req.continuationAnchors...))
+	base.ContextProvenance = contextProvenance(outgoing, retained, append(compactionInputs(req), req.continuationAnchors...))
 	base.Messages = modelMessagesToSDKMessages(outgoing)
-	base.ContextTail = req.continuationTail
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil
 	base.Query = ""

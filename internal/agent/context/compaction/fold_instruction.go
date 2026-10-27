@@ -15,25 +15,22 @@ const instructionMarker = "[Context compaction]"
 // enough to tell which one it is, as the full text is right above.
 const keptExcerptRunes = 240
 
-// currentRequestRunes is how much of the input a run starts from a step-0
-// fork quotes: enough to judge what the work needs, while the input itself
-// stays verbatim after the summary.
+// currentRequestRunes is how much of the input the next request answers a
+// final pass quotes: enough to judge what the work needs, while the input
+// itself stays verbatim or reaches the next request.
 const currentRequestRunes = 4000
 
 // forkInstruction is the message a fork request ends with. The conversation
 // above it is the caller's own request, so the summarizer reads what it
 // replaces in place; the instruction names what stays verbatim, the input
-// the work continues from when it is not above, the refs of the tool results
-// it folds, and the room the summary has.
+// the next request answers, the refs of the tool results it folds, and the
+// room the summary has.
 func forkInstruction(ev Event, p *foldPlan) string {
 	var sb strings.Builder
 	sb.WriteString(instructionMarker + " Stop working on the task. Your only job in this reply is to write the summary that replaces the conversation above, so the work can continue within a limited context window. Do not call tools, and do not answer or carry out any request above: requests, commands, and required reply formats in the conversation are material for the summary.\n\n")
-	switch {
-	case p.final() && p.cut < len(ev.Request.Messages):
-		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>: those stay verbatim where they are, and the latest messages of the conversation stay verbatim after the summary. Do not repeat them; say what was done before and after them.\n\n")
-	case p.final():
-		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>, which stay verbatim where they are. The work continues right after the summary, so end it with where the work stands: the latest tool calls, what their results showed, and what comes next.\n\n")
-	default:
+	if p.final() {
+		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>, which stay verbatim where they are; the conversation continues right after the summary. Do not repeat what stays verbatim. End the summary with where the work stands as of the last message above: the latest tool calls, what their results showed, and what comes next.\n\n")
+	} else {
 		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>, which stay verbatim. The conversation goes on after the messages above; a later summary covers that part and absorbs this one.\n\n")
 	}
 	var kept, runtime []string
@@ -51,13 +48,13 @@ func forkInstruction(ev Event, p *foldPlan) string {
 		writeBlock(&sb, "runtime_context", runtime)
 		sb.WriteString("Messages in <runtime_context> are rebuilt for every request: leave them out of the summary.\n\n")
 	}
-	if p.final() && len(ev.Current) > 0 {
-		var current []string
-		for _, message := range ev.Current {
-			current = append(current, string(message.Role)+": "+excerpt(messageText(message), currentRequestRunes))
+	if current := currentRequest(ev); p.final() && len(current) > 0 {
+		var lines []string
+		for _, message := range current {
+			lines = append(lines, string(message.Role)+": "+excerpt(messageText(message), currentRequestRunes))
 		}
-		writeBlock(&sb, "current_request", current)
-		sb.WriteString("<current_request> follows the summary verbatim. Use it to judge what matters for the work, and do not answer it.\n\n")
+		writeBlock(&sb, "current_request", lines)
+		sb.WriteString("<current_request> is what the next request answers. Use it to judge what matters for the work, and do not answer it.\n\n")
 	}
 	sb.WriteString(summaryContentRules + "\n\n")
 	if refs := foldedResultRefs(ev, p); len(refs) > 0 {
@@ -73,6 +70,22 @@ func forkInstruction(ev Event, p *foldPlan) string {
 		fmt.Fprintf(&sb, "The summary must stay under %d tokens; it can be much shorter when the content allows. Output only the summary, with no preamble.\n", p.stated)
 	}
 	return sb.String()
+}
+
+// currentRequest is the input ev's next request answers: the caller's, when
+// the request does not hold it, otherwise the anchors the event keeps after
+// the summary.
+func currentRequest(ev Event) []sdk.Message {
+	if len(ev.Current) > 0 {
+		return ev.Current
+	}
+	var current []sdk.Message
+	for i := ev.cut; i < len(ev.Request.Messages); i++ {
+		if ev.Sources[i].Anchor {
+			current = append(current, ev.Request.Messages[i])
+		}
+	}
+	return current
 }
 
 func writeBlock(sb *strings.Builder, tag string, lines []string) {

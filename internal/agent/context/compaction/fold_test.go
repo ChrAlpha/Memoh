@@ -79,7 +79,10 @@ func historySource(sources ...turn.ContextMessageSource) Source {
 }
 
 // request is one run's next request: the checkpoint's summary, three rows
-// of earlier work, the run's input, and the latest step as the tail.
+// of earlier work, the run's input, and the latest step. The earlier step
+// is larger than the verbatim budget leaves beside the latest one, so cut,
+// where the messages the event keeps after the summary start, is the latest
+// step.
 type request struct {
 	messages []sdk.Message
 	sources  []Source
@@ -96,7 +99,7 @@ func (s *foldSession) request() request {
 			SummaryMessage("Earlier work summarized."),
 			sdk.UserMessage("Please audit the parser module and list every unsafe cast you find in it."),
 			callMessage("call_1"),
-			resultMessage("call_1", strings.Repeat("parser.go:12 unsafe cast of int64 to int32\n", 40)),
+			resultMessage("call_1", strings.Repeat("parser.go:12 unsafe cast of int64 to int32\n", 500)),
 			sdk.UserMessage("RUN_INPUT: fix the casts the audit found"),
 			callMessage("call_2"),
 			resultMessage("call_2", "patched parser.go"),
@@ -122,15 +125,14 @@ func (s *foldSession) event(r request, summarizer *scriptedSummarizer) Event {
 		SessionID:       s.session,
 		Request:         req,
 		Sources:         r.sources,
-		Cut:             r.cut,
 		Window:          32000,
 		Allowance:       24000,
 		MaxOutputTokens: 8000,
 		Summarizer:      summarizer.summarize,
-		Apply: func(pass Pass) (sdk.Request, []Source, int) {
+		Apply: func(pass Pass) (sdk.Request, []Source) {
 			messages, sources := splice(req.Messages, r.sources, pass)
-			req.Messages, r.sources, r.cut = messages, sources, pass.Cut
-			return req, sources, pass.Cut
+			req.Messages, r.sources, r.cut = messages, sources, pass.cut
+			return req, sources
 		},
 	}
 }
@@ -151,11 +153,12 @@ func replaced(sources []Source, pass Pass) []turn.ContextMessageSource {
 	return out
 }
 
-// A fold forks the request the run would send: the prefix before the tail
-// is the run's own, byte for byte, and one instruction follows it. The
-// summary replaces the checkpoint's summary and the work before the run's
-// input; the input stays, and the checkpoint moves past the folded rows.
-func TestFoldForksTheRequestBeforeItsTail(t *testing.T) {
+// A fold forks the request the run would send: the prefix before the latest
+// step, which the verbatim budget keeps, is the run's own, byte for byte, and
+// one instruction follows it. The summary replaces the checkpoint's summary
+// and the work before the run's input; the input stays, and the checkpoint
+// moves past the folded rows.
+func TestFoldForksTheRequestBeforeTheStepItKeeps(t *testing.T) {
 	t.Parallel()
 	s := newFoldSession(t)
 	r := s.request()
@@ -193,7 +196,7 @@ func TestFoldForksTheRequestBeforeItsTail(t *testing.T) {
 	}
 	for _, row := range r.rows[3:] {
 		if slices.Contains(folded, row) {
-			t.Fatalf("replaced = %v, the input and the tail must stay", folded)
+			t.Fatalf("replaced = %v, the input and the latest step must stay", folded)
 		}
 	}
 	held := s.q.held()
@@ -246,30 +249,33 @@ func TestFoldLeavesRuntimeContextAndTakesClosuresWithTheirCalls(t *testing.T) {
 	}
 }
 
-// When the request before the tail does not leave the summarizer room to
-// answer in its window, a pass reads less, ending at a tool-group boundary,
-// and the next pass forks the spliced request again.
+// When the request before the step the event keeps does not leave the
+// summarizer room to answer in its window, a pass reads less, ending at a
+// tool-group boundary, and the next pass forks the spliced request again.
 func TestFoldReadsLessWhenThePrefixFillsTheWindow(t *testing.T) {
 	t.Parallel()
 	s := newFoldSession(t)
 	r := s.request()
 	second := s.row()
 	secondResult := s.row()
-	r.messages = slices.Insert(r.messages, 4, callMessage("call_3"), resultMessage("call_3", strings.Repeat("lexer.go:40 unsafe cast of uint to int\n", 40)))
+	// The lexer audit takes more than the verbatim budget leaves beside the
+	// latest step, so the event keeps only that step.
+	r.messages[3] = resultMessage("call_1", strings.Repeat("parser.go:12 unsafe cast of int64 to int32\n", 40))
+	r.messages = slices.Insert(r.messages, 4, callMessage("call_3"), resultMessage("call_3", strings.Repeat("lexer.go:40 unsafe cast of uint to int\n", 80)))
 	r.sources = slices.Insert(r.sources, 4, historySource(second), historySource(secondResult))
 	r.cut += 2
 	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The parser part of the audit is summarized."), summaryAnswer("The parser and lexer audits are summarized.")}}
 	ev := s.event(r, summarizer)
 	// The window holds one long result and an answer, not both results.
-	ev.Window = forkTokens(sdk.Request{System: ev.Request.System, Messages: r.messages[:4], Tools: ev.Request.Tools}) + 1900
-	ev.Allowance = 20000
+	ev.Window = forkTokens(sdk.Request{System: ev.Request.System, Messages: r.messages[:4], Tools: ev.Request.Tools}) + 2200
+	ev.Allowance = 4000
 	ev.MaxOutputTokens = 4000
 	apply, applied, read := ev.Apply, 0, [][]Source{r.sources}
-	ev.Apply = func(pass Pass) (sdk.Request, []Source, int) {
+	ev.Apply = func(pass Pass) (sdk.Request, []Source) {
 		applied++
-		req, sources, cut := apply(pass)
+		req, sources := apply(pass)
 		read = append(read, sources)
-		return req, sources, cut
+		return req, sources
 	}
 
 	passes, err := s.svc.Fold(context.Background(), ev)
@@ -453,20 +459,20 @@ func TestFoldFailsBeforeAskingWhenNoSummaryFits(t *testing.T) {
 	}
 }
 
-// A latest step the request cannot keep beside a summary folds with what is
-// before it, in the same event and the same summarizer call: the input stays,
-// and the instruction asks for where the work stands and names the ref the
-// step's result reads back by, rather than quoting a tail that no longer
-// follows the summary.
-func TestFoldFoldsAStepTheRequestCannotKeep(t *testing.T) {
+// A latest step larger than the verbatim budget folds with what is before
+// it, in the same pass: the input stays where it is, and the instruction asks
+// for where the work stands and names the ref the step's result reads back
+// by.
+func TestFoldFoldsALatestStepLargerThanTheBudget(t *testing.T) {
 	t.Parallel()
 	s := newFoldSession(t)
 	r := s.request()
-	r.messages[6] = resultMessage("call_2", strings.Repeat("parser.go: patched cast\n", 400))
+	r.messages[6] = resultMessage("call_2", strings.Repeat("parser.go: patched cast\n", 1200))
 	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The audit found casts at parser.go:12; the patch rewrote each of them.")}}
 	ev := s.event(r, summarizer)
-	ev.Current = r.messages[r.cut:]
-	ev.Allowance = forkTokens(sdk.Request{System: ev.Request.System, Messages: r.messages[r.cut-1:], Tools: ev.Request.Tools})
+	if step := forkTokens(sdk.Request{Messages: r.messages[5:]}); step <= verbatimBudget(ev) {
+		t.Fatalf("the latest step takes %d tokens, want more than the %d-token budget", step, verbatimBudget(ev))
+	}
 
 	passes, err := s.svc.Fold(context.Background(), ev)
 	if err != nil || len(passes) != 1 || len(summarizer.requests) != 1 {
@@ -478,29 +484,86 @@ func TestFoldFoldsAStepTheRequestCannotKeep(t *testing.T) {
 			t.Fatalf("replaced = %v, want the earlier work and the latest step folded", folded)
 		}
 	}
-	if slices.Contains(folded, r.rows[3]) || passes[0].Cut != len(passes[0].Order) {
-		t.Fatalf("pass = %+v, want the input kept and no tail left", passes[0])
+	if slices.Contains(folded, r.rows[3]) || passes[0].cut != len(passes[0].Order) {
+		t.Fatalf("pass = %+v, want the input kept and nothing after the summary", passes[0])
 	}
 	fork := summarizer.requests[0]
 	if len(fork.Messages) != len(r.messages)+1 {
 		t.Fatalf("fork read %d messages, want the whole request and the instruction", len(fork.Messages)-1)
 	}
 	instruction := messageText(fork.Messages[len(fork.Messages)-1])
-	if !strings.Contains(instruction, "The work continues right after the summary") || !strings.Contains(instruction, "call_2 ref="+r.rows[5].ID+":0") || strings.Contains(instruction, "<current_request>") {
+	if !strings.Contains(instruction, "End the summary with where the work stands") || !strings.Contains(instruction, "call_2 ref="+r.rows[5].ID+":0") {
 		t.Fatalf("instruction does not hand the step over to the summary:\n%s", instruction)
 	}
 }
 
-// A tail that holds only the input a run starts from never folds: the event
-// fails as protected before it asks the summarizer.
-func TestFoldKeepsAnInputTailItCannotFit(t *testing.T) {
+// Anchors and call groups share one verbatim budget, anchors first: an input
+// that takes nearly all of it stays where it is, and the latest step, small
+// as it is, folds with the earlier work.
+func TestFoldAnchorsAndStepsShareTheBudget(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The audit and the patch are summarized.")}}
+	ev := s.event(r, summarizer)
+	step := forkTokens(sdk.Request{Messages: r.messages[5:]})
+	input := "RUN_INPUT: fix the casts the audit found" + strings.Repeat(" detail", 2000)
+	for forkTokens(sdk.Request{Messages: []sdk.Message{sdk.UserMessage(input)}}) <= verbatimBudget(ev)-step {
+		input += " detail"
+	}
+	r.messages[4] = sdk.UserMessage(input)
+	ev = s.event(r, summarizer)
+	if forkTokens(sdk.Request{Messages: r.messages[4:5]}) > verbatimBudget(ev) {
+		t.Fatal("the input alone must fit the budget")
+	}
+
+	passes, err := s.svc.Fold(context.Background(), ev)
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("passes=%d err=%v, want one pass", len(passes), err)
+	}
+	folded := replaced(r.sources, passes[0])
+	if slices.Contains(folded, r.rows[3]) || !slices.Contains(folded, r.rows[4]) || !slices.Contains(folded, r.rows[5]) {
+		t.Fatalf("replaced = %v, want the input kept and the latest step folded", folded)
+	}
+}
+
+// A message no context row holds stays whatever it takes, and takes it from
+// the verbatim budget: a run's input before its first step writes its row
+// leaves the earlier step no room, so the step folds.
+func TestFoldChargesWhatNoRowHoldsToTheBudget(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	r.messages[3] = resultMessage("call_1", strings.Repeat("parser.go:12 unsafe cast of int64 to int32\n", 40))
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The audit is summarized.")}}
+	ev := s.event(r, summarizer)
+	input := "RUN_INPUT: fix the casts the audit found"
+	for forkTokens(sdk.Request{Messages: []sdk.Message{sdk.UserMessage(input)}}) <= verbatimBudget(ev) {
+		input += " detail"
+	}
+	r.messages, r.sources = append(slices.Clone(r.messages[:4]), sdk.UserMessage(input)), append(slices.Clone(r.sources[:4]), Source{Sources: []turn.ContextMessageSource{{Kind: "history", ID: uuid.NewString()}}, Anchor: true})
+
+	passes, err := s.svc.Fold(context.Background(), s.event(r, summarizer))
+	if err != nil || len(passes) != 1 {
+		t.Fatalf("passes=%d err=%v, want one pass", len(passes), err)
+	}
+	if folded := replaced(r.sources, passes[0]); !slices.Contains(folded, r.rows[1]) || !slices.Contains(folded, r.rows[2]) {
+		t.Fatalf("replaced = %v, want the earlier step folded beside the unwritten input", folded)
+	}
+}
+
+// The input after the newest step, which the next call answers, never folds,
+// however little room it leaves: the event fails as protected before it asks
+// the summarizer.
+func TestFoldKeepsTheInputTheNextCallAnswers(t *testing.T) {
 	t.Parallel()
 	s := newFoldSession(t)
 	r := s.request()
 	r.messages, r.sources, r.cut = r.messages[:5], r.sources[:5], 4
+	// Folded, the input would leave a summary room; kept, it leaves none.
+	r.messages[4] = sdk.UserMessage("RUN_INPUT: fix the casts the audit found" + strings.Repeat(" in every file", 100))
 	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("unused")}}
 	ev := s.event(r, summarizer)
-	ev.Current = r.messages[r.cut:]
 	ev.Allowance = forkTokens(sdk.Request{System: ev.Request.System, Messages: r.messages[r.cut:], Tools: ev.Request.Tools}) + 10
 
 	_, err := s.svc.Fold(context.Background(), ev)
@@ -547,12 +610,14 @@ func messagesEqual(a, b sdk.Message) bool {
 }
 
 // However much room the next request has, a summary may take at most a
-// share of the allowance, so a fold leaves room for the turns after it; the
+// share of the room beside what every request carries, so a fold leaves room for the turns after it; the
 // fork's output cap stays above the length it asks for.
 func TestFoldBoundsTheSummaryBelowTheRoom(t *testing.T) {
 	t.Parallel()
 	s := newFoldSession(t)
 	r := s.request()
+	// The earlier step takes more than a large window's verbatim budget.
+	r.messages[3] = resultMessage("call_1", strings.Repeat("parser.go:12 unsafe cast of int64 to int32\n", 3000))
 	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("Audit summarized.")}}
 	ev := s.event(r, summarizer)
 	ev.Window, ev.Allowance, ev.MaxOutputTokens = 200000, 168000, 64000
@@ -567,8 +632,8 @@ func TestFoldBoundsTheSummaryBelowTheRoom(t *testing.T) {
 		t.Fatalf("instruction states no limit:\n%s", instruction)
 	}
 	stated, _ := strconv.Atoi(strings.Fields(after)[0])
-	if stated <= 0 || stated > ev.Allowance/summaryShareOfAllowance || *fork.MaxTokens <= stated {
-		t.Fatalf("stated limit %d, max_tokens %d: want at most %d and below the output cap", stated, *fork.MaxTokens, ev.Allowance/summaryShareOfAllowance)
+	if stated <= 0 || stated > summaryBudget(ev) || *fork.MaxTokens <= stated {
+		t.Fatalf("stated limit %d, max_tokens %d: want at most %d and below the output cap", stated, *fork.MaxTokens, summaryBudget(ev))
 	}
 }
 
@@ -673,8 +738,9 @@ func TestFoldLeavesAResidueTooSmallToSummarize(t *testing.T) {
 }
 
 // A Discuss run keeps the inputs it answers while they leave a tenth of the
-// room for the summary; the default cap keeps a run's input and steers
-// within a quarter of the allowance. Older anchors fold either way.
+// room for the summary; otherwise anchors before the newest step take the
+// verbatim budget, a quarter of the allowance here. Older anchors fold
+// either way.
 func TestFoldKeepsAnchorsByPolicy(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -698,6 +764,8 @@ func TestFoldKeepsAnchorsByPolicy(t *testing.T) {
 				messages = append(messages, sdk.UserMessage("input "+strconv.Itoa(i)+strings.Repeat(" i", 1200)))
 				sources = append(sources, Source{Sources: []turn.ContextMessageSource{input}, Anchor: true})
 			}
+			messages = append(messages, callMessage("call_9"), resultMessage("call_9", "done"))
+			sources = append(sources, historySource(s.row()), historySource(s.row()))
 			summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("Earlier talk and the oldest inputs summarized.")}}
 			ev := s.event(request{messages: messages, sources: sources, cut: len(messages)}, summarizer)
 			ev.Request.Tools, ev.Allowance, ev.Window, ev.Anchors = nil, 3200, 12000, tc.policy

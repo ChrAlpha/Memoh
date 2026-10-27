@@ -153,8 +153,7 @@ func TestCompactForBudgetBoundsALiveRequestByItsOwnTurn(t *testing.T) {
 // A fold from rows streams its summaries through the client the runs stream
 // through: a long summary is bounded by silence, not by a deadline on its
 // first byte. A Discuss recovery keeps the batch it answers by the inputs-first
-// policy; a continuation keeps its input and steers within the cap and resumes
-// from its deferred call.
+// policy; a continuation keeps its input and steers as capped anchors.
 func TestCompactForBudgetStreamsAndKeepsByEntry(t *testing.T) {
 	t.Parallel()
 
@@ -163,10 +162,9 @@ func TestCompactForBudgetStreamsAndKeepsByEntry(t *testing.T) {
 	service.streamHTTPClient = &http.Client{}
 	batch := []turn.ContextMessageSource{{Kind: "external", ID: "older"}, {Kind: "external", ID: "newest"}}
 	anchors := []turn.ContextMessageSource{{Kind: "history", ID: "root"}}
-	tail := []turn.ContextMessageSource{{Kind: "history", ID: "call"}}
 	for _, req := range []ChatRequest{
 		{discussCurrentSources: batch},
-		{continuationTail: tail, continuationAnchors: anchors},
+		{continuationToolCallID: "call", continuationAnchors: anchors},
 	} {
 		req.BotID, req.ChatID, req.ThreadID = syncCompactBotID, syncCompactBotID, syncCompactThreadID
 		if err := service.compactForBudget(t.Context(), req, 2000, 1000, ""); err != nil {
@@ -174,11 +172,11 @@ func TestCompactForBudgetStreamsAndKeepsByEntry(t *testing.T) {
 		}
 	}
 	discuss, continuation := runner.configs[0], runner.configs[1]
-	if discuss.HTTPClient != service.streamHTTPClient || discuss.AnchorPolicy != compaction.AnchorsFirst || !reflect.DeepEqual(discuss.Anchors, batch) || len(discuss.ProtectedSources) != 0 {
+	if discuss.HTTPClient != service.streamHTTPClient || discuss.AnchorPolicy != compaction.AnchorsFirst || !reflect.DeepEqual(discuss.Anchors, batch) {
 		t.Fatalf("discuss config = %+v, want the batch kept inputs first through the stream client", discuss)
 	}
-	if continuation.AnchorPolicy != compaction.AnchorsCapped || !reflect.DeepEqual(continuation.ProtectedSources, tail) || !reflect.DeepEqual(continuation.Anchors, anchors) {
-		t.Fatalf("continuation config = %+v, want its anchors capped and its deferred call kept", continuation)
+	if continuation.AnchorPolicy != compaction.AnchorsCapped || !reflect.DeepEqual(continuation.Anchors, anchors) {
+		t.Fatalf("continuation config = %+v, want its anchors capped", continuation)
 	}
 }
 

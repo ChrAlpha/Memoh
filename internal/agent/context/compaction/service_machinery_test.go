@@ -437,10 +437,10 @@ func machineryConfig(stub *stubModel, historyBudgetTokens int) TriggerConfig {
 }
 
 // currentConfig is machineryConfig for a request whose current input is
-// current.
+// current, an anchor.
 func currentConfig(stub *stubModel, historyBudgetTokens int, current candidateRow) TriggerConfig {
 	cfg := machineryConfig(stub, historyBudgetTokens)
-	cfg.ProtectedSources = historySources(current)
+	cfg.Anchors = historySources(current)
 	return cfg
 }
 
@@ -454,21 +454,24 @@ func historySources(rows ...candidateRow) []turn.ContextMessageSource {
 
 // machineryCorpus returns a deterministic session whose oldest portion contains
 // two tool exchanges (one base64-image result, one structured stdout result),
-// plus recent text turns. Indices are returned for precise assertions.
+// plus recent text turns. Indices are returned for precise assertions. Rows 3
+// and 9 take more than the verbatim budget a 4000-token history leaves, so a
+// fold that reads up to either keeps none of the rows before it raw.
 func machineryCorpus(t *testing.T) []candidateRow {
 	t.Helper()
 	b64 := strings.Repeat("QUJD", 100) // 400 base64 chars
+	long := strings.Repeat(" in detail", 500)
 	return []candidateRow{
 		mkRow(t, "user", `[{"type":"text","text":"deploy please`+strings.Repeat(", with the usual checks", 20)+`"}]`),                                         // 0
 		mkRow(t, "assistant", `[{"type":"text","text":"on it"},{"type":"tool-call","toolCallId":"A","toolName":"screenshot","input":{}}]`),                    // 1 call A
 		mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"A","toolName":"screenshot","result":{"mime":"image/png","data":"`+b64+`"}}]`),                  // 2 result A (base64)
-		mkRow(t, "assistant", `[{"type":"text","text":"captured the screen"}]`),                                                                               // 3
+		mkRow(t, "assistant", `[{"type":"text","text":"captured the screen`+long+`"}]`),                                                                       // 3
 		mkRow(t, "user", `[{"type":"text","text":"now build"}]`),                                                                                              // 4
 		mkRow(t, "assistant", `[{"type":"text","text":"running"},{"type":"tool-call","toolCallId":"B","toolName":"exec_command","input":{"cmd":"make"}}]`),    // 5 call B
 		mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"B","toolName":"exec_command","result":{"exit_code":0,"stdout":"build ok done","stderr":""}}]`), // 6 result B (structured)
 		mkRow(t, "assistant", `[{"type":"text","text":"build finished"}]`),                                                                                    // 7
 		mkRow(t, "user", `[{"type":"text","text":"recent question"}]`),                                                                                        // 8
-		mkRow(t, "assistant", `[{"type":"text","text":"recent answer"}]`),                                                                                     // 9
+		mkRow(t, "assistant", `[{"type":"text","text":"recent answer`+long+`"}]`),                                                                             // 9
 	}
 }
 

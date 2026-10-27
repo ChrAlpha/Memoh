@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
@@ -23,9 +24,9 @@ import (
 )
 
 // A pass over a long run of short messages, whose stored rows weigh far more
-// than their payload, commits every row its candidate read admitted: the
-// checkpoint it makes active holds its summary alone, through the last of
-// them.
+// than their payload, commits every row its candidate read admitted but the
+// newest the verbatim budget keeps: the checkpoint it makes active holds its
+// summary alone, through the last row it folds.
 func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 	ctx := context.Background()
 	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
@@ -86,10 +87,11 @@ func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 	}))
 	t.Cleanup(summarizer.Close)
 
-	passes, err := NewService(slog.Default(), queries).Compact(ctx, TriggerConfig{
+	cfg := TriggerConfig{
 		BotID: botID, SessionID: sessionID, ModelID: "compact-model", ClientType: "openai-completions",
 		BaseURL: summarizer.URL, APIKey: "test-key", SummaryWindowTokens: 60000, HistoryBudgetTokens: 4000,
-	})
+	}
+	passes, err := NewService(slog.Default(), queries).Compact(ctx, cfg)
 	if err != nil {
 		t.Fatalf("compact: %v", err)
 	}
@@ -108,8 +110,11 @@ func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 	if len(passes) != 1 {
 		t.Fatalf("passes=%d, want one committed pass", len(passes))
 	}
-	if folded != rows || total != rows {
-		t.Fatalf("folded=%d of %d, want every row folded", folded, total)
+	// The newest rows the verbatim budget holds stay raw, each taking at
+	// least a token of it.
+	budget := verbatimBudget(Event{Allowance: cfg.HistoryBudgetTokens + forkTokens(sdk.Request{System: synthesisSystemPrompt})})
+	if kept := total - folded; total != rows || kept < 1 || kept > budget {
+		t.Fatalf("folded=%d of %d, want every row folded but the newest the %d-token budget keeps", folded, total, budget)
 	}
 	if len(active.Items) != 1 || active.Items[0].SummaryID != passes[0].SummaryID || active.Items[0].Summary != "The short messages were exchanged." {
 		t.Fatalf("checkpoint holds %+v, want the pass's summary alone", active.Items)

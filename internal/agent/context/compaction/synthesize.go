@@ -36,14 +36,13 @@ The conversation is the messages that follow, each written out as text, tool cal
 type synthesis struct {
 	request sdk.Request
 	sources []Source
-	cut     int
 	// truncated reports rows the read bound left out.
 	truncated bool
 }
 
 // synthesize builds the request a fold from rows reads, as cfg's caller
-// would have it: rows before cfg.CandidatesBefore, the cfg.ProtectedSources
-// tail after the summary, cfg.Anchors kept by cfg.AnchorPolicy.
+// would have it: rows before cfg.CandidatesBefore, cfg.Anchors kept by
+// cfg.AnchorPolicy.
 func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis, error) {
 	sessionUUID, err := db.ParseUUID(cfg.SessionID)
 	if err != nil {
@@ -92,14 +91,11 @@ func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis,
 		}
 	}
 
-	syn := synthesis{request: sdk.Request{System: synthesisSystemPrompt}, cut: -1}
+	syn := synthesis{request: sdk.Request{System: synthesisSystemPrompt}}
 	if len(rows) > 0 {
 		syn.truncated = rows[0].CandidateCount > int64(len(rows))
 	}
 	add := func(message sdk.Message, sources []turn.ContextMessageSource) {
-		if syn.cut < 0 && sharesSource(sources, cfg.ProtectedSources) {
-			syn.cut = len(syn.request.Messages)
-		}
 		syn.request.Messages = append(syn.request.Messages, message)
 		syn.sources = append(syn.sources, Source{Sources: sources, Anchor: len(sources) > 0 && sharesSource(sources, cfg.Anchors)})
 	}
@@ -122,9 +118,6 @@ func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis,
 		if !held[formatUUID(row.ID)] {
 			add(rowMessage(row))
 		}
-	}
-	if syn.cut < 0 {
-		syn.cut = len(syn.request.Messages)
 	}
 	return syn, nil
 }
@@ -240,14 +233,13 @@ func (s *Service) compactRows(ctx context.Context, cfg TriggerConfig) ([]Pass, e
 		if err != nil {
 			return passes, err
 		}
-		request, sources, cut := syn.request, syn.sources, syn.cut
+		request, sources := syn.request, syn.sources
 		folded, err := s.passes(ctx, Event{
 			BotID:           cfg.BotID,
 			SessionID:       cfg.SessionID,
 			ModelRecordID:   cfg.ModelRecordID,
 			Request:         request,
 			Sources:         sources,
-			Cut:             cut,
 			Current:         current,
 			Anchors:         cfg.AnchorPolicy,
 			Window:          cfg.SummaryWindowTokens,
@@ -255,10 +247,9 @@ func (s *Service) compactRows(ctx context.Context, cfg TriggerConfig) ([]Pass, e
 			Allowance:       allowance,
 			Pressure:        cfg.TotalInputTokens,
 			Summarizer:      summarize,
-			Apply: func(pass Pass) (sdk.Request, []Source, int) {
+			Apply: func(pass Pass) (sdk.Request, []Source) {
 				request.Messages, sources = splice(request.Messages, sources, pass)
-				cut = pass.Cut
-				return request, sources, cut
+				return request, sources
 			},
 		})
 		passes = append(passes, folded...)

@@ -12,7 +12,7 @@ import (
 )
 
 // forkRead is what a pass sends its summarizer of the request before the
-// tail, ahead of the instruction: the request's messages as the run sends
+// newest messages the event keeps, ahead of the instruction: the request's messages as the run sends
 // them, except that a message larger than a fork can read whole keeps its
 // head and tail (forkMessageCap). A fold therefore reads, and stands for, any
 // message the request holds, however large. Messages that render no source,
@@ -20,7 +20,7 @@ import (
 // messages, reach the fork whole: every pass reads them. A message no cut
 // brings within the cap fails the pass as an input overflow.
 func forkRead(ev Event) ([]sdk.Message, error) {
-	messages := slices.Clip(ev.Request.Messages[:ev.Cut])
+	messages := slices.Clip(ev.Request.Messages[:ev.cut])
 	capTokens := forkMessageCap(ev)
 	var read []sdk.Message
 	for i := range messages {
@@ -49,13 +49,13 @@ func forkRead(ev Event) ([]sdk.Message, error) {
 // after a summary.
 func forkMessageCap(ev Event) int {
 	var fixed []sdk.Message
-	for i, message := range ev.Request.Messages[:ev.Cut] {
+	for i, message := range ev.Request.Messages[:ev.cut] {
 		if len(ev.Sources[i].Sources) == 0 {
 			fixed = append(fixed, message)
 		}
 	}
 	envelope := forkTokens(sdk.Request{System: ev.Request.System, Messages: fixed, Tools: ev.Request.Tools})
-	return max(ev.Window-envelope-ev.Allowance/summaryShareOfAllowance-forkInstructionReserve-minForkOutputTokens, minForkOutputTokens)
+	return max(ev.Window-envelope-summaryBudget(ev)-forkInstructionReserve-minForkOutputTokens, minForkOutputTokens)
 }
 
 // cutForFork renders message within capTokens for a fork: its text, the

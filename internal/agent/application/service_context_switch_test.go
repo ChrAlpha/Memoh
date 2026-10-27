@@ -118,7 +118,7 @@ func TestContextProvenanceNamesWhatEachMessageRenders(t *testing.T) {
 	}
 	req := ChatRequest{PersistedUserMessageID: "request", inputInHistory: true}
 
-	got := contextProvenance(messages, records, compactionProtectedSources(req))
+	got := contextProvenance(messages, records, compactionInputs(req))
 	want := []struct {
 		kind, id string
 		anchor   bool
@@ -170,14 +170,14 @@ func (r *switchRunner) Fold(_ context.Context, ev compaction.Event) ([]compactio
 		return nil, r.err
 	}
 	for _, pass := range r.passes {
-		ev.Request, ev.Sources, ev.Cut = ev.Apply(pass)
+		ev.Request, ev.Sources = ev.Apply(pass)
 	}
 	return r.passes, nil
 }
 
 // The event an armed run asks for forks the request the run holds: its
-// sources as the rows hold them, the run's input and steers kept in place,
-// the latest step as the tail, and the run's own model as summarizer. Every
+// sources as the rows hold them, the run's input and steers anchors, and the
+// run's own model as summarizer. Every
 // pass it commits is spliced into the request, which must then fit. A failed
 // event names its reason.
 func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
@@ -191,8 +191,8 @@ func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
 		return sources
 	}
 	passes := []compaction.Pass{
-		{SummaryID: "a1", Summary: "first", Order: []int{-1, 1, 2, 3, 4, 5}, Cut: 5, More: true},
-		{SummaryID: "a2", Summary: "second", Order: []int{1, -1, 3, 4, 5}, Cut: 4},
+		{SummaryID: "a1", Summary: "first", Order: []int{-1, 1, 2, 3, 4, 5}, More: true},
+		{SummaryID: "a2", Summary: "second", Order: []int{1, -1, 3, 4, 5}},
 	}
 	provenance := []*native.MessageProvenance{
 		{Sources: rows("old-user")}, {Sources: rows("request"), Anchor: true}, {Sources: rows("call")}, nil, {Sources: rows("steer")}, {Sources: rows("latest")},
@@ -224,7 +224,7 @@ func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
 			request := sdk.Request{Model: "run-model", Messages: make([]sdk.Message, len(provenance))}
 			summarized := false
 			sw := native.ContextSwitch{
-				Request: request, Provenance: provenance, Cut: 5,
+				Request: request, Provenance: provenance,
 				UsageTokens: 3000, AllowanceTokens: 2000, WindowTokens: 4000, OutputTokens: 1000,
 				Summarize: func(context.Context, sdk.Request) (sdk.ModelResult, error) {
 					summarized = true
@@ -232,7 +232,7 @@ func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
 				},
 				Fold: func(fold native.ContextFold) native.ContextSplice {
 					folds = append(folds, fold)
-					return native.ContextSplice{Request: request, Provenance: provenance, Cut: 5, Tokens: 3000 - tc.saved*len(folds)}
+					return native.ContextSplice{Request: request, Provenance: provenance, Tokens: 3000 - tc.saved*len(folds)}
 				},
 			}
 			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
@@ -245,7 +245,7 @@ func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
 					t.Fatalf("source %d = %+v, want anchor=%v and runtime context only where the run rebuilds it", i, source, anchors[i])
 				}
 			}
-			if ev.Cut != 5 || ev.Window != 4000 || ev.MaxOutputTokens != 1000 || ev.Allowance != 2000 || ev.ModelRecordID != "model-row" || ev.Request.Model != "run-model" {
+			if ev.Window != 4000 || ev.MaxOutputTokens != 1000 || ev.Allowance != 2000 || ev.ModelRecordID != "model-row" || ev.Request.Model != "run-model" {
 				t.Fatalf("event = %+v, want the run's request, window, output and allowance", ev)
 			}
 			if _, _ = ev.Summarizer(t.Context(), sdk.Request{}); !summarized {
@@ -253,7 +253,7 @@ func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
 			}
 			if tc.want == nil {
 				if err != nil || len(folds) != 2 || folds[1].SummaryID != "a2" || !reflect.DeepEqual(folds[1].Summary, compaction.SummaryMessage("second")) ||
-					!slices.Equal(folds[1].Order, passes[1].Order) || folds[1].Cut != passes[1].Cut || detail != "trigger=in_run passes=2 request_tokens=3000->2000 allowance=2000" {
+					!slices.Equal(folds[1].Order, passes[1].Order) || detail != "trigger=in_run passes=2 request_tokens=3000->2000 allowance=2000" {
 					t.Fatalf("err=%v folds=%+v detail=%q, want both passes spliced into a request that fits", err, folds, detail)
 				}
 				return
@@ -279,7 +279,7 @@ func TestSwitchContextReadsARetriedRequestFromItsCopy(t *testing.T) {
 	older := turn.ContextMessageSource{Kind: "history", ID: "older"}
 	provenance := []*native.MessageProvenance{{Sources: []turn.ContextMessageSource{older}}, {Sources: []turn.ContextMessageSource{request}, Anchor: true}, {Sources: []turn.ContextMessageSource{{Kind: "history", ID: "latest"}}}}
 	sw := native.ContextSwitch{
-		Request: sdk.Request{Messages: make([]sdk.Message, 3)}, Provenance: provenance, Cut: 2, UsageTokens: 3000, AllowanceTokens: 2000,
+		Request: sdk.Request{Messages: make([]sdk.Message, 3)}, Provenance: provenance, UsageTokens: 3000, AllowanceTokens: 2000,
 		Fold: func(native.ContextFold) native.ContextSplice { return native.ContextSplice{Tokens: 1000} },
 	}
 	req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
@@ -320,7 +320,7 @@ func TestSwitchContextNamesTheRunsRequestByItsRow(t *testing.T) {
 				{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "latest"}}},
 			}
 			sw := native.ContextSwitch{
-				Request: sdk.Request{Messages: make([]sdk.Message, 3)}, Provenance: provenance, Cut: 2, UsageTokens: 3000, AllowanceTokens: 2000,
+				Request: sdk.Request{Messages: make([]sdk.Message, 3)}, Provenance: provenance, UsageTokens: 3000, AllowanceTokens: 2000,
 				Fold: func(native.ContextFold) native.ContextSplice { return native.ContextSplice{Tokens: 1000} },
 			}
 			req := ChatRequest{BotID: syncCompactBotID, ChatID: syncCompactBotID, ThreadID: syncCompactThreadID, RunID: "run"}
@@ -363,7 +363,7 @@ func TestSwitchContextChoosesWhatAFoldKeeps(t *testing.T) {
 			committer := &agentStepCommitter{req: req, replacementStarted: tc.started}
 			sw := native.ContextSwitch{
 				Request: sdk.Request{Messages: make([]sdk.Message, 1)}, Provenance: []*native.MessageProvenance{{Sources: []turn.ContextMessageSource{{Kind: "history", ID: "row"}}}},
-				Cut: 1, UsageTokens: 3000, AllowanceTokens: 2000,
+				UsageTokens: 3000, AllowanceTokens: 2000,
 				Fold: func(native.ContextFold) native.ContextSplice { return native.ContextSplice{Tokens: 1000} },
 			}
 			if _, err := service.switchContext(req, committer, "")(t.Context(), sw); err != nil {

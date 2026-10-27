@@ -53,21 +53,30 @@ tool, is that proof.
 
 An armed run compacts with `compaction.Service.Fold`, before any step whose
 request does not fit, the first one included: one event over the request the
-run sends next, whose tail stays verbatim after the summary with everything
-after it. The tail is the latest committed step; before the first one it is the
-input the run answers, or the deferred call and answer a decision continuation
-resumes from, and a Discuss run, whose inputs are anchors, starts from none.
-A step stays only while the request can keep it beside a summary: when it
-leaves a summary no room, or nothing before it is left to fold and the request
-is still over, the same event folds it too, and the instruction asks the
-summary to end with where the work stands. The tool results it folds are
-listed by the ref `get_messages` reads them back by, as for any other fold. A
-tail that holds only the run's input never folds; the event fails as
-protected instead.
-Each pass forks that request before its tail and asks the run's own model for
-the summary that replaces everything foldable there, the active checkpoint's
-summaries included. Before the run's first step the instruction also quotes
-the input, which follows the summary verbatim. The fork keeps the run's system
+run sends next. Before its first pass the event decides what of the request
+stays verbatim (`retain`), whoever calls it. Runtime context stays and takes
+nothing. Everything else it keeps takes from one verbatim budget: a quarter
+of what the allowance leaves beside the system prompt, the tools and the
+runtime context, at most 32000 tokens; first the messages no context row holds and
+the anchors after the newest call group, the input or steers the next call
+answers, which stay whatever they take; then the other anchors newest first;
+then the newest complete call groups, a call with all its results, up to the
+first that does not fit. Everything else folds, the active checkpoint's
+summaries included. The latest step is such a call group, and so is the
+deferred call and answer a decision continuation resumes from: a step within
+the budget stays, a larger one folds in the same pass as what is before it.
+32000 tokens holds three results at the tool output bound, or two beside a
+long input. The summary may take another quarter of the room, so a fold
+leaves at least half of it to the steps after it and a small window does not
+fold at every step. The 32000-token bound was calibrated on call-group sizes
+of real agent sessions, and every event logs
+`compaction retention` with the budget, the call groups it kept and the
+latest group's size, to check it against Memoh's own traffic.
+Each pass forks that request up to the newest messages it keeps and asks the
+run's own model for the summary that replaces what folds there. The
+instruction quotes the input the next call answers, and asks the summary to
+end with where the work stands; the tool results it folds are listed by the
+ref `get_messages` reads them back by. The fork keeps the run's system
 prompt, tools, cache key and reasoning settings and ends with one compaction
 instruction, so the summarizer reads what it replaces in place and the fork
 shares the run's prompt cache. It streams outside the run's call observer, and
@@ -87,10 +96,11 @@ or self-sent message, or a summary. The run's query names the row that holds
 the run's request, which admission or the run's first step writes; runtime
 context the run rebuilds for every request names nothing and stays where it
 is, and so does a message no context row holds, which no checkpoint can stand
-for. Anchors are kept newest first: a run's input and steers within
-`min(20000, allowance/4)` tokens, the inputs a Discuss run answers while they
-leave a tenth of the room for the summary; older ones fold, and a folded input
-records the images it carried as omitted. When nothing but summaries is left,
+for. A run's input and steers are anchors, kept as the verbatim budget keeps
+them; the inputs a Discuss run answers are kept newest first while they leave
+a tenth of the room for the summary, and its call groups take what they leave
+of the budget. Older anchors fold, and a folded input records the images it
+carried as omitted. When nothing but summaries is left,
 they are rewritten only if they do not fit the room the next request has, and
 a remainder too small for any summary to replace ends the event once the
 request fits. The context view keeps an armed run's whole history, without
@@ -108,8 +118,8 @@ no tools: its request writes every message out as text under its role, tool
 calls, tool results and media included. The summarizer streams through the
 client the runs stream through. An event folds every row the
 caller does not keep into one rolling summary, reading again for what one
-bounded read left; the deferred call a continuation resumes from stays after
-the summary, and its input, steers or Discuss batch are anchors.
+bounded read left; it keeps what a run's fold keeps, with the input, a
+continuation's steers or a Discuss batch as anchors.
 
 A committed pass hands its caller the request it leaves: the engine orders
 the messages it read once, by `turn.PlaceSummary`, with every message it

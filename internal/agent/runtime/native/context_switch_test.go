@@ -101,8 +101,8 @@ func switchDetails(cfg RunConfig) []string {
 	return details
 }
 
-// The event sees the request the run would send, what each of its messages
-// renders and where its tail starts, and the request the run sends next is
+// The event sees the request the run would send and what each of its
+// messages renders, anchors included, and the request the run sends next is
 // the one it had with the covered messages replaced by the summary at rule
 // P: every other message is the same message, in its order.
 func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
@@ -141,14 +141,14 @@ func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
 		nil, rowSources("h2"),
 		rowSources("input"), rowSources("c1"), rowSources("r1"), rowSources("steer"), rowSources("c2"), rowSources("r2"),
 	}
-	if !reflect.DeepEqual(seen.Request.Messages, messages) || !reflect.DeepEqual(rendered, sources) || !reflect.DeepEqual(anchors, []int{5, 8}) || seen.Cut != 9 {
-		t.Fatalf("the event saw %d messages rendering %v, anchors %v and cut %d", len(seen.Request.Messages), rendered, anchors, seen.Cut)
+	if !reflect.DeepEqual(seen.Request.Messages, messages) || !reflect.DeepEqual(rendered, sources) || !reflect.DeepEqual(anchors, []int{5, 8}) {
+		t.Fatalf("the event saw %d messages rendering %v and anchors %v", len(seen.Request.Messages), rendered, anchors)
 	}
 	if seen.WindowTokens != cfg.ContextManifest.BudgetPlan.Window || seen.UsageTokens <= seen.AllowanceTokens || seen.Summarize == nil {
 		t.Fatalf("window=%d usage=%d allowance=%d summarize=%v", seen.WindowTokens, seen.UsageTokens, seen.AllowanceTokens, seen.Summarize != nil)
 	}
-	if !reflect.DeepEqual(spliced.Request.Messages, want) || spliced.Cut != 5 || spliced.Tokens > seen.AllowanceTokens || spliced.Provenance[3].Sources[0].ID != "A1" {
-		t.Fatalf("splice = %d messages, cut %d, %d tokens over a %d allowance", len(spliced.Request.Messages), spliced.Cut, spliced.Tokens, seen.AllowanceTokens)
+	if !reflect.DeepEqual(spliced.Request.Messages, want) || spliced.Tokens > seen.AllowanceTokens || spliced.Provenance[3].Sources[0].ID != "A1" {
+		t.Fatalf("splice = %d messages, %d tokens over a %d allowance", len(spliced.Request.Messages), spliced.Tokens, seen.AllowanceTokens)
 	}
 	if !reflect.DeepEqual(switchDetails(cfg), []string{"trigger=in_run passes=1"}) {
 		t.Fatalf("details=%q", switchDetails(cfg))
@@ -324,8 +324,8 @@ func TestArmedRunContinuesOnItsSplicedRequest(t *testing.T) {
 			} else if _, err := a.Generate(context.Background(), cfg); err != nil {
 				t.Fatal(err)
 			}
-			if len(requests) != 5 || len(events) != 1 || events[0].Cut != 5 || !reflect.DeepEqual(events[0].Provenance[5].Sources, rowSources("s2.0")) {
-				t.Fatalf("provider calls=%d events=%d, want one event before the fourth call with the third step as its tail", len(requests), len(events))
+			if len(requests) != 5 || len(events) != 1 || !reflect.DeepEqual(events[0].Provenance[5].Sources, rowSources("s2.0")) {
+				t.Fatalf("provider calls=%d events=%d, want one event before the fourth call that knows the third step", len(requests), len(events))
 			}
 			spliced, next := requests[3].Messages, requests[4].Messages
 			call, _ := spliced[min(2, len(spliced)-1)].Content[0].(sdk.ToolCallPart)
@@ -340,9 +340,8 @@ func TestArmedRunContinuesOnItsSplicedRequest(t *testing.T) {
 }
 
 // A run whose first request does not fit folds it before its first dispatch,
-// in both loops: the event sees the request the run would send, its input as
-// the tail and as the current request, and the run dispatches the spliced
-// request once.
+// in both loops: the event sees the request the run would send, its input an
+// anchor, and the run dispatches the spliced request once.
 func TestArmedRunFoldsBeforeItsFirstStep(t *testing.T) {
 	t.Parallel()
 
@@ -366,7 +365,6 @@ func TestArmedRunFoldsBeforeItsFirstStep(t *testing.T) {
 				Identity: SessionContext{BotID: "bot-1", SessionID: "sess-1"}, ContextMutations: contextfrag.NewMutationLedger(),
 				ContextManifest:                contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 1200}},
 				ContextCurrentUserMessageIndex: &current,
-				ContextTail:                    []turn.ContextMessageSource{request},
 				ContextProvenance: []MessageProvenance{
 					{Message: older, Sources: rowSources("older")},
 					{Message: answer, Sources: rowSources("answer")},
@@ -391,8 +389,8 @@ func TestArmedRunFoldsBeforeItsFirstStep(t *testing.T) {
 				t.Fatalf("events=%d provider calls=%d, want one event before the only call", len(events), len(requests))
 			}
 			sw := events[0]
-			if sw.Cut != 2 || !reflect.DeepEqual(sw.Current, []sdk.Message{input}) || sw.Request.Model != "mock-model" || len(sw.Request.Messages) != 3 {
-				t.Fatalf("event cut=%d current=%d model=%q messages=%d, want the run's whole first request with its input as the tail", sw.Cut, len(sw.Current), sw.Request.Model, len(sw.Request.Messages))
+			if sw.Request.Model != "mock-model" || len(sw.Request.Messages) != 3 || !sw.Provenance[2].Anchor {
+				t.Fatalf("event model=%q messages=%d, want the run's whole first request with its input an anchor", sw.Request.Model, len(sw.Request.Messages))
 			}
 			if got := requests[0].Messages; len(got) != 2 || !reflect.DeepEqual(got[0], summary) || !reflect.DeepEqual(got[1], input) {
 				t.Fatalf("first call sent %d messages, want the summary and the input", len(got))
@@ -401,11 +399,9 @@ func TestArmedRunFoldsBeforeItsFirstStep(t *testing.T) {
 	}
 }
 
-// A run that starts from no tail, such as a Discuss run answering a batch,
-// may fold its whole first request but its anchors: the event reads it to
-// its end with no current request, and a pass that covers an input with
-// images records them omitted, as no summary carries an image.
-func TestArmedRunWithoutATailFoldsItsWholeRequest(t *testing.T) {
+// A pass that covers an input with images, such as an older input of a
+// Discuss batch, records them omitted, as no summary carries an image.
+func TestArmedRunRecordsTheImagesOfAFoldedInput(t *testing.T) {
 	t.Parallel()
 
 	var requests []sdk.Request
@@ -436,8 +432,8 @@ func TestArmedRunWithoutATailFoldsItsWholeRequest(t *testing.T) {
 	if _, err := New(Deps{}).Generate(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if len(events) != 1 || events[0].Cut != 3 || events[0].Current != nil {
-		t.Fatalf("events=%d cut=%d current=%d, want one event over the whole request", len(events), events[0].Cut, len(events[0].Current))
+	if len(events) != 1 || len(events[0].Request.Messages) != 3 {
+		t.Fatalf("events=%d, want one event over the whole request", len(events))
 	}
 	if got := requests[0].Messages; len(got) != 2 || !reflect.DeepEqual(got[0], summary) || !reflect.DeepEqual(got[1], newest) {
 		t.Fatalf("first call sent %d messages, want the summary and the newest input", len(got))
@@ -453,37 +449,9 @@ func TestArmedRunWithoutATailFoldsItsWholeRequest(t *testing.T) {
 	}
 }
 
-// An event may fold the run's latest step too. Until the next step commits
-// the run then has no tail, so a further event reads its whole request
-// rather than fail looking for the step it folded.
-func TestArmedRunWhoseTailFoldedHasNoneUntilItsNextStep(t *testing.T) {
-	t.Parallel()
-
-	messages, provenance := switchRequest()
-	summary := sdk.UserMessage("<summary>\nnew\n")
-	var cuts []int
-	cfg, failure := armedRun(t, messages, provenance, []int{2, 3, 5, 8}, func(_ context.Context, sw ContextSwitch) (string, error) {
-		cuts = append(cuts, sw.Cut)
-		whole := sw
-		whole.Cut = len(sw.Request.Messages)
-		sw.Fold(foldCovering(whole, fmt.Sprintf("A%d", len(cuts)), summary, append(rowSources("h1", "h2", "c1", "r1", "c2", "r2"), summarySource("A0"), summarySource("A1"))...))
-		return "trigger=in_run passes=1", nil
-	})
-	params := prepareArmed(cfg, messages)
-	if *failure != nil || slices.ContainsFunc(params.Messages, func(m sdk.Message) bool { return reflect.DeepEqual(m, messages[10]) }) {
-		t.Fatalf("failure=%v, want the latest step folded", *failure)
-	}
-
-	grown := append(slices.Clone(params.Messages), sdk.UserMessage("runtime"+strings.Repeat(" x", 2000)))
-	prepareArmed(cfg, grown)
-	if len(cuts) != 2 || cuts[1] != len(grown) || *failure != nil && strings.Contains((*failure).Error(), "latest step") {
-		t.Fatalf("cuts=%v failure=%v, want a second event over the whole request", cuts, *failure)
-	}
-}
-
 // foldCovering is the fold an event commits when its summary stands for
-// covered: every message before the switch's cut whose sources it all covers
-// goes, and the summary takes its place, as the engine orders a pass.
+// covered: every message whose sources it all covers goes, and the summary
+// takes its place, as the engine orders a pass.
 func foldCovering(sw ContextSwitch, artifact string, summary sdk.Message, covered ...turn.ContextMessageSource) ContextFold {
 	set := make(map[turn.ContextMessageSource]bool, len(covered))
 	for _, source := range covered {
@@ -494,7 +462,7 @@ func foldCovering(sw ContextSwitch, artifact string, summary sdk.Message, covere
 		order[i] = i
 	}
 	order, _ = turn.PlaceSummary(order, -1, func(i int) bool {
-		if i < 0 || i >= sw.Cut || sw.Provenance[i] == nil || len(sw.Provenance[i].Sources) == 0 {
+		if i < 0 || sw.Provenance[i] == nil || len(sw.Provenance[i].Sources) == 0 {
 			return false
 		}
 		for _, source := range sw.Provenance[i].Sources {
@@ -504,11 +472,7 @@ func foldCovering(sw ContextSwitch, artifact string, summary sdk.Message, covere
 		}
 		return true
 	})
-	cut := slices.Index(order, sw.Cut)
-	if cut < 0 {
-		cut = len(order)
-	}
-	return ContextFold{SummaryID: artifact, Summary: summary, Order: order, Cut: cut}
+	return ContextFold{SummaryID: artifact, Summary: summary, Order: order}
 }
 
 func summarySource(id string) turn.ContextMessageSource {

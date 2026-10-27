@@ -268,10 +268,13 @@ event per pending request:
   within the call fails the event.
 - Afterwards the request is only rechecked, never compacted again to reach a lower
   mark. A Discuss batch gets one recovery; the recomposed attempt only rechecks.
-- The current request and applied steers stay verbatim as anchors, outside
-  the summary. The latest tool/reasoning closure stays raw; a decision continuation
-  protects its deferred call and approved/answered result while allowing earlier
-  completed steps to fold. Anchors do not create separate summary segments.
+- What stays verbatim is decided once per event from one budget, a quarter of
+  what the allowance leaves beside the system prompt, tools and runtime context, at
+  most 32000 tokens: the input or steers the next call answers stay
+  whatever they take, then older anchors newest first, then the newest complete call
+  groups. The latest step and a decision continuation's deferred call and answer are
+  call groups like any other: within the budget they stay raw, beyond it they fold
+  with what is before them. Anchors do not create separate summary segments.
 - In-run candidates are the request's messages, named by the history rows,
   inbound messages or summaries they render. A pass replaces whole messages; the
   messages it keeps remain byte-identical. One placement rule (`turn.PlaceSummary`)

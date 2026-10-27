@@ -22,8 +22,8 @@ import (
 // request before a step, the first one included, does not fit: one
 // compaction.Fold over that request, whose passes it splices into the run's
 // own request as they commit, before the run measures it once. The run's
-// input and steers stay where they are, and the tail with everything after
-// it stays raw after the summary. The summary comes from the run's own model,
+// input and steers are anchors; the event keeps them and the newest call
+// groups raw as compaction.Fold decides. The summary comes from the run's own model,
 // forked from its request. An edit or retry that folds before its first step
 // replaces the turn first moves the session to the checkpoint the
 // replacement keeps.
@@ -38,8 +38,6 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 			ModelRecordID:   turnModelID,
 			Request:         sw.Request,
 			Sources:         foldSources(committer, sw.Provenance, inputs),
-			Cut:             sw.Cut,
-			Current:         sw.Current,
 			Anchors:         anchorPolicy(req),
 			Window:          sw.WindowTokens,
 			MaxOutputTokens: sw.OutputTokens,
@@ -47,15 +45,14 @@ func (s *Service) switchContext(req ChatRequest, committer *agentStepCommitter, 
 			Pressure:        sw.UsageTokens,
 			ReplacedTurnID:  committer.replacedTurn(),
 			Summarizer:      sw.Summarize,
-			Apply: func(pass compaction.Pass) (sdk.Request, []compaction.Source, int) {
+			Apply: func(pass compaction.Pass) (sdk.Request, []compaction.Source) {
 				splice := sw.Fold(native.ContextFold{
 					SummaryID: pass.SummaryID,
 					Summary:   compaction.SummaryMessage(pass.Summary),
 					Order:     pass.Order,
-					Cut:       pass.Cut,
 				})
 				tokens = splice.Tokens
-				return splice.Request, foldSources(committer, splice.Provenance, inputs), splice.Cut
+				return splice.Request, foldSources(committer, splice.Provenance, inputs)
 			},
 		})
 		reason := compaction.ReasonOf(err)

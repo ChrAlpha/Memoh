@@ -22,15 +22,16 @@ import (
 )
 
 // A fold from rows reads the session's history as one text message per row
-// under its role, writes the summary of everything before the current input,
-// and commits it as the session's checkpoint at the last row it folds; the
-// current input stays after it.
-func TestCompactFoldsTheRowsBeforeTheCurrentInput(t *testing.T) {
+// under its role. The current input after the newest step stays raw after
+// the summary, and so do the newest complete call groups the verbatim budget
+// holds; the summary stands for the rows before them, and the checkpoint
+// moves to the last row it folds.
+func TestCompactKeepsTheCurrentInputAndTheNewestGroupsRaw(t *testing.T) {
 	t.Parallel()
 
-	rows := machineryCorpus(t)
+	rows := machineryCorpus(t)[:9]
 	q := &fakeQueries{history: rows}
-	stub := &stubModel{summary: "Deployed after a screenshot, built with make."}
+	stub := &stubModel{summary: "Deployed after a screenshot."}
 	svc := newMachineryService(q)
 	cfg := currentConfig(stub, 4000, rows[8])
 
@@ -38,20 +39,20 @@ func TestCompactFoldsTheRowsBeforeTheCurrentInput(t *testing.T) {
 	if err != nil || len(passes) != 1 || passes[0].More {
 		t.Fatalf("passes=%+v err=%v, want one pass", passes, err)
 	}
-	if !slices.Equal(q.folded, rowIDs(rows[:8])) {
-		t.Fatalf("folded %d rows, want the 8 before the current input", len(q.folded))
+	if !slices.Equal(q.folded, rowIDs(rows[:4])) {
+		t.Fatalf("folded %d rows, want the 4 before the newest groups the budget keeps", len(q.folded))
 	}
 	active := q.checkpoints[q.active]
-	if position := (messagepkg.HistoryPosition{Turn: active.TurnPosition, Seq: active.TurnMessageSeq}); position != rowPosition(rows[7]) || len(q.held()) != 1 || q.held()[0].SummaryID == "" {
+	if position := (messagepkg.HistoryPosition{Turn: active.TurnPosition, Seq: active.TurnMessageSeq}); position != rowPosition(rows[3]) || len(q.held()) != 1 || q.held()[0].SummaryID == "" {
 		t.Fatalf("checkpoint at %+v holds %+v, want the summary at the last folded row", position, q.held())
 	}
-	for _, want := range []string{"deploy please", "[tool_call: exec_command]", "build ok done", "[media]", instructionMarker} {
+	for _, want := range []string{"deploy please", "[media]", instructionMarker, "<current_request>"} {
 		if !strings.Contains(stub.prompt, want) {
 			t.Fatalf("the summarizer request lacks %q:\n%s", want, stub.prompt)
 		}
 	}
-	if strings.Contains(stub.prompt, "recent question") {
-		t.Fatal("the summarizer read the current input as history")
+	if strings.Contains(stub.prompt, "build ok done") {
+		t.Fatal("the summarizer read a call group the fold keeps raw")
 	}
 }
 
@@ -132,8 +133,8 @@ func TestCompactReadsBeforeItsCutoffAfterRewindingTheReplacedTurn(t *testing.T) 
 }
 
 // A history larger than one bounded read is folded in passes: each reads the
-// rows the one before could not, with the summary it wrote, until none is
-// left.
+// rows the one before could not, with the summary it wrote, until only the
+// newest rows the verbatim budget keeps are left.
 func TestCompactPassesOverWhatOneReadLeaves(t *testing.T) {
 	t.Parallel()
 
@@ -157,8 +158,11 @@ func TestCompactPassesOverWhatOneReadLeaves(t *testing.T) {
 			t.Fatalf("pass %d left the summary of the pass before: %v", i, passes[i].Order)
 		}
 	}
-	if len(q.held()) != 1 || !slices.Contains(q.folded, rows[len(rows)-1].ID) {
-		t.Fatalf("checkpoint holds %+v, want one summary over every row", q.held())
+	active := q.checkpoints[q.active]
+	position := messagepkg.HistoryPosition{Turn: active.TurnPosition, Seq: active.TurnMessageSeq}
+	last := slices.IndexFunc(rows, func(row candidateRow) bool { return rowPosition(row) == position })
+	if kept := len(rows) - 1 - last; len(q.held()) != 1 || last < 0 || kept < 1 || kept > 5 {
+		t.Fatalf("checkpoint at row %d holds %+v, want one summary over every row but the newest few", last, q.held())
 	}
 }
 
@@ -168,7 +172,7 @@ func TestCompactPassesOverWhatOneReadLeaves(t *testing.T) {
 func TestCompactFoldsAnAskUserCallLaterHistoryClosed(t *testing.T) {
 	t.Parallel()
 
-	detail := strings.Repeat(" with the detail a real exchange carries", 12)
+	detail := strings.Repeat(" with the detail a real exchange carries", 120)
 	rows := []candidateRow{
 		mkRow(t, "user", `"plan the migration`+detail+`"`),
 		mkRow(t, "assistant", `[{"type":"tool-call","toolCallId":"ask-1","toolName":"ask_user","input":{"questions":[{"question":"which database?"}]}}]`),

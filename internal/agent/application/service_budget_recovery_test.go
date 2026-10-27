@@ -348,7 +348,7 @@ func TestLoadChatHistoryFoldsATruncatedLoad(t *testing.T) {
 				}
 				return
 			}
-			if len(runner.configs) != 1 || !slices.Contains(runner.configs[0].ProtectedSources, turn.ContextMessageSource{Kind: "history", ID: "request-row", Current: true}) {
+			if len(runner.configs) != 1 || !slices.Contains(runner.configs[0].Anchors, turn.ContextMessageSource{Kind: "history", ID: "request-row", Current: true}) {
 				t.Fatalf("compactions=%+v, want one keeping the request's own input", runner.configs)
 			}
 			if tc.name == "folded" && (len(got.messages) != 1 || got.truncated) {

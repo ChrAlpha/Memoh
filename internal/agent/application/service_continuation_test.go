@@ -191,8 +191,8 @@ func TestPendingRuntimeDecisionsFailsClosedOnRuntimeLookupFailure(t *testing.T) 
 }
 
 // A continuation whose load the byte budget truncated folds the rows it left
-// out before it runs, keeping the turn it resumes verbatim.
-func TestContinuationFoldsATruncatedLoadKeepingTheResumedTurn(t *testing.T) {
+// out before it runs, keeping the input it resumes as an anchor.
+func TestContinuationFoldsATruncatedLoadKeepingTheResumedInput(t *testing.T) {
 	s, history, runner, _ := chatRecoveryFixture(t)
 	history.truncated = true
 	history.messages = []messagepkg.Message{
@@ -213,8 +213,8 @@ func TestContinuationFoldsATruncatedLoadKeepingTheResumedTurn(t *testing.T) {
 	if len(runner.configs) != 1 || history.loads != 2 {
 		t.Fatalf("truncated continuation compactions=%d loads=%d, want one compaction and a second load", len(runner.configs), history.loads)
 	}
-	if want := (turn.ContextMessageSource{Kind: "history", ID: "request-row"}); !slices.Contains(runner.configs[0].ProtectedSources, want) {
-		t.Fatalf("resumed turn must stay verbatim and count as kept history: %+v", runner.configs[0].ProtectedSources)
+	if want := (turn.ContextMessageSource{Kind: "history", ID: "request-row"}); !slices.Contains(runner.configs[0].Anchors, want) {
+		t.Fatalf("the resumed input must be an anchor: %+v", runner.configs[0].Anchors)
 	}
 	if countRecoveryText(cfg.Messages, "compacted history") != 1 {
 		t.Fatalf("continuation did not run on the compacted history: %d messages", len(cfg.Messages))

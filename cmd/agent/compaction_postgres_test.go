@@ -24,12 +24,14 @@ import (
 )
 
 // fold runs one compaction event over the fixture's session, by default for
-// a request with a 100000-token history budget.
+// a request with a 300-token history budget, whose verbatim budget holds none
+// of the fixture's rows: an event folds everything it does not keep as an
+// anchor.
 func (f *backlogFixture) fold(ctx context.Context, cfg compaction.TriggerConfig) ([]compaction.Pass, error) {
 	cfg.BotID, cfg.SessionID = f.botID, f.sessionID
 	cfg.ModelID, cfg.ClientType, cfg.APIKey, cfg.BaseURL = "compact-model", "openai-completions", "test-key", f.providerURL
 	cfg.SummaryWindowTokens = cmp.Or(cfg.SummaryWindowTokens, 128000)
-	cfg.HistoryBudgetTokens = cmp.Or(cfg.HistoryBudgetTokens, 100000)
+	cfg.HistoryBudgetTokens = cmp.Or(cfg.HistoryBudgetTokens, 300)
 	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
 	return compaction.NewService(slog.Default(), queries).Compact(ctx, cfg)
 }
@@ -69,7 +71,8 @@ func TestPostgresCompactionFoldsTheActiveCheckpointIntoOneSummary(t *testing.T) 
 		f.appendMessage(fmt.Sprintf("earlier-%d", i), fmt.Sprintf("earlier-%d ", i)+strings.Repeat("y", 400))
 	}
 	kept := turn.ContextMessageSource{Kind: "history", ID: f.rowID("earlier-1")}
-	first, err := f.fold(f.ctx, compaction.TriggerConfig{Anchors: []turn.ContextMessageSource{kept}})
+	// The budget holds the anchor, not the newest row beside it.
+	first, err := f.fold(f.ctx, compaction.TriggerConfig{Anchors: []turn.ContextMessageSource{kept}, HistoryBudgetTokens: 600})
 	if err != nil || len(first) != 1 {
 		t.Fatalf("fold the earlier rows around the one kept raw: passes=%+v err=%v", first, err)
 	}

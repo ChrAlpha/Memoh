@@ -10,14 +10,16 @@ import (
 )
 
 const (
-	// summaryShareOfAllowance bounds a summary to this fraction of what the
-	// next request may take, so a fold leaves room for the turns after it
-	// instead of refilling the request it just emptied.
-	summaryShareOfAllowance = 4
-	// anchorCapTokens is the most a fold keeps of a run's input and steers
-	// verbatim, newest first; older anchors fold like any other message. A
-	// small window keeps at most a quarter of its allowance.
-	anchorCapTokens = 20000
+	// roomShare is the share of a request's room (fixedRoom) a fold may keep
+	// verbatim, and the share its summary may take: a fold leaves at least
+	// half of the room to the steps after it instead of refilling the request
+	// it just emptied.
+	roomShare = 4
+	// verbatimCapTokens is the most a fold keeps verbatim of what it may
+	// fold: anchors newest first, then the newest complete call groups. It
+	// holds three results at the tool output bound, or two beside a long
+	// input; a small window keeps at most a quarter of its room (fixedRoom).
+	verbatimCapTokens = 32000
 	// minForkOutputTokens is the least output a fork request asks for. A pass
 	// reads less of the request rather than ask for less.
 	minForkOutputTokens = 1024
@@ -29,40 +31,154 @@ const (
 	forkInstructionReserve = 1024
 )
 
-// AnchorPolicy is how much of a request's anchors a fold keeps verbatim,
-// newest first; the rest fold like any other message.
+// AnchorPolicy is how a fold keeps a request's anchors.
 type AnchorPolicy int
 
 const (
-	// AnchorsCapped keeps a run's input and steers within anchorCapTokens, so
-	// the summary keeps room for the steps after it.
+	// AnchorsCapped keeps the anchors after the newest call group, the input
+	// and steers the next call answers, whatever they take, and the older
+	// ones newest first within the verbatim budget.
 	AnchorsCapped AnchorPolicy = iota
-	// AnchorsFirst keeps the inputs a run answers, a Discuss batch, while they
-	// leave a tenth of the room beside the tail for the summary.
+	// AnchorsFirst keeps the inputs a run answers, a Discuss batch, newest
+	// first while they leave a tenth of the room for the summary; call groups
+	// take what they leave of the verbatim budget.
 	AnchorsFirst
 )
 
-// anchorCap is the most a fold keeps of ev's anchors.
-func anchorCap(ev Event) int {
-	if ev.Anchors != AnchorsFirst {
-		return min(anchorCapTokens, ev.Allowance/4)
-	}
-	var fixed []sdk.Message
+// verbatimBudget is the most ev keeps verbatim of what it may fold: its
+// share of the room, within verbatimCapTokens.
+func verbatimBudget(ev Event) int {
+	return min(verbatimCapTokens, fixedRoom(ev)/roomShare)
+}
+
+// summaryBudget is the most a summary of ev may take: its share of the room.
+func summaryBudget(ev Event) int {
+	return fixedRoom(ev) / roomShare
+}
+
+// fixedRoom is what ev's allowance leaves beside what every request carries:
+// the system prompt, the tools and the runtime context.
+func fixedRoom(ev Event) int {
+	var runtime []sdk.Message
 	for i, message := range ev.Request.Messages {
-		if i >= ev.Cut || len(ev.Sources[i].Sources) == 0 {
-			fixed = append(fixed, message)
+		if len(ev.Sources[i].Sources) == 0 {
+			runtime = append(runtime, message)
 		}
 	}
-	room := ev.Allowance - forkTokens(sdk.Request{System: ev.Request.System, Messages: fixed, Tools: ev.Request.Tools})
-	return room - room/10
+	return ev.Allowance - forkTokens(sdk.Request{System: ev.Request.System, Messages: runtime, Tools: ev.Request.Tools})
+}
+
+// retention is what an event keeps verbatim of what it may fold, decided
+// before its first pass: the anchors it keeps where they are, and cut, the
+// first of the newest messages it keeps after the summary.
+type retention struct {
+	cut     int
+	anchors map[turn.ContextMessageSource]bool
+	// keptGroups and latestGroupTokens describe the call groups it keeps,
+	// for the event's log.
+	keptGroups        int
+	latestGroupTokens int
+}
+
+func (r retention) keeps(source Source) bool {
+	return source.Anchor && slices.ContainsFunc(source.Sources, func(s turn.ContextMessageSource) bool {
+		return r.anchors[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}]
+	})
+}
+
+// retain decides what ev keeps verbatim. Runtime context stays and takes
+// nothing; everything else ev keeps takes from one budget. The messages no
+// context row holds stay whatever they take, and so, under AnchorsCapped, do
+// the anchors after the newest call group; then anchors newest first, then
+// the newest complete call groups, a call with all its results, up to the
+// first that does not fit. Everything else, summaries included, folds.
+func retain(ev Event, unfoldable map[int]bool) retention {
+	messages, sources := ev.Request.Messages, ev.Sources
+	cost := func(from, to int) int {
+		tokens := 0
+		for i := from; i < to; i++ {
+			if len(sources[i].Sources) > 0 && !unfoldable[i] {
+				tokens += forkTokens(sdk.Request{Messages: messages[i : i+1]})
+			}
+		}
+		return tokens
+	}
+	fixed := func(i int) bool { return len(sources[i].Sources) == 0 || unfoldable[i] }
+	r := retention{cut: len(messages), anchors: map[turn.ContextMessageSource]bool{}}
+	budget := verbatimBudget(ev)
+	for i := range messages {
+		if len(sources[i].Sources) > 0 && unfoldable[i] {
+			budget -= forkTokens(sdk.Request{Messages: messages[i : i+1]})
+		}
+	}
+	if ev.Anchors == AnchorsCapped {
+		for r.cut > 0 && (fixed(r.cut-1) || sources[r.cut-1].Anchor) {
+			r.cut--
+		}
+		budget -= cost(r.cut, len(messages))
+	}
+	anchorBudget := budget
+	if ev.Anchors == AnchorsFirst {
+		room := fixedRoom(ev)
+		anchorBudget = room - room/10
+	}
+	used := 0
+	for i := r.cut - 1; i >= 0; i-- {
+		if !sources[i].Anchor || fixed(i) {
+			continue
+		}
+		tokens := cost(i, i+1)
+		if used+tokens > anchorBudget {
+			break
+		}
+		used += tokens
+		for _, s := range sources[i].Sources {
+			r.anchors[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}] = true
+		}
+	}
+	budget -= used
+	latest := true
+	for at := r.cut; at > 0; {
+		start := at - 1
+		for start > 0 && !foldBoundary(messages, start) {
+			start--
+		}
+		group, stop := false, false
+		for i := start; i < at; i++ {
+			switch {
+			case fixed(i) || r.keeps(sources[i]):
+			case isSummarySource(sources[i]) || sources[i].Anchor:
+				stop = true
+			default:
+				group = true
+			}
+		}
+		if stop {
+			break
+		}
+		if group {
+			tokens := cost(start, at)
+			if latest {
+				r.latestGroupTokens, latest = tokens, false
+			}
+			if tokens > budget {
+				break
+			}
+			budget -= tokens
+			r.keptGroups++
+			r.cut = start
+		}
+		at = start
+	}
+	return r
 }
 
 // foldPlan is one pass worked out before the summarizer is asked: what it
 // reads and folds, and how long its summary may be.
 type foldPlan struct {
-	// end is how much of the request the pass reads; cut is where the
-	// caller's tail starts. A pass that reads less than the cut leaves the
-	// rest to a later pass.
+	// end is how much of the request the pass reads; cut is the first of the
+	// newest messages the event keeps. A pass that reads less than the cut
+	// leaves the rest to a later pass.
 	end int
 	cut int
 	// folded are the sources the summary stands for, read every source of
@@ -93,9 +209,10 @@ type foldPlan struct {
 func (p foldPlan) folds() bool { return len(p.folded) > 0 || len(p.absorbed) > 0 }
 
 // order is ev's request after the pass, as Pass.Order names it, and where the
-// tail starts in it. The pass replaces every message it reads that renders a
-// source and that it does not keep: what it folds and the summaries it
-// absorbs. The tail and runtime context stay.
+// newest messages the event keeps start in it. The pass replaces every
+// message it reads that renders a source and that it does not keep: what it
+// folds and the summaries it absorbs. Everything after it and runtime
+// context stay.
 func (p foldPlan) order(ev Event) ([]int, int) {
 	order := make([]int, len(ev.Request.Messages))
 	for i := range order {
@@ -104,15 +221,15 @@ func (p foldPlan) order(ev Event) ([]int, int) {
 	order, _ = turn.PlaceSummary(order, -1, func(i int) bool {
 		return i >= 0 && i < p.end && len(ev.Sources[i].Sources) > 0 && !p.keep[i]
 	})
-	cut := slices.Index(order, ev.Cut)
+	cut := slices.Index(order, ev.cut)
 	if cut < 0 {
 		cut = len(order)
 	}
 	return order, cut
 }
 
-// final reports whether the pass reads up to the tail, so its summary is the
-// one the caller's next request carries.
+// final reports whether the pass reads up to the newest messages the event
+// keeps, so its summary is the one the caller's next request carries.
 func (p foldPlan) final() bool { return p.end == p.cut }
 
 // bounded reports whether the pass's summary must fit the room the next
@@ -122,7 +239,7 @@ func (p foldPlan) bounded() bool { return p.final() || p.rewrite }
 
 // planFold decides one pass over ev. Every message before the cut folds
 // except runtime context, which has no sources, the messages no context row
-// holds, and the anchors ev's policy keeps; summaries are absorbed. When
+// holds, and the anchors ev keeps; summaries are absorbed. When
 // nothing but summaries is left, a pass rewrites them only if they do not fit
 // the room the next request has. The pass reads the longest prefix of the
 // request, ending at a tool-group boundary, that leaves the fork room to
@@ -130,26 +247,26 @@ func (p foldPlan) bounded() bool { return p.final() || p.rewrite }
 // less than minForkOutputTokens.
 func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	messages, sources := ev.Request.Messages, ev.Sources
-	kept := keptAnchors(messages, sources, ev.Cut, anchorCap(ev), unfoldable)
-	for i := range unfoldable {
-		kept[i] = true
+	kept := map[int]bool{}
+	for i := range ev.cut {
+		kept[i] = unfoldable[i] || ev.keeps(sources[i])
 	}
 	capability := ev.MaxOutputTokens
 	// A checkpoint absorbs every summary of its parent, so a pass reads past
 	// the last one the request renders.
 	summariesEnd := 0
-	for i, source := range sources[:ev.Cut] {
+	for i, source := range sources[:ev.cut] {
 		if isSummarySource(source) {
 			summariesEnd = i + 1
 		}
 	}
-	rewrite := len(spanPlan(ev, kept, ev.Cut).folded) == 0
+	rewrite := len(spanPlan(ev, kept, ev.cut).folded) == 0
 	read, err := forkRead(ev)
 	if err != nil {
 		return foldPlan{}, err
 	}
 	var smaller error
-	for end := ev.Cut; end > 0; end-- {
+	for end := ev.cut; end > 0; end-- {
 		if end < summariesEnd || !foldBoundary(messages, end) {
 			continue
 		}
@@ -172,7 +289,7 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 			}
 			continue
 		}
-		need := max(minForkOutputTokens, min(ev.Allowance/summaryShareOfAllowance, plan.replaced)/2)
+		need := max(minForkOutputTokens, min(summaryBudget(ev), plan.replaced)/2)
 		if plan.maxTokens >= min(capability, need) {
 			return plan, nil
 		}
@@ -185,30 +302,10 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 		}
 		return foldPlan{}, smaller
 	}
-	if !spanPlan(ev, kept, ev.Cut).folds() {
+	if !spanPlan(ev, kept, ev.cut).folds() {
 		return foldPlan{}, nil
 	}
 	return foldPlan{}, failed(ReasonInputOverflow, fmt.Errorf("%w: no prefix of the request leaves the summarizer room to answer in a %d-token window", errCompactionInputOverflow, ev.Window))
-}
-
-// keptAnchors marks the anchors before the cut a fold keeps verbatim: the
-// newest ones, while they fit the cap. An anchor the fold cannot stand for
-// stays anyway and takes none of it.
-func keptAnchors(messages []sdk.Message, sources []Source, cut, capTokens int, unfoldable map[int]bool) map[int]bool {
-	kept := map[int]bool{}
-	tokens := 0
-	for i := cut - 1; i >= 0; i-- {
-		if !sources[i].Anchor || unfoldable[i] {
-			continue
-		}
-		cost := forkTokens(sdk.Request{Messages: messages[i : i+1]})
-		if tokens+cost > capTokens {
-			break
-		}
-		tokens += cost
-		kept[i] = true
-	}
-	return kept
 }
 
 // foldBoundary reports whether a pass may end its read before message end: a
@@ -231,7 +328,7 @@ func foldBoundary(messages []sdk.Message, end int) bool {
 
 // spanPlan classifies the messages a pass reading up to end folds.
 func spanPlan(ev Event, kept map[int]bool, end int) foldPlan {
-	plan := foldPlan{end: end, cut: ev.Cut, keep: map[int]bool{}}
+	plan := foldPlan{end: end, cut: ev.cut, keep: map[int]bool{}}
 	read, folded := map[turn.ContextMessageSource]bool{}, map[turn.ContextMessageSource]bool{}
 	for i := range end {
 		source := ev.Sources[i]
@@ -281,7 +378,7 @@ func (p *foldPlan) size(ev Event, capability int) error {
 	prefix := forkTokens(sdk.Request{System: ev.Request.System, Messages: p.fork, Tools: ev.Request.Tools})
 	p.instruction = forkInstruction(ev, p)
 	p.maxTokens = min(capability, ev.Window-prefix-instructionTokens(p.instruction)-instructionNumberSlack)
-	p.stated = min(p.maxTokens*3/4, ev.Allowance/summaryShareOfAllowance, summaryOutputLimit(p.replaced-1, capability))
+	p.stated = min(p.maxTokens*3/4, summaryBudget(ev), summaryOutputLimit(p.replaced-1, capability))
 	if p.bounded() {
 		p.stated = min(p.stated, summaryOutputLimit(p.room, capability))
 	}

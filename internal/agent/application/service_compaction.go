@@ -18,10 +18,9 @@ import (
 	"github.com/felinics/memoh/internal/settings"
 )
 
-// compactForBudget folds the session history before the protected tail into
-// one summary, in as many passes as the summarizer needs to read it all, so
-// that what the history renders fits historyBudget: the summary and the rows
-// it keeps raw. It reports why when the history could not be folded;
+// compactForBudget folds the session history into one summary, in as many
+// passes as the summarizer needs to read it all, so that what the history
+// renders fits historyBudget: the summary and the rows it keeps raw. It reports why when the history could not be folded;
 // a failed pass leaves the history it did not commit as it was.
 func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) error {
 	if s.compactionService == nil || s.settingsService == nil {
@@ -35,17 +34,15 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 	if err != nil {
 		return err
 	}
-	cfg.ProtectedSources = compactionProtectedSources(req)
-	switch anchors := req.compactionAnchors(); {
-	case len(anchors) > 0:
-		// A continuation keeps its input and steers within the anchor cap,
-		// and the deferred call and answer it resumes from after the summary.
-		cfg.Anchors, cfg.ProtectedSources = anchors, req.continuationTail
-	case len(req.discussCurrentSources) > 0:
+	// The input and a continuation's steers are anchors, as in the run's own
+	// folds; the deferred call and answer a continuation resumes from are its
+	// newest call group.
+	cfg.Anchors = append(compactionInputs(req), req.continuationAnchors...)
+	if len(req.discussCurrentSources) > 0 && req.continuationToolCallID == "" {
 		// A Discuss run keeps the inputs it answers where they are while they
 		// leave the summary room, without pinning completed tool steps of a
 		// failed run that follow an older, still-unanswered input.
-		cfg.Anchors, cfg.ProtectedSources, cfg.AnchorPolicy = cfg.ProtectedSources, nil, compaction.AnchorsFirst
+		cfg.AnchorPolicy = compaction.AnchorsFirst
 	}
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
 	// Every row of the thread before the request's own turn that the
@@ -128,10 +125,10 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 	return cfg, nil
 }
 
-// compactionProtectedSources is the current input a compaction must keep raw.
-// Discuss callers pass the protected suffix their admission chose, so older
+// compactionInputs is the current input, which a compaction keeps as an
+// anchor. Discuss callers pass the suffix their admission chose, so older
 // unconsumed input stays compactable.
-func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
+func compactionInputs(req ChatRequest) []turn.ContextMessageSource {
 	sources := append([]turn.ContextMessageSource(nil), req.discussCurrentSources...)
 	if req.ExternalMessageID != "" {
 		sources = append(sources, turn.ContextMessageSource{Kind: "external", ID: req.ExternalMessageID, Current: !req.inputInHistory})
@@ -142,15 +139,4 @@ func compactionProtectedSources(req ChatRequest) []turn.ContextMessageSource {
 		}
 	}
 	return sources
-}
-
-// compactionAnchors are the sources a compaction keeps raw in place. A
-// continuation that resumes after a deferred call keeps its input and steers
-// where they are and folds the work around them; the caller prices them, the
-// way an in-run fold does, outside the history budget it gives.
-func (req ChatRequest) compactionAnchors() []turn.ContextMessageSource {
-	if len(req.continuationTail) == 0 {
-		return nil
-	}
-	return append(compactionProtectedSources(req), req.continuationAnchors...)
 }

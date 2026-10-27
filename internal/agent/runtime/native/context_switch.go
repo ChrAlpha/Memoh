@@ -24,20 +24,14 @@ type MessageProvenance struct {
 }
 
 // ContextSwitch is the compaction event an armed run asks for when the
-// request before a step does not fit its allowance. Request is that request,
-// Provenance what each of its messages renders (nil for runtime context the
-// run rebuilds), and Cut the first message of its tail: the latest committed
-// step, or before the run's first step the input it starts from, and
-// everything after it, which stays verbatim after the summary. Current is
-// that tail before the run's first step, which the summarizer reads to judge
-// what the work needs. Summarize answers a fork request through the run's own
-// model; Fold applies a pass the event committed to the request and reports
-// the request as it then is.
+// request before a step does not fit its allowance. Request is that request
+// and Provenance what each of its messages renders (nil for runtime context
+// the run rebuilds); the event decides what of it stays verbatim. Summarize
+// answers a fork request through the run's own model; Fold applies a pass
+// the event committed to the request and reports the request as it then is.
 type ContextSwitch struct {
 	Request         sdk.Request
 	Provenance      []*MessageProvenance
-	Cut             int
-	Current         []sdk.Message
 	UsageTokens     int
 	AllowanceTokens int
 	WindowTokens    int
@@ -50,41 +44,35 @@ type ContextSwitch struct {
 type ContextSplice struct {
 	Request    sdk.Request
 	Provenance []*MessageProvenance
-	Cut        int
 	Tokens     int
 }
 
 // ContextFold is one pass an event committed: its summary, and the request
 // it leaves by the messages of the request it read, the index of each that
-// stays or -1 for the summary; Cut is where the tail starts in it.
+// stays or -1 for the summary.
 type ContextFold struct {
 	SummaryID string
 	Summary   sdk.Message
 	Order     []int
-	Cut       int
 }
 
 // contextSwitchState follows an armed run's request across its dispatches:
-// the provenance of what it renders, the sources of its tail, and, from a
-// splice until the re-dispatch that follows it, where each message of the
-// spliced request was before (-1 for a summary). The tail is what the run
-// starts from until its first step commits, then the latest committed step.
+// the provenance of what it renders and, from a splice until the re-dispatch
+// that follows it, where each message of the spliced request was before (-1
+// for a summary).
 type contextSwitchState struct {
-	known   []MessageProvenance
-	tail    []turn.ContextMessageSource
-	initial bool
-	moved   []int
+	known []MessageProvenance
+	moved []int
 }
 
 func newContextSwitchState(cfg RunConfig) *contextSwitchState {
 	if cfg.SwitchContext == nil {
 		return nil
 	}
-	s := &contextSwitchState{initial: true}
+	s := &contextSwitchState{}
 	for _, provenance := range cfg.ContextProvenance {
 		s.know(provenance)
 	}
-	s.tail = slices.Clone(cfg.ContextTail)
 	return s
 }
 
@@ -101,16 +89,9 @@ func (s *contextSwitchState) committed(messages []sdk.Message, provenance []Mess
 	if s == nil || len(provenance) == 0 || len(provenance) != len(messages) {
 		return
 	}
-	var tail []turn.ContextMessageSource
 	for i, p := range provenance {
 		p.Message = messages[i]
 		s.know(p)
-		if !p.Anchor {
-			tail = append(tail, p.Sources...)
-		}
-	}
-	if len(tail) > 0 {
-		s.tail, s.initial = tail, false
 	}
 }
 
@@ -133,13 +114,10 @@ func (s *contextSwitchState) align(messages []sdk.Message) []*MessageProvenance 
 }
 
 // fold runs one compaction event when params does not fit allowance, and
-// splices each pass it commits into params. The event keeps the run's tail
-// verbatim after the summary: the latest committed step, or before the first
-// one what the run starts from; a run that starts from no tail may fold its
-// whole request but its anchors and runtime context. A step the request
-// cannot keep beside a summary folds too. Every message no pass covers stays
-// as it was. It reports whether params changed; an event that leaves the
-// request over its allowance fails as the event says.
+// splices each pass it commits into params; the event decides what stays
+// verbatim. Every message no pass covers stays as it was. It reports whether
+// params changed; an event that leaves the request over its allowance fails
+// as the event says.
 func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, allowance int) (bool, error) {
 	if s == nil || allowance <= 0 {
 		return false, nil
@@ -149,21 +127,8 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		return false, nil
 	}
 	provenance := s.align(params.Messages)
-	tailStart := len(params.Messages)
-	if len(s.tail) > 0 {
-		tailStart = slices.IndexFunc(provenance, func(p *MessageProvenance) bool {
-			return p != nil && sharesSource(p.Sources, s.tail)
-		})
-		if tailStart < 0 {
-			return false, fmt.Errorf("%w: context switch: the run's latest step is not in its request", contextfrag.ErrBudgetUnsatisfied)
-		}
-	}
-	var current []sdk.Message
-	if s.initial && tailStart < len(params.Messages) {
-		current = slices.Clone(params.Messages[tailStart:])
-	}
 	window, reserve := providerWindow(cfg)
-	splice := requestSplice{messages: params.Messages, provenance: provenance, from: make([]int, len(params.Messages)), cut: tailStart}
+	splice := requestSplice{messages: params.Messages, provenance: provenance, from: make([]int, len(params.Messages))}
 	for i := range splice.from {
 		splice.from[i] = i
 	}
@@ -171,8 +136,6 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	sw := ContextSwitch{
 		Request:         *params,
 		Provenance:      provenance,
-		Cut:             tailStart,
-		Current:         current,
 		UsageTokens:     usage,
 		AllowanceTokens: allowance,
 		WindowTokens:    window,
@@ -183,7 +146,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 			tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
 			request := *params
 			request.Messages = splice.messages
-			return ContextSplice{Request: request, Provenance: splice.provenance, Cut: splice.cut, Tokens: tokens}
+			return ContextSplice{Request: request, Provenance: splice.provenance, Tokens: tokens}
 		},
 	}
 	detail, err := cfg.SwitchContext(ctx, sw)
@@ -210,17 +173,10 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	recordFoldedInputImages(cfg.ContextMutations, params.Messages, provenance, splice.from)
 	params.Messages = splice.messages
 	s.known = nil
-	kept := false
 	for _, p := range splice.provenance {
 		if p != nil {
 			s.know(*p)
-			kept = kept || sharesSource(p.Sources, s.tail)
 		}
-	}
-	if !kept {
-		// The event folded the tail too: until the next step commits, the run
-		// has none.
-		s.tail = nil
 	}
 	s.moved = splice.from
 	return true, nil
@@ -233,15 +189,13 @@ type requestSplice struct {
 	messages   []sdk.Message
 	provenance []*MessageProvenance
 	from       []int
-	// cut is the first message of the tail.
-	cut int
 }
 
 // apply rewrites the request as the pass left it: the messages fold.Order
 // keeps, in its order, with the summary in its place.
 func (sp *requestSplice) apply(fold ContextFold) {
 	summary := &MessageProvenance{Message: fold.Summary, Sources: []turn.ContextMessageSource{{Kind: "summary", ID: fold.SummaryID}}}
-	next := requestSplice{cut: fold.Cut}
+	var next requestSplice
 	for _, i := range fold.Order {
 		if i < 0 {
 			next.messages, next.provenance, next.from = append(next.messages, fold.Summary), append(next.provenance, summary), append(next.from, -1)
@@ -278,14 +232,6 @@ func recordFoldedInputImages(ledger *contextfrag.MutationLedger, messages []sdk.
 	if len(omitted) > 0 && ledger != nil {
 		ledger.Record(contextfrag.MutationCurrentInputImagesOmitted, "sources="+strings.Join(omitted, ","))
 	}
-}
-
-func sharesSource(sources, set []turn.ContextMessageSource) bool {
-	return slices.ContainsFunc(sources, func(source turn.ContextMessageSource) bool {
-		return slices.ContainsFunc(set, func(other turn.ContextMessageSource) bool {
-			return source.Kind == other.Kind && source.ID == other.ID
-		})
-	})
 }
 
 // remap moves dynamic refs of the request before the last splice to the

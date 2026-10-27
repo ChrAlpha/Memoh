@@ -16,10 +16,10 @@ type Pass struct {
 	Summary   string
 	// Order is the request after the pass, by the messages of the request it
 	// read: the index of each that stays, or -1 for the summary, which takes
-	// the place turn.PlaceSummary gives it. Cut is where the caller's tail
-	// starts in it.
+	// the place turn.PlaceSummary gives it; cut is where the newest messages
+	// the event keeps start in it.
 	Order []int
-	Cut   int
+	cut   int
 	// More reports candidates left that the pass could not read; the event
 	// folds them in a later pass.
 	More bool
@@ -108,13 +108,8 @@ type TriggerConfig struct {
 	// turn when its first step commits; an event the request needs earlier
 	// rewinds first, so it folds onto the checkpoint the replacement keeps.
 	ReplacedTurnID string
-	// ProtectedSources stay raw after the summary, with every row after the
-	// first one that records them: the deferred call and answer a
-	// continuation resumes from.
-	ProtectedSources []turn.ContextMessageSource
-	// Anchors stay raw where they are, as AnchorPolicy keeps them, without
-	// ending what a pass may fold: a run's input and steers, or the inputs a
-	// Discuss run answers.
+	// Anchors are kept verbatim where they are, as AnchorPolicy keeps them: a
+	// run's input and steers, or the inputs a Discuss run answers.
 	Anchors      []turn.ContextMessageSource
 	AnchorPolicy AnchorPolicy
 	// CurrentRequest is the caller's current input, which the summarizer

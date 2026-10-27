@@ -203,8 +203,8 @@ func TestDiscussProviderBudgetRecoveryKeepsTheBatchByPolicy(t *testing.T) {
 	for _, source := range cfg.Anchors {
 		protected[source.ID] = true
 	}
-	if !protected["m4"] || !protected["m3"] || !protected["m1"] || cfg.AnchorPolicy != compaction.AnchorsFirst || len(cfg.ProtectedSources) != 0 || cfg.HistoryBudgetTokens <= 998 {
-		t.Fatalf("anchors=%v policy=%v protected_tail=%v history_budget=%d; the batch stays at its own positions newest first, priced once with the history it renders in", protected, cfg.AnchorPolicy, cfg.ProtectedSources, cfg.HistoryBudgetTokens)
+	if !protected["m4"] || !protected["m3"] || !protected["m1"] || cfg.AnchorPolicy != compaction.AnchorsFirst || cfg.HistoryBudgetTokens <= 998 {
+		t.Fatalf("anchors=%v policy=%v history_budget=%d; the batch stays at its own positions newest first, priced once with the history it renders in", protected, cfg.AnchorPolicy, cfg.HistoryBudgetTokens)
 	}
 }
 

@@ -85,7 +85,7 @@ func TestDiscussRecoveryCarriesCurrentSourcesEvenWithoutMaterializedMessages(t *
 		t.Fatalf("recovery did not run: %v", err)
 	}
 	cfg := runner.configs[0]
-	if !reflect.DeepEqual(cfg.Anchors, sources) || cfg.AnchorPolicy != compaction.AnchorsFirst || len(cfg.ProtectedSources) != 0 || cfg.HistoryBudgetTokens != 1000 {
+	if !reflect.DeepEqual(cfg.Anchors, sources) || cfg.AnchorPolicy != compaction.AnchorsFirst || cfg.HistoryBudgetTokens != 1000 {
 		t.Fatalf("Channel overflow must keep the batch newest first and compact what does not fit beside it: %+v", cfg)
 	}
 }
