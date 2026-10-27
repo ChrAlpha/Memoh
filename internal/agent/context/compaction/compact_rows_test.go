@@ -212,6 +212,132 @@ func TestCompactPassesOverWhatOneReadLeaves(t *testing.T) {
 	}
 }
 
+// A read the byte bound truncates ends at a call group's end: the tool rows
+// after the last row it reads come with it. No checkpoint an event commits,
+// an unfinished event's included, has a call behind its position and a
+// result of it after, whether the bound falls at the call or between results
+// written as rows of their own, and a call larger than a read alone still
+// folds with its results.
+func TestCompactNeverFoldsACallApartFromItsResults(t *testing.T) {
+	t.Parallel()
+
+	call := func(t *testing.T, size int, ids ...string) candidateRow {
+		var parts []string
+		for _, id := range ids {
+			parts = append(parts, `{"type":"tool-call","toolCallId":"`+id+`","toolName":"write","input":{"content":"`+strings.Repeat("x", size/len(ids))+`"}}`)
+		}
+		return mkRow(t, "assistant", "["+strings.Join(parts, ",")+"]")
+	}
+	result := func(t *testing.T, id string, size int) candidateRow {
+		return mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"`+id+`","toolName":"write","result":"written `+strings.Repeat("r", size)+`"}]`)
+	}
+	note := func(t *testing.T, size int) candidateRow {
+		return mkRow(t, "user", `"`+strings.Repeat("plan the release ", size/17)+`"`)
+	}
+	for _, tc := range []struct {
+		name string
+		// rows returns the session's rows and the indexes of a call and its
+		// results.
+		rows func(t *testing.T) ([]candidateRow, int, []int)
+	}{
+		{name: "the bound falls at the call", rows: func(t *testing.T) ([]candidateRow, int, []int) {
+			return []candidateRow{note(t, 400000), call(t, 200000, "W"), result(t, "W", 10), mkRow(t, "assistant", `"released"`), mkRow(t, "user", `"current request"`)}, 1, []int{2}
+		}},
+		{name: "the bound falls between results of their own", rows: func(t *testing.T) ([]candidateRow, int, []int) {
+			return []candidateRow{note(t, 400000), call(t, 20, "A", "B"), result(t, "A", 150000), result(t, "B", 10), mkRow(t, "assistant", `"released"`), mkRow(t, "user", `"current request"`)}, 1, []int{2, 3}
+		}},
+		{name: "a call larger than a read", rows: func(t *testing.T) ([]candidateRow, int, []int) {
+			return []candidateRow{call(t, 600000, "W"), result(t, "W", 10), mkRow(t, "assistant", `"released"`), mkRow(t, "user", `"current request"`)}, 0, []int{1}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rows, at, results := tc.rows(t)
+			q := &fakeQueries{history: rows}
+			stub := &stubModel{summary: "The release was planned and its notes written."}
+			svc := newMachineryService(q)
+			cfg := currentConfig(stub, 40000, rows[len(rows)-1])
+			cfg.SummaryWindowTokens = 64000
+			ordered := q.ordered()
+			var split bool
+			q.onComplete = func() {
+				active := q.checkpoints[q.active]
+				position := messagepkg.HistoryPosition{Turn: active.TurnPosition, Seq: active.TurnMessageSeq}
+				for _, i := range results {
+					split = split || !position.Before(rowPosition(ordered[at])) && position.Before(rowPosition(ordered[i]))
+				}
+			}
+
+			passes, err := svc.Compact(context.Background(), cfg)
+			if err != nil || len(passes) == 0 || split {
+				t.Fatalf("passes=%d split=%v err=%v, want the call folded with its results", len(passes), split, err)
+			}
+			for _, i := range append([]int{at}, results...) {
+				if !slices.Contains(q.folded, rows[i].ID) {
+					t.Fatalf("the newest checkpoint does not fold row %d of the call group", i)
+				}
+			}
+		})
+	}
+}
+
+// A call group larger than any read admits is not left behind in silence: a
+// read that takes nothing after the checkpoint, only the row it keeps,
+// fails the event as an input overflow before any summarizer call.
+func TestCompactFailsOnACallGroupNoReadAdmits(t *testing.T) {
+	t.Parallel()
+
+	kept := mkRow(t, "user", `"keep this request"`)
+	rows := []candidateRow{
+		kept,
+		mkRow(t, "assistant", `[{"type":"tool-call","toolCallId":"W","toolName":"read","input":{}}]`),
+		mkRow(t, "tool", `[{"type":"tool-result","toolCallId":"W","toolName":"read","result":"`+strings.Repeat("r", 9<<20)+`"}]`),
+	}
+	q := &fakeQueries{history: rows}
+	held := q.hold("Earlier work summarized.")
+	items, _ := json.Marshal(append([]checkpoint.Item{{RowID: kept.ID.String()}}, decodeItemsForTest(held.Items)...))
+	held.Items, held.TurnPosition, held.TurnMessageSeq = items, q.ordered()[0].TurnPosition.Int64, q.ordered()[0].TurnMessageSeq.Int64
+	q.putCheckpoint(held)
+	stub := &stubModel{summary: "unused"}
+	svc := newMachineryService(q)
+	cfg := currentConfig(stub, 40000, kept)
+	cfg.SummaryWindowTokens = 64000
+
+	passes, err := svc.Compact(context.Background(), cfg)
+	if ReasonOf(err) != ReasonInputOverflow || len(passes) != 0 || stub.calls != 0 || q.active != held.ID {
+		t.Fatalf("passes=%d calls=%d err=%v, want an input overflow before any summarizer call", len(passes), stub.calls, err)
+	}
+}
+
+// Rows the checkpoint keeps that one read cannot hold together are read and
+// folded one read after another: a read that stops among them still leaves
+// something to fold.
+func TestCompactFoldsKeptRowsLargerThanARead(t *testing.T) {
+	t.Parallel()
+
+	first := mkRow(t, "user", `"`+strings.Repeat("first long note ", 5<<20/16)+`"`)
+	second := mkRow(t, "user", `"`+strings.Repeat("second long note ", 5<<20/17)+`"`)
+	current := mkRow(t, "user", `"current request"`)
+	q := &fakeQueries{history: []candidateRow{first, second, current}}
+	held := q.hold("Earlier work summarized.")
+	items, _ := json.Marshal(append([]checkpoint.Item{{RowID: first.ID.String()}, {RowID: second.ID.String()}}, decodeItemsForTest(held.Items)...))
+	ordered := q.ordered()
+	held.Items, held.TurnPosition, held.TurnMessageSeq = items, ordered[1].TurnPosition.Int64, ordered[1].TurnMessageSeq.Int64
+	q.putCheckpoint(held)
+	stub := &stubModel{summary: "Two long notes, condensed."}
+	svc := newMachineryService(q)
+	cfg := currentConfig(stub, 40000, current)
+	cfg.SummaryWindowTokens = 64000
+
+	passes, err := svc.Compact(context.Background(), cfg)
+	if err != nil || len(passes) < 2 {
+		t.Fatalf("passes=%d err=%v, want both kept rows folded, one read each", len(passes), err)
+	}
+	if kept := q.held(); slices.ContainsFunc(kept, func(item checkpoint.Item) bool { return item.RowID != "" }) {
+		t.Fatalf("checkpoint holds %+v, want both long notes folded", kept)
+	}
+}
+
 // A call the conversation moved on from without an answer is history like
 // any other: a fold from rows reads it as text and takes it with the rows
 // around it.

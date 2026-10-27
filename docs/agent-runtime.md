@@ -125,17 +125,23 @@ engine: for a chat or continuation load the byte budget truncated, before the
 request is built, and for Discuss input Channel omitted or a batch it could
 not compose. It builds the request from the rows: the active checkpoint's
 items in their order, then the context rows after its position, oldest first
-within a byte bound and the row that crosses it, up to 8 MiB, each row the
-message a run's request holds for it, so a pass plans and folds it the way it
-folds a run's. The compaction model, whatever provider it runs on, is offered
-no tools: its request writes every message out as text under its role, tool
-calls and tool results included, media named. It is asked for as much output
-as the window leaves, up to its cap, and never less than half of what the
-summary may need; a pass reads less rather than ask for less. The summarizer
-streams through the client the runs stream through. An event folds every row the
-caller does not keep into one rolling summary, reading again for what one
-bounded read left; it keeps what a run's fold keeps, with the input, a
-continuation's steers or a Discuss batch as anchors.
+within a byte bound, each row the message a run's request holds for it, so a
+pass plans and folds it the way it folds a run's. A read takes whole call
+groups, a row and the tool rows after it that carry its calls' results: those
+that end within the bound, and the one that crosses it when what it reads past
+the bound fits 8 MiB. No checkpoint, even one an unfinished event leaves, has
+a call behind its position and a result of it after, and a call larger than
+the bound still folds with its results; a read that leaves nothing to fold
+while rows are left after it, a group larger than any read admits, fails the
+event as an input overflow. The compaction model, whatever provider it runs
+on, is offered no tools: its request writes every message out as text under
+its role, tool calls and tool results included, media named. It is asked for
+as much output as the window leaves, up to its cap, and never less than half
+of what the summary may need; a pass reads less rather than ask for less. The
+summarizer streams through the client the runs stream through. An event folds
+every row the caller does not keep into one rolling summary, reading again
+for what one bounded read left; it keeps what a run's fold keeps, with the
+input, a continuation's steers or a Discuss batch as anchors.
 
 A committed pass hands its caller the request it leaves: the engine orders
 the messages it read once, by `turn.PlaceSummary`, with every message it

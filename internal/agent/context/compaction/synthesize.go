@@ -30,9 +30,10 @@ The conversation is the messages that follow, each written out as text, tool cal
 // synthesis is a request built from the rows of a session's history for a
 // fold no run's request renders: the active checkpoint's items in their
 // order, then the context rows after its position, oldest first, within the
-// read bound. Each row renders as the message a run's request holds for it,
-// so a fold plans and folds it the way it does a run's; the summarizer, which
-// is offered no tools, reads it written out (writtenOut).
+// read bound, which ends at a call group's end. Each row renders as the
+// message a run's request holds for it, so a fold plans and folds it the way
+// it does a run's; the summarizer, which is offered no tools, reads it
+// written out (writtenOut).
 type synthesis struct {
 	request sdk.Request
 	sources []Source
@@ -71,10 +72,12 @@ func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis,
 	if err != nil {
 		return synthesis{}, fmt.Errorf("load the rows to compact: %w", err)
 	}
-	if len(rows) == 0 {
-		// The read admits rows oldest first, and the one that crosses the
-		// bound; one larger than any read admits none, though rows are
-		// left.
+	syn := synthesis{request: sdk.Request{System: synthesisSystemPrompt}}
+	if len(rows) > 0 {
+		syn.truncated = rows[0].CandidateCount > int64(len(rows))
+	} else {
+		// A read that takes nothing reports no count; rows may be left that
+		// it could not take.
 		measure, err := s.queries.MeasureHistoryCheckpointCandidates(ctx, sqlc.MeasureHistoryCheckpointCandidatesParams{
 			SessionID:            sessionUUID,
 			AfterTurnPosition:    parent.Position.Turn,
@@ -86,14 +89,7 @@ func (s *Service) synthesize(ctx context.Context, cfg TriggerConfig) (synthesis,
 		if err != nil {
 			return synthesis{}, err
 		}
-		if measure.CandidateCount > 0 {
-			return synthesis{}, failed(ReasonInputOverflow, fmt.Errorf("%w: largest_candidate_bytes=%d max_row_bytes=%d", errCompactionInputOverflow, measure.LargestCandidateBytes, maxCompactionReadBytes))
-		}
-	}
-
-	syn := synthesis{request: sdk.Request{System: synthesisSystemPrompt}}
-	if len(rows) > 0 {
-		syn.truncated = rows[0].CandidateCount > int64(len(rows))
+		syn.truncated = measure.CandidateCount > 0
 	}
 	add := func(message sdk.Message, sources []turn.ContextMessageSource) {
 		syn.request.Messages = append(syn.request.Messages, message)
@@ -198,7 +194,8 @@ func withoutMedia(s string) string {
 
 // compactRows folds the rows of cfg's session until none is left to fold:
 // each event reads what one bounded read loads and folds everything it may,
-// and the next reads what is left. The summarizer is the compaction model,
+// and the next reads what is left; an event that folds nothing while rows are
+// left fails as an input overflow. The summarizer is the compaction model,
 // streaming.
 func (s *Service) compactRows(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
 	// The summarizer may write as much as the model declares it can answer;
@@ -253,8 +250,13 @@ func (s *Service) compactRows(ctx context.Context, cfg TriggerConfig) ([]Pass, e
 			},
 		})
 		passes = append(passes, folded...)
-		if err != nil || len(folded) == 0 || !syn.truncated {
+		switch {
+		case err != nil || !syn.truncated:
 			return passes, err
+		case len(folded) == 0:
+			// What the read holds leaves nothing to fold, and rows are left
+			// after it: a call group larger than any read admits.
+			return passes, failed(ReasonInputOverflow, fmt.Errorf("%w: rows are left after a read that leaves nothing to fold: max_row_bytes=%d", errCompactionInputOverflow, maxCompactionReadBytes))
 		}
 	}
 }

@@ -230,11 +230,28 @@ func (f *fakeQueries) ListHistoryCheckpointCandidatesWithinBytes(_ context.Conte
 		<-f.listRelease
 	}
 	candidates := f.candidates(arg.AfterTurnPosition, arg.AfterTurnMessageSeq, arg.KeptIds, arg.BeforeTurnPosition, arg.BeforeTurnMessageSeq)
+	// A read takes whole call groups, a row other than a tool's and the tool
+	// rows after it: every group that ends within the budget, and the group
+	// that crosses it when what it reads past the budget fits a row.
+	group, ends := make([]int, len(candidates)), map[int]int64{}
+	open, total := 0, int64(0)
+	for i, row := range candidates {
+		if row.Role != "tool" {
+			open++
+		}
+		group[i], total = open, total+payloadBytesForTest(row)
+		ends[open] = total
+	}
+	crossing := -1
+	for i := range candidates {
+		if ends[group[i]] > arg.MaxBytes {
+			crossing = group[i]
+			break
+		}
+	}
 	admitted := make([]candidateRow, 0, len(candidates))
-	var cumulative int64
-	for _, row := range candidates {
-		before := cumulative
-		if cumulative += payloadBytesForTest(row); cumulative > arg.MaxBytes && (before > arg.MaxBytes || payloadBytesForTest(row) > arg.MaxRowBytes) {
+	for i, row := range candidates {
+		if end := ends[group[i]]; end > arg.MaxBytes && (group[i] != crossing || end-arg.MaxBytes > arg.MaxRowBytes) {
 			break
 		}
 		row.CandidateCount = int64(len(candidates))

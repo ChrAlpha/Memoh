@@ -117,11 +117,14 @@ FROM owner_session owner;
 -- A compaction pass reads its candidates oldest first within a hard content
 -- budget: the rows the checkpoint it folds onto keeps by reference and the
 -- context rows after that checkpoint's position, before the cutoff position
--- when set. The row that crosses the budget is read too, when it alone fits
--- max_row_bytes, so every pass can read past what it has read. The cumulative
--- filter is evaluated before the payload join, so a row larger than that
--- returns no payload instead of crossing the process-memory boundary.
--- CandidateCount reports whether the prefix was truncated.
+-- when set. A read takes whole call groups, a row other than a tool's and the
+-- tool rows after it that carry its calls' results, so no pass folds a call
+-- apart from a result the read left out: every group that ends within the
+-- budget, and the group that crosses it when what it reads past the budget
+-- fits max_row_bytes, so every pass can read past what it has read. The
+-- cumulative filter is evaluated before the payload join, so a read never
+-- loads more than max_bytes and max_row_bytes together. CandidateCount
+-- reports whether the prefix was truncated.
 WITH candidate_rows AS MATERIALIZED (
   SELECT
     m.id,
@@ -130,7 +133,8 @@ WITH candidate_rows AS MATERIALIZED (
     m.created_at,
     (
       octet_length(m.content::text)
-    )::BIGINT AS payload_bytes
+    )::BIGINT AS payload_bytes,
+    (m.role <> 'tool')::int AS opens_group
   FROM bot_visible_history_messages m
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = sqlc.arg(session_id)
@@ -145,15 +149,26 @@ WITH candidate_rows AS MATERIALIZED (
   SELECT
     candidate_rows.*,
     COUNT(*) OVER ()::BIGINT AS candidate_count,
-    SUM(payload_bytes) OVER (
-      ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
-    )::BIGINT AS cumulative_bytes
+    SUM(payload_bytes) OVER history_order::BIGINT AS cumulative_bytes,
+    SUM(opens_group) OVER history_order::BIGINT AS call_group
   FROM candidate_rows
-), admitted_candidates AS MATERIALIZED (
-  SELECT *
+  WINDOW history_order AS (ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC)
+), grouped_candidates AS MATERIALIZED (
+  SELECT
+    ranked_candidates.*,
+    MAX(cumulative_bytes) OVER (PARTITION BY call_group)::BIGINT AS group_end_bytes
   FROM ranked_candidates
-  WHERE cumulative_bytes <= sqlc.arg(max_bytes)::BIGINT
-    OR (cumulative_bytes - payload_bytes <= sqlc.arg(max_bytes)::BIGINT AND payload_bytes <= sqlc.arg(max_row_bytes)::BIGINT)
+), crossing_group AS (
+  SELECT MIN(call_group) AS call_group
+  FROM grouped_candidates
+  WHERE group_end_bytes > sqlc.arg(max_bytes)::BIGINT
+), admitted_candidates AS MATERIALIZED (
+  SELECT grouped.*
+  FROM grouped_candidates grouped
+  CROSS JOIN crossing_group
+  WHERE grouped.group_end_bytes <= sqlc.arg(max_bytes)::BIGINT
+    OR (grouped.call_group = crossing_group.call_group
+      AND grouped.group_end_bytes - sqlc.arg(max_bytes)::BIGINT <= sqlc.arg(max_row_bytes)::BIGINT)
 )
 SELECT
   m.id,
@@ -170,8 +185,9 @@ ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
 
 -- name: MeasureHistoryCheckpointCandidates :one
 -- Metadata-only companion of ListHistoryCheckpointCandidatesWithinBytes over
--- the same candidates. It never returns payloads and reports the largest
--- one, which a read that admits nothing could not fit.
+-- the same candidates. It never returns payloads: it counts them, which tells
+-- a read that took nothing whether rows are left, and reports the largest
+-- one.
 SELECT
   COUNT(*)::BIGINT AS candidate_count,
   COALESCE(MAX(octet_length(m.content::text)), 0)::BIGINT AS largest_candidate_bytes

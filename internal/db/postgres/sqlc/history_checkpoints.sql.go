@@ -292,7 +292,8 @@ WITH candidate_rows AS MATERIALIZED (
     m.created_at,
     (
       octet_length(m.content::text)
-    )::BIGINT AS payload_bytes
+    )::BIGINT AS payload_bytes,
+    (m.role <> 'tool')::int AS opens_group
   FROM bot_visible_history_messages m
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
@@ -305,17 +306,28 @@ WITH candidate_rows AS MATERIALIZED (
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ), ranked_candidates AS MATERIALIZED (
   SELECT
-    candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.payload_bytes,
+    candidate_rows.id, candidate_rows.turn_position, candidate_rows.turn_message_seq, candidate_rows.created_at, candidate_rows.payload_bytes, candidate_rows.opens_group,
     COUNT(*) OVER ()::BIGINT AS candidate_count,
-    SUM(payload_bytes) OVER (
-      ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
-    )::BIGINT AS cumulative_bytes
+    SUM(payload_bytes) OVER history_order::BIGINT AS cumulative_bytes,
+    SUM(opens_group) OVER history_order::BIGINT AS call_group
   FROM candidate_rows
-), admitted_candidates AS MATERIALIZED (
-  SELECT id, turn_position, turn_message_seq, created_at, payload_bytes, candidate_count, cumulative_bytes
+  WINDOW history_order AS (ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC)
+), grouped_candidates AS MATERIALIZED (
+  SELECT
+    ranked_candidates.id, ranked_candidates.turn_position, ranked_candidates.turn_message_seq, ranked_candidates.created_at, ranked_candidates.payload_bytes, ranked_candidates.opens_group, ranked_candidates.candidate_count, ranked_candidates.cumulative_bytes, ranked_candidates.call_group,
+    MAX(cumulative_bytes) OVER (PARTITION BY call_group)::BIGINT AS group_end_bytes
   FROM ranked_candidates
-  WHERE cumulative_bytes <= $7::BIGINT
-    OR (cumulative_bytes - payload_bytes <= $7::BIGINT AND payload_bytes <= $8::BIGINT)
+), crossing_group AS (
+  SELECT MIN(call_group) AS call_group
+  FROM grouped_candidates
+  WHERE group_end_bytes > $7::BIGINT
+), admitted_candidates AS MATERIALIZED (
+  SELECT grouped.id, grouped.turn_position, grouped.turn_message_seq, grouped.created_at, grouped.payload_bytes, grouped.opens_group, grouped.candidate_count, grouped.cumulative_bytes, grouped.call_group, grouped.group_end_bytes
+  FROM grouped_candidates grouped
+  CROSS JOIN crossing_group
+  WHERE grouped.group_end_bytes <= $7::BIGINT
+    OR (grouped.call_group = crossing_group.call_group
+      AND grouped.group_end_bytes - $7::BIGINT <= $8::BIGINT)
 )
 SELECT
   m.id,
@@ -355,11 +367,14 @@ type ListHistoryCheckpointCandidatesWithinBytesRow struct {
 // A compaction pass reads its candidates oldest first within a hard content
 // budget: the rows the checkpoint it folds onto keeps by reference and the
 // context rows after that checkpoint's position, before the cutoff position
-// when set. The row that crosses the budget is read too, when it alone fits
-// max_row_bytes, so every pass can read past what it has read. The cumulative
-// filter is evaluated before the payload join, so a row larger than that
-// returns no payload instead of crossing the process-memory boundary.
-// CandidateCount reports whether the prefix was truncated.
+// when set. A read takes whole call groups, a row other than a tool's and the
+// tool rows after it that carry its calls' results, so no pass folds a call
+// apart from a result the read left out: every group that ends within the
+// budget, and the group that crosses it when what it reads past the budget
+// fits max_row_bytes, so every pass can read past what it has read. The
+// cumulative filter is evaluated before the payload join, so a read never
+// loads more than max_bytes and max_row_bytes together. CandidateCount
+// reports whether the prefix was truncated.
 func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context, arg ListHistoryCheckpointCandidatesWithinBytesParams) ([]ListHistoryCheckpointCandidatesWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listHistoryCheckpointCandidatesWithinBytes,
 		arg.SessionID,
@@ -1056,8 +1071,9 @@ type MeasureHistoryCheckpointCandidatesRow struct {
 }
 
 // Metadata-only companion of ListHistoryCheckpointCandidatesWithinBytes over
-// the same candidates. It never returns payloads and reports the largest
-// one, which a read that admits nothing could not fit.
+// the same candidates. It never returns payloads: it counts them, which tells
+// a read that took nothing whether rows are left, and reports the largest
+// one.
 func (q *Queries) MeasureHistoryCheckpointCandidates(ctx context.Context, arg MeasureHistoryCheckpointCandidatesParams) (MeasureHistoryCheckpointCandidatesRow, error) {
 	row := q.db.QueryRow(ctx, measureHistoryCheckpointCandidates,
 		arg.SessionID,
