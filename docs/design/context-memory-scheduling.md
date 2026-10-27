@@ -266,8 +266,9 @@ event per pending request:
 - History is never dropped to make the summarizer call fit. When the history to
   replace does not fit one summarizer call, the event folds the oldest prefix that
   fits, in as many passes as reading it takes; each pass absorbs the summary before
-  it and commits a new history checkpoint. A single message larger than one call
-  can read reaches the summarizer by its head and tail; a message no cut brings
+  it and commits a new history checkpoint. A call group, which a pass reads whole
+  or not at all, larger than one call can read reaches the summarizer by the head
+  and tail of its larger parts, which share the call's room; a group no cut brings
   within the call fails the event.
 - Afterwards the request is only rechecked, never compacted again to reach a lower
   mark. A Discuss batch gets one recovery; the recomposed attempt only rechecks.

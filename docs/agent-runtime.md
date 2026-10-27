@@ -96,12 +96,14 @@ tool once more with a firmer instruction, which the pass priced in, so the
 second request fits with the same output. A fork that does not fit the window
 reads a shorter prefix ending at a tool-group boundary, and the event passes
 again over the request the native runtime spliced, each pass absorbing the
-summary before it. A
-message larger than what the window leaves one message beside the system
-prompt, tools, the longest summary, the instruction and the least output
-reaches the summarizer by its head and tail: its text, the arguments of its
-calls and its results. No message is too large to fold; the row keeps the
-whole message, which `get_messages` reads back.
+summary before it. A pass reads a call group whole or not at all, so the
+window's bound is the group's: a group larger than what the window leaves one
+group beside the system prompt, tools, the longest summary, the instruction
+and the least output reaches the summarizer by the head and tail of its larger
+parts, the text, call arguments and results of all its messages, an equal
+share each of what the smaller ones leave. No group is too large to fold; the
+rows keep the whole messages, which `get_messages` reads back, so a folded row
+is one its summary stands for, read whole or in part.
 
 Every message of the request names what it renders: a history row, an inbound
 or self-sent message, or a summary. The run's query names the row that holds

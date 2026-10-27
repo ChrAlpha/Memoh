@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -427,18 +428,124 @@ func TestFoldReadsToolPartsLargerThanItsWindow(t *testing.T) {
 				t.Fatalf("passes=%+v err=%v, want one pass that stands for the large call and its result", passes, err)
 			}
 			fork := summarizer.requests[0]
-			cut, read := fork.Messages[2], fork.Messages[2].Content[0].(sdk.ToolCallPart).Input.String()
+			read := fork.Messages[2].Content[0].(sdk.ToolCallPart).Input.String()
 			if tc.inResult {
-				cut, read = fork.Messages[3], fork.Messages[3].Content[0].(sdk.ToolResultPart).Result.String()
+				read = fork.Messages[3].Content[0].(sdk.ToolResultPart).Result.String()
 			}
-			if tokens := forkTokens(sdk.Request{Messages: []sdk.Message{cut}}); tokens > forkMessageCap(ev) {
-				t.Fatalf("the cut message takes %d tokens as the fork encodes it, want at most %d", tokens, forkMessageCap(ev))
+			if tokens := forkTokens(sdk.Request{Messages: fork.Messages[2:4]}); tokens > forkGroupCap(ev) {
+				t.Fatalf("the cut call group takes %d tokens as the fork encodes it, want at most %d", tokens, forkGroupCap(ev))
 			}
 			if forkTokens(fork) > ev.Window || !strings.Contains(read, "CONTENT_HEAD") || !strings.Contains(read, "CONTENT_TAIL") ||
 				fork.Messages[2].Content[0].(sdk.ToolCallPart).ToolCallID != "call_1" || fork.Messages[3].Content[0].(sdk.ToolResultPart).ToolCallID != "call_1" {
 				t.Fatalf("fork = %d tokens in a %d-token window, read %d bytes, want the call and result paired with their head and tail", forkTokens(fork), ev.Window, len(read))
 			}
 		})
+	}
+}
+
+// A pass reads a call group whole or not at all, so the cap is the group's: a
+// call and its result that each fit a fork but not together keep their head
+// and tail within a share of it each, and one pass folds both.
+func TestFoldReadsACallGroupLargerThanItsWindow(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	content := "CONTENT_HEAD " + strings.Repeat("line of the file ", 600) + " CONTENT_TAIL"
+	r.messages[2] = sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{
+		ToolCallID: "call_1", ToolName: "write", Input: sdk.ParseToolArguments(`{"path":"big.txt","content":` + strconv.Quote(content) + `}`),
+	}}}
+	r.messages[3] = resultMessage("call_1", "RESULT_HEAD "+strings.Repeat("parser.go:12 unsafe cast of int64 to int32\n", 300)+" RESULT_TAIL")
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("A large file was written and audited.")}}
+	ev := s.event(r, summarizer)
+	ev.Window, ev.Allowance, ev.MaxOutputTokens = 8000, 6000, 2000
+	planned := ev
+	planned.retention = retain(planned, nil)
+	capTokens := forkGroupCap(planned)
+	call, result := forkTokens(sdk.Request{Messages: r.messages[2:3]}), forkTokens(sdk.Request{Messages: r.messages[3:4]})
+	if call > capTokens || result > capTokens || call+result <= capTokens {
+		t.Fatalf("call %d and result %d tokens, want each within the %d-token cap and both over it", call, result, capTokens)
+	}
+
+	passes, err := s.svc.Fold(context.Background(), ev)
+	if err != nil || len(passes) != 1 || len(summarizer.requests) != 1 {
+		t.Fatalf("passes=%d err=%v summarizer calls=%d, want one pass from one call", len(passes), err, len(summarizer.requests))
+	}
+	if folded := replaced(r.sources, passes[0]); !slices.Contains(folded, r.rows[1]) || !slices.Contains(folded, r.rows[2]) {
+		t.Fatalf("replaced = %v, want the call and its result folded", folded)
+	}
+	fork := summarizer.requests[0]
+	read := messageText(fork.Messages[2]) + fork.Messages[2].Content[0].(sdk.ToolCallPart).Input.String() + fork.Messages[3].Content[0].(sdk.ToolResultPart).Result.String()
+	if group := forkTokens(sdk.Request{Messages: fork.Messages[2:4]}); group > capTokens || forkTokens(fork) > ev.Window {
+		t.Fatalf("the group takes %d tokens and the fork %d, want at most %d and %d", group, forkTokens(fork), capTokens, ev.Window)
+	}
+	for _, want := range []string{"CONTENT_HEAD", "CONTENT_TAIL", "RESULT_HEAD", "RESULT_TAIL"} {
+		if !strings.Contains(read, want) {
+			t.Fatalf("the fork lost %q of the group", want)
+		}
+	}
+}
+
+// The parts of a group share its cap however its messages split them: a
+// message of many results takes more of it than a message of one text, so a
+// group that fits once each part keeps its head and tail is read whole.
+func TestFoldReadsAGroupOfManyPartsWithinItsCap(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	calls := []sdk.MessagePart{sdk.TextPart{Text: "PLAN_HEAD " + strings.Repeat("plan ", 1600)}}
+	var results []sdk.MessagePart
+	for i := range 32 {
+		id := "call_" + strconv.Itoa(i)
+		calls = append(calls, sdk.ToolCallPart{ToolCallID: id, ToolName: "read", Input: sdk.ParseToolArguments(`{}`)})
+		results = append(results, sdk.ToolResultPart{ToolCallID: id, ToolName: "read", Result: sdk.TextOutput("RESULT_" + strconv.Itoa(i) + "_HEAD " + strings.Repeat("r", 10000))})
+	}
+	r.messages[2] = sdk.Message{Role: sdk.MessageRoleAssistant, Content: calls}
+	r.messages[3] = sdk.Message{Role: sdk.MessageRoleTool, Content: results}
+	ev := s.event(r, &scriptedSummarizer{})
+	ev.Window, ev.Allowance, ev.MaxOutputTokens, ev.FixedOutput = 14000, 9000, 5000, true
+	ev.retention = retain(ev, nil)
+
+	read, err := forkRead(ev)
+	if err != nil {
+		t.Fatalf("forkRead: %v, want the group cut within its cap", err)
+	}
+	if tokens := forkTokens(sdk.Request{Messages: read[2:4]}); tokens > forkGroupCap(ev) {
+		t.Fatalf("the group takes %d tokens, want at most %d", tokens, forkGroupCap(ev))
+	}
+	for i, part := range read[3].Content {
+		result := part.(sdk.ToolResultPart)
+		if call := read[2].Content[i+1].(sdk.ToolCallPart); call.ToolCallID != result.ToolCallID || !strings.Contains(result.Result.String(), "RESULT_"+strconv.Itoa(i)+"_HEAD") {
+			t.Fatalf("result %d = %q under call %s, want its head paired with its call", i, result.Result.String(), call.ToolCallID)
+		}
+	}
+}
+
+// A group is cut until it fits or no part can be cut shorter, however many
+// rounds of measuring that takes: one whose many small parts shrink no
+// further fits only once its one long part is cut close to the shortest cut
+// a part keeps.
+func TestCutGroupCutsUntilNoPartCanBeShorter(t *testing.T) {
+	t.Parallel()
+	calls := []sdk.MessagePart{sdk.TextPart{Text: strings.Repeat("a", 1<<20)}}
+	var results []sdk.MessagePart
+	for i := range 200 {
+		id := "call_" + strconv.Itoa(i)
+		calls = append(calls, sdk.ToolCallPart{ToolCallID: id, ToolName: "read", Input: sdk.ParseToolArguments(`{}`)})
+		results = append(results, sdk.ToolResultPart{ToolCallID: id, ToolName: "read", Result: sdk.TextOutput("ok")})
+	}
+	group := []sdk.Message{{Role: sdk.MessageRoleAssistant, Content: calls}, {Role: sdk.MessageRoleTool, Content: results}}
+	cutAt := func(bytes int) int {
+		limit := contextlimit.ToolOutputLimit{MaxBytes: bytes}
+		return forkTokens(sdk.Request{Messages: []sdk.Message{cutParts(group[0], limit), cutParts(group[1], limit)}})
+	}
+
+	capTokens := cutAt(1000)
+	read, ok := cutGroup(group, capTokens)
+	if tokens := forkTokens(sdk.Request{Messages: read}); !ok || tokens > capTokens {
+		t.Fatalf("cut=%v to %d tokens, want the group cut within %d", ok, tokens, capTokens)
+	}
+	if _, ok := cutGroup(group, cutAt(256)-1); ok {
+		t.Fatal("a cap below the shortest cut was met")
 	}
 }
 
