@@ -549,7 +549,8 @@ func joinFinalTexts(previous []string, last string) string {
 // half of what a request within allowance has beside its system prompt and
 // tools, priced the way a provider request is, so a step fits the request
 // next to a summary and the run's anchors, and a fork that reads it has room
-// to answer. Each result also keeps its tool's own bound.
+// to answer. Each result also keeps its tool's own bound. It is at least one
+// byte while there is an allowance; zero means no bound.
 //
 //nolint:gocritic // hugeParam: the request is read, not copied into anything.
 func stepOutputBudget(allowance int, params sdk.Request, systemPrepended bool) int {
@@ -557,7 +558,7 @@ func stepOutputBudget(allowance int, params sdk.Request, systemPrepended bool) i
 		return 0
 	}
 	var system []sdk.Message
-	if systemPrepended && len(params.Messages) > 0 {
+	if systemPrepended {
 		system = params.Messages[:1]
 	}
 	room := allowance - contextfrag.ProviderEnvelopeTokens(params.System, system, params.Tools)

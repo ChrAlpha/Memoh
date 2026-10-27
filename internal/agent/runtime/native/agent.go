@@ -174,14 +174,10 @@ func (a *Agent) ExecuteToolWithUIMetadata(ctx context.Context, cfg RunConfig, ca
 	}
 	sdkTools, _ = decorateReadMediaTools(cfg.Model, sdkTools)
 	// The call is the one result of the step it was deferred from: it may
-	// take what that step's results may take together. A tool definition
-	// that does not convert is left out of that estimate; it fails the run
-	// that offers it, not this call.
-	var toolDefs []sdk.ToolDefinition
-	for _, tool := range canonicalizeProviderToolSchemas(sdkTools) {
-		if def, err := toolexec.ToolDefinitionFromTool(tool); err == nil {
-			toolDefs = append(toolDefs, def)
-		}
+	// take what that step's results may take together.
+	toolDefs, err := toolexec.ToolDefinitionsFromTools(canonicalizeProviderToolSchemas(sdkTools))
+	if err != nil {
+		return sdk.ToolResultPart{}, nil, fmt.Errorf("tool definitions: %w", err)
 	}
 	outputBytes := stepOutputBudget(providerInputAllowance(cfg), sdk.Request{System: appendToolUsageToSystem(cfg.System, toolUsage), Tools: toolDefs}, false)
 	uiMetadata := newToolExecutionMetadataRegistry(nil)

@@ -38,7 +38,7 @@ func WrapToolOutputLimits(sdkTools []toolexec.Tool, limit ToolOutputLimit) []too
 		wrapped[i].Execute = func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 			output, err := execute(ctx, input)
 			limit := limit
-			if ctx.OutputBytes > 0 && (limit.MaxBytes <= 0 || ctx.OutputBytes < limit.MaxBytes) {
+			if ctx.OutputBytes > 0 && ctx.OutputBytes < limit.MaxBytes {
 				limit.MaxBytes = ctx.OutputBytes
 			}
 			if err != nil {
