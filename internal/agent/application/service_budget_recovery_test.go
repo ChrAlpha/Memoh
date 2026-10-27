@@ -55,6 +55,7 @@ func chatRecoveryFixture(t *testing.T) (*Service, *recoveryHistoryService, *reco
 	s, _ := newControllerPolicyService(t)
 	history := &recoveryHistoryService{}
 	s.messageService = history
+	s.checkpoints = emptyHistoryCheckpoints()
 	runner := &recoveryCompactionRunner{run: func() ([]compaction.Pass, error) {
 		history.messages = []messagepkg.Message{{ID: "history-new", BotID: syncCompactBotID, SessionID: syncCompactThreadID, Role: "assistant", Content: newTextContent("compacted history")}}
 		history.truncated = false

@@ -305,7 +305,7 @@ func TestPipelineCurrentIdentitySurvivesLaterExternalAndSelfMessages(t *testing.
 	echo := pipelineTextEvent("echo", 4000, "self echo")
 	echo.IsSelfSent = true
 	pipeline.PushEvent(pipelineTestSessionID, echo)
-	svc := &Service{pipeline: pipeline, logger: slog.New(slog.DiscardHandler)}
+	svc := pipelineCheckpointService(pipeline, &historyCheckpointQueries{}, &turnResponseSourceMessageService{})
 	messages, _, _, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{ThreadID: pipelineTestSessionID, ExternalMessageID: "current"}, 500)
 	if err != nil {
 		t.Fatal(err)
@@ -319,17 +319,24 @@ func TestPipelineCurrentIdentitySurvivesLaterExternalAndSelfMessages(t *testing.
 func TestBuildMessagesFromPipelineFailsWhenASourceCannotLoad(t *testing.T) {
 	t.Parallel()
 
-	for name, svc := range map[string]*Service{
-		"checkpoint": pipelineCheckpointService(nil, &historyCheckpointQueries{activeErr: errors.New("checkpoint unavailable")}, nil),
-		"history":    {messageService: &turnResponseSourceMessageService{err: errors.New("history unavailable")}},
-	} {
-		pipeline := timeline.NewPipeline(timeline.RenderParams{})
-		pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "current question"))
-		svc.pipeline, svc.logger = pipeline, slog.New(slog.DiscardHandler)
-		messages, _, _, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{BotID: pipelineTestBotID, ThreadID: pipelineTestSessionID}, 1000)
-		if err == nil || messages != nil {
-			t.Fatalf("%s: messages=%s err=%v, want the request failed instead of composed without the source", name, messagesDebug(messages), err)
-		}
+	for _, source := range []string{"checkpoint", "history"} {
+		t.Run(source, func(t *testing.T) {
+			loadErr := errors.New(source + " unavailable")
+			queries := &historyCheckpointQueries{}
+			rows := &turnResponseSourceMessageService{}
+			if source == "checkpoint" {
+				queries.activeErr = loadErr
+			} else {
+				rows.err = loadErr
+			}
+			pipeline := timeline.NewPipeline(timeline.RenderParams{})
+			pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "current question"))
+			svc := pipelineCheckpointService(pipeline, queries, rows)
+			messages, _, _, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{BotID: pipelineTestBotID, ThreadID: pipelineTestSessionID}, 1000)
+			if !errors.Is(err, loadErr) || messages != nil {
+				t.Fatalf("messages=%s err=%v, want %v without composing", messagesDebug(messages), err, loadErr)
+			}
+		})
 	}
 }
 

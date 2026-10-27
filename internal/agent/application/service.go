@@ -211,10 +211,12 @@ func NewService(
 		Timeout:   10 * time.Minute,
 	}
 
-	service := &Service{
+	return &Service{
 		agent:                  a,
 		modelsService:          modelsService,
 		queries:                queries,
+		checkpoints:            checkpoint.NewStore(log, queries),
+		pipelineCheckpoints:    timeline.NewCheckpointSource(log, queries, messageService),
 		contextLifecycles:      queries,
 		messageService:         messageService,
 		settingsService:        settingsService,
@@ -226,13 +228,6 @@ func NewService(
 		clockLocation:          clockLocation,
 		logger:                 log.With(slog.String("service", "agent/application")),
 	}
-	if queries != nil {
-		service.checkpoints = checkpoint.NewStore(log, queries)
-		if messageService != nil {
-			service.pipelineCheckpoints = timeline.NewCheckpointSource(log, queries, messageService)
-		}
-	}
-	return service
 }
 
 // SetContextAbsoluteMaxTokens sets the server-wide context admission cap

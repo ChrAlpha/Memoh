@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -38,8 +37,8 @@ func (h *idleSessionHistory) ListTurnResponseSourcesWithinBytes(_ context.Contex
 func TestPreparedHistoryReportsATruncatedLoad(t *testing.T) {
 	for _, truncated := range []bool{false, true} {
 		source := &idleSessionHistory{rows: []messagepkg.Message{persistedHistoryMessage(t, "newest", "assistant", "newest answer")}, truncated: truncated}
-		svc := &Service{messageService: source, logger: slog.New(slog.DiscardHandler)}
-		prepared, err := svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: "bot", ThreadID: "thread"}, historyfrag.ScopeFallback{}, 1000)
+		svc := checkpointTestService(source, &historyCheckpointQueries{})
+		prepared, err := svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: "bot", ThreadID: lifecycleTestSessionID}, historyfrag.ScopeFallback{}, 1000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -55,8 +54,8 @@ func TestSessionHistorySurvivesIdleDays(t *testing.T) {
 	answer := persistedHistoryMessage(t, "old-answer", "assistant", "confirmed BLUE_WHALE")
 	user.CreatedAt, answer.CreatedAt = old, old.Add(time.Second)
 	source := &idleSessionHistory{rows: []messagepkg.Message{user, answer}}
-	svc := &Service{messageService: source, logger: slog.New(slog.DiscardHandler)}
-	req := ChatRequest{BotID: "bot", ThreadID: "thread", Query: "what was the codeword?"}
+	svc := checkpointTestService(source, &historyCheckpointQueries{})
+	req := ChatRequest{BotID: "bot", ThreadID: lifecycleTestSessionID, Query: "what was the codeword?"}
 	prepared, err := svc.prepareHistoryContext(context.Background(), req, historyfrag.ScopeFallback{}, 1000)
 	if err != nil {
 		t.Fatal(err)
@@ -87,7 +86,7 @@ func TestSessionHistorySurvivesIdleDays(t *testing.T) {
 // without a session has no history, and never widens the read to the bot.
 func TestMissingSessionNeverLoadsHistory(t *testing.T) {
 	for _, sessionID := range []string{"", "  "} {
-		svc := &Service{messageService: &struct{ messagepkg.Service }{}, queries: &struct{ dbstore.Queries }{}}
+		svc := checkpointTestService(&struct{ messagepkg.Service }{}, &struct{ dbstore.Queries }{})
 		ctx := context.Background()
 		prepared, err := svc.prepareHistoryContext(ctx, ChatRequest{BotID: "bot", ThreadID: sessionID}, historyfrag.ScopeFallback{ChatID: "bot"}, 1000)
 		if err != nil || len(prepared.records) != 0 || len(prepared.messages) != 0 {
@@ -152,8 +151,8 @@ func TestRetryEmptyFailureKeepsPriorHistoryAndExcludesLaterRows(t *testing.T) {
 	cutoff.Metadata = map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "context.budget_unsatisfied"}
 	later := persistedHistoryMessage(t, "later", "user", "exclude FUTURE_CODEWORD")
 	later.CreatedAt = time.Now()
-	svc := &Service{messageService: &positionedHistory{rows: []messagepkg.Message{prior, earlierFailure, request, cutoff, later}}, logger: slog.New(slog.DiscardHandler)}
-	prepared, err := svc.prepareHistoryContext(t.Context(), ChatRequest{BotID: "bot", ThreadID: "thread", HistoryCutoffBeforeMessageID: cutoff.ID}, historyfrag.ScopeFallback{}, 10000)
+	svc := checkpointTestService(&positionedHistory{rows: []messagepkg.Message{prior, earlierFailure, request, cutoff, later}}, &historyCheckpointQueries{})
+	prepared, err := svc.prepareHistoryContext(t.Context(), ChatRequest{BotID: "bot", ThreadID: lifecycleTestSessionID, HistoryCutoffBeforeMessageID: cutoff.ID}, historyfrag.ScopeFallback{}, 10000)
 	if err != nil {
 		t.Fatal(err)
 	}

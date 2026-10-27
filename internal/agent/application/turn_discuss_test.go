@@ -120,6 +120,7 @@ type testDiscussService interface {
 
 func newDiscussTestService(streamer testChatStreamer, agent testAgentStreamer, resolver testDiscussService) *Service {
 	service := newTurnTestService(streamer)
+	service.checkpoints = emptyHistoryCheckpoints()
 	if service.logger == nil {
 		service.logger = slog.New(slog.DiscardHandler)
 	}

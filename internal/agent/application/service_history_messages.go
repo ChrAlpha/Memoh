@@ -31,12 +31,9 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 		return nil, 0, false, nil
 	}
 
-	var held timeline.HistoryCheckpoint
-	if s.pipelineCheckpoints != nil {
-		var err error
-		if held, err = s.pipelineCheckpoints.Load(ctx, sessionID, rc); err != nil {
-			return nil, 0, false, err
-		}
+	held, err := s.pipelineCheckpoints.Load(ctx, sessionID, rc)
+	if err != nil {
+		return nil, 0, false, err
 	}
 	trs, truncated, err := s.loadTurnResponses(ctx, sessionID, held.Position, contextTokenBudget)
 	if err != nil {

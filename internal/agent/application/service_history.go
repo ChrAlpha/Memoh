@@ -177,9 +177,6 @@ func (s *Service) loadHistoryRecords(ctx context.Context, fallback historyfrag.S
 // historyCheckpoint is the checkpoint a request renders: the session's
 // active one, or the one an edit or retry's replacement keeps.
 func (s *Service) historyCheckpoint(ctx context.Context, sessionID string, cut historyCut) (checkpoint.Checkpoint, error) {
-	if s.checkpoints == nil {
-		return checkpoint.Checkpoint{}, nil
-	}
 	var (
 		held checkpoint.Checkpoint
 		err  error

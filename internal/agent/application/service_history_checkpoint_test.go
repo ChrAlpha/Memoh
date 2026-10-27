@@ -138,6 +138,11 @@ func checkpointTestService(messages messagepkg.Service, queries dbstore.Queries)
 	return &Service{messageService: messages, checkpoints: checkpoint.NewStore(logger, queries), logger: logger}
 }
 
+// emptyHistoryCheckpoints serves sessions whose history has not been folded.
+func emptyHistoryCheckpoints() *checkpoint.Store {
+	return checkpoint.NewStore(slog.New(slog.DiscardHandler), &historyCheckpointQueries{})
+}
+
 // A request renders what the session's checkpoint holds, in its order, and
 // then the rows after its position however long ago that is: the summary
 // stands for the rows it folds and a row it keeps renders where it holds it.
@@ -239,42 +244,13 @@ func TestPrepareHistoryContextRendersTheCheckpointAReplacementKeeps(t *testing.T
 func TestPrepareHistoryContextFailsWithoutItsCheckpoint(t *testing.T) {
 	t.Parallel()
 
-	svc := checkpointTestService(&memoryQueryMessageService{messages: []messagepkg.Message{
-		persistedHistoryMessage(t, "question", "user", "question"),
-	}}, &historyCheckpointQueries{activeErr: errors.New("checkpoint unavailable")})
-	if _, err := svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}, historyfrag.ScopeFallback{}, 100000); err == nil {
-		t.Fatal("history loaded without its checkpoint")
-	}
-}
-
-// The checkpoint says where raw history starts, so history whose checkpoint
-// does not load is not read at all rather than read whole.
-func TestThreadHistoryFailsWhenTheCheckpointDoesNotLoad(t *testing.T) {
-	t.Parallel()
-
 	messages := &memoryQueryMessageService{messages: []messagepkg.Message{persistedHistoryMessage(t, "question", "user", "question")}}
-	svc := checkpointTestService(messages, &historyCheckpointQueries{activeErr: errors.New("database unavailable")})
-	scope := contextfrag.Scope{SessionID: lifecycleTestSessionID}
-	if _, _, err := svc.loadHistoryRecords(t.Context(), historyfrag.ScopeFallback{}, scope, 1000, historyCut{}); err == nil {
-		t.Fatal("history loaded without its checkpoint")
+	loadErr := errors.New("checkpoint unavailable")
+	svc := checkpointTestService(messages, &historyCheckpointQueries{activeErr: loadErr})
+	if _, err := svc.prepareHistoryContext(t.Context(), ChatRequest{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}, historyfrag.ScopeFallback{}, 1000); !errors.Is(err, loadErr) {
+		t.Fatalf("history error = %v, want checkpoint load failure", err)
 	}
 	if len(messages.windows) != 0 {
 		t.Fatalf("history loaded unbounded: %+v", messages.windows)
-	}
-}
-
-// History belongs to a thread: a request without one has none to read.
-func TestThreadlessRequestsLoadNoHistory(t *testing.T) {
-	t.Parallel()
-
-	messages := &memoryQueryMessageService{messages: []messagepkg.Message{persistedHistoryMessage(t, "question", "user", "question")}}
-	queries := &historyCheckpointQueries{}
-	svc := checkpointTestService(messages, queries)
-	records, _, err := svc.loadHistoryRecords(t.Context(), historyfrag.ScopeFallback{ChatID: "bot-1"}, contextfrag.Scope{BotID: "bot-1"}, 1000, historyCut{})
-	if err != nil || len(records) != 0 {
-		t.Fatalf("records=%v err=%v, want none", records, err)
-	}
-	if len(messages.windows) != 0 || len(queries.replacedTurns) != 0 {
-		t.Fatalf("a threadless request read history: windows=%+v", messages.windows)
 	}
 }

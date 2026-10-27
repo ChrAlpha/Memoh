@@ -84,13 +84,14 @@ func TestPrepareHistoryContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
 		contextfrag.MetadataContextLifecycleKey:    lifecycle,
 	})
 	svc := &Service{
+		checkpoints: emptyHistoryCheckpoints(),
 		messageService: &memoryQueryMessageService{messages: []messagepkg.Message{
 			persistedHistoryMessage(t, "question", "user", "question"), failed, checkpoint,
 		}},
 		logger: slog.New(slog.DiscardHandler),
 	}
 
-	prepared, err := svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: "bot-1", ThreadID: "session-1"}, historyfrag.ScopeFallback{}, 100000)
+	prepared, err := svc.prepareHistoryContext(context.Background(), ChatRequest{BotID: "bot-1", ThreadID: lifecycleTestSessionID}, historyfrag.ScopeFallback{}, 100000)
 	if err != nil {
 		t.Fatalf("prepareHistoryContext failed: %v", err)
 	}

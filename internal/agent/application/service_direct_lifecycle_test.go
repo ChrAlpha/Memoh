@@ -290,6 +290,7 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 	runtime := &lifecycleTurnAdmitter{admission: lifecycleTestAdmission()}
 	service := &Service{
 		agent:                  native.New(native.Deps{Logger: logger}),
+		checkpoints:            emptyHistoryCheckpoints(),
 		modelsService:          models.NewService(logger, queries),
 		queries:                queries,
 		contextLifecycles:      lifecycles,
