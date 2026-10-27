@@ -128,6 +128,46 @@ func TestExecuteTools_ParallelExecution(t *testing.T) {
 	}
 }
 
+// The calls a batch executes share what its results may take together, each
+// an equal part; a call the batch refuses takes none, and a batch without a
+// bound leaves every result to its tool's own.
+func TestExecuteTools_SharesTheBatchOutputBound(t *testing.T) {
+	var mu sync.Mutex
+	shares := map[string]int{}
+	share := func(name string) toolexec.Tool {
+		return toolexec.Tool{
+			Name:       name,
+			Parameters: objSchema(),
+			Execute: func(ctx *toolexec.ToolExecContext, _ sdk.ToolArguments) (sdk.ToolOutput, error) {
+				mu.Lock()
+				defer mu.Unlock()
+				shares[ctx.ToolCallID] = ctx.OutputBytes
+				return sdk.TextOutput("ok"), nil
+			},
+		}
+	}
+	tools := []toolexec.Tool{share("t1"), share("t2"), share("t3")}
+	calls := []sdk.ToolCall{
+		{ToolCallID: "c1", ToolName: "t1"},
+		{ToolCallID: "c2", ToolName: "t2"},
+		{ToolCallID: "c3", ToolName: "t3"},
+		{ToolCallID: "c4", ToolName: "missing"},
+	}
+
+	for _, tc := range []struct {
+		bound int
+		want  int
+	}{{bound: 900, want: 300}, {bound: 0, want: 0}} {
+		clear(shares)
+		if _, err := toolexec.ExecuteTools(context.Background(), calls, toolexec.ToolExecOptions{Tools: tools, OutputBytes: tc.bound}); err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(shares) != 3 || shares["c1"] != tc.want || shares["c2"] != tc.want || shares["c3"] != tc.want {
+			t.Fatalf("bound %d: shares = %v, want %d for each executed call", tc.bound, shares, tc.want)
+		}
+	}
+}
+
 func TestExecuteTools_SingleExecution(t *testing.T) {
 	var executed bool
 	outcome, err := toolexec.ExecuteTools(context.Background(),

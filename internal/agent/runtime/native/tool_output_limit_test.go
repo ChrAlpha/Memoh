@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/felinics/memoh/internal/agent/background"
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
@@ -131,6 +133,102 @@ func TestAgentExecuteToolLimitsToolError(t *testing.T) {
 	}
 	if len(text) >= len(largeErr) || !strings.Contains(text, "[memoh pruned]") {
 		t.Fatalf("tool error was not pruned:\n%s", text)
+	}
+}
+
+// A step's results together keep within half of what its request has beside
+// the system prompt and tools, parallel results sharing that equally: four
+// results that alone would each fill the window reach the next request with
+// room to spare.
+func TestAgentGenerateBoundsAStepsResultsTogether(t *testing.T) {
+	t.Parallel()
+
+	var next sdk.Request
+	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
+		if call > 1 {
+			next = cloneGenerateParams(params)
+			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		}
+		calls := make([]sdk.ToolCall, 4)
+		for i := range calls {
+			calls[i] = sdk.ToolCall{
+				ToolCallID: fmt.Sprintf("call-%d", i),
+				ToolName:   "lookup",
+				Input:      toolexec.ArgumentsFromValue(map[string]any{"q": i}),
+			}
+		}
+		return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: calls}, nil
+	}}
+	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
+		return cfg, nil
+	}})
+	a.SetToolProviders([]agenttools.ToolProvider{oversizeLookupProvider()})
+
+	plan := contextfrag.ContextBudgetPlan{Window: 8000, OutputReserve: 1000}
+	result, err := a.Generate(context.Background(), RunConfig{
+		Model:            &sdk.Model{ID: "mock-model", Provider: modelProvider},
+		Messages:         []sdk.Message{sdk.UserMessage("look everything up")},
+		SupportsToolCall: true,
+		Identity:         SessionContext{BotID: "bot-1"},
+		ContextManifest:  contextfrag.Manifest{BudgetPlan: &plan},
+	})
+	if err != nil {
+		t.Fatalf("Generate() error = %v, want the run to finish", err)
+	}
+	if result.Text != "done" {
+		t.Fatalf("Generate() text = %q, want done", result.Text)
+	}
+	allowance := plan.Window - plan.OutputReserve
+	room := allowance - contextfrag.ProviderEnvelopeTokens(next.System, nil, next.Tools)
+	var sizes []int
+	results := 0
+	for _, message := range next.Messages {
+		for _, part := range message.Content {
+			if result, ok := part.(sdk.ToolResultPart); ok {
+				if !strings.Contains(result.Result.Text, "[memoh pruned]") {
+					t.Fatalf("result %s was sent whole", result.ToolCallID)
+				}
+				sizes = append(sizes, len(result.Result.String()))
+			}
+		}
+		if message.Role == sdk.MessageRoleTool {
+			results += contextfrag.ProviderEnvelopeTokens("", []sdk.Message{message}, nil)
+		}
+	}
+	// Each result carries its call's id and name beside the share it takes.
+	if len(sizes) != 4 || slices.Min(sizes) != slices.Max(sizes) || results > room/2+4*32 {
+		t.Fatalf("result sizes = %v (%d tokens), want four equal shares within half of the %d-token room", sizes, results, room)
+	}
+	if tokens := contextfrag.ProviderEnvelopeTokens(next.System, next.Messages, next.Tools); tokens > allowance {
+		t.Fatalf("next request = %d tokens, want it within the %d-token allowance", tokens, allowance)
+	}
+}
+
+// A call run after its decision is the one result of the step it was
+// deferred from: it keeps within what that step's results may take together.
+func TestAgentExecuteToolBoundsAnApprovedCallByItsStep(t *testing.T) {
+	t.Parallel()
+
+	a := New(Deps{})
+	a.SetToolProviders([]agenttools.ToolProvider{oversizeLookupProvider()})
+	cfg := RunConfig{
+		Model:                  &sdk.Model{ID: "mock-model"},
+		SupportsToolCall:       true,
+		Identity:               SessionContext{BotID: "bot-1"},
+		ContextBudgetMaxTokens: 4000,
+		ModelMaxOutputTokens:   1000,
+	}
+	result, err := a.ExecuteTool(context.Background(), cfg, sdk.ToolCall{
+		ToolCallID: "call-approved",
+		ToolName:   "lookup",
+		Input:      toolexec.ArgumentsFromValue(map[string]any{}),
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTool() error = %v", err)
+	}
+	budget := int(contextfrag.BudgetBytesForTokens(providerInputAllowance(cfg) / 2))
+	if size := len(result.Result.String()); size > budget || !strings.Contains(result.Result.Text, "[memoh pruned]") {
+		t.Fatalf("approved result = %d bytes, want it pruned within the step's %d", size, budget)
 	}
 }
 
