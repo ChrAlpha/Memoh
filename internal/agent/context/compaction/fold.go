@@ -59,6 +59,14 @@ type Event struct {
 	Window          int
 	MaxOutputTokens int
 	Allowance       int
+	// FixedOutput marks a summarizer that answers within all of
+	// MaxOutputTokens: the run's own model, whose output settings a fork of
+	// the run's request keeps, since the provider settings the fork shares
+	// with the run's requests (a thinking budget) hold for the output those
+	// ask for. A pass then reads only what the window holds beside all of it,
+	// as the run's own requests do. Otherwise a fork asks for less output
+	// when that lets a pass read more.
+	FixedOutput bool
 	// Pressure is the request size that called for the event, for hooks.
 	Pressure int
 	// ReplacedTurnID is the turn an edit or retry replaces: the event first
@@ -139,7 +147,9 @@ func (s *Service) foldPass(ctx context.Context, ev Event, rows requestRows) (Pas
 	}
 	fork := ev.Request
 	fork.Messages = append(slices.Clip(plan.fork), sdk.UserMessage(plan.instruction))
-	fork.MaxTokens = &plan.maxTokens
+	if !ev.FixedOutput {
+		fork.MaxTokens = &plan.maxTokens
+	}
 
 	persistCtx := context.WithoutCancel(ctx)
 	logID, err := s.openLog(persistCtx, ev.BotID, ev.SessionID)
@@ -220,8 +230,9 @@ func rendersCheckpoint(ev Event, parent checkpoint.Checkpoint) error {
 // summarize asks for the summary. A transient failure gets one immediate
 // retry, or the wait the provider asks for; a rejected request is not made
 // again. A model that answers with a tool call is asked once more, with the
-// same prefix and a firmer instruction; the answer must finish naturally and
-// say something.
+// same prefix and a firmer instruction, which the pass priced in, so the
+// second request fits the window with the same output; the answer must
+// finish naturally and say something.
 func (s *Service) summarize(ctx context.Context, ev Event, fork sdk.Request, plan foldPlan) (sdk.ModelResult, error) {
 	ask := func(fork sdk.Request) (sdk.ModelResult, error) {
 		return modelretry.Do(models.WithModelSession(ctx, ev.SessionID), s.logger, "agent.compaction",
@@ -232,12 +243,7 @@ func (s *Service) summarize(ctx context.Context, ev Event, fork sdk.Request, pla
 	if err == nil && len(result.ToolCalls) > 0 {
 		s.logger.WarnContext(ctx, "compaction: the summarizer called a tool, asking again",
 			slog.String("session_id", ev.SessionID), slog.Int("tool_calls", len(result.ToolCalls)))
-		// The reminder takes from what the fork may answer, so the request
-		// stays within the window it was sized for.
-		reminder := "\n\n" + noToolsReminder
-		fork.Messages = append(slices.Clip(fork.Messages[:len(fork.Messages)-1]), sdk.UserMessage(plan.instruction+reminder))
-		maxTokens := plan.maxTokens - instructionTokens(reminder)
-		fork.MaxTokens = &maxTokens
+		fork.Messages = append(slices.Clip(fork.Messages[:len(fork.Messages)-1]), sdk.UserMessage(plan.instruction+noToolsReminder))
 		result, err = ask(fork)
 	}
 	if err != nil {
@@ -354,8 +360,9 @@ func (r requestRows) of(plan foldPlan) foldRows {
 	return out
 }
 
-// noToolsReminder is what a second fork request adds after a tool call.
-const noToolsReminder = "Your previous answer called a tool. Do not call any tool: answer with the summary text alone."
+// noToolsReminder is what a second fork request adds to the instruction
+// after a tool call.
+const noToolsReminder = "\n\nYour previous answer called a tool. Do not call any tool: answer with the summary text alone."
 
 // hookScope is what the compaction hooks are told about an event.
 type hookScope struct {

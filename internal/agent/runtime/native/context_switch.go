@@ -27,8 +27,11 @@ type MessageProvenance struct {
 // request before a step does not fit its allowance. Request is that request
 // and Provenance what each of its messages renders (nil for runtime context
 // the run rebuilds); the event decides what of it stays verbatim. Summarize
-// answers a fork request through the run's own model; Fold applies a pass
-// the event committed to the request and reports the request as it then is.
+// answers a fork request through the run's own model, with the output
+// settings the request carries, so a fork reads only what WindowTokens holds
+// beside OutputTokens, the run's output allowance, as every request of the
+// run does. Fold applies a pass the event committed to the request and
+// reports the request as it then is.
 type ContextSwitch struct {
 	Request         sdk.Request
 	Provenance      []*MessageProvenance

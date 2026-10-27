@@ -300,6 +300,69 @@ func TestFoldReadsLessWhenThePrefixFillsTheWindow(t *testing.T) {
 	}
 }
 
+// A fork of a run's own request answers with the output settings the
+// request carries, a thinking budget sized for them among them: it asks for
+// no output cap the run does not ask for, and for no other one.
+func TestFoldKeepsTheOutputSettingsOfARunsRequest(t *testing.T) {
+	t.Parallel()
+	runCap := 8000
+	for _, tc := range []struct {
+		name      string
+		maxTokens *int
+	}{
+		{name: "the provider's own cap"},
+		{name: "a requested cap", maxTokens: &runCap},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newFoldSession(t)
+			r := s.request()
+			summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("Audit summarized.")}}
+			ev := s.event(r, summarizer)
+			ev.Request.MaxTokens, ev.FixedOutput = tc.maxTokens, true
+
+			if passes, err := s.svc.Fold(context.Background(), ev); err != nil || len(passes) != 1 {
+				t.Fatalf("passes=%d err=%v, want one pass", len(passes), err)
+			}
+			if got := summarizer.requests[0].MaxTokens; got != tc.maxTokens {
+				t.Fatalf("fork max_tokens = %v, want the request's own %v", got, tc.maxTokens)
+			}
+		})
+	}
+}
+
+// A summarizer whose output is fixed is never asked for less: a pass reads
+// only what the window holds beside all of it and leaves the rest to the next
+// pass, where one that may answer in less reads up to the cut at once.
+func TestFoldReadsWhatTheWindowHoldsBesideAFixedOutput(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	r.messages[3] = resultMessage("call_1", strings.Repeat("parser.go:12 unsafe cast of int64 to int32\n", 600))
+	r.messages = slices.Insert(r.messages, 4, callMessage("call_3"), resultMessage("call_3", strings.Repeat("lexer.go:40 unsafe cast of uint to int\n", 600)))
+	r.sources = slices.Insert(r.sources, 4, historySource(s.row()), historySource(s.row()))
+	ev := s.event(r, &scriptedSummarizer{})
+	// A small summary budget, so no window below reads either audit cut.
+	ev.Allowance = 4000
+	ev.retention = retain(ev, nil)
+	whole, err := planFold(ev, nil)
+	if err != nil || !whole.final() || ev.cut != r.cut+2 {
+		t.Fatalf("plan end=%d cut=%d err=%v, want one read up to the latest step in a roomy window", whole.end, ev.cut, err)
+	}
+	// The window holds the whole read with half of the output beside it.
+	read := append(slices.Clone(whole.fork), sdk.UserMessage(whole.instruction+noToolsReminder))
+	ev.Window = forkTokens(sdk.Request{System: ev.Request.System, Messages: read, Tools: ev.Request.Tools}) + instructionNumberSlack + ev.MaxOutputTokens/2
+
+	if flexible, err := planFold(ev, nil); err != nil || !flexible.final() || flexible.maxTokens >= ev.MaxOutputTokens {
+		t.Fatalf("plan end=%d max_tokens=%d err=%v, want the whole read with less output", flexible.end, flexible.maxTokens, err)
+	}
+	ev.FixedOutput = true
+	fixed, err := planFold(ev, nil)
+	if err != nil || fixed.final() || fixed.end != 4 || fixed.maxTokens != ev.MaxOutputTokens {
+		t.Fatalf("plan end=%d max_tokens=%d err=%v, want the read up to the second call with all %d tokens of output", fixed.end, fixed.maxTokens, err, ev.MaxOutputTokens)
+	}
+}
+
 // A message larger than the window the summarizer reads in is no wall: the
 // fork reads its head and tail, and the summary stands for all of it.
 func TestFoldReadsAMessageLargerThanItsWindowByItsHeadAndTail(t *testing.T) {
@@ -406,7 +469,8 @@ func TestFoldReadsAPromotedSystemPromptWhole(t *testing.T) {
 	}
 }
 
-// A summarizer that calls a tool is asked once more with the same prefix; a
+// A summarizer that calls a tool is asked once more with the same prefix and
+// output, which the window holds with the reminder the instruction gains; a
 // second tool call fails the event.
 func TestFoldAsksAgainOnceWhenTheSummarizerCallsATool(t *testing.T) {
 	t.Parallel()
@@ -424,7 +488,10 @@ func TestFoldAsksAgainOnceWhenTheSummarizerCallsATool(t *testing.T) {
 			s := newFoldSession(t)
 			r := s.request()
 			summarizer := &scriptedSummarizer{answers: tc.answers}
-			passes, err := s.svc.Fold(context.Background(), s.event(r, summarizer))
+			ev := s.event(r, summarizer)
+			// The window, not the cap, bounds what the fork may answer.
+			ev.MaxOutputTokens = 64000
+			passes, err := s.svc.Fold(context.Background(), ev)
 			if ReasonOf(err) != tc.wantErr || (tc.wantErr == "") != (len(passes) == 1) {
 				t.Fatalf("passes=%d err=%v, want reason %q", len(passes), err, tc.wantErr)
 			}
@@ -435,9 +502,8 @@ func TestFoldAsksAgainOnceWhenTheSummarizerCallsATool(t *testing.T) {
 			if !slices.EqualFunc(first.Messages[:r.cut], second.Messages[:r.cut], messagesEqual) || !strings.Contains(messageText(second.Messages[r.cut]), noToolsReminder) {
 				t.Fatal("the second request changed the prefix or lacks the reminder")
 			}
-			// The reminder comes out of what the fork may answer.
-			if grown := forkTokens(second) - forkTokens(first); *second.MaxTokens > *first.MaxTokens-grown {
-				t.Fatalf("second max_tokens=%d, want at most %d: the first %d less the %d tokens the reminder adds", *second.MaxTokens, *first.MaxTokens-grown, *first.MaxTokens, grown)
+			if *first.MaxTokens >= ev.MaxOutputTokens || *second.MaxTokens != *first.MaxTokens || forkTokens(second)+*second.MaxTokens > ev.Window {
+				t.Fatalf("max_tokens %d then %d, the second taking %d tokens of a %d-token window: want the same output, within the window", *first.MaxTokens, *second.MaxTokens, forkTokens(second)+*second.MaxTokens, ev.Window)
 			}
 		})
 	}

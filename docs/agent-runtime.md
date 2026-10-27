@@ -83,14 +83,20 @@ run's own model for the summary that replaces what folds there. The
 instruction quotes the input the next call answers, and asks the summary to
 end with where the work stands; the tool results it folds are listed by the
 ref `get_messages` reads them back by. The fork keeps the run's system
-prompt, tools, cache key and reasoning settings and ends with one compaction
-instruction, so the summarizer reads what it replaces in place and the fork
-shares the run's prompt cache. It streams outside the run's call observer, and
-a stream that sends nothing for the run's model window is cut off; a transient
-failure is asked once more, and an answer that calls a tool once more with a
-firmer instruction. A fork that does not fit the window reads a shorter prefix
-ending at a tool-group boundary, and the event passes again over the request
-the native runtime spliced, each pass absorbing the summary before it. A
+prompt, tools, cache key, reasoning and output settings and ends with one
+compaction instruction, so the summarizer reads what it replaces in place and
+the fork shares the run's prompt cache. It asks for the output the run's
+requests ask for, or none where they leave the cap to the provider, and reads
+only what the window holds beside the run's output allowance, as each of
+those requests does: a provider setting sized for that output, such as a
+legacy Anthropic thinking budget, stays valid. It streams outside the run's
+call observer, and a stream that sends nothing for the run's model window is
+cut off; a transient failure is asked once more, and an answer that calls a
+tool once more with a firmer instruction, which the pass priced in, so the
+second request fits with the same output. A fork that does not fit the window
+reads a shorter prefix ending at a tool-group boundary, and the event passes
+again over the request the native runtime spliced, each pass absorbing the
+summary before it. A
 message larger than what the window leaves one message beside the system
 prompt, tools, the longest summary, the instruction and the least output
 reaches the summarizer by its head and tail: its text, the arguments of its
@@ -121,8 +127,10 @@ within a byte bound and the row that crosses it, up to 8 MiB, each row the
 message a run's request holds for it, so a pass plans and folds it the way it
 folds a run's. The compaction model, whatever provider it runs on, is offered
 no tools: its request writes every message out as text under its role, tool
-calls, tool results and media included. The summarizer streams through the
-client the runs stream through. An event folds every row the
+calls and tool results included, media named. It is asked for as much output
+as the window leaves, up to its cap, and never less than half of what the
+summary may need; a pass reads less rather than ask for less. The summarizer
+streams through the client the runs stream through. An event folds every row the
 caller does not keep into one rolling summary, reading again for what one
 bounded read left; it keeps what a run's fold keeps, with the input, a
 continuation's steers or a Discuss batch as anchors.

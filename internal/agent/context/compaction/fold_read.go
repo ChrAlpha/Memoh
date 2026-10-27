@@ -45,8 +45,8 @@ func forkRead(ev Event) ([]sdk.Message, error) {
 // forkMessageCap is the most one message takes in a fork request: what the
 // window has beside the system prompt, the tools and the messages that render
 // no source, the longest summary a pass reads before it, the instruction and
-// the least output a fork asks for. A pass can therefore read any message
-// after a summary.
+// the least output a fork asks for (leastOutput). A pass can therefore read
+// any message after a summary.
 func forkMessageCap(ev Event) int {
 	var fixed []sdk.Message
 	for i, message := range ev.Request.Messages[:ev.cut] {
@@ -55,7 +55,7 @@ func forkMessageCap(ev Event) int {
 		}
 	}
 	envelope := forkTokens(sdk.Request{System: ev.Request.System, Messages: fixed, Tools: ev.Request.Tools})
-	return max(ev.Window-envelope-summaryBudget(ev)-forkInstructionReserve-minForkOutputTokens, minForkOutputTokens)
+	return max(ev.Window-envelope-summaryBudget(ev)-forkInstructionReserve-leastOutput(ev), minForkOutputTokens)
 }
 
 // cutForFork renders message within capTokens for a fork: its text, the

@@ -22,8 +22,9 @@ const (
 	// holds three results at the tool output bound, or two beside a long
 	// input; a small window keeps at most a quarter of its room (fixedRoom).
 	verbatimCapTokens = 32000
-	// minForkOutputTokens is the least output a fork request asks for. A pass
-	// reads less of the request rather than ask for less.
+	// minForkOutputTokens is the least output a fork request asks for of a
+	// summarizer whose output is not fixed. A pass reads less of the request
+	// rather than ask for less.
 	minForkOutputTokens = 1024
 	// instructionNumberSlack covers the instruction growing by the digits of
 	// the numbers it states.
@@ -247,6 +248,27 @@ func (p foldPlan) order(ev Event) ([]int, int) {
 // keeps, so its summary is the one the caller's next request carries.
 func (p foldPlan) final() bool { return p.end == p.cut }
 
+// answers reports whether the fork leaves the summarizer room to answer: all
+// of its output when that is fixed, else, within its cap, at least half of
+// the summary what the pass reads may need and never less than
+// minForkOutputTokens.
+func (p foldPlan) answers(ev Event) bool {
+	need := ev.MaxOutputTokens
+	if !ev.FixedOutput {
+		need = min(need, max(minForkOutputTokens, min(summaryBudget(ev), p.replaced)/2))
+	}
+	return p.maxTokens >= need
+}
+
+// leastOutput is the least output a fork of ev asks for: all of the
+// summarizer's when it is fixed, else minForkOutputTokens within its cap.
+func leastOutput(ev Event) int {
+	if ev.FixedOutput {
+		return ev.MaxOutputTokens
+	}
+	return min(ev.MaxOutputTokens, minForkOutputTokens)
+}
+
 // bounded reports whether the pass's summary must fit the room the next
 // request has for it: the final pass's, and a rewrite's, which makes
 // progress only by leaving a summary that fits.
@@ -258,8 +280,7 @@ func (p foldPlan) bounded() bool { return p.final() || p.rewrite }
 // nothing but summaries is left, a pass rewrites them only if they do not fit
 // the room the next request has. The pass reads the longest prefix of the
 // request, ending at a tool-group boundary, that leaves the fork room to
-// answer: at least half of the summary what it reads may need, and never
-// less than minForkOutputTokens.
+// answer (answers).
 func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	messages, sources := ev.Request.Messages, ev.Sources
 	kept := map[int]bool{}
@@ -304,8 +325,7 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 			}
 			continue
 		}
-		need := max(minForkOutputTokens, min(summaryBudget(ev), plan.replaced)/2)
-		if plan.maxTokens >= min(capability, need) {
+		if plan.answers(ev) {
 			return plan, nil
 		}
 	}
@@ -392,7 +412,9 @@ func (p *foldPlan) size(ev Event, capability int) error {
 	p.room = ev.Allowance - forkTokens(sdk.Request{System: ev.Request.System, Messages: keptMessages, Tools: ev.Request.Tools})
 	prefix := forkTokens(sdk.Request{System: ev.Request.System, Messages: p.fork, Tools: ev.Request.Tools})
 	p.instruction = forkInstruction(ev, p)
-	p.maxTokens = min(capability, ev.Window-prefix-instructionTokens(p.instruction)-instructionNumberSlack)
+	// The instruction is priced as a second request carries it, with the
+	// reminder after a tool call.
+	p.maxTokens = min(capability, ev.Window-prefix-instructionTokens(p.instruction+noToolsReminder)-instructionNumberSlack)
 	p.stated = min(p.maxTokens*3/4, summaryBudget(ev), summaryOutputLimit(p.replaced-1, capability))
 	if p.bounded() {
 		p.stated = min(p.stated, summaryOutputLimit(p.room, capability))

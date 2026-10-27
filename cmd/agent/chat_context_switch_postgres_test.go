@@ -889,6 +889,30 @@ func requestMessages(t *testing.T, request string) []string {
 
 // summaryContents is every message of a provider request body that carries
 // the scripted summary, in order.
+// assertForksAskForTheRunsOutput fails unless every fork asks for the output
+// cap the run's own request does, none when the run leaves it to the provider:
+// the provider settings a fork shares with the run hold for that output.
+func assertForksAskForTheRunsOutput(t *testing.T, run string, forks []string) {
+	t.Helper()
+	outputCap := func(body string) (any, bool) {
+		var request map[string]any
+		if err := json.Unmarshal([]byte(body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if value, ok := request["max_tokens"]; ok {
+			return value, true
+		}
+		value, ok := request["max_completion_tokens"]
+		return value, ok
+	}
+	want, wantSet := outputCap(run)
+	for i, body := range forks {
+		if got, set := outputCap(body); set != wantSet || got != want {
+			t.Fatalf("summarizer call %d asks for output cap %v (set=%v), want the run's %v (set=%v)", i+1, got, set, want, wantSet)
+		}
+	}
+}
+
 func summaryContents(t *testing.T, request string) []string {
 	t.Helper()
 	var summaries []string
@@ -960,10 +984,11 @@ func historyFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 }
 
 // When the history a run starts with fills the request, the first step that
-// does not fit folds that history into a summary and the run goes on: the
-// effect runs once, the request keeps every message the fold does not cover
-// exactly as it was sent, with the input and the step's result verbatim, and
-// the next turn replays the same summary without compacting.
+// does not fit folds that history into a summary and the run goes on: every
+// fork asks for the run's own output, the effect runs once, the request keeps
+// every message the fold does not cover exactly as it was sent, with the
+// input and the step's result verbatim, and the next turn replays the same
+// summary without compacting.
 func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	f := s.f
 	// The turns fit the request together; with the step after them they do
@@ -985,17 +1010,21 @@ func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	// The step fits the verbatim budget; with the history before it, the
 	// request does not fit.
 	s.resultBytes = 2200
+	var forks []string
+	f.onSummary = func(body []byte) { forks = append(forks, string(body)) }
 	code, requests := s.run(entry, loopInput, 1)
+	f.onSummary = nil
 	if code != "" || !slices.Equal(s.effects, []int{1}) || len(requests) != 2+entry.extra {
 		t.Fatalf("code=%q effects=%v provider_calls=%d summary_calls=%d, want the run answered after one effect", code, s.effects, len(requests), f.summaries.Load()-summaries)
 	}
 	before, last := requests[len(requests)-2], requests[len(requests)-1]
 	summary := summaryContents(t, last)
-	if strings.Contains(before, loopSummary) || f.summaries.Load()-summaries != 1 || len(summary) != 1 || strings.Count(last, loopInput) != 1 ||
+	if strings.Contains(before, loopSummary) || len(forks) == 0 || len(summary) != 1 || strings.Count(last, loopInput) != 1 ||
 		!strings.Contains(last, "TOOL_RESULT_001 ") || strings.Contains(last, "PREFIX_TURN_0 ") || strings.Contains(last, "[tool result pruned") {
-		t.Fatalf("summary_calls=%d summaries=%q input=%d result=%v raw_prefix=%v, want the earlier turns folded in one call at the step that did not fit, and the input and result raw",
-			f.summaries.Load()-summaries, summary, strings.Count(last, loopInput), strings.Contains(last, "TOOL_RESULT_001 "), strings.Contains(last, "PREFIX_TURN_0 "))
+		t.Fatalf("summary_calls=%d summaries=%q input=%d result=%v raw_prefix=%v, want the earlier turns folded at the step that did not fit, and the input and result raw",
+			len(forks), summary, strings.Count(last, loopInput), strings.Contains(last, "TOOL_RESULT_001 "), strings.Contains(last, "PREFIX_TURN_0 "))
 	}
+	assertForksAskForTheRunsOutput(t, before, forks)
 	sent := requestMessages(t, before)
 	for _, message := range requestMessages(t, last) {
 		at := slices.Index(sent, message)
@@ -1027,7 +1056,8 @@ func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 
 // A tool loop that outgrows the model window keeps going on one rolling
 // summary in every entry: each effect runs once, each event folds everything
-// before the latest step in one summarizer call that is told the run's input,
+// before the latest step, in summarizer calls that are told the run's input
+// and ask for the run's own output, as many as the window needs beside it,
 // requests between events only grow, the input and the latest results stay
 // verbatim, a row written into the session by someone else is left alone, and
 // the next turn renders the summary the run sent at the same place without
@@ -1082,14 +1112,15 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 		}
 		first, previous = kept, messages
 	}
-	if events < 2 || int(f.summaries.Load()-summaries) != events {
-		t.Fatalf("events=%d summary_calls=%d, want the loop to fold at least twice, one summarizer call each", events, f.summaries.Load()-summaries)
+	if events < 2 || int(f.summaries.Load()-summaries) < events {
+		t.Fatalf("events=%d summary_calls=%d, want the loop to fold at least twice, with a summarizer call or more each", events, f.summaries.Load()-summaries)
 	}
 	for i, body := range summarized {
 		if !strings.Contains(body, loopInput) {
 			t.Fatalf("summarizer call %d was not told the run's input", i+1)
 		}
 	}
+	assertForksAskForTheRunsOutput(t, requests[len(requests)-1], summarized)
 	var running, toolRows, foldedRows, foreign int
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE state <> 'completed') FROM session_runs WHERE session_id=$1`, f.sessionID).Scan(&running); err != nil {
 		t.Fatal(err)

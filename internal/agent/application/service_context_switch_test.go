@@ -245,8 +245,8 @@ func TestSwitchContextFoldsTheRunsRequest(t *testing.T) {
 					t.Fatalf("source %d = %+v, want anchor=%v and runtime context only where the run rebuilds it", i, source, anchors[i])
 				}
 			}
-			if ev.Window != 4000 || ev.MaxOutputTokens != 1000 || ev.Allowance != 2000 || ev.ModelRecordID != "model-row" || ev.Request.Model != "run-model" {
-				t.Fatalf("event = %+v, want the run's request, window, output and allowance", ev)
+			if ev.Window != 4000 || ev.MaxOutputTokens != 1000 || !ev.FixedOutput || ev.Allowance != 2000 || ev.ModelRecordID != "model-row" || ev.Request.Model != "run-model" {
+				t.Fatalf("event = %+v, want the run's request, window, fixed output and allowance", ev)
 			}
 			if _, _ = ev.Summarizer(t.Context(), sdk.Request{}); !summarized {
 				t.Fatal("the event does not ask the run's own model")

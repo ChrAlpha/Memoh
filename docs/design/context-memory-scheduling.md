@@ -253,9 +253,12 @@ event per pending request:
 - The event folds everything the request does not keep raw into one rolling summary.
   It does not stop once the request would fit, and it does not aim at a fixed target,
   ratio, or watermark.
-- The summarizer is the model the run resolved. Its output limit comes from that
-  model's capability and the room the request leaves, and the stated bound prices the
-  summary wrapper and provider envelope. The prompt states the capacity facts — the
+- The summarizer is the model the run resolved. A fork of the run's request keeps the
+  run's output settings, so it reads only what the window holds beside the run's
+  output allowance and a provider setting sized for that output (a thinking budget)
+  stays valid; a request built from rows asks the compaction model for what the
+  window leaves, up to its capability. The stated bound prices the summary wrapper
+  and provider envelope. The prompt states the capacity facts — the
   content being replaced, what stays verbatim, the room available, the summary's
   upper bound, and the current goal — and the model decides what to keep and how long
   the summary is. Below the minimum useful summary room, the event fails before a
