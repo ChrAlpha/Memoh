@@ -1,19 +1,21 @@
 package compaction
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/turn"
 )
 
 const (
-	// roomShare is the share of a request's room (fixedRoom) a fold may keep
-	// verbatim, and the share its summary may take: a fold leaves at least
-	// half of the room to the steps after it instead of refilling the request
-	// it just emptied.
+	// roomShare is the share of a request's room (fixedRoom) a fold keeps
+	// verbatim within its budget, and the share its summary may take, so a
+	// fold leaves the steps after it room instead of refilling the request it
+	// just emptied.
 	roomShare = 4
 	// verbatimCapTokens is the most a fold keeps verbatim of what it may
 	// fold: anchors newest first, then the newest complete call groups. It
@@ -80,6 +82,18 @@ type retention struct {
 	latestGroupTokens int
 }
 
+// keepTokens is what keeping message verbatim takes: what a request prices it
+// at, or what a history load admits it by, its encoded bytes, whichever is
+// more. A request prices an inline image flat, but the image fills a load
+// bounded in bytes; kept, it would leave the history that load cannot hold.
+func keepTokens(message sdk.Message) int {
+	tokens := forkTokens(sdk.Request{Messages: []sdk.Message{message}})
+	if encoded, err := json.Marshal(message); err == nil {
+		tokens = max(tokens, contextfrag.TokensFromBytes(len(encoded)))
+	}
+	return tokens
+}
+
 func (r retention) keeps(source Source) bool {
 	return source.Anchor && slices.ContainsFunc(source.Sources, func(s turn.ContextMessageSource) bool {
 		return r.anchors[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}]
@@ -91,14 +105,15 @@ func (r retention) keeps(source Source) bool {
 // context row holds stay whatever they take, and so, under AnchorsCapped, do
 // the anchors after the newest call group; then anchors newest first, then
 // the newest complete call groups, a call with all its results, up to the
-// first that does not fit. Everything else, summaries included, folds.
+// first that does not fit. Everything else, summaries included, folds. What
+// a message takes is keepTokens.
 func retain(ev Event, unfoldable map[int]bool) retention {
 	messages, sources := ev.Request.Messages, ev.Sources
 	cost := func(from, to int) int {
 		tokens := 0
 		for i := from; i < to; i++ {
 			if len(sources[i].Sources) > 0 && !unfoldable[i] {
-				tokens += forkTokens(sdk.Request{Messages: messages[i : i+1]})
+				tokens += keepTokens(messages[i])
 			}
 		}
 		return tokens
@@ -108,7 +123,7 @@ func retain(ev Event, unfoldable map[int]bool) retention {
 	budget := verbatimBudget(ev)
 	for i := range messages {
 		if len(sources[i].Sources) > 0 && unfoldable[i] {
-			budget -= forkTokens(sdk.Request{Messages: messages[i : i+1]})
+			budget -= keepTokens(messages[i])
 		}
 	}
 	if ev.Anchors == AnchorsCapped {

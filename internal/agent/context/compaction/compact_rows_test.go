@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -15,7 +16,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/toolexec"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -129,6 +132,49 @@ func TestCompactReadsBeforeItsCutoffAfterRewindingTheReplacedTurn(t *testing.T) 
 	}
 	if strings.Contains(stub.prompt, "now build") {
 		t.Fatal("the summarizer read a row from the cutoff on")
+	}
+}
+
+// A row heavy in bytes and light in tokens, an inline screenshot, takes what
+// its bytes fill of a history load: the event does not keep it raw, so the
+// history advances until it loads whole, whether one read holds it or the
+// byte bound truncates the read.
+func TestCompactFoldsRowsTooLargeToLoad(t *testing.T) {
+	t.Parallel()
+
+	for _, screenshots := range []int{1, 4} {
+		t.Run(fmt.Sprintf("%d screenshots", screenshots), func(t *testing.T) {
+			t.Parallel()
+			var rows []candidateRow
+			for i := range screenshots {
+				message := sdk.UserMessage(fmt.Sprintf("Screenshot %d", i), sdk.ImagePart{
+					Image: "data:image/png;base64," + strings.Repeat("A", 1_330_000), MediaType: "image/png",
+				})
+				raw, err := historyfrag.MarshalStoredSDKMessage(message)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rows = append(rows, mkRow(t, "user", string(raw)), mkRow(t, "assistant", `"seen"`))
+			}
+			q := &fakeQueries{history: rows}
+			stub := &stubModel{summary: "The earlier screenshots show the UI states before the current task."}
+			svc := newMachineryService(q)
+			cfg := machineryConfig(stub, 168_000)
+			cfg.SummaryWindowTokens = 200_000
+
+			if passes, err := svc.Compact(context.Background(), cfg); err != nil || len(passes) == 0 {
+				t.Fatalf("passes=%d err=%v, want the screenshots folded", len(passes), err)
+			}
+			active := q.checkpoints[q.active]
+			position := messagepkg.HistoryPosition{Turn: active.TurnPosition, Seq: active.TurnMessageSeq}
+			last := rowPosition(rows[len(rows)-2])
+			if position.Turn < last.Turn || position.Turn == last.Turn && position.Seq < last.Seq || slices.ContainsFunc(q.held(), func(item checkpoint.Item) bool { return item.RowID != "" }) {
+				t.Fatalf("checkpoint at %+v holds %+v, want every screenshot folded", position, q.held())
+			}
+			if after, err := svc.synthesize(context.Background(), cfg); err != nil || after.truncated {
+				t.Fatalf("err=%v truncated=%v, want the history to load whole after the fold", err, after.truncated)
+			}
+		})
 	}
 }
 

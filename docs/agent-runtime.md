@@ -62,13 +62,19 @@ the anchors after the newest call group, the input or steers the next call
 answers, which stay whatever they take; then the other anchors newest first;
 then the newest complete call groups, a call with all its results, up to the
 first that does not fit. Everything else folds, the active checkpoint's
-summaries included. The latest step is such a call group, and so is the
+summaries included. A message takes what a request prices it at or what a
+history load admits it by, its encoded bytes, whichever is more: an inline
+image a request prices flat stays only if the byte-bounded load can still
+hold it, so a history of large screenshots folds rather than stay too large
+to load. The latest step is such a call group, and so is the
 deferred call and answer a decision continuation resumes from: a step within
 the budget stays, a larger one folds in the same pass as what is before it.
 32000 tokens holds three results at the tool output bound, or two beside a
 long input. The summary may take another quarter of the room, so a fold
-leaves at least half of it to the steps after it and a small window does not
-fold at every step. The 32000-token bound was calibrated on call-group sizes
+that keeps no more than the budget leaves about half of it to the steps after
+it. What stays whatever it takes, the input the next call answers and the
+messages no row holds, can take more, and a Discuss batch is kept by its own
+rule. The 32000-token bound was calibrated on call-group sizes
 of real agent sessions, and every event logs
 `compaction retention` with the budget, the call groups it kept and the
 latest group's size, to check it against Memoh's own traffic.

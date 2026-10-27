@@ -278,7 +278,7 @@ func (s *effectLoop) Tools(context.Context, tools.SessionContext) ([]toolexec.To
 		toolexec.Define("numbered_effect", "Record a numbered effect and return its findings.", func(tc *toolexec.ToolExecContext, input effectInput) (sdk.ToolOutput, error) {
 			s.mu.Lock()
 			s.effects = append(s.effects, input.Index)
-			size, foreign, arrive := cmp.Or(s.resultBytes, 2400), input.Index == s.foreignAt, input.Index == s.arriveAt
+			size, foreign, arrive := cmp.Or(s.resultBytes, 2200), input.Index == s.foreignAt, input.Index == s.arriveAt
 			if input.Index == s.downAt {
 				s.downFrom = s.f.summaries.Load()
 				s.f.failStatus.Store(http.StatusServiceUnavailable)
@@ -766,19 +766,29 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 }
 
 // A fold asks for its summary by forking the request the run sends next, up
-// to the newest messages it keeps: the same tools and cache key, and messages
-// that extend the request the run sent last, or that it extends, then the
-// compaction request, so the fork shares the run's prompt cache. Each result
-// fits what a fork reads of one message, so the fork reads it whole.
+// to the newest messages it keeps: the first pass of each fold sends the same
+// tools and cache key as the request the run sent last before it, and
+// messages that extend that request, or that it extends, then the compaction
+// request, so the fork reuses the run's prompt cache. A further pass of the
+// same fold reads the request the pass before it spliced. Each result fits
+// what a fork reads of one message, so the fork reads it whole.
 func TestPostgresInRunFoldForksTheRunRequest(t *testing.T) {
 	const steps = 14
 	web := runEntryNamed("web")
 	s := newEffectLoop(t, web)
 	f := s.f
 	s.prose, s.resultBytes = true, 6000
-	var asked []string
-	f.onSummary = func(body []byte) { asked = append(asked, string(body)) }
-	code, requests := s.run(web, loopInput, steps)
+	var asked, parents []string
+	sent := 0
+	f.onSummary = func(body []byte) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if len(s.requests) > sent {
+			sent = len(s.requests)
+			asked, parents = append(asked, string(body)), append(parents, s.requests[sent-1])
+		}
+	}
+	code, _ := s.run(web, loopInput, steps)
 	f.onSummary = nil
 	if code != "" || len(asked) == 0 || len(s.effects) != steps {
 		t.Fatalf("code=%q summary_calls=%d effects=%v, want the run to fold and finish", code, len(asked), s.effects)
@@ -788,28 +798,22 @@ func TestPostgresInRunFoldForksTheRunRequest(t *testing.T) {
 		Tools          json.RawMessage   `json:"tools"`
 		PromptCacheKey string            `json:"prompt_cache_key"`
 	}
-	sent := make([]request, len(requests))
-	for i, body := range requests {
-		if err := json.Unmarshal([]byte(body), &sent[i]); err != nil {
-			t.Fatal(err)
-		}
-	}
 	for i, body := range asked {
-		var ask request
+		var ask, parent request
 		if err := json.Unmarshal([]byte(body), &ask); err != nil {
 			t.Fatal(err)
 		}
+		if err := json.Unmarshal([]byte(parents[i]), &parent); err != nil {
+			t.Fatal(err)
+		}
 		if n := len(ask.Messages); n == 0 || !strings.Contains(string(ask.Messages[n-1]), "[Context compaction]") {
-			t.Fatalf("summary request %d does not end with the compaction request", i+1)
+			t.Fatalf("fold %d does not end with the compaction request", i+1)
 		}
 		read := ask.Messages[:len(ask.Messages)-1]
-		extends := slices.ContainsFunc(sent, func(r request) bool {
-			shared := min(len(r.Messages), len(read))
-			return string(r.Tools) == string(ask.Tools) && r.PromptCacheKey == ask.PromptCacheKey && shared > 0 &&
-				slices.EqualFunc(r.Messages[:shared], read[:shared], func(a, b json.RawMessage) bool { return string(a) == string(b) })
-		})
-		if !extends {
-			t.Fatalf("summary request %d shares no prefix with a request the run sent", i+1)
+		shared := min(len(parent.Messages), len(read))
+		if string(parent.Tools) != string(ask.Tools) || parent.PromptCacheKey != ask.PromptCacheKey || shared == 0 ||
+			!slices.EqualFunc(parent.Messages[:shared], read[:shared], func(a, b json.RawMessage) bool { return string(a) == string(b) }) {
+			t.Fatalf("fold %d does not extend, or is not a prefix of, the request the run sent before it", i+1)
 		}
 	}
 }
@@ -818,7 +822,7 @@ func TestPostgresInRunFoldForksTheRunRequest(t *testing.T) {
 // folds that progress before its first step, and keeps its input and the
 // decision's result, which the verbatim budget holds, raw.
 func decisionAfterProgressScenario(t *testing.T, entry runEntry, s *effectLoop) {
-	s.decisionAfter, s.resultBytes, s.decisionResultBytes = 2, 7000, 2400
+	s.decisionAfter, s.resultBytes, s.decisionResultBytes = 2, 7000, 2200
 	code, requests := s.run(entry, loopInput, 4)
 	if code != "" || !slices.Equal(s.effects, []int{1, 2, 3, 4}) || len(requests) != 6 {
 		t.Fatalf("resume: code=%q effects=%v calls=%d, want all four effects completed once", code, s.effects, len(requests))
@@ -980,7 +984,7 @@ func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	summaries := f.summaries.Load()
 	// The step fits the verbatim budget; with the history before it, the
 	// request does not fit.
-	s.resultBytes = 2400
+	s.resultBytes = 2200
 	code, requests := s.run(entry, loopInput, 1)
 	if code != "" || !slices.Equal(s.effects, []int{1}) || len(requests) != 2+entry.extra {
 		t.Fatalf("code=%q effects=%v provider_calls=%d summary_calls=%d, want the run answered after one effect", code, s.effects, len(requests), f.summaries.Load()-summaries)
