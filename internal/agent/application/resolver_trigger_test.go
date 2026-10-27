@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"testing"
@@ -169,4 +170,31 @@ func TestTriggerScheduleAttachesPromptAsCurrentUserMessage(t *testing.T) {
 
 	seen, params := runTriggerPromptPipeline(t, cfg, provider)
 	assertTriggerCurrentRequest(t, seen, params, schedulePrompt)
+}
+
+func TestTriggerScheduleStoresThePromptAsSentAndDisplaysTheCommand(t *testing.T) {
+	t.Parallel()
+	schedulePrompt := agentpkg.GenerateSchedulePrompt(agentpkg.Schedule{
+		ID:      "sched-1",
+		Name:    "daily digest",
+		Command: "summarize inbox",
+	})
+	req := ChatRequest{BotID: "bot", ThreadID: "session", Query: "summarize inbox", RawQuery: "summarize inbox"}
+	req, _ = attachCurrentTurnPrompt(req, agentpkg.RunConfig{}, schedulePrompt)
+
+	round := prependTurnUserMessage(req, []ModelMessage{{Role: "assistant", Content: newTextContent("done")}})
+	inputs, err := (&Service{}).buildPersistInputs(context.Background(), req, round, "model", storeRoundOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored ModelMessage
+	if err := json.Unmarshal(inputs[0].Content, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.TextContent(); got != schedulePrompt {
+		t.Fatalf("stored input = %q, want the prompt as sent %q", got, schedulePrompt)
+	}
+	if inputs[0].DisplayText != "summarize inbox" {
+		t.Fatalf("display text = %q, want the command", inputs[0].DisplayText)
+	}
 }

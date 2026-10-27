@@ -1,7 +1,6 @@
 package application
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,9 +20,9 @@ import (
 // attachCurrentTurnPrompt makes a trigger's rich prompt the run's input: the
 // context view classifies it as the live current request rather than history,
 // and the turn stores it as sent, so every later request renders the input
-// the way this run sent it. The turn still displays the trigger's own text.
+// the way this run sent it. The turn displays req.RawQuery, the trigger's own
+// text.
 func attachCurrentTurnPrompt(req ChatRequest, cfg native.RunConfig, prompt string) (ChatRequest, native.RunConfig) {
-	req.RawQuery = cmp.Or(req.RawQuery, req.Query)
 	req.Query = prompt
 	cfg.Query = prompt
 	return req, cfg
@@ -57,7 +56,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	// Project the command as the run's request user turn so subscribers (an
 	// open web session, any future thread subscriber) see what fired this run
 	// while it is still executing — not only after it finishes. Text must equal
-	// the persisted user message (prependTurnUserMessage uses req.Query =
+	// the persisted user message's display text (req.RawQuery =
 	// payload.Command), otherwise the bubble's content would visibly change
 	// when the runtime projection hands over to the database at run end.
 	viewFn := func(handle sessionruntime.RunHandle) *sessionruntime.RunAdmissionView {
@@ -105,6 +104,7 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 		RunID:           admission.RunID,
 		RunHandle:       admission.Handle,
 		Query:           payload.Command,
+		RawQuery:        payload.Command,
 		UserID:          payload.OwnerUserID,
 		Token:           token,
 		Model:           payload.ModelID,
