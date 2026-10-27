@@ -19,7 +19,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
-	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -29,6 +29,7 @@ import (
 	"github.com/felinics/memoh/internal/oauthctx"
 	"github.com/felinics/memoh/internal/providers"
 	"github.com/felinics/memoh/internal/reasoning"
+	"github.com/felinics/memoh/internal/runtimekind"
 	"github.com/felinics/memoh/internal/settings"
 )
 
@@ -44,17 +45,24 @@ const (
 	agentControlVersion = "v2"
 )
 
-// agenttools.ErrWatchdogTimedOut is returned when the subagent watchdog fires.
-
 var (
 	agentIDPattern   = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 	errAgentNotFound = errors.New("agent not found")
+)
+
+type (
+	subagentWatchdogKey   struct{}
+	subagentWatchdogPause struct {
+		paused bool
+		done   chan struct{}
+	}
 )
 
 // SubagentWatchdog implements an activity-based timeout for subagent execution.
 type SubagentWatchdog struct {
 	timeout time.Duration
 	touchCh chan struct{}
+	pauseCh chan subagentWatchdogPause
 	cancel  context.CancelCauseFunc
 	done    chan struct{}
 	logger  *slog.Logger
@@ -68,18 +76,34 @@ func NewSubagentWatchdog(parentCtx context.Context, timeout time.Duration, logge
 	wd := &SubagentWatchdog{
 		timeout: timeout,
 		touchCh: make(chan struct{}, 1),
+		pauseCh: make(chan subagentWatchdogPause),
 		cancel:  cancel,
 		done:    make(chan struct{}),
 		logger:  logger,
 	}
 	go wd.run(ctx)
-	return ctx, wd
+	return context.WithValue(ctx, subagentWatchdogKey{}, wd), wd
 }
 
 func (w *SubagentWatchdog) Touch() {
 	select {
 	case w.touchCh <- struct{}{}:
 	default:
+	}
+}
+
+func (w *SubagentWatchdog) Pause()  { w.setPaused(true) }
+func (w *SubagentWatchdog) Resume() { w.setPaused(false) }
+func (w *SubagentWatchdog) setPaused(paused bool) {
+	change := subagentWatchdogPause{paused: paused, done: make(chan struct{})}
+	select {
+	case w.pauseCh <- change:
+	case <-w.done:
+		return
+	}
+	select {
+	case <-change.done:
+	case <-w.done:
 	}
 }
 
@@ -92,11 +116,27 @@ func (w *SubagentWatchdog) run(ctx context.Context) {
 	defer close(w.done)
 	timer := time.NewTimer(w.timeout)
 	defer timer.Stop()
+	paused := false
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case change := <-w.pauseCh:
+			paused = change.paused
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			if !paused {
+				timer.Reset(w.timeout)
+			}
+			close(change.done)
 		case <-w.touchCh:
+			if paused {
+				continue
+			}
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -106,7 +146,7 @@ func (w *SubagentWatchdog) run(ctx context.Context) {
 			timer.Reset(w.timeout)
 		case <-timer.C:
 			w.logger.WarnContext(ctx, "subagent watchdog fired", slog.Duration("timeout", w.timeout))
-			w.cancel(agenttools.ErrWatchdogTimedOut)
+			w.cancel(tools.ErrWatchdogTimedOut)
 			return
 		}
 	}
@@ -115,7 +155,6 @@ func (w *SubagentWatchdog) run(ctx context.Context) {
 type agentSessionService interface {
 	CreateSubagent(ctx context.Context, input sessionpkg.CreateSubagentInput) (sessionpkg.Thread, sessionpkg.SubagentConfig, error)
 	GetSubagentConfig(ctx context.Context, sessionID string) (sessionpkg.SubagentConfig, error)
-	ListSubagentForkContext(ctx context.Context, sessionID string) ([]sessionpkg.SubagentForkContextMessage, error)
 	ListSubagentsByParent(ctx context.Context, parentSessionID string) ([]sessionpkg.Thread, error)
 }
 
@@ -151,7 +190,7 @@ type subagentModelCatalogItem struct {
 
 type subagentModelResolver func(
 	ctx context.Context,
-	session agenttools.SessionContext,
+	session tools.SessionContext,
 	modelUUID string,
 	modelID string,
 	providerName string,
@@ -159,7 +198,8 @@ type subagentModelResolver func(
 
 // SubagentService exposes managed subagent control tools.
 type SubagentService struct {
-	agent          agenttools.SpawnAgent
+	execution      *Service
+	agent          tools.SpawnAgent
 	settings       *settings.Service
 	models         *models.Service
 	queries        dbstore.Queries
@@ -168,7 +208,7 @@ type SubagentService struct {
 	systemPromptFn func(sessionType string) string
 	bgManager      *background.Manager
 	hookService    *hooks.Service
-	admitter       agenttools.SubagentAdmitter
+	admitter       tools.SubagentAdmitter
 	modelResolver  subagentModelResolver
 	coord          *agentCoordinator
 	logger         *slog.Logger
@@ -198,7 +238,7 @@ func NewSubagentService(
 	return p
 }
 
-func (p *SubagentService) SetAgent(a agenttools.SpawnAgent) {
+func (p *SubagentService) SetAgent(a tools.SpawnAgent) {
 	p.agent = a
 }
 
@@ -214,49 +254,59 @@ func (p *SubagentService) SetHookService(h *hooks.Service) {
 	p.hookService = h
 }
 
-// Usage frames how the available agent-control tools are meant to be used.
 type agentRecord struct {
-	AgentID   string
-	SessionID string
-	Title     string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Thread          sessionpkg.Thread
+	RuntimeType     string
+	BotAgentID      string
+	RuntimeMetadata map[string]any
+	AgentID         string
+	SessionID       string
+	Title           string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 type agentRunResult struct {
-	AgentID          string                             `json:"agent_id"`
-	SessionID        string                             `json:"session_id,omitempty"`
-	TaskID           string                             `json:"task_id,omitempty"`
-	ModelID          string                             `json:"model_id,omitempty"`
-	Provider         string                             `json:"provider,omitempty"`
-	Fork             bool                               `json:"fork,omitempty"`
-	Status           string                             `json:"status"`
-	Message          string                             `json:"message,omitempty"`
-	Text             string                             `json:"text,omitempty"`
-	Code             string                             `json:"code,omitempty"`
-	Error            string                             `json:"error,omitempty"`
-	QueuePosition    int                                `json:"queue_position,omitempty"`
-	QueueRemaining   int                                `json:"queue_remaining,omitempty"`
-	TimedOut         bool                               `json:"timed_out,omitempty"`
-	ContextLifecycle *contextfrag.LifecycleSnapshot     `json:"-"`
-	Cause            error                              `json:"-"`
-	AttemptResolved  bool                               `json:"-"`
-	AttemptOutcome   agenttools.SpawnAttemptDisposition `json:"-"`
+	RunID            string                         `json:"run_id,omitempty"`
+	RuntimeType      string                         `json:"runtime_type,omitempty"`
+	BotAgentID       string                         `json:"bot_agent_id,omitempty"`
+	ExecutionState   string                         `json:"execution_state,omitempty"`
+	Usage            *sdk.Usage                     `json:"usage,omitempty"`
+	AgentID          string                         `json:"agent_id"`
+	SessionID        string                         `json:"session_id,omitempty"`
+	TaskID           string                         `json:"task_id,omitempty"`
+	ModelID          string                         `json:"model_id,omitempty"`
+	Provider         string                         `json:"provider,omitempty"`
+	Fork             bool                           `json:"fork,omitempty"`
+	Status           string                         `json:"status"`
+	Message          string                         `json:"message,omitempty"`
+	Text             string                         `json:"text,omitempty"`
+	Code             string                         `json:"code,omitempty"`
+	Error            string                         `json:"error,omitempty"`
+	QueuePosition    int                            `json:"queue_position,omitempty"`
+	QueueRemaining   int                            `json:"queue_remaining,omitempty"`
+	TimedOut         bool                           `json:"timed_out,omitempty"`
+	ContextLifecycle *contextfrag.LifecycleSnapshot `json:"-"`
+	Cause            error                          `json:"-"`
+	AttemptResolved  bool                           `json:"-"`
+	AttemptOutcome   tools.SpawnAttemptDisposition  `json:"-"`
 }
 
 type agentRequest struct {
+	runtimeType      string
+	botAgentID       string
 	taskID           string
 	agentID          string
 	agentSessionID   string
 	message          string
 	messagePersisted bool
-	parentSession    agenttools.SessionContext
+	parentSession    tools.SessionContext
 	config           sessionpkg.SubagentConfig
 	runtime          resolvedSubagentModel
 	systemPrompt     string
 	// admission is the run identity the durable gate allocated; persistence
 	// files this task's messages under admission.TurnID.
-	admission agenttools.SubagentAdmission
+	admission tools.SubagentAdmission
 	// requestMessageID is the persisted task user message this run's assistant
 	// and tool rows bind to, so the whole task lands in one history turn.
 	requestMessageID string
@@ -327,22 +377,29 @@ func (c *agentCoordinator) snapshot(botID, parentSessionID, agentID string) agen
 	}
 }
 
-func (p *SubagentService) Spawn(ctx context.Context, session agenttools.SessionContext, args agenttools.SpawnAgentArgs) (any, error) {
+func (p *SubagentService) Spawn(ctx context.Context, session tools.SessionContext, args tools.SpawnAgentArgs) (out any, callErr error) {
+	defer func() { callErr = p.publicError(ctx, "agent.subagent.spawn", callErr) }()
 	if err := validateParentSession(session); err != nil {
 		return nil, err
 	}
 	task := strings.TrimSpace(args.Task)
 	if task == "" {
-		return nil, errors.New("task is required")
+		return nil, apperror.FieldRequired("task")
 	}
 	agentID, err := p.resolveNewAgentID(ctx, session, args.ID)
 	if err != nil {
 		return nil, err
 	}
 	if existing, err := p.findAgent(ctx, session, agentID); err == nil && existing.AgentID != "" {
-		return nil, fmt.Errorf("agent %q already exists; choose a different id or continue the existing agent if follow-up messaging is available", agentID)
+		return nil, apperror.FieldInvalid("id", fmt.Errorf("agent %q already exists", agentID))
 	} else if err != nil && !errors.Is(err, errAgentNotFound) {
 		return nil, err
+	}
+	if strings.TrimSpace(args.BotAgentID) != "" {
+		if args.Fork || strings.TrimSpace(args.ModelID) != "" || strings.TrimSpace(args.Provider) != "" {
+			return nil, apperror.FieldInvalid("bot_agent_id", errors.New("external backend cannot be combined with model, provider or fork"))
+		}
+		return p.spawnExternal(ctx, session, agentID, task, args)
 	}
 	requestedModelID := strings.TrimSpace(args.ModelID)
 	requestedProvider := strings.TrimSpace(args.Provider)
@@ -389,7 +446,8 @@ func (p *SubagentService) Spawn(ctx context.Context, session agenttools.SessionC
 	return p.submitAgentTask(ctx, session, rec, config, task, runInBackground)
 }
 
-func (p *SubagentService) Send(ctx context.Context, session agenttools.SessionContext, args agenttools.SendAgentMessageArgs) (any, error) {
+func (p *SubagentService) Send(ctx context.Context, session tools.SessionContext, args tools.SendAgentMessageArgs) (out any, callErr error) {
+	defer func() { callErr = p.publicError(ctx, "agent.subagent.send", callErr) }()
 	if err := validateParentSession(session); err != nil {
 		return nil, err
 	}
@@ -405,6 +463,9 @@ func (p *SubagentService) Send(ctx context.Context, session agenttools.SessionCo
 	if err != nil {
 		return nil, err
 	}
+	if runtimekind.IsExternal(rec.RuntimeType) {
+		return nil, apperror.New(apperror.CodeRuntimeControlUnsupported, nil)
+	}
 	config, err := p.loadSubagentConfig(context.WithoutCancel(ctx), rec)
 	if err != nil {
 		return nil, err
@@ -413,7 +474,8 @@ func (p *SubagentService) Send(ctx context.Context, session agenttools.SessionCo
 	return p.submitAgentTask(ctx, session, rec, config, message, runInBackground)
 }
 
-func (p *SubagentService) Models(ctx context.Context, session agenttools.SessionContext) (any, error) {
+func (p *SubagentService) Models(ctx context.Context, session tools.SessionContext) (out any, callErr error) {
+	defer func() { callErr = p.publicError(ctx, "agent.subagent.models", callErr) }()
 	catalog, err := p.listModelCatalog(ctx, "")
 	if err != nil {
 		return nil, err
@@ -442,7 +504,8 @@ func (p *SubagentService) Models(ctx context.Context, session agenttools.Session
 	}, nil
 }
 
-func (p *SubagentService) List(ctx context.Context, session agenttools.SessionContext) (any, error) {
+func (p *SubagentService) List(ctx context.Context, session tools.SessionContext) (out any, callErr error) {
+	defer func() { callErr = p.publicError(ctx, "agent.subagent.list", callErr) }()
 	if err := validateParentSession(session); err != nil {
 		return nil, err
 	}
@@ -469,7 +532,8 @@ func (p *SubagentService) List(ctx context.Context, session agenttools.SessionCo
 			"status":       status,
 			"queued_count": len(snap.QueuedTaskIDs),
 			"created_at":   session.FormatTime(rec.CreatedAt),
-			"updated_at":   session.FormatTime(rec.UpdatedAt),
+			"runtime_type": rec.RuntimeType, "bot_agent_id": rec.BotAgentID,
+			"updated_at": session.FormatTime(rec.UpdatedAt),
 		}
 		if config, configErr := p.sessionService.GetSubagentConfig(ctx, rec.SessionID); configErr == nil {
 			item["model_id"] = config.ModelID
@@ -482,12 +546,21 @@ func (p *SubagentService) List(ctx context.Context, session agenttools.SessionCo
 		if snap.Last.TaskID != "" {
 			item["last_task_id"] = snap.Last.TaskID
 		}
+		if p.execution != nil {
+			durable, err := p.execution.subagentState(ctx, rec.Thread, false)
+			if err != nil {
+				return nil, err
+			}
+			for key, value := range durable {
+				item[key] = value
+			}
+		}
 		items = append(items, item)
 	}
 	return map[string]any{"agents": items, "count": len(items)}, nil
 }
 
-func (p *SubagentService) submitAgentTask(ctx context.Context, session agenttools.SessionContext, rec agentRecord, config sessionpkg.SubagentConfig, message string, runInBackground bool) (any, error) {
+func (p *SubagentService) submitAgentTask(ctx context.Context, session tools.SessionContext, rec agentRecord, config sessionpkg.SubagentConfig, message string, runInBackground bool) (any, error) {
 	if p.bgManager == nil {
 		return nil, errors.New("background task manager not available")
 	}
@@ -496,9 +569,13 @@ func (p *SubagentService) submitAgentTask(ctx context.Context, session agenttool
 	if p.admitter == nil {
 		return nil, errors.New("session runtime is not available")
 	}
-	runtime, err := p.modelResolver(context.WithoutCancel(ctx), session, config.ModelUUID, config.ModelID, config.ProviderName)
-	if err != nil {
-		return nil, fmt.Errorf("resolve model: %w", err)
+	var runtime resolvedSubagentModel
+	if !runtimekind.IsExternal(rec.RuntimeType) {
+		var err error
+		runtime, err = p.modelResolver(context.WithoutCancel(ctx), session, config.ModelUUID, config.ModelID, config.ProviderName)
+		if err != nil {
+			return nil, err
+		}
 	}
 	systemPrompt := ""
 	if p.systemPromptFn != nil {
@@ -506,7 +583,8 @@ func (p *SubagentService) submitAgentTask(ctx context.Context, session agenttool
 	}
 
 	req := &agentRequest{
-		agentID:        rec.AgentID,
+		agentID:     rec.AgentID,
+		runtimeType: rec.RuntimeType, botAgentID: rec.BotAgentID,
 		agentSessionID: rec.SessionID,
 		message:        message,
 		parentSession:  session,
@@ -552,16 +630,23 @@ func (p *SubagentService) submitAgentTask(ctx context.Context, session agenttool
 	st.runningTaskID = taskID
 	p.coord.mu.Unlock()
 
+	runCtx, finishRun, admitErr := p.prepareAgentRequest(taskCtx, req)
+	if admitErr != nil {
+		p.recordAdmissionFailure(taskCtx, req, admitErr)
+		return agentResultMap(p.completeAgentRequest(taskCtx, key, req, rejectedAgentRun(req, admitErr))), nil
+	}
+
 	if runInBackground {
-		go p.runAgentRequest(taskCtx, key, req)
+		go p.runAdmittedAgentRequest(taskCtx, runCtx, key, req, finishRun)
 		return map[string]any{
-			"agent_id":    rec.AgentID,
-			"session_id":  rec.SessionID,
-			"task_id":     taskID,
-			"model_id":    config.ModelID,
-			"provider":    config.ProviderName,
-			"fork":        config.Forked,
-			"status":      "background_started",
+			"agent_id":   rec.AgentID,
+			"session_id": rec.SessionID,
+			"task_id":    taskID,
+			"model_id":   config.ModelID,
+			"provider":   config.ProviderName,
+			"fork":       config.Forked,
+			"status":     "background_started",
+			"run_id":     req.admission.RunID, "runtime_type": rec.RuntimeType, "bot_agent_id": rec.BotAgentID,
 			"description": description,
 			"message":     fmt.Sprintf("Agent %s started in background with task ID: %s. Use wait_until(task_id), then get_background_status(task_id) to inspect result.", rec.AgentID, taskID),
 		}, nil
@@ -570,26 +655,40 @@ func (p *SubagentService) submitAgentTask(ctx context.Context, session agenttool
 	progressCtx, progressCancel := context.WithCancel(ctx)
 	defer progressCancel()
 	p.startSpawnProgress(progressCtx, session)
-	result := p.runAgentRequest(taskCtx, key, req)
+	result := p.runAdmittedAgentRequest(taskCtx, runCtx, key, req, finishRun)
 	return agentResultMap(result), nil
 }
 
+// prepareAgentRequest durably accepts the complete task before the parent is
+// told it started. Background execution may begin only after this barrier.
+func (p *SubagentService) prepareAgentRequest(ctx context.Context, req *agentRequest) (context.Context, func(agentRunResult), error) {
+	runCtx, finish, err := p.admitAgentRun(ctx, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	id, persisted := p.persistUserMessage(context.WithoutCancel(runCtx), req)
+	if !persisted {
+		err := apperror.New(apperror.CodeSessionHistoryInconsistent, nil)
+		finish(rejectedAgentRun(req, err))
+		return nil, nil, err
+	}
+	req.messagePersisted = true
+	req.requestMessageID = id
+	return runCtx, finish, nil
+}
+
 func (p *SubagentService) runAgentRequest(ctx context.Context, key string, req *agentRequest) agentRunResult {
-	runCtx, finishRun, admitErr := p.admitAgentRun(ctx, req)
-	if admitErr != nil {
-		// Nothing was started and nothing was persisted, but the task record has
-		// to close anyway: a caller waiting on it would otherwise wait on a run
-		// that will never exist.
-		p.recordAdmissionFailure(ctx, req, admitErr)
-		return p.completeAgentRequest(ctx, key, req, rejectedAgentRun(req, admitErr))
+	runCtx, finish, err := p.prepareAgentRequest(ctx, req)
+	if err != nil {
+		p.recordAdmissionFailure(ctx, req, err)
+		return p.completeAgentRequest(ctx, key, req, rejectedAgentRun(req, err))
 	}
-	requestMessageID, persisted := p.persistUserMessage(context.WithoutCancel(runCtx), req)
-	req.messagePersisted = persisted
-	if persisted {
-		req.requestMessageID = requestMessageID
-	}
+	return p.runAdmittedAgentRequest(ctx, runCtx, key, req, finish)
+}
+
+func (p *SubagentService) runAdmittedAgentRequest(ctx, runCtx context.Context, key string, req *agentRequest, finishRun func(agentRunResult)) agentRunResult {
 	result := p.runSubagentTask(runCtx, req)
-	if result.AttemptResolved && result.AttemptOutcome == agenttools.SpawnAttemptAbort {
+	if result.AttemptResolved && result.AttemptOutcome == tools.SpawnAttemptAbort {
 		if p.agentTaskStopRequested(req.taskID) {
 			result.Status = string(background.TaskKilled)
 			result.Error = "stopped by the user"
@@ -642,6 +741,7 @@ func (p *SubagentService) completeAgentRequest(ctx context.Context, key string, 
 		result.Status = string(background.TaskCompleted)
 	}
 	p.bgManager.CompleteAgentTask(req.taskID, background.AgentTaskResult{
+		Receipt:        background.AgentReceipt{RunID: result.RunID, RuntimeType: req.runtimeType, BotAgentID: req.botAgentID, ExecutionState: result.ExecutionState, Usage: marshalSubagentUsage(result.Usage)},
 		AgentID:        req.agentID,
 		AgentSessionID: req.agentSessionID,
 		Message:        req.message,
@@ -711,8 +811,12 @@ func (p *SubagentService) finishAgentRequest(ctx context.Context, key string, re
 }
 
 func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest) agentRunResult {
+	if runtimekind.IsExternal(req.runtimeType) {
+		return p.runExternalSubagentTask(ctx, req)
+	}
 	res := agentRunResult{
-		AgentID:   req.agentID,
+		AgentID: req.agentID,
+		RunID:   req.admission.RunID, RuntimeType: req.runtimeType,
 		SessionID: req.agentSessionID,
 		TaskID:    req.taskID,
 		ModelID:   req.config.ModelID,
@@ -747,27 +851,11 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 			)
 		}
 	}()
-	history := p.loadAgentMessages(context.WithoutCancel(ctx), req.agentSessionID)
-	if req.messagePersisted {
-		history = dropLatestMatchingUserMessage(history, req.message)
-	}
-	if req.config.Forked {
-		parentMessages, loadErr := p.loadAgentForkContext(context.WithoutCancel(ctx), req.agentSessionID)
-		if loadErr != nil {
-			res.fail(loadErr)
-			res.Status = string(background.TaskFailed)
-			return res
-		}
-		combined := make([]sdk.Message, 0, len(parentMessages)+len(history))
-		combined = append(combined, parentMessages...)
-		combined = append(combined, history...)
-		history = combined
-	}
 	contextBudgetMaxTokens := req.runtime.ContextBudgetMaxTokens
 	if contextBudgetMaxTokens <= 0 {
 		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
 	}
-	cfg := agenttools.SpawnRunConfig{
+	cfg := tools.SpawnRunConfig{
 		RunID:                    strings.TrimSpace(req.admission.RunID),
 		Model:                    req.runtime.Model,
 		ModelUUID:                req.runtime.UUID,
@@ -785,13 +873,12 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 		SupportsImageInput:       req.runtime.SupportsImageInput,
 		SupportsFileInput:        req.runtime.SupportsFileInput,
 		SupportsToolCall:         req.runtime.SupportsToolCall,
-		Messages:                 history,
 		Skills:                   req.parentSession.Skills,
 		BackgroundManager:        p.bgManager,
 		ContextBudgetMaxTokens:   contextBudgetMaxTokens,
 		ModelMaxOutputTokens:     req.runtime.ModelMaxOutputTokens,
 		TurnRequestMessageID:     req.requestMessageID,
-		Identity: agenttools.SpawnIdentity{
+		Identity: tools.SpawnIdentity{
 			BotID:               req.parentSession.BotID,
 			ChatID:              req.parentSession.ChatID,
 			SessionID:           req.agentSessionID,
@@ -809,7 +896,7 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 			TimezoneLocation: req.parentSession.TimezoneLocation,
 			IsSubagent:       true,
 		},
-		LoopDetection: agenttools.SpawnLoopConfig{Enabled: true},
+		LoopDetection: tools.SpawnLoopConfig{Enabled: true},
 	}
 	// stepPersisted flips once any complete step or interrupted checkpoint has
 	// durably committed. From then on the attempt loop stops retrying: the agent
@@ -817,7 +904,7 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 	// replaying the turn from the top would do that work twice.
 	var stepPersisted atomic.Bool
 	cfg.OnStepPersisted = func() { stepPersisted.Store(true) }
-	cfg.BeforeTerminal = func(persistCtx context.Context, result *agenttools.SpawnResult) error {
+	cfg.BeforeTerminal = func(persistCtx context.Context, result *tools.SpawnResult) error {
 		if p.messageService == nil || req.agentSessionID == "" {
 			return errors.New("subagent terminal persistence is unavailable")
 		}
@@ -836,9 +923,9 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 				res.Error = "parent cancelled"
 				res.Cause = context.Cause(ctx)
 				res.AttemptResolved = true
-				res.AttemptOutcome = agenttools.SpawnAttemptFailure
+				res.AttemptOutcome = tools.SpawnAttemptFailure
 				if errors.Is(context.Cause(ctx), context.Canceled) {
-					res.AttemptOutcome = agenttools.SpawnAttemptAbort
+					res.AttemptOutcome = tools.SpawnAttemptAbort
 				}
 				return res
 			}
@@ -847,11 +934,11 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 		wdCtx, wd := NewSubagentWatchdog(ctx, subagentWatchdogTimeout, p.logger)
 		cfg.Attempt = attempt + 1
 		cfg.MaxAttempts = subagentMaxRetries + 1
-		attemptDisposition := agenttools.SpawnAttemptFailure
+		attemptDisposition := tools.SpawnAttemptFailure
 		dispositionResolved := false
-		cfg.ResolveAttempt = func(attemptErr error) agenttools.SpawnAttemptDisposition {
+		cfg.ResolveAttempt = func(attemptErr error) tools.SpawnAttemptDisposition {
 			if p.agentTaskStopRequested(req.taskID) {
-				attemptDisposition = agenttools.SpawnAttemptAbort
+				attemptDisposition = tools.SpawnAttemptAbort
 			} else {
 				attemptDisposition = subagentAttemptDisposition(
 					ctx,
@@ -863,25 +950,35 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 			dispositionResolved = true
 			return attemptDisposition
 		}
-		cfg.ResolveCompletion = func() agenttools.SpawnAttemptDisposition {
+		cfg.ResolveCompletion = func() tools.SpawnAttemptDisposition {
 			switch {
 			case p.agentTaskStopRequested(req.taskID), errors.Is(context.Cause(ctx), context.Canceled):
-				attemptDisposition = agenttools.SpawnAttemptAbort
+				attemptDisposition = tools.SpawnAttemptAbort
 			case ctx.Err() != nil:
-				attemptDisposition = agenttools.SpawnAttemptFailure
+				attemptDisposition = tools.SpawnAttemptFailure
 			default:
-				attemptDisposition = agenttools.SpawnAttemptCompleted
+				attemptDisposition = tools.SpawnAttemptCompleted
 			}
 			dispositionResolved = true
 			return attemptDisposition
 		}
-		cfg.ReconcileTerminal = func(outcome agenttools.SpawnAttemptDisposition) {
+		cfg.ReconcileTerminal = func(outcome tools.SpawnAttemptDisposition) {
 			attemptDisposition = outcome
 			dispositionResolved = true
 		}
 		genResult, err := p.agent.GenerateWithWatchdog(wdCtx, cfg, wd.Touch)
 		wd.Stop()
 
+		if genResult != nil {
+			if genResult.Usage != nil {
+				if res.Usage == nil {
+					res.Usage = genResult.Usage
+				} else {
+					sum := res.Usage.Add(*genResult.Usage)
+					res.Usage = &sum
+				}
+			}
+		}
 		if genResult != nil && genResult.ContextLifecycle != nil {
 			res.ContextLifecycle = genResult.ContextLifecycle
 		}
@@ -889,13 +986,13 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 			if !dispositionResolved {
 				attemptDisposition = cfg.ResolveCompletion()
 			}
-			if attemptDisposition == agenttools.SpawnAttemptCompleted && !genResult.Persisted && p.messageService != nil && req.agentSessionID != "" {
-				// Non-native agenttools.SpawnAgent implementations may not implement the
+			if attemptDisposition == tools.SpawnAttemptCompleted && !genResult.Persisted && p.messageService != nil && req.agentSessionID != "" {
+				// Non-native tools.SpawnAgent implementations may not implement the
 				// BeforeTerminal callback. Preserve the fallback for them, but make
 				// its failure authoritative instead of reporting false completion.
 				if persistErr := p.persistMessages(context.WithoutCancel(ctx), req, genResult, !req.messagePersisted); persistErr != nil {
 					res.AttemptResolved = true
-					res.AttemptOutcome = agenttools.SpawnAttemptFailure
+					res.AttemptOutcome = tools.SpawnAttemptFailure
 					res.fail(persistErr)
 					return res
 				}
@@ -903,7 +1000,7 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 			}
 			res.AttemptResolved = true
 			res.AttemptOutcome = attemptDisposition
-			if attemptDisposition == agenttools.SpawnAttemptAbort {
+			if attemptDisposition == tools.SpawnAttemptAbort {
 				cause := context.Cause(ctx)
 				if cause == nil {
 					cause = context.Canceled
@@ -912,7 +1009,7 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 				res.Cause = cause
 				return res
 			}
-			if attemptDisposition != agenttools.SpawnAttemptCompleted {
+			if attemptDisposition != tools.SpawnAttemptCompleted {
 				cause := context.Cause(ctx)
 				if cause == nil {
 					cause = errors.New("agent run failed")
@@ -926,7 +1023,7 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 		lastErr = err
 		if !dispositionResolved {
 			if p.agentTaskStopRequested(req.taskID) {
-				attemptDisposition = agenttools.SpawnAttemptAbort
+				attemptDisposition = tools.SpawnAttemptAbort
 			} else {
 				attemptDisposition = subagentAttemptDisposition(
 					ctx,
@@ -936,12 +1033,12 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 				)
 			}
 		}
-		if attemptDisposition == agenttools.SpawnAttemptRetry {
+		if attemptDisposition == tools.SpawnAttemptRetry {
 			continue
 		}
 		res.AttemptResolved = true
 		res.AttemptOutcome = attemptDisposition
-		if attemptDisposition == agenttools.SpawnAttemptAbort {
+		if attemptDisposition == tools.SpawnAttemptAbort {
 			cause := context.Cause(ctx)
 			if cause == nil {
 				cause = context.Canceled
@@ -955,7 +1052,7 @@ func (p *SubagentService) runSubagentTask(ctx context.Context, req *agentRequest
 			res.Error += " (progress from this attempt is saved; send a follow-up message to continue)"
 			return res
 		}
-		if errors.Is(err, agenttools.ErrWatchdogTimedOut) && attempt == subagentMaxRetries {
+		if errors.Is(err, tools.ErrWatchdogTimedOut) && attempt == subagentMaxRetries {
 			break
 		}
 		res.fail(err)
@@ -992,7 +1089,7 @@ func subagentFailureCode(err error) apperror.Code {
 		return apperror.CodeOf(err)
 	}
 	switch {
-	case errors.Is(err, agenttools.ErrWatchdogTimedOut):
+	case errors.Is(err, tools.ErrWatchdogTimedOut):
 		return apperror.CodeAgentResponseTimeout
 	case errors.Is(err, contextfrag.ErrProtectedContextOverflow):
 		return apperror.CodeContextProtectedOverflow
@@ -1012,17 +1109,17 @@ func subagentAttemptDisposition(
 	err error,
 	stepPersisted bool,
 	attemptsRemain bool,
-) agenttools.SpawnAttemptDisposition {
+) tools.SpawnAttemptDisposition {
 	if errors.Is(context.Cause(ctx), context.Canceled) {
-		return agenttools.SpawnAttemptAbort
+		return tools.SpawnAttemptAbort
 	}
 	if ctx != nil && ctx.Err() != nil {
-		return agenttools.SpawnAttemptFailure
+		return tools.SpawnAttemptFailure
 	}
-	if !stepPersisted && attemptsRemain && errors.Is(err, agenttools.ErrWatchdogTimedOut) {
-		return agenttools.SpawnAttemptRetry
+	if !stepPersisted && attemptsRemain && errors.Is(err, tools.ErrWatchdogTimedOut) {
+		return tools.SpawnAttemptRetry
 	}
-	return agenttools.SpawnAttemptFailure
+	return tools.SpawnAttemptFailure
 }
 
 func (p *SubagentService) runSubagentHook(ctx context.Context, eventName string, req *agentRequest, result agentRunResult) error {
@@ -1069,7 +1166,7 @@ func (p *SubagentService) runSubagentHook(ctx context.Context, eventName string,
 
 func (p *SubagentService) createAgentSession(
 	ctx context.Context,
-	parent agenttools.SessionContext,
+	parent tools.SessionContext,
 	agentID, task string,
 	runtime resolvedSubagentModel,
 	forked bool,
@@ -1108,8 +1205,9 @@ func (p *SubagentService) createAgentSession(
 		return agentRecord{}, sessionpkg.SubagentConfig{}, err
 	}
 	return agentRecord{
-		AgentID:   agentID,
-		SessionID: sess.ID,
+		AgentID:     agentID,
+		SessionID:   sess.ID,
+		RuntimeType: sess.RuntimeType, BotAgentID: sess.BotAgentID, RuntimeMetadata: sess.RuntimeMetadata, Thread: sess,
 		Title:     sess.Title,
 		CreatedAt: sess.CreatedAt,
 		UpdatedAt: sess.UpdatedAt,
@@ -1127,7 +1225,7 @@ func (p *SubagentService) loadSubagentConfig(ctx context.Context, rec agentRecor
 	return config, nil
 }
 
-func (p *SubagentService) resolveNewAgentID(ctx context.Context, session agenttools.SessionContext, raw string) (string, error) {
+func (p *SubagentService) resolveNewAgentID(ctx context.Context, session tools.SessionContext, raw string) (string, error) {
 	if strings.TrimSpace(raw) != "" {
 		return normalizeAgentID(raw)
 	}
@@ -1147,7 +1245,7 @@ func (p *SubagentService) resolveNewAgentID(ctx context.Context, session agentto
 	}
 }
 
-func (p *SubagentService) findAgent(ctx context.Context, session agenttools.SessionContext, agentID string) (agentRecord, error) {
+func (p *SubagentService) findAgent(ctx context.Context, session tools.SessionContext, agentID string) (agentRecord, error) {
 	agents, err := p.listAgentRecords(ctx, session)
 	if err != nil {
 		return agentRecord{}, err
@@ -1160,7 +1258,7 @@ func (p *SubagentService) findAgent(ctx context.Context, session agenttools.Sess
 	return agentRecord{}, fmt.Errorf("%w: %q in current session", errAgentNotFound, agentID)
 }
 
-func (p *SubagentService) listAgentRecords(ctx context.Context, session agenttools.SessionContext) ([]agentRecord, error) {
+func (p *SubagentService) listAgentRecords(ctx context.Context, session tools.SessionContext) ([]agentRecord, error) {
 	if p.sessionService == nil {
 		return nil, errors.New("session service not available")
 	}
@@ -1179,6 +1277,7 @@ func (p *SubagentService) listAgentRecords(ctx context.Context, session agenttoo
 			continue
 		}
 		records = append(records, agentRecord{
+			Thread: sess, RuntimeType: sess.RuntimeType, BotAgentID: sess.BotAgentID, RuntimeMetadata: sess.RuntimeMetadata,
 			AgentID:   agentID,
 			SessionID: sess.ID,
 			Title:     sess.Title,
@@ -1192,99 +1291,10 @@ func (p *SubagentService) listAgentRecords(ctx context.Context, session agenttoo
 	return records, nil
 }
 
-func (p *SubagentService) loadAgentForkContext(ctx context.Context, sessionID string) ([]sdk.Message, error) {
-	if p.sessionService == nil {
-		return nil, errors.New("session service not available")
+func validateParentSession(session tools.SessionContext) error {
+	if session.IsSubagent || session.SessionType == sessionpkg.TypeSubagent {
+		return apperror.New(apperror.CodeRuntimeControlForbidden, nil)
 	}
-	rows, err := p.sessionService.ListSubagentForkContext(ctx, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	messages := make([]sdk.Message, 0, len(rows))
-	for _, row := range rows {
-		// A row without content (an empty assistant message the parent kept)
-		// is skipped, as the direct-turn reader skips it; the fork is not
-		// worth less for it.
-		converted, ok := sdkMessageFromPersisted(messagepkg.Message{Role: row.Role, Content: row.Message})
-		if !ok {
-			if strings.TrimSpace(string(row.Message)) != "" && p.logger != nil {
-				// A row with bytes but no decodable content is corruption
-				// worth a trace, not a reason to refuse the fork.
-				p.logger.WarnContext(ctx, "fork context row has no decodable content; skipping",
-					slog.String("session_id", sessionID), slog.String("role", row.Role))
-			}
-			continue
-		}
-		messages = append(messages, converted)
-	}
-	return messages, nil
-}
-
-func (p *SubagentService) loadAgentMessages(ctx context.Context, sessionID string) []sdk.Message {
-	if p.messageService == nil || strings.TrimSpace(sessionID) == "" {
-		return nil
-	}
-	msgs, err := p.messageService.ListBySession(ctx, sessionID)
-	if err != nil {
-		p.logger.WarnContext(ctx, "load subagent messages failed", slog.String("session_id", sessionID), slog.Any("error", err))
-		return nil
-	}
-	out := make([]sdk.Message, 0, len(msgs))
-	for _, msg := range msgs {
-		if converted, ok := sdkMessageFromPersisted(msg); ok {
-			out = append(out, converted)
-		}
-	}
-	return out
-}
-
-// sdkMessageFromPersisted types one history row for the SDK. Rows hold the
-// stored shape (arguments object, output value, nested annotations), so they
-// go through the history codec rather than being decoded as SDK JSON.
-func sdkMessageFromPersisted(msg messagepkg.Message) (sdk.Message, bool) {
-	stored := historyfrag.DecodeStoredModelMessage(nil, msg.ID, msg.Role, msg.Content)
-	converted := historyfrag.StoredModelMessageToSDKMessage(stored)
-	if converted.Role == "" {
-		converted.Role = sdk.MessageRole(msg.Role)
-	}
-	if len(converted.Content) == 0 {
-		return sdk.Message{}, false
-	}
-	return converted, true
-}
-
-func dropLatestMatchingUserMessage(messages []sdk.Message, query string) []sdk.Message {
-	needle := strings.TrimSpace(query)
-	if needle == "" || len(messages) == 0 {
-		return messages
-	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role != sdk.MessageRoleUser {
-			continue
-		}
-		if strings.TrimSpace(messageTextContent(msg)) != needle {
-			continue
-		}
-		out := make([]sdk.Message, 0, len(messages)-1)
-		out = append(out, messages[:i]...)
-		out = append(out, messages[i+1:]...)
-		return out
-	}
-	return messages
-}
-
-func messageTextContent(msg sdk.Message) string {
-	var b strings.Builder
-	for _, part := range msg.Content {
-		if text, ok := part.(sdk.TextPart); ok {
-			b.WriteString(text.Text)
-		}
-	}
-	return b.String()
-}
-
-func validateParentSession(session agenttools.SessionContext) error {
 	if strings.TrimSpace(session.BotID) == "" {
 		return errors.New("bot_id is required")
 	}
@@ -1300,7 +1310,7 @@ func normalizeAgentID(raw string) (string, error) {
 		return "", errors.New("id is required")
 	}
 	if !agentIDPattern.MatchString(id) {
-		return "", fmt.Errorf("invalid agent id %q: expected lowercase slug matching %s", raw, agentIDPattern.String())
+		return "", apperror.FieldInvalid("id", fmt.Errorf("invalid agent id %q", raw))
 	}
 	return id, nil
 }
@@ -1311,6 +1321,21 @@ func agentResultMap(res agentRunResult) map[string]any {
 		"session_id": res.SessionID,
 		"task_id":    res.TaskID,
 		"status":     res.Status,
+	}
+	if res.RunID != "" {
+		out["run_id"] = res.RunID
+	}
+	if res.RuntimeType != "" {
+		out["runtime_type"] = res.RuntimeType
+	}
+	if res.BotAgentID != "" {
+		out["bot_agent_id"] = res.BotAgentID
+	}
+	if res.ExecutionState != "" {
+		out["execution_state"] = res.ExecutionState
+	}
+	if res.Usage != nil {
+		out["usage"] = res.Usage
 	}
 	if res.ModelID != "" {
 		out["model_id"] = res.ModelID
@@ -1343,7 +1368,7 @@ func agentResultMap(res agentRunResult) map[string]any {
 	return out
 }
 
-func (*SubagentService) startSpawnProgress(ctx context.Context, session agenttools.SessionContext) {
+func (*SubagentService) startSpawnProgress(ctx context.Context, session tools.SessionContext) {
 	emitter := session.Emitter
 	if emitter == nil {
 		return
@@ -1355,7 +1380,7 @@ func (*SubagentService) startSpawnProgress(ctx context.Context, session agenttoo
 	}()
 }
 
-func runSpawnProgress(ctx context.Context, emitter agenttools.StreamEmitter, ticks <-chan time.Time) {
+func runSpawnProgress(ctx context.Context, emitter tools.StreamEmitter, ticks <-chan time.Time) {
 	if emitter == nil {
 		return
 	}
@@ -1367,7 +1392,7 @@ func runSpawnProgress(ctx context.Context, emitter agenttools.StreamEmitter, tic
 			if ctx.Err() != nil {
 				return
 			}
-			emitter(agenttools.ToolStreamEvent{Type: agenttools.StreamEventSpawnProgress})
+			emitter(tools.ToolStreamEvent{Type: tools.StreamEventSpawnProgress})
 		}
 	}
 }
@@ -1375,7 +1400,7 @@ func runSpawnProgress(ctx context.Context, emitter agenttools.StreamEmitter, tic
 func (p *SubagentService) persistMessages(
 	ctx context.Context,
 	req *agentRequest,
-	result *agenttools.SpawnResult,
+	result *tools.SpawnResult,
 	includeUser bool,
 ) error {
 	if includeUser {
@@ -1459,11 +1484,12 @@ func (p *SubagentService) persistUserMessage(ctx context.Context, req *agentRequ
 	}
 	userContent, _ := historyfrag.MarshalStoredSDKMessage(sdk.UserMessage(req.message))
 	input := messagepkg.PersistInput{
-		BotID:     req.parentSession.BotID,
-		SessionID: req.agentSessionID,
-		Role:      "user",
-		Content:   userContent,
-		RunID:     strings.TrimSpace(req.admission.RunID),
+		BotID:       req.parentSession.BotID,
+		SessionID:   req.agentSessionID,
+		Role:        "user",
+		RuntimeType: req.runtimeType, SessionMode: sessionpkg.TypeSubagent,
+		Content: userContent,
+		RunID:   strings.TrimSpace(req.admission.RunID),
 	}
 	if turnID := strings.TrimSpace(req.admission.TurnID); turnID != "" {
 		position := req.admission.TurnPosition
@@ -1519,7 +1545,7 @@ func (p *SubagentService) listModelCatalog(ctx context.Context, providerID strin
 	return items, nil
 }
 
-func (p *SubagentService) parentModel(ctx context.Context, session agenttools.SessionContext) (models.GetResponse, error) {
+func (p *SubagentService) parentModel(ctx context.Context, session tools.SessionContext) (models.GetResponse, error) {
 	if p.models == nil {
 		return models.GetResponse{}, errors.New("model resolution services not configured")
 	}
@@ -1549,7 +1575,7 @@ func (p *SubagentService) parentModel(ctx context.Context, session agenttools.Se
 
 func (p *SubagentService) resolveModel(
 	ctx context.Context,
-	session agenttools.SessionContext,
+	session tools.SessionContext,
 	modelUUID string,
 	requestedModelID string,
 	requestedProvider string,
@@ -1700,7 +1726,7 @@ func truncateTitle(s string, maxRunes int) string {
 // Read failures are returned instead of silently changing provider-wire behavior.
 func (p *SubagentService) resolveSubagentReasoning(
 	ctx context.Context,
-	session agenttools.SessionContext,
+	session tools.SessionContext,
 	modelInfo models.GetResponse,
 	clientType string,
 ) (*models.ReasoningConfig, error) {

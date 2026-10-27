@@ -1,4 +1,33 @@
 {
+  "control_agent": {
+    "properties": {
+      "action": {
+        "description": "Read status or stop the exact run.",
+        "enum": [
+          "status",
+          "stop"
+        ],
+        "type": "string"
+      },
+      "id": {
+        "description": "Child agent id from spawn_agent or list_agents.",
+        "type": "string"
+      },
+      "run_id": {
+        "description": "Required for stop. The exact child run_id returned by status.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "action"
+    ],
+    "type": "object"
+  },
+  "list_agent_backends": {
+    "properties": {},
+    "type": "object"
+  },
   "list_agents": {
     "properties": {},
     "type": "object"
@@ -30,6 +59,10 @@
   },
   "spawn_agent": {
     "properties": {
+      "bot_agent_id": {
+        "description": "Configured external agent instance from list_agent_backends. Mutually exclusive with model_id, provider and fork. Runs one task with the instance configuration.",
+        "type": "string"
+      },
       "fork": {
         "description": "If true, inherit the parent model's current message context while keeping the subagent system prompt and tools.",
         "type": "boolean"

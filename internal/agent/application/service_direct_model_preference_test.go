@@ -265,3 +265,11 @@ func TestDirectModelPreferenceAnswersCatalogFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedExternalChildIgnoresInteractiveModelPreferences(t *testing.T) {
+	svc := &Service{}
+	req, err := svc.applyDirectModelPreference(t.Context(), ChatRequest{Model: "injected", ReasoningEffort: "high"}, session.Thread{SessionMode: session.TypeSubagent, RuntimeType: session.RuntimeCodex, PreferredExternalModelID: "overridden", PreferredReasoningEffort: "high"})
+	if err != nil || req.Model != "" || req.ReasoningEffort != "" {
+		t.Fatalf("child model override survived: %+v, %v", req, err)
+	}
+}

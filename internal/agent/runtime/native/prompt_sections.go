@@ -97,11 +97,7 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 
 	sections = append(sections, buildPlatformIdentitySections(params)...)
 
-	if isSubagent {
-		return sections
-	}
-
-	if tools.PlatformRendersMarkdownMath(params.Platform) {
+	if !isSubagent && tools.PlatformRendersMarkdownMath(params.Platform) {
 		sections = append(sections, SystemSection{
 			ID: sectionIDOutputFormatting, Kind: contextfrag.KindSystemPrompt, Priority: priorityOutputFormatting,
 			RetentionTier: contextfrag.RetentionPreferred, Text: strings.TrimSpace(includes["_output_formatting"]),
@@ -122,7 +118,16 @@ func GenerateSystemSections(params SystemPromptParams) []SystemSection {
 			})
 		}
 	}
-	for _, item := range buildFilePromptItems(params.Files, params.MaxFilesBytes) {
+	files := params.Files
+	if isSubagent {
+		files = nil
+		for _, file := range params.Files {
+			if file.Filename == "AGENTS.md" {
+				files = append(files, file)
+			}
+		}
+	}
+	for _, item := range buildFilePromptItems(files, params.MaxFilesBytes) {
 		sections = append(sections, SystemSection{
 			ID: sectionIDWorkspaceFile + "." + item.ID, Kind: contextfrag.KindWorkspaceInstruction,
 			Priority: priorityWorkspaceInstructions, RetentionTier: contextfrag.RetentionPreferred, Text: item.Text,

@@ -180,6 +180,49 @@ func (f *historyFixture) active() Checkpoint {
 	return active
 }
 
+func TestPostgresChildForkRowsParticipateInOnlyTheirOwnCheckpoint(t *testing.T) {
+	f := newHistoryFixture(t)
+	parent := f.newSession()
+	parentRow := f.row(parent, 1, 1)
+	f.exec(`UPDATE bot_sessions SET type='subagent', session_mode='subagent', parent_session_id=$2 WHERE id=$1`, f.session, parent)
+	fork := f.row(f.session, 1, 1)
+	f.exec(`UPDATE bot_history_messages SET turn_visible=false, session_mode='subagent', metadata=jsonb_build_object('context_scope','subagent_fork','source_message_id',$2::text) WHERE id=$1`, fork, parentRow)
+	hidden := f.row(f.session, 1, 2)
+	f.exec(`UPDATE bot_history_messages SET turn_visible=false WHERE id=$1`, hidden)
+	task := f.row(f.session, 2, 1)
+	childID := dbpkg.ParseUUIDOrEmpty(f.session)
+	sources, err := f.queries.ListHistoryRowsBySources(f.ctx, dbsqlc.ListHistoryRowsBySourcesParams{
+		SessionID: childID, Ids: []pgtype.UUID{dbpkg.ParseUUIDOrEmpty(fork), dbpkg.ParseUUIDOrEmpty(hidden), dbpkg.ParseUUIDOrEmpty(parentRow)},
+	})
+	if err != nil || len(sources) != 1 || sources[0].ID.String() != fork {
+		t.Fatalf("child source lookup = %+v, %v", sources, err)
+	}
+	rows, err := f.queries.ListHistoryMessagesAfterWithinBytes(f.ctx, dbsqlc.ListHistoryMessagesAfterWithinBytesParams{SessionID: childID, MaxBytes: 1 << 20})
+	if err != nil || len(rows) != 2 || rows[0].ID.String() != fork || rows[1].ID.String() != task {
+		t.Fatalf("context read = %+v, %v", rows, err)
+	}
+	var visible int
+	if err = f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_visible_history_messages WHERE session_id=$1`, f.session).Scan(&visible); err != nil || visible != 1 {
+		t.Fatalf("visible child rows = %d, %v", visible, err)
+	}
+	checkpoint, err := f.foldRead(Checkpoint{}, "child inherited context", []string{fork, task}, fork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.pointer(parent) != "" || f.active().ID != checkpoint.ID {
+		t.Fatal("child fold changed parent checkpoint or was not durable")
+	}
+	after, err := f.queries.ListHistoryMessagesAfterWithinBytes(f.ctx, dbsqlc.ListHistoryMessagesAfterWithinBytesParams{SessionID: childID, AfterTurnPosition: checkpoint.Position.Turn, AfterTurnMessageSeq: checkpoint.Position.Seq, MaxBytes: 1 << 20})
+	if err != nil || len(after) != 1 || after[0].ID.String() != task {
+		t.Fatalf("checkpoint tail = %+v, %v", after, err)
+	}
+	// The inherited prefix must also be visible to bounded backlog admission.
+	bounded, err := f.queries.ListHistoryMessagesAfterWithinBytes(f.ctx, dbsqlc.ListHistoryMessagesAfterWithinBytesParams{SessionID: childID, MaxBytes: 1})
+	if err != nil || len(bounded) != 1 || !bounded[0].Truncated {
+		t.Fatalf("bounded load hid fork backlog: %+v, %v", bounded, err)
+	}
+}
+
 func items(entries ...Item) []Item { return entries }
 
 func sameItems(got, want []Item) bool {

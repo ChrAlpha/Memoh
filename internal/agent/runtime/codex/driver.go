@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/runtime/agentprocess"
 	"github.com/felinics/memoh/internal/agent/runtime/codex/protocol"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/servertable"
@@ -108,8 +109,11 @@ func serverKey(botID, botAgentID string) string {
 }
 
 func splitServerKey(key string) (string, string) {
-	botID, botAgentID, _ := strings.Cut(key, "\x00")
-	return botID, botAgentID
+	parts := strings.SplitN(key, "\x00", 3)
+	if len(parts) < 2 {
+		return key, ""
+	}
+	return parts[0], parts[1]
 }
 
 func (d *Driver) resolveAgentConfig(ctx context.Context, botID, botAgentID string, credentialRequired bool) (Config, agentcredential.ResolvedCredential, error) {
@@ -256,7 +260,13 @@ func (d *Driver) nativeModels(ctx context.Context, botID, botAgentID string, cfg
 
 // Prompt implements external.Driver: it runs one turn on the bot's
 // app-server, streaming events through the sink.
-func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (external.PromptResult, error) {
+func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (returned external.PromptResult, returnedErr error) {
+	execution := external.ExecutionNotStarted
+	defer func() {
+		if input.IsSubagent() {
+			returned.Execution = execution
+		}
+	}()
 	if input.Command == "goal" && !goalExecutionAllowed(input) {
 		return external.PromptResult{}, external.Fail(external.FailureGoalRequiresDefaultMode, nil)
 	}
@@ -280,11 +290,30 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 		return external.PromptResult{}, err
 	}
 
-	srv, releaseServer, err := d.acquireServer(ctx, input.BotID, input.BotAgentID)
+	if input.IsSubagent() {
+		execution = external.ExecutionUnknown
+	}
+	srv, releaseServer, err := d.acquireServerKey(ctx, promptServerKey(input))
 	if err != nil {
 		return external.PromptResult{}, wrapServerError(err)
 	}
 	defer releaseServer()
+	if input.IsSubagent() {
+		defer func() {
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+			defer cancel()
+			stopErr := srv.proc.Stop(stopCtx)
+			if stopErr == nil {
+				stopErr = (agentprocess.ExecutionScope{ThreadID: input.ThreadID, RunID: input.RunID}).Reconcile(stopCtx, srv.client)
+			}
+			d.servers.RecycleResource(promptServerKey(input), srv)
+			if stopErr != nil {
+				returnedErr = errors.Join(returnedErr, external.ErrTerminationUnconfirmed, stopErr)
+			} else {
+				execution = external.ExecutionStopped
+			}
+		}()
+	}
 	if err := srv.ensureAuth(ctx, cfg); err != nil {
 		if errors.Is(err, ErrAuthRequired) {
 			return external.PromptResult{}, external.Fail(external.FailureAuthRequired, err)
@@ -298,6 +327,11 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 	}
 	threadID, err := d.ensureThread(ctx, srv, cfg, input)
 	if err != nil {
+		return external.PromptResult{}, err
+	}
+	metadata := map[string]any{}
+	recordThreadMetadata(&metadata, input.RuntimeMetadata, threadID, srv.threadPath(threadID))
+	if err := input.RecordAnchor(ctx, metadata); err != nil {
 		return external.PromptResult{}, err
 	}
 	emitThreadNotices(srv, threadID, input.Sink)
@@ -347,7 +381,7 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 			} else {
 				d.logger.WarnContext(ctx, "codex turn/start cancelled before a turn id arrived; draining app-server",
 					slog.String("thread_id", threadID))
-				d.ResetBotAgent(input.BotID, input.BotAgentID)
+				d.servers.RecycleResource(promptServerKey(input), srv)
 			}
 		}
 		return srv.turnResultAfterError(turn, err)
@@ -385,7 +419,7 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 			// its last user releases it.
 			d.logger.WarnContext(ctx, "codex turn did not settle after interrupt; draining app-server",
 				slog.String("thread_id", threadID))
-			d.ResetBotAgent(input.BotID, input.BotAgentID)
+			d.servers.RecycleResource(promptServerKey(input), srv)
 		case <-srv.proc.Done():
 		}
 	case <-srv.proc.Done():
@@ -581,6 +615,7 @@ func (d *Driver) botGatewayToolLookup(botID string) func(context.Context, string
 
 // startServer is the server table's start hook.
 func (d *Driver) startServer(ctx context.Context, key string) (servertable.Resource, error) {
+	ctx = scopedServerContext(ctx, key)
 	botID, botAgentID := splitServerKey(key)
 	cfg, credential, err := d.resolveAgentConfig(ctx, botID, botAgentID, false)
 	if err != nil {
@@ -688,6 +723,11 @@ func emitThreadNotices(srv *appServer, threadID string, sink external.EventSink)
 // must defer; the reference keeps the server alive across a concurrent
 // recycle (which drains instead of killing).
 func (d *Driver) acquireServer(ctx context.Context, botID, botAgentID string) (*appServer, func(), error) {
+	return d.acquireServerKey(ctx, serverKey(botID, botAgentID))
+}
+
+func (d *Driver) acquireServerKey(ctx context.Context, key string) (*appServer, func(), error) {
+	botID, _ := splitServerKey(key)
 	info, err := d.bridges.WorkspaceInfo(ctx, botID)
 	if err != nil {
 		return nil, nil, err
@@ -695,7 +735,6 @@ func (d *Driver) acquireServer(ctx context.Context, botID, botAgentID string) (*
 	if err := external.RequireContainerWorkspace(info, RuntimeType); err != nil {
 		return nil, nil, err
 	}
-	key := serverKey(botID, botAgentID)
 	if current := d.servers.Peek(key); current != nil && d.launchers != nil {
 		launcher, err := d.resolveLauncher(ctx, botID)
 		if err != nil {

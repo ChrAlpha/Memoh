@@ -12,7 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
-	tools "github.com/felinics/memoh/internal/agent/tool"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 )
 
 var errInjectedTerminalLoad = errors.New("injected post-terminal load failure")
@@ -78,23 +78,23 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 			return observation
 		}
 	})
-	terminalOutcome := tools.SpawnAttemptCompleted
-	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
+	terminalOutcome := agenttools.SpawnAttemptCompleted
+	result, runErr := adapter.GenerateWithWatchdog(runCtx, agenttools.SpawnRunConfig{
 		RunID: admission.RunID,
 		Model: &sdk.Model{
 			ID:       "clean-end-abort-model",
 			Provider: abortAlignmentProvider{complete: true},
 		},
 		Query: "abort as the run completes",
-		Identity: tools.SpawnIdentity{
+		Identity: agenttools.SpawnIdentity{
 			BotID:      lifecycleTestBotID,
 			SessionID:  lifecycleTestSessionID,
 			IsSubagent: true,
 		},
-		ResolveCompletion: func() tools.SpawnAttemptDisposition {
-			return tools.SpawnAttemptCompleted
+		ResolveCompletion: func() agenttools.SpawnAttemptDisposition {
+			return agenttools.SpawnAttemptCompleted
 		},
-		ReconcileTerminal: func(outcome tools.SpawnAttemptDisposition) {
+		ReconcileTerminal: func(outcome agenttools.SpawnAttemptDisposition) {
 			terminalOutcome = outcome
 		},
 	}, func() {})
@@ -104,13 +104,13 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 	if result == nil || result.ContextLifecycle == nil {
 		t.Fatalf("spawn result = %#v, want lifecycle snapshot", result)
 	}
-	if terminalOutcome != tools.SpawnAttemptAbort {
+	if terminalOutcome != agenttools.SpawnAttemptAbort {
 		t.Fatalf("reconciled terminal = %v, want abort", terminalOutcome)
 	}
 	if _, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID); !errors.Is(err, errInjectedTerminalLoad) {
 		t.Fatalf("post-terminal Snapshot error = %v, want injected failure left unread by observer", err)
 	}
-	finish(tools.SubagentTerminal{
+	finish(agenttools.SubagentTerminal{
 		ContextLifecycle: result.ContextLifecycle,
 		OutcomeResolved:  true,
 		Outcome:          terminalOutcome,

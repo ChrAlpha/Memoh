@@ -9,16 +9,17 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/background"
-	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/errlog"
+	"github.com/felinics/memoh/internal/runtimekind"
 )
 
 // SetSubagentAdmitter injects the admission gate. Setter injection for the same
 // reason as the agent itself: this provider and the runtime that admits its
 // runs are wired into one graph and each is reachable from the other's
 // dependencies.
-func (p *SubagentService) SetSubagentAdmitter(admitter agenttools.SubagentAdmitter) {
+func (p *SubagentService) SetSubagentAdmitter(admitter tools.SubagentAdmitter) {
 	p.admitter = admitter
 }
 
@@ -49,22 +50,22 @@ func (p *SubagentService) admitAgentRun(ctx context.Context, req *agentRequest) 
 		return nil, nil, err
 	}
 	if recorder, ok := p.admitter.(interface {
-		RecordSubagentResume(context.Context, agenttools.SessionContext, string, string, string) error
-	}); ok {
+		RecordSubagentResume(context.Context, tools.SessionContext, string, string, string) error
+	}); ok && !runtimekind.IsExternal(req.runtimeType) {
 		if err := recorder.RecordSubagentResume(runCtx, req.parentSession, req.agentSessionID, req.message, req.config.ModelID); err != nil {
-			finish(agenttools.SubagentTerminal{Cause: err})
+			finish(tools.SubagentTerminal{Cause: err})
 			return nil, nil, err
 		}
 	}
 	req.admission = admission
 	return runCtx, func(result agentRunResult) {
-		terminal := agenttools.SubagentTerminal{
+		terminal := tools.SubagentTerminal{
 			Cause:            result.Cause,
 			ContextLifecycle: result.ContextLifecycle,
 			OutcomeResolved:  result.AttemptResolved,
 			Outcome:          result.AttemptOutcome,
 		}
-		if result.AttemptResolved && result.AttemptOutcome == agenttools.SpawnAttemptAbort {
+		if result.AttemptResolved && result.AttemptOutcome == tools.SpawnAttemptAbort {
 			terminal.Cause = nil
 			finish(terminal)
 			return

@@ -13,3 +13,11 @@ func (goldenSubagentController) Send(context.Context, SessionContext, SendAgentM
 }
 func (goldenSubagentController) List(context.Context, SessionContext) (any, error)   { return nil, nil }
 func (goldenSubagentController) Models(context.Context, SessionContext) (any, error) { return nil, nil }
+
+func (goldenSubagentController) Backends(context.Context, SessionContext) (any, error) {
+	return nil, nil
+}
+
+func (goldenSubagentController) Control(context.Context, SessionContext, SubagentControlArgs) (any, error) {
+	return nil, nil
+}

@@ -4,9 +4,6 @@ import (
 	"context"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
-	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 )
 
@@ -59,36 +56,4 @@ func (s *Service) applySubagentThreadDefaults(ctx context.Context, req ChatReque
 		}
 	}
 	return req
-}
-
-// subagentForkContextModelMessages loads the parent-context snapshot a forked
-// subagent inherited, in the shape resolve's message assembly consumes. The
-// spawn path prepends the same rows on every parent-driven task; a direct
-// turn has to do it too or the forked agent loses its inherited context the
-// moment a human talks to it.
-func (s *Service) subagentForkContextModelMessages(ctx context.Context, req ChatRequest) []ModelMessage {
-	if !strings.EqualFold(strings.TrimSpace(req.SessionType), sessionpkg.TypeSubagent) {
-		return nil
-	}
-	svc, ok := s.sessionService.(subagentThreadService)
-	if !ok {
-		return nil
-	}
-	rows, err := svc.ListSubagentForkContext(ctx, req.ThreadID)
-	if err != nil || len(rows) == 0 {
-		return nil
-	}
-	messages := make([]sdk.Message, 0, len(rows))
-	for _, row := range rows {
-		// Fork rows are written in the stored shape (history.MarshalStoredSDKMessage).
-		msg := historyfrag.StoredModelMessageToSDKMessage(historyfrag.DecodeStoredModelMessage(nil, "", row.Role, row.Message))
-		if msg.Role == "" {
-			msg.Role = sdk.MessageRole(row.Role)
-		}
-		if len(msg.Content) == 0 {
-			continue
-		}
-		messages = append(messages, msg)
-	}
-	return sdkMessagesToModelMessages(messages)
 }

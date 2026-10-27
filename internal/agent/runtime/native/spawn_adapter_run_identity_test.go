@@ -45,23 +45,15 @@ func TestSpawnRunConfigMintsRunIDForDirectCaller(t *testing.T) {
 func TestSpawnAdapterStepCommitSharesLifecycleAndInstallsInterrupt(t *testing.T) {
 	adapter := NewSpawnAdapter(newTestAgent())
 	var captured *contextfrag.LifecycleHolder
-	adapter.SetStepCommitFactory(func(
-		_ context.Context,
-		_, _, _, _ string,
-		lifecycle *contextfrag.LifecycleHolder,
-		_ func(),
-	) (
-		func(context.Context, int, *step.Record) error,
-		func(context.Context, int, *step.Record) error,
-	) {
-		captured = lifecycle
-		callback := func(context.Context, int, *step.Record) error { return nil }
-		return callback, callback
+	adapter.SetRunBindingFactory(func(_ context.Context, _ tools.SpawnRunConfig, rc *RunConfig) (func(context.Context) error, error) {
+		captured = rc.ContextLifecycle
+		rc.OnStepCommitted = func(context.Context, int, *step.Record) (StepDirective, error) { return StepDirective{}, nil }
+		rc.OnStepInterrupted = func(context.Context, int, *step.Record) error { return nil }
+		return func(context.Context) error { return nil }, nil
 	})
-	rc := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{})
-
-	if !adapter.installStepCommit(context.Background(), tools.SpawnRunConfig{}, &rc) {
-		t.Fatal("step persistence was not installed")
+	rc, persisted, _, err := adapter.prepare(context.Background(), tools.SpawnRunConfig{})
+	if err != nil || !persisted {
+		t.Fatalf("binding = %v, %v", persisted, err)
 	}
 	if captured == nil || captured != rc.ContextLifecycle {
 		t.Fatalf("captured lifecycle = %p, run lifecycle = %p", captured, rc.ContextLifecycle)
@@ -377,5 +369,16 @@ func TestSpawnAdapterGenerateFailureCarriesLifecycleSnapshot(t *testing.T) {
 	}
 	if result.ContextLifecycle.Counts.Fragments == 0 || result.ContextLifecycle.Counts.Messages == 0 {
 		t.Fatalf("failure lifecycle counts = %+v, want assembled context", result.ContextLifecycle.Counts)
+	}
+}
+
+func TestChildIdentityPreservesPromptTimezone(t *testing.T) {
+	location, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{Identity: tools.SpawnIdentity{TimezoneLocation: location, IsSubagent: true}})
+	if cfg.Identity.Timezone != "Asia/Shanghai" || cfg.Identity.TimezoneLocation != location {
+		t.Fatalf("child timezone: %+v", cfg.Identity)
 	}
 }

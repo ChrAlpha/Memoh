@@ -71,7 +71,7 @@ func (t *turnRunner) requestUserInput(ctx context.Context, callID string, input 
 			ToolCallID: callID, ToolName: userinput.ToolNameAskUser, Input: input, ProviderMetadata: metadata,
 			SourcePlatform: t.input.CurrentPlatform, ReplyTarget: t.input.ReplyTarget, ConversationType: t.input.ConversationType, ExpiresAt: &expiresAt,
 		},
-		ActorChannelIdentityID: t.input.ChannelIdentityID, Interactive: t.input.CanRequestUserInput,
+		ActorChannelIdentityID: t.input.ChannelIdentityID, Interactive: t.input.CanAskUser(),
 		WaitTimeout: userinput.DefaultWaitTimeout, Emit: t.emitUserInputRequest,
 		NonInteractiveReason: "claude requested user input without an interactive stream",
 		UndeliveredReason:    "claude user input was not delivered", TimeoutReason: "claude user input timed out", AbortReason: "claude user input aborted",

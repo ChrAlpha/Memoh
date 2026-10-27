@@ -162,13 +162,15 @@ type ReasoningEffortOption struct {
 
 // PromptInput is one turn's worth of work for a Driver.
 type PromptInput struct {
-	Steering   Steering
-	BotID      string
-	BotAgentID string
-	ChatID     string
-	ThreadID   string
-	RunID      string
-	RouteID    string
+	// PersistRuntimeState commits newly learned runtime anchors under the admitted fence.
+	PersistRuntimeState func(context.Context, map[string]any) error
+	Steering            Steering
+	BotID               string
+	BotAgentID          string
+	ChatID              string
+	ThreadID            string
+	RunID               string
+	RouteID             string
 
 	// Prompt is the user's message text.
 	Prompt string
@@ -260,6 +262,8 @@ func (f EventSinkFunc) EmitStreamEvent(ev event.StreamEvent) { f(ev) }
 
 // PromptResult is the durable outcome of one turn.
 type PromptResult struct {
+	// Execution is the managed child process outcome, independently of TurnCompleted.
+	Execution ExecutionState
 	// Notices are UI-only runtime facts collected across startup and execution.
 	// They are persisted with the round, independently of the model transcript.
 	Notices []event.Notice

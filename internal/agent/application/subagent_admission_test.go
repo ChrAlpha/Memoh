@@ -518,3 +518,22 @@ func TestAgentAdmissionFailureRecordsItsCause(t *testing.T) {
 		})
 	}
 }
+
+// The returned acceptance receipt must remain meaningful even if this server
+// disappears immediately after responding to the parent.
+func TestBackgroundChildReturnsOnlyAfterAdmissionAndInputPersistence(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	admitter := &fakeSubagentAdmitter{}
+	p, _, _, messages := newAgentControlProviderWithAdmitter(t, &fakeSpawnAgent{block: release}, admitter)
+	result, err := p.Spawn(context.Background(), agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}, agenttools.SpawnAgentArgs{ID: "worker", Task: "durable task", RunInBackground: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := result.(map[string]any)
+	starts := admitter.admissions()
+	inputs := messages.persistInputs()
+	if len(starts) != 1 || len(inputs) != 1 || receipt["run_id"] != starts[0].runID || inputs[0].RunID != starts[0].runID || !strings.Contains(string(inputs[0].Content), "durable task") {
+		t.Fatalf("acceptance preceded durable task: receipt=%v admissions=%+v input=%+v", receipt, starts, inputs)
+	}
+}

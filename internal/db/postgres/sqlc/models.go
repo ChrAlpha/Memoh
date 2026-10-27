@@ -241,6 +241,35 @@ type BotChannelRoute struct {
 	TeamID                 pgtype.UUID        `json:"team_id"`
 }
 
+type BotContextHistoryMessage struct {
+	ID                      pgtype.UUID        `json:"id"`
+	BotID                   pgtype.UUID        `json:"bot_id"`
+	SessionID               pgtype.UUID        `json:"session_id"`
+	SenderChannelIdentityID pgtype.UUID        `json:"sender_channel_identity_id"`
+	SenderAccountUserID     pgtype.UUID        `json:"sender_account_user_id"`
+	SourceMessageID         pgtype.Text        `json:"source_message_id"`
+	SourceReplyToMessageID  pgtype.Text        `json:"source_reply_to_message_id"`
+	Role                    string             `json:"role"`
+	Content                 []byte             `json:"content"`
+	Metadata                []byte             `json:"metadata"`
+	Usage                   []byte             `json:"usage"`
+	SessionMode             string             `json:"session_mode"`
+	RuntimeType             string             `json:"runtime_type"`
+	ModelID                 pgtype.UUID        `json:"model_id"`
+	EventID                 pgtype.UUID        `json:"event_id"`
+	DisplayText             pgtype.Text        `json:"display_text"`
+	TurnID                  pgtype.UUID        `json:"turn_id"`
+	TurnPosition            pgtype.Int8        `json:"turn_position"`
+	TurnMessageSeq          pgtype.Int8        `json:"turn_message_seq"`
+	TurnVisible             bool               `json:"turn_visible"`
+	TurnSupersededByTurnID  pgtype.UUID        `json:"turn_superseded_by_turn_id"`
+	TurnSupersededAt        pgtype.Timestamptz `json:"turn_superseded_at"`
+	TurnSupersededReason    pgtype.Text        `json:"turn_superseded_reason"`
+	CreatedAt               pgtype.Timestamptz `json:"created_at"`
+	TeamID                  pgtype.UUID        `json:"team_id"`
+	RunID                   pgtype.UUID        `json:"run_id"`
+}
+
 type BotDependencyInstallation struct {
 	ID                 pgtype.UUID        `json:"id"`
 	TeamID             pgtype.UUID        `json:"team_id"`

@@ -73,7 +73,7 @@ func (t *turnState) runUserInputCard(ctx context.Context, params *protocol.ToolR
 			SourcePlatform: "",
 		},
 		ActorChannelIdentityID: t.input.ChannelIdentityID,
-		Interactive:            t.input.CanRequestUserInput,
+		Interactive:            t.input.CanAskUser(),
 		WaitTimeout:            userinput.DefaultWaitTimeout,
 		Emit:                   t.emitUserInputRequest,
 		NonInteractiveReason:   "codex requested user input without an interactive stream",

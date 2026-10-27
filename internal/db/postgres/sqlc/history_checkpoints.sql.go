@@ -19,7 +19,7 @@ SELECT
     OR m.id = ANY($3::uuid[])
   )::boolean AS kept,
   COALESCE(MAX((event.event_data->>'event_cursor')::bigint), 0)::bigint AS event_cursor
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 LEFT JOIN bot_session_events event
   ON event.team_id = public.memoh_current_team_id()
  AND event.id = m.event_id
@@ -222,7 +222,7 @@ const getHistoryCheckpointKeptBeforeTurn = `-- name: GetHistoryCheckpointKeptBef
 WITH replaced AS MATERIALIZED (
   SELECT MIN(m.turn_position)::bigint AS turn_position,
     MIN(m.turn_message_seq)::bigint AS turn_message_seq
-  FROM bot_visible_history_messages m
+  FROM bot_context_history_messages m
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
     AND m.turn_id = $2
@@ -293,7 +293,7 @@ WITH candidate_rows AS MATERIALIZED (
     (
       octet_length(m.content::text)
     )::BIGINT AS payload_bytes
-  FROM bot_visible_history_messages m
+  FROM bot_context_history_messages m
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
     AND (
@@ -325,7 +325,7 @@ SELECT
   m.turn_position,
   m.turn_message_seq,
   admitted.candidate_count
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 JOIN admitted_candidates admitted ON admitted.id = m.id
 WHERE m.team_id = public.memoh_current_team_id()
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
@@ -399,7 +399,7 @@ func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context
 
 const listHistoryCheckpointSpanRows = `-- name: ListHistoryCheckpointSpanRows :many
 SELECT m.id, m.turn_position, m.turn_message_seq
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND (
@@ -502,10 +502,9 @@ WITH RECURSIVE history_window AS (
   (
     SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
       octet_length(m.content::text)::bigint AS total_bytes
-    FROM bot_history_messages m
+    FROM bot_context_history_messages m
     WHERE m.team_id = public.memoh_current_team_id()
       AND m.session_id = $1
-      AND m.turn_visible = true
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
@@ -524,10 +523,9 @@ WITH RECURSIVE history_window AS (
   CROSS JOIN LATERAL (
     SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
       octet_length(m.content::text)::bigint AS content_bytes
-    FROM bot_history_messages m
+    FROM bot_context_history_messages m
     WHERE m.team_id = public.memoh_current_team_id()
       AND m.session_id = $1
-      AND m.turn_visible = true
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
@@ -548,12 +546,12 @@ WITH RECURSIVE history_window AS (
   SELECT EXISTS (
     SELECT 1
     FROM oldest
-    JOIN bot_history_messages m
+    JOIN bot_context_history_messages m
       ON m.team_id = public.memoh_current_team_id()
      AND m.session_id = $1
      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
        < (oldest.turn_position, oldest.turn_message_seq, oldest.created_at, oldest.id)
-    WHERE m.turn_visible = true
+    WHERE true
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
@@ -583,7 +581,7 @@ SELECT
   s.channel_type AS platform,
   budget_cut.truncated
 FROM history_window admitted
-JOIN bot_history_messages m ON m.id = admitted.id
+JOIN bot_context_history_messages m ON m.id = admitted.id
   AND m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
 CROSS JOIN budget_cut
@@ -703,7 +701,7 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
 LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
@@ -783,7 +781,7 @@ func (q *Queries) ListHistoryMessagesByIDs(ctx context.Context, arg ListHistoryM
 
 const listHistoryRowsBySources = `-- name: ListHistoryRowsBySources :many
 SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND (m.id = ANY($2::uuid[]) OR m.source_message_id = ANY($3::text[]))
@@ -838,10 +836,9 @@ WITH RECURSIVE history_window AS (
   (
     SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
       octet_length(m.content::text)::bigint AS total_bytes
-    FROM bot_history_messages m
+    FROM bot_context_history_messages m
     WHERE m.team_id = public.memoh_current_team_id()
       AND m.session_id = $1
-      AND m.turn_visible = true
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
@@ -858,10 +855,9 @@ WITH RECURSIVE history_window AS (
   CROSS JOIN LATERAL (
     SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
       octet_length(m.content::text)::bigint AS content_bytes
-    FROM bot_history_messages m
+    FROM bot_context_history_messages m
     WHERE m.team_id = public.memoh_current_team_id()
       AND m.session_id = $1
-      AND m.turn_visible = true
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
@@ -882,12 +878,12 @@ WITH RECURSIVE history_window AS (
   SELECT EXISTS (
     SELECT 1
     FROM oldest
-    JOIN bot_history_messages m
+    JOIN bot_context_history_messages m
       ON m.team_id = public.memoh_current_team_id()
      AND m.session_id = $1
      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
        < (oldest.turn_position, oldest.turn_message_seq, oldest.created_at, oldest.id)
-    WHERE m.turn_visible = true
+    WHERE true
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
@@ -900,7 +896,7 @@ SELECT m.id, m.role, m.content, m.created_at,
   COALESCE(m.metadata->'discuss_step' = 'true'::jsonb, false)::boolean AS discuss_step,
   budget_cut.truncated
 FROM history_window admitted
-JOIN bot_history_messages m ON m.id = admitted.id
+JOIN bot_context_history_messages m ON m.id = admitted.id
   AND m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
 CROSS JOIN budget_cut
@@ -971,7 +967,7 @@ SELECT
   COALESCE(m.metadata->'agent_step_interrupted' = 'true'::jsonb, false)::boolean AS interrupted,
   COALESCE(m.metadata->'discuss_step' = 'true'::jsonb, false)::boolean AS discuss_step,
   m.source_message_id AS external_message_id
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND m.id = ANY($2::uuid[])
@@ -1029,7 +1025,7 @@ const measureHistoryCheckpointCandidates = `-- name: MeasureHistoryCheckpointCan
 SELECT
   COUNT(*)::BIGINT AS candidate_count,
   COALESCE(MAX(octet_length(m.content::text)), 0)::BIGINT AS largest_candidate_bytes
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND (
@@ -1076,7 +1072,7 @@ const measureHistoryMessagesAfter = `-- name: MeasureHistoryMessagesAfter :one
 SELECT
   COUNT(*)::BIGINT AS message_count,
   COALESCE(SUM(octet_length(m.content::text)), 0)::BIGINT AS content_bytes
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
@@ -1115,7 +1111,7 @@ WITH owner_session AS MATERIALIZED (
 ), replaced AS MATERIALIZED (
   SELECT MIN(m.turn_position)::bigint AS turn_position,
     MIN(m.turn_message_seq)::bigint AS turn_message_seq
-  FROM bot_visible_history_messages m
+  FROM bot_context_history_messages m
   JOIN owner_session owner ON owner.id = m.session_id
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.turn_id = $3

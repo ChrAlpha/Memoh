@@ -31,6 +31,7 @@ type Task struct {
 	Description    string
 	AgentID        string
 	AgentSessionID string
+	AgentReceipt   AgentReceipt
 	AgentMessage   string
 	AgentReport    string
 	AgentError     string
@@ -88,6 +89,7 @@ type TaskSnapshot struct {
 	Description    string
 	AgentID        string
 	AgentSessionID string
+	AgentReceipt   AgentReceipt
 	AgentMessage   string
 	AgentReport    string
 	AgentError     string
@@ -130,6 +132,7 @@ func (t *Task) Snapshot() TaskSnapshot {
 		Description:    t.Description,
 		AgentID:        t.AgentID,
 		AgentSessionID: t.AgentSessionID,
+		AgentReceipt:   t.AgentReceipt.clone(),
 		AgentMessage:   t.AgentMessage,
 		AgentReport:    t.AgentReport,
 		AgentError:     t.AgentError,

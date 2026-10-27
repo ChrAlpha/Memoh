@@ -910,3 +910,17 @@ func TestPreferencePatchReturnsStableConflict(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestExternalChildPreferencePatchReturnsUnsupported(t *testing.T) {
+	const botID = "11111111-1111-1111-1111-111111111111"
+	const sessionID = "22222222-2222-2222-2222-222222222222"
+	for _, runtime := range []string{session.RuntimeCodex, session.RuntimeClaudeCode} {
+		q := &sessionUpdateQueries{bot: testBotRow(botID, nil), session: sqlc.BotSession{ID: testUUID(sessionID), BotID: testUUID(botID), Type: session.TypeSubagent, SessionMode: session.TypeSubagent, RuntimeType: runtime}}
+		h := NewSessionHandler(slog.Default(), newThreadServiceForTest(q), nil, bots.NewService(nil, q), newTestAdminAccountService("admin"))
+		h.SetModelPreferenceService(preferenceUpdateStub{queries: q, err: session.ErrSubagentBindingImmutable})
+		_, err := callUpdateSession(h, botID, sessionID, `{"preferred_chat_model_id":"override","expected_model_preference_revision":""}`)
+		if apperror.CodeOf(err) != apperror.CodeRuntimeControlUnsupported {
+			t.Fatalf("%s preference rejection: %v", runtime, err)
+		}
+	}
+}

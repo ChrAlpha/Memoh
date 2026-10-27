@@ -81,7 +81,7 @@ func (t *turnState) handleElicitation(c *conn, req *protocol.Inbound, params *pr
 func (t *turnState) runElicitation(ctx context.Context, params *protocol.McpServerElicitationRequestParams) protocol.McpServerElicitationRequestResponse {
 	decline := protocol.McpServerElicitationRequestResponse{Action: protocol.McpServerElicitationActionDecline}
 	cancel := protocol.McpServerElicitationRequestResponse{Action: protocol.McpServerElicitationActionCancel}
-	if t == nil || t.userInput == nil || !t.input.CanRequestUserInput {
+	if t == nil || t.userInput == nil || !t.input.CanAskUser() {
 		return decline
 	}
 

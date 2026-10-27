@@ -302,6 +302,21 @@ func backgroundStatusMap(session SessionContext, s background.TaskSnapshot) map[
 	switch s.Kind {
 	case background.KindAgent:
 		result["agent_id"] = s.AgentID
+		if s.AgentReceipt.RunID != "" {
+			result["run_id"] = s.AgentReceipt.RunID
+		}
+		if s.AgentReceipt.RuntimeType != "" {
+			result["runtime_type"] = s.AgentReceipt.RuntimeType
+		}
+		if s.AgentReceipt.BotAgentID != "" {
+			result["bot_agent_id"] = s.AgentReceipt.BotAgentID
+		}
+		if s.AgentReceipt.ExecutionState != "" {
+			result["execution_state"] = s.AgentReceipt.ExecutionState
+		}
+		if s.AgentReceipt.Usage != nil {
+			result["usage"] = s.AgentReceipt.Usage
+		}
 		result["session_id"] = s.AgentSessionID
 		if s.AgentModelID != "" {
 			result["model_id"] = s.AgentModelID

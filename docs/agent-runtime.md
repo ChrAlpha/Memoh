@@ -35,8 +35,11 @@ input the event keeps in place. When the session's history checkpoint depends
 on the replaced turn, the same step moves the session back to the newest
 checkpoint that does not, or the attempt's first compaction does when it needs
 one before that step, so the attempt folds onto the checkpoint the replacement
-keeps. Subagent and external runtimes have separate ownership and remain
-outside this capability.
+keeps. Native subagents use this same history, provenance, step commit and
+checkpoint path on their own child thread. Hidden inherited rows participate
+in context admission and folding without becoming visible chat history.
+External runtimes own their context; their transcript is result evidence and
+is never replayed into a new runtime conversation.
 
 A native Discuss run writes each step as it commits, under the rows ingress
 already wrote for its input. Each composed message names the inbound message,
@@ -335,6 +338,8 @@ continuations use the same phase-aware application watchdog:
   remain supervised; explicit cancellation and runtime ownership loss still win.
 - Managed subagents have a ten-minute progress watchdog, with no implicit total
   duration. Detachment preserves an explicit ancestor execution deadline.
+  Native child preparation and compaction pause that watchdog while the
+  bounded summary request runs, then resume it for the next model step.
 - A compaction inside a native run, a fold before a step or a Discuss run's
   budget recovery, pauses the model watchdog while it runs; the model window
   restarts when it returns. A chat load folded before the request is built
@@ -584,3 +589,41 @@ then waits for active Web, Channel, schedule and subagent turns to finish their
 application-side cleanup before closing the PostgreSQL pool. This drain uses the
 remaining graceful shutdown deadline; a turn that ignores cancellation reports a
 shutdown error instead of being mistaken for a clean drain.
+
+## Managed child runtimes
+
+`spawn_agent` delegates through the application-owned `SubagentService`. The
+application durably accepts the task and its input before returning
+`background_started`; the tool provider owns only declarations and usage.
+Native children select a model from the parent provider. `bot_agent_id` selects
+an enabled configured Codex or Claude Code instance and is mutually exclusive
+with native model/provider selection and inherited-context `fork`.
+
+External children accept one task. Their configured instance, owner and native
+workspace binding are immutable, and availability is checked again at dispatch.
+Each admitted run has its own process scope. Codex uses a separate app-server;
+Claude Code uses a separate CLI process and preallocated session ID. The
+runtime session anchor is saved before the task can act. Backend-native
+subagent tools and Memoh delegation tools are disabled for children, as are
+user questions. Tool execution approval policy still applies.
+
+`list_agent_backends` exposes supported capabilities. `list_agents` and
+`control_agent(action="status")` read durable run identity, outcome, execution
+state, a bounded report and reported usage. Missing usage remains unknown.
+`control_agent(action="stop", run_id=...)` targets exactly that child execution;
+a stop request alone is not proof of termination. Native follow-ups retain
+`send_message`; external continuation and conversation fork are unsupported.
+
+The durable external execution hold is acquired under a per-bot database lock,
+with a limit of four. A failed run whose termination is unknown retains its
+hold across server restart, history clearing and child deletion. Reconciliation
+claims that exact old run after it is no longer live, stops its process scope,
+and releases the hold only after confirmation. It never submits another
+prompt. Deleting a child with a hold keeps it discoverable for cleanup.
+
+Scope cleanup confirms the bridge process exit and scans marked process trees
+in the native Linux workspace, including detached descendants that inherit the
+marker. This is lifecycle isolation, not a security sandbox: a process that
+both detaches and clears its inherited environment, or makes `/proc` state
+unreadable, can escape discovery. External workers share the bot's filesystem;
+projects requiring stronger containment need a kernel-enforced process scope.

@@ -33,16 +33,16 @@ func TestCheckpointDistinguishesUserAbortFromRevokedOwner(t *testing.T) {
 }
 
 func TestSubagentRejectsRevokedCheckpointWithDetachedCallback(t *testing.T) {
-	store := &recordingStepPersister{recordingMessageService: &recordingMessageService{}}
-	service := &Service{messageService: store}
-	owner, cancel := context.WithCancelCause(subagentRunContext("bot", "session", 9))
-	_, checkpoint := service.SubagentStepCommit(owner, "bot", "session", "model", "request", nil, nil)
-	if checkpoint == nil {
-		t.Fatal("missing checkpoint callback")
+	service, store, ctx, task := newChildBindingFixture(t, 0)
+	owner, cancel := context.WithCancelCause(ctx)
+	cfg := native.RunConfig{RunID: task.RunID, ContextLifecycle: contextfrag.NewLifecycleHolder()}
+	_, err := service.BindSubagentNativeRun(owner, task, &cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
 	cancel(sessionruntime.ErrRunOwnershipLost)
-	err := checkpoint(context.WithoutCancel(owner), 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("late")}})
+	err = cfg.OnStepInterrupted(context.WithoutCancel(owner), 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("late")}})
 	if !errors.Is(err, sessionruntime.ErrRunOwnershipLost) || len(store.steps) != 0 {
-		t.Fatalf("revoked subagent checkpoint: writes=%d err=%v", len(store.steps), err)
+		t.Fatalf("revoked child wrote %d steps: %v", len(store.steps), err)
 	}
 }

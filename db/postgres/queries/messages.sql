@@ -2431,6 +2431,11 @@ invalidated_sessions AS (
       -- or the next turn replays the cleared conversation from the runtime's
       -- own thread. Identity keys survive: keep only acp_agent_id.
       runtime_metadata = CASE
+        -- A managed external child never resumes its conversation. Its
+        -- metadata is an execution receipt: history deletion must retain
+        -- the exact-run hold and anchor needed to stop a surviving process.
+        WHEN session.session_mode = 'subagent' AND session.runtime_type <> 'model'
+          THEN session.runtime_metadata
         WHEN session.runtime_metadata ? 'acp_agent_id'
           THEN jsonb_build_object('acp_agent_id', session.runtime_metadata->'acp_agent_id')
         ELSE '{}'::jsonb
@@ -2523,6 +2528,11 @@ invalidated_session AS (
       -- Same anchor scrub as ClearHistoryByBot: continuity keys die with the
       -- history, identity (acp_agent_id) survives.
       runtime_metadata = CASE
+        -- A managed external child never resumes its conversation. Its
+        -- metadata is an execution receipt: history deletion must retain
+        -- the exact-run hold and anchor needed to stop a surviving process.
+        WHEN session.session_mode = 'subagent' AND session.runtime_type <> 'model'
+          THEN session.runtime_metadata
         WHEN session.runtime_metadata ? 'acp_agent_id'
           THEN jsonb_build_object('acp_agent_id', session.runtime_metadata->'acp_agent_id')
         ELSE '{}'::jsonb

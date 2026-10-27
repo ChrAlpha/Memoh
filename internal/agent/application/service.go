@@ -146,6 +146,7 @@ type Service struct {
 	memoryContextCache      *memprovider.MemoryContextCache
 	starterPromptFlights    singleflight.Group
 	externalAgentPromptHubs sync.Map
+	subagentBackends        subagentBackendCatalog
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
 	continueUserInputFn               func(ctx context.Context, req userinput.Request, input UserInputResponseInput, result sdk.ToolResultPart, eventCh chan<- WSStreamEvent) error
@@ -538,11 +539,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	var currentMessageIndex *int
 	if usePipeline {
 		currentMessageIndex = latestModelUserMessageIndex(messages)
-	}
-	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
-		// The inherited parent snapshot precedes the thread's own transcript,
-		// exactly as parent-driven subagent tasks assemble it.
-		messages, currentMessageIndex = prependContextMessages(forkContext, messages, currentMessageIndex)
 	}
 	historyMessageCount := len(messages)
 	if notice := currentWorkspaceTransitionMessage(historyRecords, req.WorkspaceTarget); notice != nil {

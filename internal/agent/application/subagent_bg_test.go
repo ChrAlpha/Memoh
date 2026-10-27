@@ -17,7 +17,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/agent/partmeta"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
@@ -469,7 +468,7 @@ func TestAgentControlToolsExposeSingleAgentSurface(t *testing.T) {
 		t.Fatalf("Tools failed: %v", err)
 	}
 	got := toolNames(tools)
-	want := []string{"spawn_agent", "send_message", "list_agents", "list_models"}
+	want := []string{"list_agent_backends", "control_agent", "spawn_agent", "send_message", "list_agents", "list_models"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unexpected tools: got %v want %v", got, want)
 	}
@@ -604,12 +603,12 @@ func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 		t.Fatalf("expected normalized custom id, got %v", res)
 	}
 
-	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "research_one", "task": "again"}); err == nil || !strings.Contains(err.Error(), "already exists") {
+	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "research_one", "task": "again"}); apperror.CodeOf(err) != apperror.CodeRequestFieldInvalid {
 		t.Fatalf("expected duplicate id error, got %v", err)
 	} else if strings.Contains(err.Error(), agenttools.ToolSendMessage().String()) {
 		t.Fatalf("duplicate id error should not name sibling tools that may be unavailable, got %v", err)
 	}
-	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "1bad", "task": "bad"}); err == nil || !strings.Contains(err.Error(), "invalid agent id") {
+	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "1bad", "task": "bad"}); apperror.CodeOf(err) != apperror.CodeRequestFieldInvalid {
 		t.Fatalf("expected invalid id error, got %v", err)
 	}
 }
@@ -640,9 +639,6 @@ func TestSendMessageReusesSessionAndHistory(t *testing.T) {
 	}
 	if call.Identity.SessionID != first["session_id"] {
 		t.Fatalf("expected reused identity session, got %q want %q", call.Identity.SessionID, first["session_id"])
-	}
-	if len(call.Messages) < 2 {
-		t.Fatalf("expected persisted history loaded into second call, got %d messages", len(call.Messages))
 	}
 	rec, ok := sessions.byAgent("parent1", "worker")
 	if !ok || rec.Metadata["agent_control_version"] != agentControlVersion {
@@ -677,46 +673,23 @@ func TestSpawnAgentRecordsPinnedModelOnSessionMetadata(t *testing.T) {
 	}
 }
 
-func TestForkedSubagentKeepsInvisibleParentSnapshotAcrossFollowUps(t *testing.T) {
-	agent := &fakeSpawnAgent{}
-	p, _, _, messages := newAgentControlProvider(t, agent)
-	parentMessages := []sdk.Message{
-		sdk.UserMessage("parent question"),
-		sdk.AssistantMessage("parent working context"),
+func TestForkedSubagentPersistsImmutableHandoff(t *testing.T) {
+	p, _, sessions, messages := newAgentControlProvider(t, &fakeSpawnAgent{})
+	parent := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: agenttools.NewMessageSnapshot([]sdk.Message{sdk.UserMessage("parent question"), sdk.AssistantMessage("parent working context")})}
+	result := asMap(t, mustExecuteAgentTool(t, p, parent, "spawn_agent", map[string]any{"id": "worker", "task": "child task", "fork": true}))
+	child := result["session_id"].(string)
+	frozen, err := sessions.ListSubagentForkContext(context.Background(), child)
+	if err != nil || len(frozen) != 2 {
+		t.Fatalf("handoff = %v, %v", frozen, err)
 	}
-	session := agenttools.SessionContext{
-		BotID:       "bot1",
-		SessionID:   "parent1",
-		ForkContext: agenttools.NewMessageSnapshot(parentMessages),
+	mustExecuteAgentTool(t, p, parent, "send_message", map[string]any{"id": "worker", "message": "second task"})
+	after, _ := sessions.ListSubagentForkContext(context.Background(), child)
+	if !reflect.DeepEqual(frozen, after) {
+		t.Fatal("follow-up changed accepted handoff")
 	}
-
-	first := asMap(t, mustExecuteAgentTool(t, p, session, agenttools.ToolSpawnAgent().String(), map[string]any{
-		"id":   "worker",
-		"task": "first child task",
-		"fork": true,
-	}))
-	if first["fork"] != true {
-		t.Fatalf("expected fork metadata in result, got %v", first)
-	}
-	firstCall, ok := agent.callAt(0)
-	if !ok || !reflect.DeepEqual(firstCall.Messages, parentMessages) {
-		t.Fatalf("expected only invisible parent prefix before first child query, got %+v", firstCall.Messages)
-	}
-	stored, _ := messages.ListBySession(context.Background(), first["session_id"].(string))
-	if len(stored) != 2 {
-		t.Fatalf("fork prefix must not be copied into visible child history, got %d stored messages", len(stored))
-	}
-
-	mustExecuteAgentTool(t, p, session, agenttools.ToolSendMessage().String(), map[string]any{
-		"id":      "worker",
-		"message": "second child task",
-	})
-	secondCall, ok := agent.callAt(1)
-	if !ok || len(secondCall.Messages) != 4 {
-		t.Fatalf("expected parent prefix plus first child turn, got %+v", secondCall.Messages)
-	}
-	if !reflect.DeepEqual(secondCall.Messages[:2], parentMessages) {
-		t.Fatalf("follow-up lost immutable parent prefix: %+v", secondCall.Messages)
+	visible, _ := messages.ListBySession(context.Background(), child)
+	if len(visible) != 4 {
+		t.Fatalf("handoff leaked into visible transcript: %d rows", len(visible))
 	}
 }
 
@@ -999,14 +972,8 @@ func TestQueuedAgentMessageDoesNotPersistBeforeItRuns(t *testing.T) {
 	if !ok {
 		t.Fatal("expected queued message to run")
 	}
-	if got := len(secondCall.Messages); got != 2 {
-		t.Fatalf("expected second run history to exclude current repeated query, got %d messages", got)
-	}
-	if secondCall.Messages[0].Role != sdk.MessageRoleUser || strings.TrimSpace(messageTextContent(secondCall.Messages[0])) != "repeat" {
-		t.Fatalf("expected previous user turn first in history, got %+v", secondCall.Messages[0])
-	}
-	if secondCall.Messages[1].Role != sdk.MessageRoleAssistant {
-		t.Fatalf("expected previous assistant turn second in history, got %+v", secondCall.Messages[1])
+	if secondCall.TurnRequestMessageID == "" {
+		t.Fatal("queued task has no persisted identity")
 	}
 	waitUntil(t, 2*time.Second, func() bool {
 		stored, _ := messages.ListBySession(context.Background(), childSessionID)
@@ -1095,95 +1062,16 @@ func TestListAgentsScopedByCurrentSession(t *testing.T) {
 // History rows hold the stored content shape; the subagent context reader
 // types them through the history codec, so argument objects and nested
 // annotations survive instead of failing an SDK decode.
-func TestSDKMessageFromPersistedTypesStoredRow(t *testing.T) {
-	msg, ok := sdkMessageFromPersisted(messagepkg.Message{
-		ID:      "m1",
-		Role:    "assistant",
-		Content: json.RawMessage(`{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"exec","input":{"command":"ls && pwd"},"providerMetadata":{"approval":{"approval_id":"a1","status":"approved"}}}]}`),
-	})
-	if !ok || msg.Role != sdk.MessageRoleAssistant || len(msg.Content) != 1 {
-		t.Fatalf("message = %#v, ok=%v", msg, ok)
+// File bytes are normalized before the task's handoff becomes durable.
+func TestForkedSubagentHandoffStoresFileReference(t *testing.T) {
+	p, _, sessions, _ := newAgentControlProvider(t, &fakeSpawnAgent{})
+	parent := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: agenttools.NewMessageSnapshot([]sdk.Message{sdk.UserMessage("read this", sdk.FilePart{Data: "JVBERi0xLjQ=", MediaType: "application/pdf", Filename: "brief.pdf"})})}
+	result := asMap(t, mustExecuteAgentTool(t, p, parent, "spawn_agent", map[string]any{"id": "worker", "task": "child task", "fork": true}))
+	rows, err := sessions.ListSubagentForkContext(context.Background(), result["session_id"].(string))
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("handoff = %v, %v", rows, err)
 	}
-	call, isCall := msg.Content[0].(sdk.ToolCallPart)
-	if !isCall {
-		t.Fatalf("part = %#v, want a tool call", msg.Content[0])
+	if !strings.Contains(string(rows[0].Message), "brief.pdf") || strings.Contains(string(rows[0].Message), "JVBERi0xLjQ=") {
+		t.Fatalf("handoff did not preserve a file reference: %s", rows[0].Message)
 	}
-	if args, _ := toolexec.ArgumentsValue(call.Input).(map[string]any); args["command"] != "ls && pwd" {
-		t.Fatalf("tool call input = %#v", toolexec.ArgumentsValue(call.Input))
-	}
-	if approval, ok := partmeta.Object(call.ProviderMetadata, partmeta.KeyApproval); !ok || approval["status"] != "approved" {
-		t.Fatalf("approval annotation = %#v", call.ProviderMetadata)
-	}
-	if _, ok := sdkMessageFromPersisted(messagepkg.Message{Role: "assistant", Content: json.RawMessage(`{"role":"assistant","content":[]}`)}); ok {
-		t.Fatal("empty row must be skipped")
-	}
-}
-
-// A parent thread may hold an assistant message without content (a step that
-// produced neither text nor calls). The fork skips such a row, as the
-// direct-turn reader does, instead of refusing the whole fork.
-func TestForkedSubagentToleratesEmptyParentMessage(t *testing.T) {
-	agent := &fakeSpawnAgent{}
-	p, _, _, _ := newAgentControlProvider(t, agent)
-	parentMessages := []sdk.Message{
-		sdk.UserMessage("parent question"),
-		{Role: sdk.MessageRoleAssistant},
-		sdk.AssistantMessage("parent working context"),
-	}
-	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: agenttools.NewMessageSnapshot(parentMessages)}
-
-	result := asMap(t, mustExecuteAgentTool(t, p, session, agenttools.ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true}))
-	if result["fork"] != true {
-		t.Fatalf("fork result = %v", result)
-	}
-	// The follow-up reloads the fork rows from storage.
-	mustExecuteAgentTool(t, p, session, agenttools.ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
-	second, ok := agent.callAt(1)
-	if !ok {
-		t.Fatal("follow-up call missing")
-	}
-	var texts []string
-	for _, msg := range second.Messages[:2] {
-		texts = append(texts, subagentMessageContentTextForTest(msg))
-	}
-	if texts[0] != "parent question" || texts[1] != "parent working context" {
-		t.Fatalf("fork prefix after reload = %q, want the two non-empty parent messages", texts)
-	}
-}
-
-// Fork rows follow the history-row rule: a document's bytes are never stored.
-// The forked agent inherits the file's name and type as text and reads the
-// content from the workspace itself; images are inherited as they are.
-func TestForkedSubagentInheritsFileNameNotFileBytes(t *testing.T) {
-	agent := &fakeSpawnAgent{}
-	p, _, _, _ := newAgentControlProvider(t, agent)
-	parentMessages := []sdk.Message{
-		sdk.UserMessage("read this", sdk.FilePart{Data: "JVBERi0xLjQ=", MediaType: "application/pdf", Filename: "brief.pdf"}),
-	}
-	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: agenttools.NewMessageSnapshot(parentMessages)}
-	mustExecuteAgentTool(t, p, session, agenttools.ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true})
-	mustExecuteAgentTool(t, p, session, agenttools.ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
-	second, ok := agent.callAt(1)
-	if !ok {
-		t.Fatal("follow-up call missing")
-	}
-	text := subagentMessageContentTextForTest(second.Messages[0])
-	if !strings.Contains(text, "brief.pdf") || !strings.Contains(text, "application/pdf") {
-		t.Fatalf("forked prefix = %q, want the attachment name and type", text)
-	}
-	for _, part := range second.Messages[0].Content {
-		if _, isFile := part.(sdk.FilePart); isFile {
-			t.Fatalf("forked prefix carries document bytes: %#v", part)
-		}
-	}
-}
-
-func subagentMessageContentTextForTest(message sdk.Message) string {
-	var b strings.Builder
-	for _, part := range message.Content {
-		if text, ok := part.(sdk.TextPart); ok {
-			b.WriteString(text.Text)
-		}
-	}
-	return b.String()
 }

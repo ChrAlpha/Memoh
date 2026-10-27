@@ -10,11 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/mod/semver"
 
 	"github.com/felinics/memoh/internal/agent/decision/approval"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/runtime/agentprocess"
 	"github.com/felinics/memoh/internal/agent/runtime/claudecode/claudecfg"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/toolmount"
@@ -302,7 +304,13 @@ func modelCatalogFromInitialize(configuredModel string, response initializeRespo
 
 // Prompt implements external.Driver: one CLI process serves one turn, resumed
 // from the session id in runtime metadata.
-func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (external.PromptResult, error) {
+func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (returned external.PromptResult, returnedErr error) {
+	execution := external.ExecutionNotStarted
+	defer func() {
+		if input.IsSubagent() {
+			returned.Execution = execution
+		}
+	}()
 	cfg, err := d.resolveAgentConfig(ctx, input.BotID, input.BotAgentID)
 	if err != nil {
 		if external.IsFailure(err) {
@@ -349,6 +357,18 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 	defer toolsMount.Stop()
 	args := cliArgs(cfg, input, storedSessionID, mcpConfig, launcher.Version)
 	env := cliEnv(cfg)
+	fallbackSessionID := storedSessionID
+	if input.IsSubagent() {
+		ctx = agentprocess.WithExecutionScope(ctx, agentprocess.ExecutionScope{ThreadID: input.ThreadID, RunID: input.RunID})
+		if fallbackSessionID == "" {
+			fallbackSessionID = uuid.NewString()
+			args = append(args, "--session-id", shellQuote(fallbackSessionID))
+		}
+		if err := input.RecordAnchor(ctx, map[string]any{metadataSessionIDKey: fallbackSessionID}); err != nil {
+			return external.PromptResult{}, err
+		}
+		execution = external.ExecutionUnknown
+	}
 
 	// The process must survive a caller disconnect long enough for the
 	// interrupt handshake below.
@@ -357,6 +377,26 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 		return external.PromptResult{}, external.Unavailable(err)
 	}
 	defer func() { _ = proc.Close() }()
+	if input.IsSubagent() {
+		defer func() {
+			stopper, ok := proc.(interface{ Stop(context.Context) error })
+			if !ok {
+				returnedErr = errors.Join(returnedErr, external.ErrTerminationUnconfirmed)
+				return
+			}
+			stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+			defer cancel()
+			stopErr := stopper.Stop(stopCtx)
+			if stopErr == nil {
+				stopErr = (agentprocess.ExecutionScope{ThreadID: input.ThreadID, RunID: input.RunID}).Reconcile(stopCtx, client)
+			}
+			if err := stopErr; err != nil {
+				returnedErr = errors.Join(returnedErr, external.ErrTerminationUnconfirmed, err)
+			} else {
+				execution = external.ExecutionStopped
+			}
+		}()
+	}
 
 	turn := newTurnRunner(ctx, input, proc, d.approval, d.approval.RegisterWaiter, d.logger)
 	turn.onCLIVersion = d.versionObserver(input.BotID)
@@ -445,7 +485,7 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 	<-turn.readDone
 	turn.close()
 
-	result, resultErr := turn.buildResult(storedSessionID)
+	result, resultErr := turn.buildResult(fallbackSessionID)
 	if input.Command == "reload-skills" && resultErr == nil && ctx.Err() == nil {
 		d.commands.forget(input.BotID)
 	}
@@ -523,6 +563,9 @@ func cliArgs(cfg claudecfg.Config, input external.PromptInput, sessionID, mcpCon
 	}
 	if mcpConfig != "" {
 		args = append(args, "--mcp-config", shellQuote(mcpConfig))
+	}
+	if input.IsSubagent() {
+		args = append(args, "--disallowedTools", "Agent", "Task", "TeamCreate", "TeamDelete", "SendMessage", "AskUserQuestion")
 	}
 	return args
 }

@@ -29,7 +29,8 @@ func startAppServer(ctx context.Context, client *bridge.Client, workDir, home st
 	if err := materializeCodexConfig(ctx, client, home, cfg); err != nil {
 		return nil, err
 	}
-	proc, err := agentprocess.Start(ctx, client, appServerCommand(launcher), workDir, codexAppServerEnv(home))
+	command := appServerCommand(launcher, agentprocess.ExecutionScopeFromContext(ctx).RunID != "")
+	proc, err := agentprocess.Start(ctx, client, command, workDir, codexAppServerEnv(home))
 	if err != nil {
 		return nil, errs.WrapDependency(err, "")
 	}
@@ -47,10 +48,13 @@ func codexAppServerEnv(home string) []string {
 // appServerCommand builds the shell command line that starts the app-server.
 // The launcher path is quoted: managed installs live under per-bot data
 // directories whose names are not under Memoh's control.
-func appServerCommand(launcher string) string {
+func appServerCommand(launcher string, child bool) string {
 	launcher = strings.TrimSpace(launcher)
 	if launcher == "" {
 		launcher = defaultLauncherPath
+	}
+	if child {
+		return escapeShellArg(launcher) + " app-server -c features.multi_agent=false -c features.goals=false"
 	}
 	return escapeShellArg(launcher) + " app-server -c features.goals=true"
 }

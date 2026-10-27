@@ -1021,6 +1021,9 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			if errors.Is(prefErr, application.ErrModelPreferenceConflict) {
 				return apperror.New(apperror.CodeSessionModelPreferenceConflict, nil)
 			}
+			if errors.Is(prefErr, session.ErrSubagentBindingImmutable) {
+				return modelPreferenceError(prefErr, "patch managed child model preference")
+			}
 			if session.IsDirectRuntime(result) {
 				if errors.Is(prefErr, application.ErrDirectModelUnavailable) {
 					return apperror.New(apperror.CodeACPModelUnavailable, nil)
@@ -1320,6 +1323,8 @@ func descriptorFieldError(err error) error {
 // choosing again is a field error, store and settings failures are internal.
 func modelPreferenceError(err error, op string) error {
 	switch {
+	case errors.Is(err, session.ErrSubagentBindingImmutable):
+		return apperror.Wrap(apperror.CodeRuntimeControlUnsupported, err, nil)
 	case errors.Is(err, application.ErrModelPreferenceInvalid):
 		return apperror.FieldInvalid("preferred_chat_model_id", err)
 	case errors.Is(err, application.ErrModelPreferenceRevisionInvalid):
@@ -1333,6 +1338,8 @@ func modelPreferenceError(err error, op string) error {
 
 func sessionServiceError(err error) error {
 	switch {
+	case errors.Is(err, session.ErrSubagentBindingImmutable):
+		return apperror.Wrap(apperror.CodeRuntimeControlUnsupported, err, nil)
 	case errors.Is(err, session.ErrACPAgentIDRequired),
 		errors.Is(err, session.ErrACPProjectPathMissing):
 		return apperror.Wrap(apperror.CodeACPAgentNotConfigured, err, nil)

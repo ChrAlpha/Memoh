@@ -23,6 +23,7 @@ import (
 	session "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/errs"
+	"github.com/felinics/memoh/internal/runtimekind"
 	"github.com/felinics/memoh/internal/schedule"
 )
 
@@ -67,6 +68,9 @@ func (s *Service) resolveRuntimeDispatch(ctx context.Context, req ChatRequest) (
 	}
 	if err := validateSessionBot(req.BotID, req.ThreadID, sess.BotID); err != nil {
 		return runtimeDispatch{}, err
+	}
+	if sess.SessionMode == session.TypeSubagent && runtimekind.IsExternal(sess.RuntimeType) {
+		return runtimeDispatch{}, apperror.New(apperror.CodeRuntimeControlUnsupported, nil)
 	}
 	runtimeType := ""
 	switch {

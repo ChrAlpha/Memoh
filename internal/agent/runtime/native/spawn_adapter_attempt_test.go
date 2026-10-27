@@ -9,7 +9,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agentevent "github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -151,21 +150,14 @@ func TestSpawnAdapterGenerateWithWatchdogDoesNotRetryPersistedInterruptedCheckpo
 	adapter := NewSpawnAdapter(newTestAgent())
 	var persisted atomic.Bool
 	var interruptedCalls atomic.Int32
-	adapter.SetStepCommitFactory(func(
-		_ context.Context,
-		_ string,
-		_ string,
-		_ string,
-		_ string,
-		_ *contextfrag.LifecycleHolder,
-		onPersisted func(),
-	) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error) {
-		return func(context.Context, int, *step.Record) error { return nil },
-			func(context.Context, int, *step.Record) error {
-				interruptedCalls.Add(1)
-				onPersisted()
-				return nil
-			}
+	adapter.SetRunBindingFactory(func(_ context.Context, cfg tools.SpawnRunConfig, rc *RunConfig) (func(context.Context) error, error) {
+		rc.OnStepCommitted = func(context.Context, int, *step.Record) (StepDirective, error) { return StepDirective{}, nil }
+		rc.OnStepInterrupted = func(context.Context, int, *step.Record) error {
+			interruptedCalls.Add(1)
+			cfg.OnStepPersisted()
+			return nil
+		}
+		return func(context.Context) error { return nil }, nil
 	})
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {

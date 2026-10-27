@@ -12,13 +12,15 @@ func FilterSubagentTools(toolList []toolexec.Tool) []toolexec.Tool {
 		return toolList
 	}
 	blocked := map[string]struct{}{
-		ToolAskUser().String():     {},
-		ToolSend().String():        {},
-		ToolReact().String():       {},
-		ToolSpawnAgent().String():  {},
-		ToolSendMessage().String(): {},
-		ToolListAgents().String():  {},
-		ToolListModels().String():  {},
+		ToolAskUser().String():           {},
+		ToolSend().String():              {},
+		ToolReact().String():             {},
+		ToolSpawnAgent().String():        {},
+		ToolSendMessage().String():       {},
+		ToolListAgents().String():        {},
+		ToolListModels().String():        {},
+		ToolListAgentBackends().String(): {},
+		ToolControlAgent().String():      {},
 	}
 	filtered := make([]toolexec.Tool, 0, len(toolList))
 	for _, tool := range toolList {

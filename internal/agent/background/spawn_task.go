@@ -2,6 +2,7 @@ package background
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -52,8 +53,24 @@ type SpawnBranch struct {
 	Error          string
 }
 
+// AgentReceipt preserves execution identity and known usage in a background
+// result. Absent usage stays nil, independently of task completion.
+type AgentReceipt struct {
+	RunID          string
+	RuntimeType    string
+	BotAgentID     string
+	ExecutionState string
+	Usage          json.RawMessage
+}
+
+func (r AgentReceipt) clone() AgentReceipt {
+	r.Usage = append(json.RawMessage(nil), r.Usage...)
+	return r
+}
+
 // AgentTaskResult is the terminal output for one managed subagent run.
 type AgentTaskResult struct {
+	Receipt        AgentReceipt
 	AgentID        string
 	AgentSessionID string
 	Message        string
@@ -172,6 +189,7 @@ func (m *Manager) CompleteAgentTask(taskID string, result AgentTaskResult) {
 	}
 	task.CompletedAt = time.Now()
 	task.Status = status
+	task.AgentReceipt = result.Receipt.clone()
 	task.AgentReport = result.Report
 	task.AgentError = result.Error
 	task.AgentModelID = result.ModelID

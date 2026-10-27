@@ -12,7 +12,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
-	tools "github.com/felinics/memoh/internal/agent/tool"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/testutil/sessionledger"
 )
@@ -115,15 +115,15 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
-	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
+	result, runErr := adapter.GenerateWithWatchdog(runCtx, agenttools.SpawnRunConfig{
 		RunID: admission.RunID,
 		Model: &sdk.Model{
 			ID:       "abort-alignment-model",
 			Provider: abortAlignmentProvider{},
 		},
 		Query:         "abort internally",
-		LoopDetection: tools.SpawnLoopConfig{Enabled: true},
-		Identity: tools.SpawnIdentity{
+		LoopDetection: agenttools.SpawnLoopConfig{Enabled: true},
+		Identity: agenttools.SpawnIdentity{
 			BotID:      lifecycleTestBotID,
 			SessionID:  lifecycleTestSessionID,
 			IsSubagent: true,
@@ -136,11 +136,11 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 		t.Fatalf("spawn result = %#v, want lifecycle snapshot", result)
 	}
 	cancelOwner(context.Canceled)
-	finish(tools.SubagentTerminal{
+	finish(agenttools.SubagentTerminal{
 		Cause:            runErr,
 		ContextLifecycle: result.ContextLifecycle,
 		OutcomeResolved:  true,
-		Outcome:          tools.SpawnAttemptFailure,
+		Outcome:          agenttools.SpawnAttemptFailure,
 	})
 
 	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
@@ -204,11 +204,11 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	adapter.SetFailureTranslator(service.SubagentFailure)
-	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
+	result, runErr := adapter.GenerateWithWatchdog(runCtx, agenttools.SpawnRunConfig{
 		RunID: admission.RunID,
 		Model: &sdk.Model{ID: "rejecting-model", Provider: rejectingSpawnProvider{}},
 		Query: "fail on the provider",
-		Identity: tools.SpawnIdentity{
+		Identity: agenttools.SpawnIdentity{
 			BotID:      lifecycleTestBotID,
 			SessionID:  lifecycleTestSessionID,
 			IsSubagent: true,
@@ -221,11 +221,11 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 	if !errors.As(apperror.CauseOf(runErr), &apiErr) || apiErr.Kind != sdk.KindAuthentication {
 		t.Fatalf("spawn error cause = %v, want the provider's failure", apperror.CauseOf(runErr))
 	}
-	finish(tools.SubagentTerminal{
+	finish(agenttools.SubagentTerminal{
 		Cause:            runErr,
 		ContextLifecycle: result.ContextLifecycle,
 		OutcomeResolved:  true,
-		Outcome:          tools.SpawnAttemptFailure,
+		Outcome:          agenttools.SpawnAttemptFailure,
 	})
 
 	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)
@@ -271,29 +271,29 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	attemptCtx, cancelAttempt := context.WithCancelCause(runCtx)
-	cancelAttempt(tools.ErrWatchdogTimedOut)
-	first, firstErr := adapter.GenerateWithWatchdog(attemptCtx, tools.SpawnRunConfig{
+	cancelAttempt(agenttools.ErrWatchdogTimedOut)
+	first, firstErr := adapter.GenerateWithWatchdog(attemptCtx, agenttools.SpawnRunConfig{
 		RunID: admission.RunID,
 		Model: &sdk.Model{
 			ID:       "watchdog-attempt-model",
 			Provider: abortAlignmentProvider{},
 		},
 		Query: "retry after the watchdog",
-		Identity: tools.SpawnIdentity{
+		Identity: agenttools.SpawnIdentity{
 			BotID:      lifecycleTestBotID,
 			SessionID:  lifecycleTestSessionID,
 			IsSubagent: true,
 		},
 		Attempt:     1,
 		MaxAttempts: 2,
-		ResolveAttempt: func(attemptErr error) tools.SpawnAttemptDisposition {
-			if errors.Is(attemptErr, tools.ErrWatchdogTimedOut) {
-				return tools.SpawnAttemptRetry
+		ResolveAttempt: func(attemptErr error) agenttools.SpawnAttemptDisposition {
+			if errors.Is(attemptErr, agenttools.ErrWatchdogTimedOut) {
+				return agenttools.SpawnAttemptRetry
 			}
-			return tools.SpawnAttemptFailure
+			return agenttools.SpawnAttemptFailure
 		},
 	}, func() {})
-	if !errors.Is(firstErr, tools.ErrWatchdogTimedOut) {
+	if !errors.Is(firstErr, agenttools.ErrWatchdogTimedOut) {
 		t.Fatalf("first attempt error = %v, want watchdog timeout", firstErr)
 	}
 	if first == nil || first.ContextLifecycle == nil {
@@ -314,14 +314,14 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		t.Fatalf("durable run after retry = %#v, want running", intermediate)
 	}
 
-	final, finalErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
+	final, finalErr := adapter.GenerateWithWatchdog(runCtx, agenttools.SpawnRunConfig{
 		RunID: admission.RunID,
 		Model: &sdk.Model{
 			ID:       "watchdog-attempt-model",
 			Provider: abortAlignmentProvider{complete: true},
 		},
 		Query: "retry after the watchdog",
-		Identity: tools.SpawnIdentity{
+		Identity: agenttools.SpawnIdentity{
 			BotID:      lifecycleTestBotID,
 			SessionID:  lifecycleTestSessionID,
 			IsSubagent: true,
@@ -338,10 +338,10 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 	// The clean End is already the live terminal. A later owner cancellation
 	// must not relabel durable or lifecycle state as aborted.
 	cancelOwner(context.Canceled)
-	finish(tools.SubagentTerminal{
+	finish(agenttools.SubagentTerminal{
 		ContextLifecycle: final.ContextLifecycle,
 		OutcomeResolved:  true,
-		Outcome:          tools.SpawnAttemptCompleted,
+		Outcome:          agenttools.SpawnAttemptCompleted,
 	})
 
 	snapshot, err := manager.Snapshot(context.Background(), lifecycleTestBotID, lifecycleTestSessionID)

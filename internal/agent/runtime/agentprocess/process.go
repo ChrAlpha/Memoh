@@ -16,6 +16,8 @@ import (
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
+var ErrTerminationUnconfirmed = errors.New("agent process termination is unconfirmed")
+
 const stderrTailLimit = 8 * 1024
 
 // Process is one long-lived command running through a workspace bridge exec
@@ -26,15 +28,17 @@ type Process struct {
 	stdout *io.PipeReader
 	done   chan struct{}
 
-	mu      sync.Mutex
-	closed  bool
-	tail    []byte
-	exitErr error
+	mu            sync.Mutex
+	closed        bool
+	tail          []byte
+	exitErr       error
+	exitConfirmed bool
 }
 
 // Start launches command without a bridge-side timeout. Closing the returned
 // process cancels the exec stream and terminates the command.
 func Start(ctx context.Context, client *bridge.Client, command, workDir string, env []string) (*Process, error) {
+	env = append(env, ExecutionScopeFromContext(ctx).Env()...)
 	stream, err := client.ExecStreamWithOptions(ctx, command, workDir, -1, bridge.ExecOptions{Env: env, CleanEnv: true})
 	if err != nil {
 		return nil, err
@@ -97,6 +101,9 @@ func Start(ctx context.Context, client *bridge.Client, command, workDir string, 
 			case pb.ExecOutput_STDERR:
 				proc.appendStderr(output.GetData())
 			case pb.ExecOutput_EXIT:
+				proc.mu.Lock()
+				proc.exitConfirmed = true
+				proc.mu.Unlock()
 				if output.GetExitCode() != 0 {
 					proc.mu.Lock()
 					proc.exitErr = fmt.Errorf("agent process exited with code %d", output.GetExitCode())
@@ -141,6 +148,41 @@ func (p *Process) Err() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.exitErr
+}
+
+// Stop terminates the process group and waits for the bridge's EXIT receipt.
+// A closed transport without that receipt leaves termination unconfirmed.
+func (p *Process) Stop(ctx context.Context) error {
+	confirmed := func() error {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if p.exitConfirmed {
+			return nil
+		}
+		return errors.Join(ErrTerminationUnconfirmed, p.exitErr)
+	}
+	select {
+	case <-p.done:
+		return confirmed()
+	default:
+	}
+	sent := make(chan error, 1)
+	go func() { sent <- p.stream.Terminate() }()
+	select {
+	case <-p.done:
+		return confirmed()
+	case <-sent:
+	case <-ctx.Done():
+		_ = p.Close()
+		return errors.Join(ErrTerminationUnconfirmed, ctx.Err())
+	}
+	select {
+	case <-p.done:
+		return confirmed()
+	case <-ctx.Done():
+		_ = p.Close()
+		return errors.Join(ErrTerminationUnconfirmed, ctx.Err())
+	}
 }
 
 // Close terminates the process and waits briefly for the stream to settle.

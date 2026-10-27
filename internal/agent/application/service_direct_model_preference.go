@@ -71,6 +71,10 @@ func reconcileDirectPair(catalog external.ModelCatalog, modelID, effort string) 
 }
 
 func (s *Service) applyDirectModelPreference(ctx context.Context, req ChatRequest, sess session.Thread) (ChatRequest, error) {
+	if sess.SessionMode == sessionmode.Subagent {
+		req.Model, req.ReasoningEffort = "", ""
+		return req, nil // Managed children use their configured instance, never an interactive picker.
+	}
 	if !session.IsDirectRuntime(sess) || req.SessionType == sessionmode.Schedule {
 		return req, nil
 	}

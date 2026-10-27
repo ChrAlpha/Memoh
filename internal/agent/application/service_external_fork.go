@@ -53,6 +53,9 @@ func (s *Service) prepareExternalFork(ctx context.Context, botID, sessionID, tur
 	if err := validateSessionBot(botID, sessionID, sess.BotID); err != nil {
 		return nil, err
 	}
+	if sess.SessionMode == session.TypeSubagent {
+		return nil, ErrExternalForkUnsupported
+	}
 	if !session.IsDirectRuntime(sess) {
 		return nil, fmt.Errorf("session %s is not on an external runtime", sessionID)
 	}

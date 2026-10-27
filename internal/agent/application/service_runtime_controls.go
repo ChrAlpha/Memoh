@@ -35,6 +35,9 @@ func (s *Service) runtimeControlSession(ctx context.Context, request RuntimeCont
 	if err != nil {
 		return sess, err
 	}
+	if sess.SessionMode == session.TypeSubagent && runtimekind.IsExternal(sess.RuntimeType) {
+		return sess, external.ErrControlUnsupported
+	}
 	if sess.BotID != request.BotID || strings.TrimSpace(request.ActorID) == "" {
 		return sess, approval.ErrForbidden
 	}

@@ -550,7 +550,7 @@ func agentLimitsFromConfig(cfg config.AgentConfig) native.Limits {
 	)
 }
 
-func injectToolProviders(a *native.Agent, log *slog.Logger, settingsService *settings.Service, modelsService *models.Service, queries dbstore.Queries, sessionService *sessionpkg.Service, bgManager *background.Manager, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider) {
+func injectToolProviders(a *native.Agent, botAgentsService *botagents.Service, log *slog.Logger, settingsService *settings.Service, modelsService *models.Service, queries dbstore.Queries, sessionService *sessionpkg.Service, bgManager *background.Manager, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider) {
 	a.SetToolProviders(providers)
 	for _, p := range providers {
 		if cp, ok := p.(*agenttools.ContainerProvider); ok {
@@ -562,13 +562,14 @@ func injectToolProviders(a *native.Agent, log *slog.Logger, settingsService *set
 			// off the admitted run handle AdmitSubagentRun leaves on the run
 			// context; when either is unavailable the adapter degrades to the
 			// terminal-snapshot behavior on its own.
-			adapter.SetStepCommitFactory(agentService.SubagentStepCommit)
+			adapter.SetRunBindingFactory(agentService.BindSubagentNativeRun)
 			adapter.SetRunObserverFactory(agentService.SubagentRunObserver)
 			// The parent model reads a spawned run's failure by the code the
 			// run itself failed with.
 			adapter.SetFailureTranslator(agentService.SubagentFailure)
 			controller := application.NewSubagentService(log, settingsService, modelsService, queries, sessionService, bgManager)
 			controller.SetAgent(adapter)
+			controller.SetExecutionService(agentService, botAgentsService)
 			controller.SetMessageService(msgService)
 			controller.SetSystemPromptFunc(native.SpawnSystemPrompt)
 			controller.SetHookService(hookService)

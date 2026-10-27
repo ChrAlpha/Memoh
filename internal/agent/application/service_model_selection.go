@@ -215,6 +215,10 @@ func (s *Service) PatchSessionModelPreference(ctx context.Context, botID, sessio
 		return err
 	}
 
+	if sess.SessionMode == sessionpkg.TypeSubagent && sessionpkg.IsDirectRuntimeType(sess.RuntimeType) {
+		return sessionpkg.ErrSubagentBindingImmutable
+	}
+
 	modelID := ""
 	if modelRef != nil {
 		modelID = strings.TrimSpace(*modelRef)

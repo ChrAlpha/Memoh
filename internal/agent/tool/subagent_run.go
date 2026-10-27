@@ -12,6 +12,8 @@ import (
 	"github.com/felinics/memoh/internal/models"
 )
 
+// SpawnAgent is the interface the subagent control tools use to run tasks.
+// It is satisfied by *agent.Agent and avoids an import cycle.
 type SpawnAgent interface {
 	Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error)
 	GenerateWithWatchdog(ctx context.Context, cfg SpawnRunConfig, touchFn func()) (*SpawnResult, error)
@@ -125,4 +127,5 @@ type SpawnResult struct {
 	Persisted bool
 }
 
+// ErrWatchdogTimedOut names a spawned attempt with no observed activity.
 var ErrWatchdogTimedOut = errors.New("subagent watchdog: no activity within timeout")

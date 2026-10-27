@@ -137,6 +137,7 @@ const (
 	CodeRuntimeControlThreadUnavailable          Code = "runtime_control.thread_unavailable"
 	CodeRuntimeControlCancelled                  Code = "runtime_control.cancelled"
 	CodeRuntimeControlForkLatestOnly             Code = "runtime_control.fork_latest_only"
+	CodeExternalRuntimeTerminationUnconfirmed    Code = "external_runtime.termination_unconfirmed"
 	CodeExternalRuntimeBusy                      Code = "external_runtime.busy"
 	CodeRuntimeControlFailed                     Code = "runtime_control.failed"
 	CodeRuntimeControlSteerFailed                Code = "runtime_control.steer_failed"
@@ -901,6 +902,7 @@ var catalog = map[Code]Definition{
 	CodeRuntimeControlCancelled:               {HTTPStatus: http.StatusConflict, Detail: "The runtime operation was cancelled."},
 	CodeRuntimeControlSteerFailed:             {HTTPStatus: http.StatusConflict, Detail: "The additional instruction could not be delivered. Send it again after this turn finishes."},
 	CodeRuntimeControlForkLatestOnly:          {HTTPStatus: http.StatusConflict, Detail: "Only the latest reply can be forked. Select the latest reply and try again."},
+	CodeExternalRuntimeTerminationUnconfirmed: {HTTPStatus: http.StatusConflict, Detail: "The external task may still be running. Check its status and stop the recorded run before starting replacement work."},
 	CodeExternalRuntimeBusy:                   {HTTPStatus: http.StatusConflict, Detail: "This Agent is finishing an earlier operation. Try again when it has finished."},
 	CodeRuntimeControlFailed:                  {HTTPStatus: http.StatusInternalServerError, Detail: "The runtime control could not be completed. Try again."},
 	CodeRuntimeControlForbidden:               {HTTPStatus: http.StatusForbidden, Detail: "You do not have access to this conversation."},

@@ -11,24 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
-)
-
-// SpawnStepCommitFactory builds the per-step persistence callback for one
-// spawned run. It receives the run context (which carries the admitted run's
-// identity) and returns nil when incremental persistence is unavailable, in
-// which case the spawn provider keeps its terminal-snapshot persistence.
-// turnRequestMessageID is the persisted task user message the step rows bind
-// to, so every step lands in the turn admission allocated.
-type SpawnStepCommitFactory func(
-	ctx context.Context,
-	botID, sessionID, modelUUID, turnRequestMessageID string,
-	contextLifecycle *contextfrag.LifecycleHolder,
-	onPersisted func(),
-) (
-	func(context.Context, int, *step.Record) error,
-	func(context.Context, int, *step.Record) error,
 )
 
 // SpawnRunObservation carries the terminal outcome selected by the session
@@ -51,9 +34,11 @@ var errSpawnAgentAborted = errors.New("agent run aborted")
 
 // SpawnAdapter wraps *Agent to satisfy tools.SpawnAgent without creating
 // an import cycle (tools -> agent).
+type SpawnRunBindingFactory func(context.Context, tools.SpawnRunConfig, *RunConfig) (func(context.Context) error, error)
+
 type SpawnAdapter struct {
+	bindRun     SpawnRunBindingFactory
 	agent       *Agent
-	stepCommit  SpawnStepCommitFactory
 	runObserver SpawnRunObserverFactory
 	failure     func(StreamEvent) error
 }
@@ -63,10 +48,7 @@ func NewSpawnAdapter(a *Agent) *SpawnAdapter {
 	return &SpawnAdapter{agent: a}
 }
 
-// SetStepCommitFactory installs incremental step persistence for spawned runs.
-func (s *SpawnAdapter) SetStepCommitFactory(f SpawnStepCommitFactory) {
-	s.stepCommit = f
-}
+func (s *SpawnAdapter) SetRunBindingFactory(f SpawnRunBindingFactory) { s.bindRun = f }
 
 // SetRunObserverFactory installs live event publishing for spawned runs.
 func (s *SpawnAdapter) SetRunObserverFactory(f SpawnRunObserverFactory) {
@@ -92,37 +74,25 @@ func (s *SpawnAdapter) attemptFailure(event StreamEvent) error {
 	return event.Cause
 }
 
-// installStepCommit resolves the step-commit callback for this run and wires
-// it into the run config. It reports whether incremental persistence owns the
-// run's history, so the caller can skip its terminal snapshot.
-func (s *SpawnAdapter) installStepCommit(ctx context.Context, cfg tools.SpawnRunConfig, rc *RunConfig) bool {
-	if s.stepCommit == nil {
-		return false
+func (s *SpawnAdapter) prepare(ctx context.Context, cfg tools.SpawnRunConfig) (RunConfig, bool, func(context.Context) error, error) {
+	rc := runConfigFromSpawnRunConfig(cfg)
+	if s.bindRun != nil {
+		finish, err := s.bindRun(ctx, cfg, &rc)
+		return rc, finish != nil, finish, err
 	}
-	commit, interrupt := s.stepCommit(
-		ctx,
-		cfg.Identity.BotID,
-		cfg.Identity.SessionID,
-		cfg.ModelUUID,
-		cfg.TurnRequestMessageID,
-		rc.ContextLifecycle,
-		cfg.OnStepPersisted,
-	)
-	if commit == nil || interrupt == nil {
-		return false
-	}
-	rc.OnStepCommitted = func(ctx context.Context, stepIndex int, step *step.Record) (StepDirective, error) {
-		return StepDirective{}, commit(ctx, stepIndex, step)
-	}
-	rc.OnStepInterrupted = interrupt
-	return true
+	return rc, false, nil, nil
 }
 
 func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (*tools.SpawnResult, error) {
-	rc := runConfigFromSpawnRunConfig(cfg)
-	persisted := s.installStepCommit(ctx, cfg, &rc)
+	rc, persisted, finish, err := s.prepare(ctx, cfg)
+	if err != nil {
+		return spawnFailureResult(rc), err
+	}
 
 	result, err := s.agent.Generate(ctx, rc)
+	if finish != nil {
+		err = errors.Join(err, finish(ctx))
+	}
 	if err != nil {
 		return spawnFailureResult(rc), err
 	}
@@ -171,6 +141,9 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		WorkdirPath:         cfg.Identity.WorkdirPath,
 		TimezoneLocation:    cfg.Identity.TimezoneLocation,
 		IsSubagent:          cfg.Identity.IsSubagent,
+	}
+	if identity.TimezoneLocation != nil {
+		identity.Timezone = identity.TimezoneLocation.String()
 	}
 	skills := make([]SkillEntry, 0, len(cfg.Skills))
 	for name, skill := range cfg.Skills {
@@ -250,8 +223,10 @@ func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
 // It collects the full result and returns it in the same shape as Generate.
 // This enables activity-based watchdog monitoring for subagent execution.
 func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.SpawnRunConfig, touchFn func()) (*tools.SpawnResult, error) {
-	rc := runConfigFromSpawnRunConfig(cfg)
-	persisted := s.installStepCommit(ctx, cfg, &rc)
+	rc, persisted, finish, err := s.prepare(ctx, cfg)
+	if err != nil {
+		return spawnFailureResult(rc), err
+	}
 	var observe SpawnRunObserver
 	if s.runObserver != nil {
 		observe = s.runObserver(ctx)
@@ -318,6 +293,9 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	}
 
 	var runErr error
+	if finish != nil {
+		runErr = finish(ctx)
+	}
 	// Check if context was cancelled (watchdog fired or parent cancelled).
 	if !completed && ctx.Err() != nil {
 		if cause := context.Cause(ctx); cause != nil {
@@ -339,32 +317,37 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 			runErr = errSpawnAgentAborted
 		}
 	}
+	spawnResult := &tools.SpawnResult{
+		Messages:  finalMessages,
+		Text:      allText.String(),
+		Persisted: persisted,
+	}
+	// The SDK terminal aggregate is zero-valued even when no provider reported
+	// usage. Without token evidence, keep the receipt unknown rather than
+	// manufacture a zero-cost measurement.
+	if totalUsage.InputTokens != 0 || totalUsage.OutputTokens != 0 || totalUsage.TotalTokens != 0 {
+		spawnResult.Usage = &totalUsage
+	}
+	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
+		spawnResult.ContextLifecycle = &snapshot
+	}
 	if runErr != nil {
 		outcome := observeSpawnAttemptFailure(ctx, observe, cfg, abortEvent, pendingErrors, runErr)
 		if cfg.ReconcileTerminal != nil {
 			cfg.ReconcileTerminal(outcome)
 		}
-		return spawnFailureResult(rc), runErr
+		return spawnResult, runErr
 	}
 	disposition := tools.SpawnAttemptCompleted
 	if cfg.ResolveCompletion != nil {
 		disposition = cfg.ResolveCompletion()
-	}
-	spawnResult := &tools.SpawnResult{
-		Messages:  finalMessages,
-		Text:      allText.String(),
-		Usage:     &totalUsage,
-		Persisted: persisted,
-	}
-	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
-		spawnResult.ContextLifecycle = &snapshot
 	}
 	if disposition == tools.SpawnAttemptCompleted && !persisted && cfg.BeforeTerminal != nil {
 		if persistErr := cfg.BeforeTerminal(context.WithoutCancel(ctx), spawnResult); persistErr != nil {
 			if cfg.ReconcileTerminal != nil {
 				cfg.ReconcileTerminal(tools.SpawnAttemptFailure)
 			}
-			return spawnFailureResult(rc), fmt.Errorf("persist subagent terminal before publication: %w", persistErr)
+			return spawnResult, fmt.Errorf("persist subagent terminal before publication: %w", persistErr)
 		}
 		spawnResult.Persisted = true
 	}

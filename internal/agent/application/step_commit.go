@@ -115,6 +115,7 @@ func (s *Service) bindNativeRun(ctx context.Context, req ChatRequest, rc resolve
 		configureNativeReasoningTiming(cfg, timing, committer)
 	} else if committer != nil {
 		cfg.OnStepCommitted = committer.commit
+		cfg.OnStepInterrupted = committer.interrupt
 	}
 	committer.bindContinuation(cfg)
 	// A run that persists its steps compacts in place when a step's request

@@ -398,6 +398,13 @@ func canonicalChannelType(ct string) string {
 
 // Create creates a new thread.
 func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error) {
+	if (input.Type == TypeSubagent || input.SessionMode == TypeSubagent) && runtimekind.IsExternal(input.RuntimeType) {
+		var err error
+		input, err = s.prepareExternalSubagent(ctx, input)
+		if err != nil {
+			return Thread{}, err
+		}
+	}
 	pgBotID, err := dbpkg.ParseUUID(input.BotID)
 	if err != nil {
 		return Thread{}, fmt.Errorf("invalid bot id: %w", err)
@@ -532,6 +539,18 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Thread, error)
 // model/fork configuration when the backing store supports transactions.
 func (s *Service) CreateSubagent(ctx context.Context, input CreateSubagentInput) (Thread, SubagentConfig, error) {
 	input.Thread.Type = TypeSubagent
+	if runtimekind.IsExternal(input.Thread.RuntimeType) {
+		if input.ModelUUID != "" || input.ModelID != "" || input.ProviderName != "" || input.Forked || len(input.ForkContext) > 0 {
+			return Thread{}, SubagentConfig{}, ErrInvalidExternalSubagent
+		}
+		input.Thread.SessionMode = TypeSubagent
+		prepared, err := s.prepareExternalSubagent(ctx, input.Thread)
+		if err != nil {
+			return Thread{}, SubagentConfig{}, err
+		}
+		created, err := s.Create(ctx, prepared)
+		return created, SubagentConfig{}, err
+	}
 	modelUUID, err := dbpkg.ParseUUID(input.ModelUUID)
 	if err != nil {
 		return Thread{}, SubagentConfig{}, fmt.Errorf("invalid subagent model uuid: %w", err)
@@ -1024,6 +1043,12 @@ func (s *Service) updateDescriptorAndMetadata(ctx context.Context, queries Queri
 				return Thread{}, fmt.Errorf("invalid bot agent id: %w", err)
 			}
 		}
+	}
+	// Managed child configuration and execution receipts are application-owned.
+	// A public metadata replacement must not erase a live capacity hold or
+	// retarget the workspace between admission and dispatch.
+	if existing.SessionMode == TypeSubagent && runtimekind.IsExternal(existing.RuntimeType) {
+		return Thread{}, ErrSubagentBindingImmutable
 	}
 	existingRuntimeMeta := parseJSONMap(existing.RuntimeMetadata)
 	existingMeta := parseJSONMap(existing.Metadata)
