@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -280,67 +281,76 @@ func (p foldPlan) bounded() bool { return p.final() || p.rewrite }
 // nothing but summaries is left, a pass rewrites them only if they do not fit
 // the room the next request has. The pass reads the longest prefix of the
 // request, ending at a tool-group boundary, that leaves the fork room to
-// answer (answers).
+// answer (answers). The longest read decides first, as what it keeps may
+// leave no room for any summary; past it, a shorter read takes less of the
+// window and needs less output, so the reads that answer are the shortest
+// ones, and the pass halves its way to the longest of them rather than
+// pricing every read.
 func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	messages, sources := ev.Request.Messages, ev.Sources
 	kept := map[int]bool{}
 	for i := range ev.cut {
 		kept[i] = unfoldable[i] || ev.keeps(sources[i])
 	}
-	capability := ev.MaxOutputTokens
-	// A checkpoint absorbs every summary of its parent, so a pass reads past
-	// the last one the request renders.
-	summariesEnd := 0
+	// A pass ends its read at a tool-group boundary after the first message
+	// it folds or absorbs and, as a checkpoint absorbs every summary of its
+	// parent, after the last summary the request renders.
+	first, summariesEnd := ev.cut, 0
 	for i, source := range sources[:ev.cut] {
-		if isSummarySource(source) {
+		summary := isSummarySource(source)
+		if summary {
 			summariesEnd = i + 1
 		}
+		if first == ev.cut && (summary || len(source.Sources) > 0 && !kept[i]) {
+			first = i
+		}
+	}
+	var ends []int
+	for end := max(first+1, summariesEnd); end <= ev.cut; end++ {
+		if foldBoundary(messages, end) {
+			ends = append(ends, end)
+		}
+	}
+	if len(ends) == 0 {
+		return foldPlan{}, nil
 	}
 	rewrite := len(spanPlan(ev, kept, ev.cut).folded) == 0
 	read, err := forkRead(ev)
 	if err != nil {
 		return foldPlan{}, err
 	}
-	var smaller error
-	for end := ev.cut; end > 0; end-- {
-		if end < summariesEnd || !foldBoundary(messages, end) {
-			continue
-		}
-		plan := spanPlan(ev, kept, end)
-		if !plan.folds() {
-			continue
-		}
-		plan.rewrite, plan.fork = rewrite, read[:end]
-		err := plan.size(ev, capability)
-		switch {
-		case ReasonOf(err) == ReasonProtectedOverflow:
-			return foldPlan{}, err
-		case rewrite && plan.replaced <= plan.room:
-			// Only summaries are left, and they fit: folding them again
-			// would only rewrite them.
-			return foldPlan{}, nil
-		case err != nil:
-			if smaller == nil {
-				smaller = err
-			}
-			continue
-		}
-		if plan.answers(ev) {
-			return plan, nil
+	plan := func(end int) (foldPlan, error) {
+		p := spanPlan(ev, kept, end)
+		p.rewrite, p.fork = rewrite, read[:end]
+		return p, p.size(ev)
+	}
+	pass, err := plan(ends[len(ends)-1])
+	switch {
+	case ReasonOf(err) == ReasonProtectedOverflow:
+		return foldPlan{}, err
+	case rewrite && pass.replaced <= pass.room:
+		// Only summaries are left, and they fit: folding them again would
+		// only rewrite them.
+		return foldPlan{}, nil
+	case err == nil && !pass.answers(ev):
+		answering := sort.Search(len(ends)-1, func(i int) bool {
+			p, _ := plan(ends[i])
+			return !p.answers(ev)
+		})
+		pass, err = plan(ends[max(answering-1, 0)])
+		if err == nil && answering == 0 {
+			return foldPlan{}, failed(ReasonInputOverflow, fmt.Errorf("%w: no prefix of the request leaves the summarizer room to answer in a %d-token window", errCompactionInputOverflow, ev.Window))
 		}
 	}
-	if smaller != nil {
+	if err != nil {
 		// What is left is too little for any summary to replace; once the
 		// request fits, the event is done.
 		if forkTokens(ev.Request) <= ev.Allowance {
 			return foldPlan{}, nil
 		}
-		return foldPlan{}, smaller
+		return foldPlan{}, err
 	}
-	if !spanPlan(ev, kept, ev.cut).folds() {
-		return foldPlan{}, nil
-	}
-	return foldPlan{}, failed(ReasonInputOverflow, fmt.Errorf("%w: no prefix of the request leaves the summarizer room to answer in a %d-token window", errCompactionInputOverflow, ev.Window))
+	return pass, nil
 }
 
 // foldBoundary reports whether a pass may end its read before message end: a
@@ -398,7 +408,8 @@ func spanPlan(ev Event, kept map[int]bool, end int) foldPlan {
 
 // size prices the pass: what it replaces, the room the next request leaves
 // its summary, the fork's output cap and the summary length to ask for.
-func (p *foldPlan) size(ev Event, capability int) error {
+func (p *foldPlan) size(ev Event) error {
+	capability := ev.MaxOutputTokens
 	messages := ev.Request.Messages
 	var replaced, keptMessages []sdk.Message
 	for i, message := range messages {
