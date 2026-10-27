@@ -364,10 +364,6 @@ type generateDispatch struct {
 	// prompt into the message prefix, where a capability refresh cannot
 	// replace it.
 	systemPrepended bool
-	// stepOutputBytes is what the tool results of one step may take together,
-	// against inputAllowance, what the run's requests may take.
-	stepOutputBytes int
-	inputAllowance  int
 }
 
 // buildGenerateDispatch assembles the single-call input for the Memoh-owned
@@ -478,8 +474,6 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	}
 
 	return generateDispatch{
-		stepOutputBytes:     stepOutputBudget(providerInputAllowance(cfg), params, systemPrepended),
-		inputAllowance:      providerInputAllowance(cfg),
 		params:              params,
 		execTools:           executableTools,
 		prepareStep:         stepPrepare,
@@ -540,24 +534,4 @@ func joinFinalTexts(previous []string, last string) string {
 		return last
 	}
 	return strings.Join(parts, "\n")
-}
-
-// stepOutputBudget is what the tool results of one step may take together:
-// half of what a request within allowance has beside its system prompt and
-// tools, priced the way a provider request is, so a step fits the request
-// next to a summary and the run's anchors, and a fork that reads it has room
-// to answer. Each result also keeps its tool's own bound. It is at least one
-// byte while there is an allowance; zero means no bound.
-//
-//nolint:gocritic // hugeParam: the request is read, not copied into anything.
-func stepOutputBudget(allowance int, params sdk.Request, systemPrepended bool) int {
-	if allowance <= 0 {
-		return 0
-	}
-	var system []sdk.Message
-	if systemPrepended {
-		system = params.Messages[:1]
-	}
-	room := allowance - contextfrag.ProviderEnvelopeTokens(params.System, system, params.Tools)
-	return max(int(contextfrag.ProviderBudgetBytesForTokens(room/2)), 1)
 }

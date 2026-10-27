@@ -10,7 +10,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
@@ -101,51 +100,6 @@ func TestLimitToolOutputPreservesErrorSignalOnFallback(t *testing.T) {
 	structured, ok := result.(map[string]any)
 	if !ok || structured["isError"] != true {
 		t.Fatalf("result = %#v, want isError preserved", result)
-	}
-}
-
-// A call's share of its step's bound cuts its result, error or not, below the
-// tool's own bound; a share above that bound, or none, leaves the tool's own.
-func TestWrapToolOutputLimitsKeepsTheCallsShare(t *testing.T) {
-	t.Parallel()
-
-	large := "HEAD\n" + strings.Repeat("0123456789", 1000) + "\nTAIL"
-	wrapped := WrapToolOutputLimits([]toolexec.Tool{{
-		Name: "big_tool",
-		Execute: func(_ *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
-			if strings.Contains(string(input.JSON), "fail") {
-				return sdk.ToolOutput{}, errors.New(large)
-			}
-			return sdk.TextOutput(large), nil
-		},
-	}}, ToolOutputLimit{MaxBytes: 4096, MaxLines: 2000})
-	result := func(share int, fail bool) string {
-		t.Helper()
-		input := map[string]any{}
-		if fail {
-			input["fail"] = true
-		}
-		out, err := wrapped[0].Execute(&toolexec.ToolExecContext{Context: context.Background(), ToolName: "big_tool", OutputBytes: share}, toolexec.ArgumentsFromValue(input))
-		if (err != nil) != fail {
-			t.Fatalf("share %d: err = %v, want failure %v", share, err, fail)
-		}
-		if err != nil {
-			return err.Error()
-		}
-		return out.Text
-	}
-
-	for _, fail := range []bool{false, true} {
-		own := result(0, fail)
-		if size := len(contextlimit.MarshalString(own)); size > 4096 || !strings.Contains(own, "[memoh pruned]") {
-			t.Fatalf("failure %v: unshared result = %d bytes, want it pruned to the tool's own 4096", fail, size)
-		}
-		if above := result(8192, fail); above != own {
-			t.Fatalf("failure %v: a share above the tool's bound changed the result", fail)
-		}
-		if size := len(contextlimit.MarshalString(result(1024, fail))); size > 1024 || size >= len(own) {
-			t.Fatalf("failure %v: shared result = %d bytes, want at most the share of 1024", fail, size)
-		}
 	}
 }
 

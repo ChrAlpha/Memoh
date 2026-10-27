@@ -159,10 +159,9 @@ func settleStep(ctx context.Context, dispatch generateDispatch, result sdk.Model
 	}
 	// Deferral is a normal outcome; handler failures are errors.
 	outcome, err := toolexec.ExecuteTools(ctx, result.ToolCalls, toolexec.ToolExecOptions{
-		Tools:       dispatch.execTools,
-		Approve:     dispatch.approve,
-		OnPart:      onPart,
-		OutputBytes: dispatch.stepOutputBytes,
+		Tools:   dispatch.execTools,
+		Approve: dispatch.approve,
+		OnPart:  onPart,
 	})
 	if err != nil {
 		return step.Record{}, stepFinal, err

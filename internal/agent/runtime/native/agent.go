@@ -168,18 +168,11 @@ func (a *Agent) ExecuteTool(ctx context.Context, cfg RunConfig, call sdk.ToolCal
 // alongside the model-facing result, so callers can persist them on
 // harness-side channels (row metadata) instead of leaking them to the model.
 func (a *Agent) ExecuteToolWithUIMetadata(ctx context.Context, cfg RunConfig, call sdk.ToolCall) (sdk.ToolResultPart, map[string]any, error) {
-	sdkTools, toolUsage, _, _, err := a.assembleTools(ctx, cfg, nil, false)
+	sdkTools, _, _, _, err := a.assembleTools(ctx, cfg, nil, false)
 	if err != nil {
 		return sdk.ToolResultPart{}, nil, fmt.Errorf("assemble tools: %w", err)
 	}
 	sdkTools, _ = decorateReadMediaTools(cfg.Model, sdkTools)
-	// The call is the one result of the step it was deferred from: it may
-	// take what that step's results may take together.
-	toolDefs, err := toolexec.ToolDefinitionsFromTools(canonicalizeProviderToolSchemas(sdkTools))
-	if err != nil {
-		return sdk.ToolResultPart{}, nil, fmt.Errorf("tool definitions: %w", err)
-	}
-	outputBytes := stepOutputBudget(providerInputAllowance(cfg), sdk.Request{System: appendToolUsageToSystem(cfg.System, toolUsage), Tools: toolDefs}, false)
 	uiMetadata := newToolExecutionMetadataRegistry(nil)
 	sdkTools = uiMetadata.wrapToolUIOutput(sdkTools)
 	sdkTools = tools.WrapToolOutputLimits(sdkTools, a.Limits().ToolOutputLimit())
@@ -192,10 +185,9 @@ func (a *Agent) ExecuteToolWithUIMetadata(ctx context.Context, cfg RunConfig, ca
 			return sdk.ToolResultPart{}, nil, fmt.Errorf("tool %q has no execute handler", call.ToolName)
 		}
 		execCtx := &toolexec.ToolExecContext{
-			Context:     ctx,
-			ToolCallID:  call.ToolCallID,
-			ToolName:    call.ToolName,
-			OutputBytes: outputBytes,
+			Context:    ctx,
+			ToolCallID: call.ToolCallID,
+			ToolName:   call.ToolName,
 		}
 		output, err := tool.Execute(execCtx, call.Input)
 		if err != nil {

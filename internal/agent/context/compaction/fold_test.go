@@ -453,6 +453,62 @@ func TestFoldFailsBeforeAskingWhenNoSummaryFits(t *testing.T) {
 	}
 }
 
+// A latest step the request cannot keep beside a summary folds with what is
+// before it, in the same event and the same summarizer call: the input stays,
+// and the instruction asks for where the work stands and names the ref the
+// step's result reads back by, rather than quoting a tail that no longer
+// follows the summary.
+func TestFoldFoldsAStepTheRequestCannotKeep(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	r.messages[6] = resultMessage("call_2", strings.Repeat("parser.go: patched cast\n", 400))
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("The audit found casts at parser.go:12; the patch rewrote each of them.")}}
+	ev := s.event(r, summarizer)
+	ev.Current = r.messages[r.cut:]
+	ev.Allowance = forkTokens(sdk.Request{System: ev.Request.System, Messages: r.messages[r.cut-1:], Tools: ev.Request.Tools})
+
+	passes, err := s.svc.Fold(context.Background(), ev)
+	if err != nil || len(passes) != 1 || len(summarizer.requests) != 1 {
+		t.Fatalf("passes=%d err=%v summarizer calls=%d, want one pass from one call", len(passes), err, len(summarizer.requests))
+	}
+	folded := replaced(r.sources, passes[0])
+	for _, row := range []turn.ContextMessageSource{r.rows[0], r.rows[4], r.rows[5]} {
+		if !slices.Contains(folded, row) {
+			t.Fatalf("replaced = %v, want the earlier work and the latest step folded", folded)
+		}
+	}
+	if slices.Contains(folded, r.rows[3]) || passes[0].Cut != len(passes[0].Order) {
+		t.Fatalf("pass = %+v, want the input kept and no tail left", passes[0])
+	}
+	fork := summarizer.requests[0]
+	if len(fork.Messages) != len(r.messages)+1 {
+		t.Fatalf("fork read %d messages, want the whole request and the instruction", len(fork.Messages)-1)
+	}
+	instruction := messageText(fork.Messages[len(fork.Messages)-1])
+	if !strings.Contains(instruction, "The work continues right after the summary") || !strings.Contains(instruction, "call_2 ref="+r.rows[5].ID+":0") || strings.Contains(instruction, "<current_request>") {
+		t.Fatalf("instruction does not hand the step over to the summary:\n%s", instruction)
+	}
+}
+
+// A tail that holds only the input a run starts from never folds: the event
+// fails as protected before it asks the summarizer.
+func TestFoldKeepsAnInputTailItCannotFit(t *testing.T) {
+	t.Parallel()
+	s := newFoldSession(t)
+	r := s.request()
+	r.messages, r.sources, r.cut = r.messages[:5], r.sources[:5], 4
+	summarizer := &scriptedSummarizer{answers: []sdk.ModelResult{summaryAnswer("unused")}}
+	ev := s.event(r, summarizer)
+	ev.Current = r.messages[r.cut:]
+	ev.Allowance = forkTokens(sdk.Request{System: ev.Request.System, Messages: r.messages[r.cut:], Tools: ev.Request.Tools}) + 10
+
+	_, err := s.svc.Fold(context.Background(), ev)
+	if ReasonOf(err) != ReasonProtectedOverflow || len(summarizer.requests) != 0 {
+		t.Fatalf("err=%v summarizer calls=%d, want protected_overflow before any call", err, len(summarizer.requests))
+	}
+}
+
 // A request composed on a checkpoint the session no longer has matches no
 // fold onto the active one.
 func TestFoldRefusesARequestOfAnotherCheckpoint(t *testing.T) {

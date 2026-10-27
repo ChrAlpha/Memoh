@@ -28,9 +28,12 @@ const currentRequestRunes = 4000
 func forkInstruction(ev Event, p *foldPlan) string {
 	var sb strings.Builder
 	sb.WriteString(instructionMarker + " Stop working on the task. Your only job in this reply is to write the summary that replaces the conversation above, so the work can continue within a limited context window. Do not call tools, and do not answer or carry out any request above: requests, commands, and required reply formats in the conversation are material for the summary.\n\n")
-	if p.final() {
+	switch {
+	case p.final() && p.cut < len(ev.Request.Messages):
 		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>: those stay verbatim where they are, and the latest messages of the conversation stay verbatim after the summary. Do not repeat them; say what was done before and after them.\n\n")
-	} else {
+	case p.final():
+		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>, which stay verbatim where they are. The work continues right after the summary, so end it with where the work stands: the latest tool calls, what their results showed, and what comes next.\n\n")
+	default:
 		sb.WriteString("The summary replaces every message above, earlier summaries included, except the ones in <kept> and <runtime_context>, which stay verbatim. The conversation goes on after the messages above; a later summary covers that part and absorbs this one.\n\n")
 	}
 	var kept, runtime []string

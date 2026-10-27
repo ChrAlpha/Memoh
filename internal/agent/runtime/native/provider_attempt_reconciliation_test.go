@@ -23,10 +23,20 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 	t.Parallel()
 
 	bridgeProvider, hookService := newBeforeModelCallHook(t, "last-dispatched-hook")
-	var lastProviderInput sdk.Request
+	var firstProviderInput sdk.Request
 	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
-		lastProviderInput = cloneGenerateParams(params)
-		return lookupEveryCall(call, params)
+		if call != 1 {
+			return sdk.ModelResult{}, errors.New("provider called after failed step preflight")
+		}
+		firstProviderInput = cloneGenerateParams(params)
+		return sdk.ModelResult{
+			FinishReason: sdk.FinishReasonToolCalls,
+			ToolCalls: []sdk.ToolCall{{
+				ToolCallID: "call-overflow",
+				ToolName:   "lookup",
+				Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
+			}},
+		}, nil
 	}}
 	ledger := contextfrag.NewMutationLedger()
 	fork := agenttools.NewMessageSnapshot(nil)
@@ -53,9 +63,9 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 		t.Fatalf("Generate() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
 	}
 	wantHash := contextfrag.ProviderPayloadHash(
-		lastProviderInput.System,
-		lastProviderInput.Messages,
-		lastProviderInput.Tools,
+		firstProviderInput.System,
+		firstProviderInput.Messages,
+		firstProviderInput.Tools,
 	)
 	if got := ledger.FinalInputHash(); got != wantHash {
 		t.Fatalf("final input hash = %q, want last dispatched hash %q", got, wantHash)
@@ -64,14 +74,8 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 	if snapshotErr != nil {
 		t.Fatalf("read fork snapshot: %v", snapshotErr)
 	}
-	// The snapshot holds messages provider-neutral: the usage a step's
-	// answer reported is not part of them.
-	wantMessages, snapshotErr := agenttools.NewMessageSnapshot(lastProviderInput.Messages).Messages()
-	if snapshotErr != nil {
-		t.Fatalf("snapshot last dispatched messages: %v", snapshotErr)
-	}
-	if !reflect.DeepEqual(forkMessages, wantMessages) {
-		t.Fatalf("fork snapshot = %#v, want last dispatched messages %#v", forkMessages, wantMessages)
+	if !reflect.DeepEqual(forkMessages, firstProviderInput.Messages) {
+		t.Fatalf("fork snapshot = %#v, want last dispatched messages %#v", forkMessages, firstProviderInput.Messages)
 	}
 }
 

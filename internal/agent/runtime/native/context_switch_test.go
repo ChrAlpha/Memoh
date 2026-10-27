@@ -453,6 +453,34 @@ func TestArmedRunWithoutATailFoldsItsWholeRequest(t *testing.T) {
 	}
 }
 
+// An event may fold the run's latest step too. Until the next step commits
+// the run then has no tail, so a further event reads its whole request
+// rather than fail looking for the step it folded.
+func TestArmedRunWhoseTailFoldedHasNoneUntilItsNextStep(t *testing.T) {
+	t.Parallel()
+
+	messages, provenance := switchRequest()
+	summary := sdk.UserMessage("<summary>\nnew\n")
+	var cuts []int
+	cfg, failure := armedRun(t, messages, provenance, []int{2, 3, 5, 8}, func(_ context.Context, sw ContextSwitch) (string, error) {
+		cuts = append(cuts, sw.Cut)
+		whole := sw
+		whole.Cut = len(sw.Request.Messages)
+		sw.Fold(foldCovering(whole, fmt.Sprintf("A%d", len(cuts)), summary, append(rowSources("h1", "h2", "c1", "r1", "c2", "r2"), summarySource("A0"), summarySource("A1"))...))
+		return "trigger=in_run passes=1", nil
+	})
+	params := prepareArmed(cfg, messages)
+	if *failure != nil || slices.ContainsFunc(params.Messages, func(m sdk.Message) bool { return reflect.DeepEqual(m, messages[10]) }) {
+		t.Fatalf("failure=%v, want the latest step folded", *failure)
+	}
+
+	grown := append(slices.Clone(params.Messages), sdk.UserMessage("runtime"+strings.Repeat(" x", 2000)))
+	prepareArmed(cfg, grown)
+	if len(cuts) != 2 || cuts[1] != len(grown) || *failure != nil && strings.Contains((*failure).Error(), "latest step") {
+		t.Fatalf("cuts=%v failure=%v, want a second event over the whole request", cuts, *failure)
+	}
+}
+
 // foldCovering is the fold an event commits when its summary stands for
 // covered: every message before the switch's cut whose sources it all covers
 // goes, and the summary takes its place, as the engine orders a pass.

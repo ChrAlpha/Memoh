@@ -316,13 +316,25 @@ func TestAgentGenerateStepRequestsOnlyAppend(t *testing.T) {
 }
 
 // A run that cannot compact in place ends when a step request no longer
-// fits: nothing it already sent is dropped or rewritten to make room. A step's
-// results keep within half of the room, so the request outgrows the window
-// only over steps.
+// fits: nothing it already sent is dropped or rewritten to make room.
 func TestAgentGenerateFailsClosedWhenStepRequestOutgrowsTheWindow(t *testing.T) {
 	t.Parallel()
 
-	modelProvider := &atomicMockProvider{handler: lookupEveryCall}
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
+			if call != 1 {
+				return sdk.ModelResult{}, fmt.Errorf("unexpected provider call %d after the request outgrew the window", call)
+			}
+			return sdk.ModelResult{
+				FinishReason: sdk.FinishReasonToolCalls,
+				ToolCalls: []sdk.ToolCall{{
+					ToolCallID: "call-step-overflow",
+					ToolName:   "lookup",
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
+				}},
+			}, nil
+		},
+	}
 	ledger := contextfrag.NewMutationLedger()
 	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		return cfg, nil
@@ -341,13 +353,15 @@ func TestAgentGenerateFailsClosedWhenStepRequestOutgrowsTheWindow(t *testing.T) 
 	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
 		t.Fatalf("Generate() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
 	}
-	calls := int(modelProvider.calls.Load())
-	steps := ledger.StepSnapshots()
-	if calls < 2 || len(steps) != calls+1 || steps[calls].StepIndex != calls {
-		t.Fatalf("provider calls = %d, step snapshots = %#v, want the steps that fit, then one snapshot for the step that does not", calls, steps)
+	if got := modelProvider.calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
 	}
-	if steps[calls].PostPrepareInputHash != "" {
-		t.Fatalf("failed step snapshot has provider input hash %q, want none", steps[calls].PostPrepareInputHash)
+	steps := ledger.StepSnapshots()
+	if len(steps) != 2 || steps[0].StepIndex != 0 || steps[1].StepIndex != 1 {
+		t.Fatalf("step snapshots = %#v, want exactly one entry for initial and failed steps", steps)
+	}
+	if steps[1].PostPrepareInputHash != "" {
+		t.Fatalf("failed step snapshot has provider input hash %q, want none", steps[1].PostPrepareInputHash)
 	}
 	records := ledger.Records()
 	if len(records) != 1 ||
@@ -357,20 +371,8 @@ func TestAgentGenerateFailsClosedWhenStepRequestOutgrowsTheWindow(t *testing.T) 
 	}
 }
 
-// lookupEveryCall answers every model call with one lookup call.
-func lookupEveryCall(call int, _ sdk.Request) (sdk.ModelResult, error) {
-	return sdk.ModelResult{
-		FinishReason: sdk.FinishReasonToolCalls,
-		ToolCalls: []sdk.ToolCall{{
-			ToolCallID: fmt.Sprintf("call-%d", call),
-			ToolName:   "lookup",
-			Input:      toolexec.ArgumentsFromValue(map[string]any{"q": call}),
-		}},
-	}, nil
-}
-
-// oversizeLookupProvider serves a lookup tool whose result alone would
-// outgrow a 2000-token window; the step bound cuts it to its share.
+// oversizeLookupProvider serves a lookup tool whose result alone outgrows a
+// 2000-token window.
 func oversizeLookupProvider() agenttools.ToolProvider {
 	return staticToolProvider{tools: []toolexec.Tool{{
 		Name:       "lookup",
@@ -384,7 +386,21 @@ func oversizeLookupProvider() agenttools.ToolProvider {
 func TestAgentStreamFailsClosedWhenStepRequestOutgrowsTheWindow(t *testing.T) {
 	t.Parallel()
 
-	modelProvider := &atomicMockProvider{handler: lookupEveryCall}
+	modelProvider := &atomicMockProvider{
+		handler: func(call int, _ sdk.Request) (sdk.ModelResult, error) {
+			if call != 1 {
+				return sdk.ModelResult{}, fmt.Errorf("unexpected provider call %d after the request outgrew the window", call)
+			}
+			return sdk.ModelResult{
+				FinishReason: sdk.FinishReasonToolCalls,
+				ToolCalls: []sdk.ToolCall{{
+					ToolCallID: "call-stream-step-overflow",
+					ToolName:   "lookup",
+					Input:      toolexec.ArgumentsFromValue(map[string]any{"q": "one"}),
+				}},
+			}, nil
+		},
+	}
 	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
 		return cfg, nil
 	}})
@@ -405,8 +421,8 @@ func TestAgentStreamFailsClosedWhenStepRequestOutgrowsTheWindow(t *testing.T) {
 		}
 	}
 
-	if got := modelProvider.calls.Load(); got < 2 {
-		t.Fatalf("provider calls = %d, want the request to outgrow the window over steps", got)
+	if got := modelProvider.calls.Load(); got != 1 {
+		t.Fatalf("provider calls = %d, want 1", got)
 	}
 	if len(errorEvents) != 1 {
 		t.Fatalf("error events = %#v, want exactly one", errorEvents)

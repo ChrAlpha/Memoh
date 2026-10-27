@@ -136,9 +136,10 @@ func (s *contextSwitchState) align(messages []sdk.Message) []*MessageProvenance 
 // splices each pass it commits into params. The event keeps the run's tail
 // verbatim after the summary: the latest committed step, or before the first
 // one what the run starts from; a run that starts from no tail may fold its
-// whole request but its anchors and runtime context. Every message no pass
-// covers stays as it was. It reports whether params changed; an event that
-// leaves the request over its allowance fails as the event says.
+// whole request but its anchors and runtime context. A step the request
+// cannot keep beside a summary folds too. Every message no pass covers stays
+// as it was. It reports whether params changed; an event that leaves the
+// request over its allowance fails as the event says.
 func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, allowance int) (bool, error) {
 	if s == nil || allowance <= 0 {
 		return false, nil
@@ -209,10 +210,17 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	recordFoldedInputImages(cfg.ContextMutations, params.Messages, provenance, splice.from)
 	params.Messages = splice.messages
 	s.known = nil
+	kept := false
 	for _, p := range splice.provenance {
 		if p != nil {
 			s.know(*p)
+			kept = kept || sharesSource(p.Sources, s.tail)
 		}
+	}
+	if !kept {
+		// The event folded the tail too: until the next step commits, the run
+		// has none.
+		s.tail = nil
 	}
 	s.moved = splice.from
 	return true, nil

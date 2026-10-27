@@ -57,6 +57,13 @@ run sends next, whose tail stays verbatim after the summary with everything
 after it. The tail is the latest committed step; before the first one it is the
 input the run answers, or the deferred call and answer a decision continuation
 resumes from, and a Discuss run, whose inputs are anchors, starts from none.
+A step stays only while the request can keep it beside a summary: when it
+leaves a summary no room, or nothing before it is left to fold and the request
+is still over, the same event folds it too, and the instruction asks the
+summary to end with where the work stands. The tool results it folds are
+listed by the ref `get_messages` reads them back by, as for any other fold. A
+tail that holds only the run's input never folds; the event fails as
+protected instead.
 Each pass forks that request before its tail and asks the run's own model for
 the summary that replaces everything foldable there, the active checkpoint's
 summaries included. Before the run's first step the instruction also quotes
@@ -72,8 +79,8 @@ the native runtime spliced, each pass absorbing the summary before it. A
 message larger than what the window leaves one message beside the system
 prompt, tools, the longest summary, the instruction and the least output
 reaches the summarizer by its head and tail: its text, the arguments of its
-calls and its results. No message is too large to fold, and a step's results,
-bounded below half the room, reach the fork whole.
+calls and its results. No message is too large to fold; the row keeps the
+whole message, which `get_messages` reads back.
 
 Every message of the request names what it renders: a history row, an inbound
 or self-sent message, or a summary. The run's query names the row that holds
@@ -342,14 +349,9 @@ continuations use the same phase-aware application watchdog:
   apply.
 
 Conversation messages only append between compaction events. A tool result is
-bounded once, when the tool returns, keeping its head and tail, and every later
-request carries it as stored. Its bound is the tool's own (`tool_output_max_bytes`,
-32 KiB by default, and `tool_output_max_lines`) or its share of its step's bound,
-whichever is smaller. The results of one step together take at most half of what
-the run's request has beside its system prompt and tools, parallel results in
-equal shares, so a step always fits next to a summary and a fork that reads it
-has room to answer. A call run after its decision is the one result of the step
-it was deferred from. No run prunes, stubs, or drops a stored conversation message
+bounded once, when the tool returns (`tool_output_max_bytes`, 32 KiB by default, and
+`tool_output_max_lines`, keeping its head and tail), and every later request
+carries it as stored. No run prunes, stubs, or drops a stored conversation message
 it already sent. Dynamic background-task snapshots and before-model hooks keep
 their existing refresh behavior.
 When the next call does not fit, a run armed for in-run compaction folds its

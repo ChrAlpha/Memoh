@@ -65,28 +65,31 @@ func TestPostgresASmallerWindowFoldsTheHistoryItNoLongerHolds(t *testing.T) {
 	}
 }
 
-// Effects a step calls at once share its bound: four results that alone
-// would each fill most of the room reach the next request cut to their
-// shares, and the run goes on to fold and finish.
-func TestPostgresAParallelStepSharesItsBound(t *testing.T) {
+// A parallel step whose results together leave a summary no room folds in
+// the same event as what is before it: the request after the step carries
+// the run's input and the summary instead of the results, every result is
+// stored whole for get_messages to read back, and the run goes on to finish.
+func TestPostgresAParallelStepTooLargeToKeepFolds(t *testing.T) {
 	web := runEntryNamed("web")
 	s := newEffectLoop(t, web)
+	f := s.f
 	s.parallel, s.resultBytes = 4, 6000
 	code, requests := s.run(web, loopInput, 12)
-	if code != "" || len(s.effects) != 12 || len(requests) == 0 {
+	if code != "" || len(s.effects) != 12 || len(requests) < 2 {
 		t.Fatalf("code=%q effects=%v, want the three parallel steps run and the turn answered", code, s.effects)
 	}
-	shared := 0
-	for _, message := range requestMessages(t, requests[1]) {
-		if strings.Contains(message, `"role":"tool"`) {
-			if !strings.Contains(message, "[memoh pruned]") || len(message) > 4000 {
-				t.Fatalf("a parallel result reached the next request at %d bytes, want it cut to its share", len(message))
-			}
-			shared++
-		}
+	if len(summaryContents(t, requests[1])) != 1 || strings.Count(requests[1], loopInput) != 1 || strings.Contains(requests[1], "TOOL_RESULT_") {
+		t.Fatalf("the request after the first step carries summaries=%d inputs=%d raw results=%v, want the step folded beside the input",
+			len(summaryContents(t, requests[1])), strings.Count(requests[1], loopInput), strings.Contains(requests[1], "TOOL_RESULT_"))
 	}
-	if shared != 4 {
-		t.Fatalf("the request after the first step carries %d results, want 4", shared)
+	for i := 1; i <= 12; i++ {
+		var stored bool
+		if err := f.pool.QueryRow(f.ctx, `SELECT EXISTS (SELECT 1 FROM bot_history_messages WHERE session_id=$1 AND role='tool' AND strpos(content::text, $2) > 0)`, f.sessionID, effectResult(i, s.resultBytes)).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if !stored {
+			t.Fatalf("result %d is not stored whole", i)
+		}
 	}
 }
 

@@ -21,10 +21,6 @@ type ToolExecContext struct {
 	ToolCallID   string
 	ToolName     string
 	SendProgress func(content sdk.ToolOutput) // nil when not in streaming mode
-	// OutputBytes is the most this call's result may take: its share of what
-	// the results of its batch may take together. Zero leaves the result to
-	// its tool's own bound.
-	OutputBytes int
 }
 
 type ToolApprovalDecision string

@@ -393,29 +393,3 @@ func TestCapabilityRefreshDecoratesNewReadTool(t *testing.T) {
 		})
 	}
 }
-
-// A refresh that brings more tools leaves a step less room beside them: the
-// dispatch bounds the next step's results against the refreshed request,
-// whether its system prompt is a field or the head of the prefix.
-func TestCapabilityRefreshBoundsTheNextStepAgainstTheNewTools(t *testing.T) {
-	t.Parallel()
-
-	refreshed := refreshedTools{system: "You are the bot. " + strings.Repeat("Use the new tools well. ", 200)}
-	for i := range 40 {
-		refreshed.defs = append(refreshed.defs, sdk.ToolDefinition{Name: fmt.Sprintf("tool_%d", i), Description: strings.Repeat("does a thing ", 40)})
-	}
-	for _, prepended := range []bool{false, true} {
-		params := sdk.Request{System: "You are the bot.", Messages: []sdk.Message{sdk.UserMessage("task")}}
-		if prepended {
-			params.System = ""
-			params.Messages = append([]sdk.Message{{Role: sdk.MessageRoleSystem, Content: []sdk.MessagePart{sdk.TextPart{Text: "You are the bot."}}}}, params.Messages...)
-		}
-		dispatch := generateDispatch{inputAllowance: 20000, systemPrepended: prepended}
-		dispatch.stepOutputBytes = stepOutputBudget(dispatch.inputAllowance, params, prepended)
-		before := dispatch.stepOutputBytes
-		refreshed.apply(&dispatch, &params, params.Messages)
-		if want := stepOutputBudget(dispatch.inputAllowance, params, prepended); dispatch.stepOutputBytes != want || want >= before {
-			t.Fatalf("prepended=%v: step bound %d -> %d, want the refreshed request's %d, below %d", prepended, before, dispatch.stepOutputBytes, want, before)
-		}
-	}
-}

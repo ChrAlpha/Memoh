@@ -47,7 +47,7 @@ type Event struct {
 	// Request is what the caller sends next and Sources what each of its
 	// messages renders. Messages from Cut on are the tail the caller keeps
 	// verbatim after the summary: the latest step, or the input a run starts
-	// from.
+	// from. A step folds too when the request cannot keep it (tailFolds).
 	Request sdk.Request
 	Sources []Source
 	Cut     int
@@ -87,11 +87,17 @@ func (s *Service) Fold(ctx context.Context, ev Event) ([]Pass, error) {
 }
 
 // passes runs ev's passes, splicing each into the caller's request through
-// ev.Apply, until one reads up to the tail or nothing is left to fold.
+// ev.Apply, until one reads up to the tail or nothing is left to fold. A tail
+// that leaves the request over its allowance once nothing before it is left
+// to fold, or that leaves a summary no room, folds too (tailFolds).
 func (s *Service) passes(ctx context.Context, ev Event) ([]Pass, error) {
 	var passes []Pass
 	for {
 		pass, folded, err := s.foldPass(ctx, ev)
+		if (err == nil && !folded || ReasonOf(err) == ReasonProtectedOverflow) && tailFolds(ev) {
+			ev.Cut, ev.Current = len(ev.Request.Messages), nil
+			continue
+		}
 		if err != nil {
 			return passes, err
 		}
@@ -183,6 +189,20 @@ func (s *Service) foldPass(ctx context.Context, ev Event) (Pass, bool, error) {
 		Cut:       cut,
 		More:      !plan.final(),
 	}, true, nil
+}
+
+// tailFolds reports whether ev's tail folds with what is before it: the
+// request is over its allowance and the tail holds a completed step, whose
+// calls and results the summary can stand for and get_messages reads back.
+// A tail that holds only the input a run starts from stays, so the event
+// fails as protected rather than summarize the input it answers.
+func tailFolds(ev Event) bool {
+	if ev.Cut >= len(ev.Request.Messages) || forkTokens(ev.Request) <= ev.Allowance {
+		return false
+	}
+	return slices.ContainsFunc(ev.Sources[ev.Cut:], func(source Source) bool {
+		return len(source.Sources) > 0 && !source.Anchor && !isSummarySource(source)
+	})
 }
 
 // rendersCheckpoint refuses a request composed on a checkpoint the session

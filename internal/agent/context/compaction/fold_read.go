@@ -46,8 +46,7 @@ func forkRead(ev Event) ([]sdk.Message, error) {
 // window has beside the system prompt, the tools and the messages that render
 // no source, the longest summary a pass reads before it, the instruction and
 // the least output a fork asks for. A pass can therefore read any message
-// after a summary, and a step's results, which take at most half of the run's
-// room, reach the fork whole.
+// after a summary.
 func forkMessageCap(ev Event) int {
 	var fixed []sdk.Message
 	for i, message := range ev.Request.Messages[:ev.Cut] {

@@ -25,9 +25,6 @@ type ToolExecOptions struct {
 	// (StreamToolErrorPart). Parallel executions may invoke OnPart
 	// concurrently; callers must synchronize if needed.
 	OnPart func(sdk.StreamPart)
-	// OutputBytes is what the results of the batch may take together: each
-	// call it executes gets an equal share. Zero sets no bound for the batch.
-	OutputBytes int
 }
 
 // ToolExecOutcome is the result of ExecuteTools over one batch of tool calls.
@@ -159,28 +156,23 @@ func ExecuteTools(ctx context.Context, calls []sdk.ToolCall, opts ToolExecOption
 		pending = append(pending, pendingToolExec{idx: i, tc: tc, tool: tool})
 	}
 
-	share := 0
-	if opts.OutputBytes > 0 && len(pending) > 0 {
-		share = max(opts.OutputBytes/len(pending), 1)
-	}
-	runPendingTools(ctx, pending, results, opts.OnPart, share)
+	runPendingTools(ctx, pending, results, opts.OnPart)
 	return ToolExecOutcome{Results: results, Refused: refused}, nil
 }
 
 // runPendingTools executes approved tool calls, in parallel when more than one,
-// writing each result to its call index in results. Each result may take at
-// most outputBytes, zero for its tool's own bound.
-func runPendingTools(ctx context.Context, pending []pendingToolExec, results []sdk.ToolResultPart, onPart func(sdk.StreamPart), outputBytes int) {
+// writing each result to its call index in results.
+func runPendingTools(ctx context.Context, pending []pendingToolExec, results []sdk.ToolResultPart, onPart func(sdk.StreamPart)) {
 	switch {
 	case len(pending) == 1:
-		results[pending[0].idx] = runTool(ctx, &pending[0].tc, pending[0].tool, onPart, outputBytes)
+		results[pending[0].idx] = runTool(ctx, &pending[0].tc, pending[0].tool, onPart)
 	case len(pending) > 1:
 		var wg sync.WaitGroup
 		wg.Add(len(pending))
 		for _, p := range pending {
 			go func(p pendingToolExec) {
 				defer wg.Done()
-				results[p.idx] = runTool(ctx, &p.tc, p.tool, onPart, outputBytes)
+				results[p.idx] = runTool(ctx, &p.tc, p.tool, onPart)
 			}(p)
 		}
 		wg.Wait()
@@ -227,7 +219,7 @@ func rejectedToolResultText(approval ToolApprovalResult) string {
 	return "tool execution denied by user"
 }
 
-func runTool(ctx context.Context, tc *sdk.ToolCall, tool *Tool, sendProgress func(sdk.StreamPart), outputBytes int) sdk.ToolResultPart {
+func runTool(ctx context.Context, tc *sdk.ToolCall, tool *Tool, sendProgress func(sdk.StreamPart)) sdk.ToolResultPart {
 	var progressFn func(content sdk.ToolOutput)
 	if sendProgress != nil {
 		progressFn = func(content sdk.ToolOutput) {
@@ -244,7 +236,6 @@ func runTool(ctx context.Context, tc *sdk.ToolCall, tool *Tool, sendProgress fun
 		ToolCallID:   tc.ToolCallID,
 		ToolName:     tc.ToolName,
 		SendProgress: progressFn,
-		OutputBytes:  outputBytes,
 	}
 
 	output, err := tool.Execute(execCtx, tc.Input)
