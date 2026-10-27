@@ -228,9 +228,12 @@ summaries, so its first request that does not fit compacts it.
 A fork copies the source's visible history through its turn under the source's
 share lock and carries the newest checkpoint on the source's active chain that
 accounts for no history past the fork point (`checkpoint.CopyToFork`), in the
-transaction that creates the fork. Its summaries are copied, its kept rows
-named by their copies, and its position mapped to the copy's, so a fork's
-first request does not fold again what the source had folded.
+transaction that creates the fork. Its summaries are copied with the rows
+they cite named by their copies, so a ref `get_messages` reads a folded tool
+result back by, which reads only the session's own rows, reads the fork's
+copy; its kept rows are named by their copies, and its position mapped to the
+copy's, so a fork's first request does not fold again what the source had
+folded.
 
 Candidate payloads are read within byte bounds. A request reads the active
 checkpoint; an edit or retry, a rewind and a fork walk its chain for the

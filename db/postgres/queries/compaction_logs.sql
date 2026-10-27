@@ -27,13 +27,14 @@ WHERE team_id = public.memoh_current_team_id()
 RETURNING *;
 
 -- name: CopyCompactionSummary :one
--- A fork carries a summary of its source as its own: the same text, model,
--- count and timing, and no usage, so the summarizer call that wrote it is
--- counted once.
+-- A fork carries a summary of its source as its own: the text the copy gives
+-- it, which names the fork's rows where the source's named the source's, the
+-- same model, count and timing, and no usage, so the summarizer call that
+-- wrote it is counted once.
 INSERT INTO bot_history_message_compacts (
   bot_id, session_id, team_id, status, summary, message_count, model_id, started_at, completed_at
 )
-SELECT fork.bot_id, fork.id, fork.team_id, 'ok', source.summary, source.message_count,
+SELECT fork.bot_id, fork.id, fork.team_id, 'ok', sqlc.arg(summary)::text, source.message_count,
   source.model_id, source.started_at, source.completed_at
 FROM bot_history_message_compacts source
 JOIN bot_sessions fork

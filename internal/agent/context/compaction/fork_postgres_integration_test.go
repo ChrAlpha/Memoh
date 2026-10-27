@@ -4,15 +4,20 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/thread"
@@ -357,5 +362,69 @@ func TestPostgresForkKeepsTheCopiesOfTheRowsACheckpointKeeps(t *testing.T) {
 	f.assertCopied(f.active(fork), kept, source, f.copies(source, fork))
 	if got := f.raw(fork); got != 3 {
 		t.Fatalf("fork reads %d raw rows, want the kept request and the 2 of turn 4", got)
+	}
+}
+
+// A fork carries its source's summaries naming the fork's copies of the rows
+// they cite: a tool result a summary cites by ref reads back in the fork,
+// where the source's row is not the fork's to read.
+func TestPostgresForkSummariesCiteTheForksRows(t *testing.T) {
+	f := newForkFixture(t)
+	source := f.session()
+	persist := func(message sdk.Message) string {
+		t.Helper()
+		content, err := historyfrag.MarshalStoredSDKMessage(message)
+		if err != nil {
+			t.Fatal(err)
+		}
+		row, err := f.messages.Persist(f.ctx, messagepkg.PersistInput{BotID: f.botID, SessionID: source, Role: string(message.Role), Content: content})
+		if err != nil {
+			t.Fatalf("persist %s: %v", message.Role, err)
+		}
+		f.exec(`UPDATE bot_history_messages SET created_at = $2 WHERE id = $1`, row.ID, f.next)
+		f.next = f.next.Add(time.Second)
+		return row.ID
+	}
+	log := "BUILD_LOG: compiled 42 packages"
+	rows := []string{
+		persist(sdk.UserMessage("build it")),
+		persist(sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: sdk.ParseToolArguments(`{"cmd":"make"}`)}}}),
+		persist(sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "exec", Result: sdk.TextOutput(log)})),
+		persist(sdk.AssistantMessage("built")),
+	}
+	later := f.turns(source, 1)
+	f.fold(source, "built; ref="+rows[2]+":0", rows...)
+
+	fork := f.fork(source, later[0])
+	items := f.active(fork).Items
+	at := slices.IndexFunc(items, func(item checkpoint.Item) bool { return item.SummaryID != "" })
+	if at < 0 {
+		t.Fatalf("fork checkpoint holds %+v, want the source's summary", items)
+	}
+	summary := items[at].Summary
+	cited := regexp.MustCompile(`ref=([0-9a-f-]{36}):0`).FindStringSubmatch(summary)
+	if cited == nil || cited[1] == rows[2] {
+		t.Fatalf("the fork's summary %q cites %v, want the fork's copy of %s", summary, cited, rows[2])
+	}
+	limit := tools.ToolOutputLimit{MaxBytes: 4096, MaxLines: 64}
+	provided, err := tools.NewHistoryProvider(nil, nil, f.messages, nil, limit).Tools(f.ctx, tools.SessionContext{BotID: f.botID, SessionID: fork})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(ref string) (string, error) {
+		for _, tool := range provided {
+			if tool.Name == tools.ToolGetMessages().String() {
+				out, err := tool.Execute(&toolexec.ToolExecContext{Context: f.ctx, ToolName: tool.Name}, toolexec.ArgumentsFromValue(map[string]any{"ref": ref}))
+				return out.String(), err
+			}
+		}
+		t.Fatal("no get_messages tool")
+		return "", nil
+	}
+	if out, err := read(cited[1] + ":0"); err != nil || !strings.Contains(out, log) {
+		t.Fatalf("get_messages in the fork = %s, %v; want the cited result", out, err)
+	}
+	if _, err := read(rows[2] + ":0"); err == nil || !strings.Contains(err.Error(), "not in the current session") {
+		t.Fatalf("the source's ref read in the fork: %v", err)
 	}
 }

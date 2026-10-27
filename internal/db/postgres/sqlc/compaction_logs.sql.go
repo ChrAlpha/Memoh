@@ -71,29 +71,31 @@ const copyCompactionSummary = `-- name: CopyCompactionSummary :one
 INSERT INTO bot_history_message_compacts (
   bot_id, session_id, team_id, status, summary, message_count, model_id, started_at, completed_at
 )
-SELECT fork.bot_id, fork.id, fork.team_id, 'ok', source.summary, source.message_count,
+SELECT fork.bot_id, fork.id, fork.team_id, 'ok', $1::text, source.message_count,
   source.model_id, source.started_at, source.completed_at
 FROM bot_history_message_compacts source
 JOIN bot_sessions fork
   ON fork.team_id = public.memoh_current_team_id()
- AND fork.id = $1
+ AND fork.id = $2
  AND fork.bot_id = source.bot_id
 WHERE source.team_id = public.memoh_current_team_id()
-  AND source.id = $2
+  AND source.id = $3
   AND source.status = 'ok'
 RETURNING id
 `
 
 type CopyCompactionSummaryParams struct {
+	Summary         string      `json:"summary"`
 	SessionID       pgtype.UUID `json:"session_id"`
 	SourceCompactID pgtype.UUID `json:"source_compact_id"`
 }
 
-// A fork carries a summary of its source as its own: the same text, model,
-// count and timing, and no usage, so the summarizer call that wrote it is
-// counted once.
+// A fork carries a summary of its source as its own: the text the copy gives
+// it, which names the fork's rows where the source's named the source's, the
+// same model, count and timing, and no usage, so the summarizer call that
+// wrote it is counted once.
 func (q *Queries) CopyCompactionSummary(ctx context.Context, arg CopyCompactionSummaryParams) (pgtype.UUID, error) {
-	row := q.db.QueryRow(ctx, copyCompactionSummary, arg.SessionID, arg.SourceCompactID)
+	row := q.db.QueryRow(ctx, copyCompactionSummary, arg.Summary, arg.SessionID, arg.SourceCompactID)
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
