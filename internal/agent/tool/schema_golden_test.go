@@ -37,8 +37,8 @@ var schemaGoldenTools = map[string]func(t *testing.T) []toolexec.Tool{
 	),
 	"schedule": providerTools(NewScheduleProvider(nil, nativeSourceTestScheduler{})),
 	"subagent": func(t *testing.T) []toolexec.Tool {
-		p := NewSpawnProvider(nil, nil, nil, nil, nil, background.New(nil))
-		p.SetAgent(&fakeSpawnAgent{})
+		p := NewSpawnProvider()
+		p.SetController(goldenSubagentController{})
 		return providerTools(p)(t)
 	},
 	"ask_user": providerTools(NewAskUserProvider(nil)),

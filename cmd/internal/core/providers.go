@@ -550,7 +550,7 @@ func agentLimitsFromConfig(cfg config.AgentConfig) native.Limits {
 	)
 }
 
-func injectToolProviders(a *native.Agent, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider) {
+func injectToolProviders(a *native.Agent, log *slog.Logger, settingsService *settings.Service, modelsService *models.Service, queries dbstore.Queries, sessionService *sessionpkg.Service, bgManager *background.Manager, msgService *message.DBService, hookService *hookspkg.Service, agentService *application.Service, providers []agenttools.ToolProvider) {
 	a.SetToolProviders(providers)
 	for _, p := range providers {
 		if cp, ok := p.(*agenttools.ContainerProvider); ok {
@@ -567,13 +567,15 @@ func injectToolProviders(a *native.Agent, msgService *message.DBService, hookSer
 			// The parent model reads a spawned run's failure by the code the
 			// run itself failed with.
 			adapter.SetFailureTranslator(agentService.SubagentFailure)
-			sp.SetAgent(adapter)
-			sp.SetMessageService(msgService)
-			sp.SetSystemPromptFunc(native.SpawnSystemPrompt)
-			sp.SetHookService(hookService)
+			controller := application.NewSubagentService(log, settingsService, modelsService, queries, sessionService, bgManager)
+			controller.SetAgent(adapter)
+			controller.SetMessageService(msgService)
+			controller.SetSystemPromptFunc(native.SpawnSystemPrompt)
+			controller.SetHookService(hookService)
 			// A spawned turn takes its thread's single run slot like any other,
 			// so without admission this provider starts nothing.
-			sp.SetSubagentAdmitter(agentService)
+			controller.SetSubagentAdmitter(agentService)
+			sp.SetController(controller)
 		}
 	}
 }
@@ -1165,7 +1167,7 @@ func provideToolProviders(log *slog.Logger, channelRuntime channel.Runtime, regi
 		agenttools.NewBackgroundProvider(log, bgManager),
 		agenttools.NewBrowserProvider(log, settingsService, nativeWorkspaceBridgeProvider{manager: manager}, displayService, config.DefaultDataMount),
 		agenttools.NewWebFetchProvider(log, settingsService, fetchProviderService),
-		agenttools.NewSpawnProvider(log, settingsService, modelsService, queries, sessionService, bgManager),
+		agenttools.NewSpawnProvider(),
 		agenttools.NewSkillProvider(log, func(ctx context.Context, botID string) (map[string]agenttools.SkillDetail, error) {
 			items, err := containerdHandler.LoadSkills(ctx, botID)
 			if err != nil {

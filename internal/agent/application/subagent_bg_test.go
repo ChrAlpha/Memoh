@@ -1,4 +1,4 @@
-package tools
+package application
 
 import (
 	"context"
@@ -18,6 +18,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/partmeta"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -27,19 +28,19 @@ import (
 type fakeSpawnAgent struct {
 	block            chan struct{}
 	failFor          map[string]string
-	failureResult    *SpawnResult
+	failureResult    *agenttools.SpawnResult
 	failureErr       error
 	contextLifecycle *contextfrag.LifecycleSnapshot
 
 	mu    sync.Mutex
-	calls []SpawnRunConfig
+	calls []agenttools.SpawnRunConfig
 }
 
-func (f *fakeSpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
+func (f *fakeSpawnAgent) Generate(ctx context.Context, cfg agenttools.SpawnRunConfig) (*agenttools.SpawnResult, error) {
 	return f.GenerateWithWatchdog(ctx, cfg, func() {})
 }
 
-func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, cfg)
 	f.mu.Unlock()
@@ -57,7 +58,7 @@ func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunC
 	if msg, ok := f.failFor[cfg.Query]; ok {
 		return nil, errors.New(msg)
 	}
-	return &SpawnResult{
+	return &agenttools.SpawnResult{
 		Text: "report for " + cfg.Query,
 		Messages: []sdk.Message{{
 			Role:    sdk.MessageRoleAssistant,
@@ -77,11 +78,11 @@ func (f *fakeSpawnAgent) queries() []string {
 	return out
 }
 
-func (f *fakeSpawnAgent) callAt(i int) (SpawnRunConfig, bool) {
+func (f *fakeSpawnAgent) callAt(i int) (agenttools.SpawnRunConfig, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if i < 0 || i >= len(f.calls) {
-		return SpawnRunConfig{}, false
+		return agenttools.SpawnRunConfig{}, false
 	}
 	return f.calls[i], true
 }
@@ -234,17 +235,17 @@ func (s *fakeAgentMessageService) persistInputs() []messagepkg.PersistInput {
 // text, so the message persists with that text instead of being dropped.
 func TestPersistSubagentMessagesKeepsUnencodableInputAsText(t *testing.T) {
 	messages := newFakeAgentMessageService()
-	provider := &SpawnProvider{
+	provider := &SubagentService{
 		messageService: messages,
 		logger:         slog.New(slog.DiscardHandler),
 	}
 	req := &agentRequest{
 		agentSessionID:   "subagent-session",
-		parentSession:    SessionContext{BotID: "bot-1"},
+		parentSession:    agenttools.SessionContext{BotID: "bot-1"},
 		requestMessageID: "request-1",
 		runtime:          resolvedSubagentModel{UUID: "model-1"},
 	}
-	result := &SpawnResult{Messages: []sdk.Message{
+	result := &agenttools.SpawnResult{Messages: []sdk.Message{
 		{
 			Role: sdk.MessageRoleAssistant,
 			Content: []sdk.MessagePart{sdk.ToolCallPart{
@@ -387,22 +388,22 @@ func (*fakeAgentMessageService) LinkAssets(context.Context, string, []messagepkg
 	return nil
 }
 
-func newAgentControlProvider(t *testing.T, agent *fakeSpawnAgent) (*SpawnProvider, *background.Manager, *fakeAgentSessionService, *fakeAgentMessageService) {
+func newAgentControlProvider(t *testing.T, agent *fakeSpawnAgent) (*SubagentService, *background.Manager, *fakeAgentSessionService, *fakeAgentMessageService) {
 	t.Helper()
 	return newAgentControlProviderWithAdmitter(t, agent, &fakeSubagentAdmitter{})
 }
 
-func newAgentControlProviderWithAdmitter(t *testing.T, agent *fakeSpawnAgent, admitter *fakeSubagentAdmitter) (*SpawnProvider, *background.Manager, *fakeAgentSessionService, *fakeAgentMessageService) {
+func newAgentControlProviderWithAdmitter(t *testing.T, agent *fakeSpawnAgent, admitter *fakeSubagentAdmitter) (*SubagentService, *background.Manager, *fakeAgentSessionService, *fakeAgentMessageService) {
 	t.Helper()
 	mgr := background.New(nil)
 	sessionSvc := &fakeAgentSessionService{}
 	messageSvc := newFakeAgentMessageService()
-	p := NewSpawnProvider(nil, nil, nil, nil, nil, mgr)
+	p := NewSubagentService(nil, nil, nil, nil, nil, mgr)
 	p.sessionService = sessionSvc
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
 	p.SetSubagentAdmitter(admitter)
-	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+	p.modelResolver = func(context.Context, agenttools.SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{
 			Model:            &sdk.Model{},
 			UUID:             "00000000-0000-0000-0000-000000000123",
@@ -414,9 +415,9 @@ func newAgentControlProviderWithAdmitter(t *testing.T, agent *fakeSpawnAgent, ad
 	return p, mgr, sessionSvc, messageSvc
 }
 
-func executeAgentTool(t *testing.T, p *SpawnProvider, session SessionContext, name string, args map[string]any) (any, error) {
+func executeAgentTool(t *testing.T, p *SubagentService, session agenttools.SessionContext, name string, args map[string]any) (any, error) {
 	t.Helper()
-	tools, err := p.Tools(context.Background(), session)
+	tools, err := subagentTestTools(p).Tools(context.Background(), session)
 	if err != nil {
 		t.Fatalf("Tools failed: %v", err)
 	}
@@ -461,9 +462,9 @@ func asMap(t *testing.T, value any) map[string]any {
 
 func TestAgentControlToolsExposeSingleAgentSurface(t *testing.T) {
 	p, _, _, _ := newAgentControlProvider(t, &fakeSpawnAgent{})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
-	tools, err := p.Tools(context.Background(), session)
+	tools, err := subagentTestTools(p).Tools(context.Background(), session)
 	if err != nil {
 		t.Fatalf("Tools failed: %v", err)
 	}
@@ -473,7 +474,7 @@ func TestAgentControlToolsExposeSingleAgentSurface(t *testing.T) {
 		t.Fatalf("unexpected tools: got %v want %v", got, want)
 	}
 
-	subagentTools, err := p.Tools(context.Background(), SessionContext{BotID: "bot1", SessionID: "child", IsSubagent: true})
+	subagentTools, err := subagentTestTools(p).Tools(context.Background(), agenttools.SessionContext{BotID: "bot1", SessionID: "child", IsSubagent: true})
 	if err != nil {
 		t.Fatalf("subagent Tools failed: %v", err)
 	}
@@ -484,7 +485,7 @@ func TestAgentControlToolsExposeSingleAgentSurface(t *testing.T) {
 
 func TestAgentControlToolSchemasDoNotReferenceSiblingTools(t *testing.T) {
 	p, _, _, _ := newAgentControlProvider(t, &fakeSpawnAgent{})
-	tools, err := p.Tools(context.Background(), SessionContext{BotID: "bot1", SessionID: "parent1"})
+	tools, err := subagentTestTools(p).Tools(context.Background(), agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"})
 	if err != nil {
 		t.Fatalf("Tools failed: %v", err)
 	}
@@ -494,8 +495,8 @@ func TestAgentControlToolSchemasDoNotReferenceSiblingTools(t *testing.T) {
 			t.Fatalf("marshal %s schema: %v", tool.Name, err)
 		}
 		schema := string(raw)
-		if tool.Name == ToolSendMessage().String() {
-			for _, absent := range []string{ToolSpawnAgent().String(), ToolListAgents().String()} {
+		if tool.Name == agenttools.ToolSendMessage().String() {
+			for _, absent := range []string{agenttools.ToolSpawnAgent().String(), agenttools.ToolListAgents().String()} {
 				if strings.Contains(schema, absent) {
 					t.Fatalf("%s schema references sibling tool %s:\n%s", tool.Name, absent, schema)
 				}
@@ -508,7 +509,7 @@ func TestSpawnAgentSessionInheritsParentUserIdentity(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, sessions, _ := newAgentControlProvider(t, agent)
 	location := time.FixedZone("UTC+8", 8*60*60)
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:               "bot1",
 		ChatID:              "chat1",
 		SessionID:           "parent1",
@@ -521,7 +522,7 @@ func TestSpawnAgentSessionInheritsParentUserIdentity(t *testing.T) {
 		WorkspaceTargetKind: "remote",
 		WorkspaceTargetName: "Build machine",
 		TimezoneLocation:    location,
-		Skills: map[string]SkillDetail{
+		Skills: map[string]agenttools.SkillDetail{
 			"review": {Description: "Review code", Content: "instructions", Path: "/skills/review"},
 		},
 	}
@@ -549,7 +550,7 @@ func TestSpawnAgentSessionInheritsParentUserIdentity(t *testing.T) {
 func TestSpawnAgentPropagatesContextBudget(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, _, _ := newAgentControlProvider(t, agent)
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:                  "bot1",
 		SessionID:              "parent1",
 		ContextBudgetMaxTokens: 128000,
@@ -569,10 +570,10 @@ func TestSpawnAgentPropagatesContextBudget(t *testing.T) {
 func TestSpawnAgentUsesResolvedModelContextBudgetOverParent(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, _, _ := newAgentControlProvider(t, agent)
-	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+	p.modelResolver = func(context.Context, agenttools.SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{Model: &sdk.Model{}, ModelID: "model-2", ContextBudgetMaxTokens: 64000}, nil
 	}
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:                  "bot1",
 		SessionID:              "parent1",
 		ContextBudgetMaxTokens: 128000,
@@ -591,7 +592,7 @@ func TestSpawnAgentUsesResolvedModelContextBudgetOverParent(t *testing.T) {
 
 func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 	p, _, _, _ := newAgentControlProvider(t, &fakeSpawnAgent{})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	res := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"task": "alpha"}))
 	if res["agent_id"] != "agent_1" || res["status"] != "completed" {
@@ -605,7 +606,7 @@ func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 
 	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "research_one", "task": "again"}); err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("expected duplicate id error, got %v", err)
-	} else if strings.Contains(err.Error(), ToolSendMessage().String()) {
+	} else if strings.Contains(err.Error(), agenttools.ToolSendMessage().String()) {
 		t.Fatalf("duplicate id error should not name sibling tools that may be unavailable, got %v", err)
 	}
 	if _, err := executeAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "1bad", "task": "bad"}); err == nil || !strings.Contains(err.Error(), "invalid agent id") {
@@ -613,7 +614,7 @@ func TestSpawnAgentIDsAndDuplicateValidation(t *testing.T) {
 	}
 }
 
-func mustExecuteAgentTool(t *testing.T, p *SpawnProvider, session SessionContext, name string, args map[string]any) any {
+func mustExecuteAgentTool(t *testing.T, p *SubagentService, session agenttools.SessionContext, name string, args map[string]any) any {
 	t.Helper()
 	res, err := executeAgentTool(t, p, session, name, args)
 	if err != nil {
@@ -625,7 +626,7 @@ func mustExecuteAgentTool(t *testing.T, p *SpawnProvider, session SessionContext
 func TestSendMessageReusesSessionAndHistory(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, sessions, messages := newAgentControlProvider(t, agent)
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	first := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "worker", "task": "first"}))
 	second := asMap(t, mustExecuteAgentTool(t, p, session, "send_message", map[string]any{"id": "worker", "message": "second"}))
@@ -657,7 +658,7 @@ func TestSendMessageReusesSessionAndHistory(t *testing.T) {
 func TestSpawnAgentRecordsPinnedModelOnSessionMetadata(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, sessions, _ := newAgentControlProvider(t, agent)
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{"id": "worker", "task": "first"})
 
@@ -683,13 +684,13 @@ func TestForkedSubagentKeepsInvisibleParentSnapshotAcrossFollowUps(t *testing.T)
 		sdk.UserMessage("parent question"),
 		sdk.AssistantMessage("parent working context"),
 	}
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:       "bot1",
 		SessionID:   "parent1",
-		ForkContext: NewMessageSnapshot(parentMessages),
+		ForkContext: agenttools.NewMessageSnapshot(parentMessages),
 	}
 
-	first := asMap(t, mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{
+	first := asMap(t, mustExecuteAgentTool(t, p, session, agenttools.ToolSpawnAgent().String(), map[string]any{
 		"id":   "worker",
 		"task": "first child task",
 		"fork": true,
@@ -706,7 +707,7 @@ func TestForkedSubagentKeepsInvisibleParentSnapshotAcrossFollowUps(t *testing.T)
 		t.Fatalf("fork prefix must not be copied into visible child history, got %d stored messages", len(stored))
 	}
 
-	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{
+	mustExecuteAgentTool(t, p, session, agenttools.ToolSendMessage().String(), map[string]any{
 		"id":      "worker",
 		"message": "second child task",
 	})
@@ -722,13 +723,13 @@ func TestForkedSubagentKeepsInvisibleParentSnapshotAcrossFollowUps(t *testing.T)
 func TestNonForkedSubagentDoesNotInheritAvailableParentSnapshot(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, _, _ := newAgentControlProvider(t, agent)
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:       "bot1",
 		SessionID:   "parent1",
-		ForkContext: NewMessageSnapshot([]sdk.Message{sdk.UserMessage("parent-only")}),
+		ForkContext: agenttools.NewMessageSnapshot([]sdk.Message{sdk.UserMessage("parent-only")}),
 	}
 
-	mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{
+	mustExecuteAgentTool(t, p, session, agenttools.ToolSpawnAgent().String(), map[string]any{
 		"id":   "worker",
 		"task": "isolated child task",
 	})
@@ -750,7 +751,7 @@ func TestSpawnAgentPersistsLifecycleOnFinalAssistantAndAssociatesItsID(t *testin
 		admitter,
 	)
 
-	mustExecuteAgentTool(t, p, SessionContext{BotID: "bot1", SessionID: "parent1"}, "spawn_agent", map[string]any{
+	mustExecuteAgentTool(t, p, agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}, "spawn_agent", map[string]any{
 		"id":   "worker",
 		"task": "audit context",
 	})
@@ -789,11 +790,11 @@ func TestSpawnAgentRetainsContextLifecycleWhenBudgetPreflightFails(t *testing.T)
 		},
 	}
 	agent := &fakeSpawnAgent{
-		failureResult: &SpawnResult{ContextLifecycle: snapshot},
+		failureResult: &agenttools.SpawnResult{ContextLifecycle: snapshot},
 		failureErr:    contextfrag.ErrBudgetUnsatisfied,
 	}
 	p, _, _, _ := newAgentControlProvider(t, agent)
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":   "worker",
@@ -828,7 +829,7 @@ func TestBusyAgentQueuesAndRunsFIFO(t *testing.T) {
 	block := make(chan struct{})
 	agent := &fakeSpawnAgent{block: block}
 	p, mgr, _, _ := newAgentControlProvider(t, agent)
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	first := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":                "worker",
@@ -872,7 +873,7 @@ func TestQueuedSpawnAgentUsesExecutionModelContextBudget(t *testing.T) {
 	var resolverMu sync.Mutex
 	resolverBudgets := []int{128000, 128000, 128000, 64000, 32000}
 	resolverCall := 0
-	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+	p.modelResolver = func(context.Context, agenttools.SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		resolverMu.Lock()
 		defer resolverMu.Unlock()
 		if resolverCall >= len(resolverBudgets) {
@@ -887,7 +888,7 @@ func TestQueuedSpawnAgentUsesExecutionModelContextBudget(t *testing.T) {
 			ContextBudgetMaxTokens: budget,
 		}, nil
 	}
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:                  "bot1",
 		SessionID:              "parent1",
 		ContextBudgetMaxTokens: 256000,
@@ -928,7 +929,7 @@ func TestQueuedSpawnAgentUsesExecutionModelContextBudget(t *testing.T) {
 func TestBackgroundSpawnPersistsUserMessageBeforeAgentCompletes(t *testing.T) {
 	block := make(chan struct{})
 	p, _, _, messages := newAgentControlProvider(t, &fakeSpawnAgent{block: block})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	started := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":                "worker",
@@ -958,7 +959,7 @@ func TestQueuedAgentMessageDoesNotPersistBeforeItRuns(t *testing.T) {
 	block := make(chan struct{})
 	agent := &fakeSpawnAgent{block: block}
 	p, _, _, messages := newAgentControlProvider(t, agent)
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	started := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":                "worker",
@@ -1016,7 +1017,7 @@ func TestQueuedAgentMessageDoesNotPersistBeforeItRuns(t *testing.T) {
 func TestBackgroundWaitTimeoutDoesNotCancelRunningAgentTask(t *testing.T) {
 	block := make(chan struct{})
 	p, mgr, _, _ := newAgentControlProvider(t, &fakeSpawnAgent{block: block})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 	started := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":                "worker",
 		"task":              "slow",
@@ -1039,7 +1040,7 @@ func TestKillBackgroundCancelsRunningAndQueuedAgentTasks(t *testing.T) {
 	agent := &fakeSpawnAgent{block: block}
 	admitter := &fakeSubagentAdmitter{}
 	p, mgr, _, _ := newAgentControlProviderWithAdmitter(t, agent, admitter)
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	first := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":                "worker",
@@ -1078,8 +1079,8 @@ func TestKillBackgroundCancelsRunningAndQueuedAgentTasks(t *testing.T) {
 
 func TestListAgentsScopedByCurrentSession(t *testing.T) {
 	p, _, _, _ := newAgentControlProvider(t, &fakeSpawnAgent{})
-	sessionA := SessionContext{BotID: "bot1", SessionID: "parent-a"}
-	sessionB := SessionContext{BotID: "bot1", SessionID: "parent-b"}
+	sessionA := agenttools.SessionContext{BotID: "bot1", SessionID: "parent-a"}
+	sessionB := agenttools.SessionContext{BotID: "bot1", SessionID: "parent-b"}
 
 	mustExecuteAgentTool(t, p, sessionA, "spawn_agent", map[string]any{"id": "alpha", "task": "a"})
 	mustExecuteAgentTool(t, p, sessionB, "spawn_agent", map[string]any{"id": "beta", "task": "b"})
@@ -1129,21 +1130,21 @@ func TestForkedSubagentToleratesEmptyParentMessage(t *testing.T) {
 		{Role: sdk.MessageRoleAssistant},
 		sdk.AssistantMessage("parent working context"),
 	}
-	session := SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: NewMessageSnapshot(parentMessages)}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: agenttools.NewMessageSnapshot(parentMessages)}
 
-	result := asMap(t, mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true}))
+	result := asMap(t, mustExecuteAgentTool(t, p, session, agenttools.ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true}))
 	if result["fork"] != true {
 		t.Fatalf("fork result = %v", result)
 	}
 	// The follow-up reloads the fork rows from storage.
-	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
+	mustExecuteAgentTool(t, p, session, agenttools.ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
 	second, ok := agent.callAt(1)
 	if !ok {
 		t.Fatal("follow-up call missing")
 	}
 	var texts []string
 	for _, msg := range second.Messages[:2] {
-		texts = append(texts, messageContentTextForTest(msg))
+		texts = append(texts, subagentMessageContentTextForTest(msg))
 	}
 	if texts[0] != "parent question" || texts[1] != "parent working context" {
 		t.Fatalf("fork prefix after reload = %q, want the two non-empty parent messages", texts)
@@ -1159,14 +1160,14 @@ func TestForkedSubagentInheritsFileNameNotFileBytes(t *testing.T) {
 	parentMessages := []sdk.Message{
 		sdk.UserMessage("read this", sdk.FilePart{Data: "JVBERi0xLjQ=", MediaType: "application/pdf", Filename: "brief.pdf"}),
 	}
-	session := SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: NewMessageSnapshot(parentMessages)}
-	mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true})
-	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: agenttools.NewMessageSnapshot(parentMessages)}
+	mustExecuteAgentTool(t, p, session, agenttools.ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true})
+	mustExecuteAgentTool(t, p, session, agenttools.ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
 	second, ok := agent.callAt(1)
 	if !ok {
 		t.Fatal("follow-up call missing")
 	}
-	text := messageContentTextForTest(second.Messages[0])
+	text := subagentMessageContentTextForTest(second.Messages[0])
 	if !strings.Contains(text, "brief.pdf") || !strings.Contains(text, "application/pdf") {
 		t.Fatalf("forked prefix = %q, want the attachment name and type", text)
 	}
@@ -1177,7 +1178,7 @@ func TestForkedSubagentInheritsFileNameNotFileBytes(t *testing.T) {
 	}
 }
 
-func messageContentTextForTest(message sdk.Message) string {
+func subagentMessageContentTextForTest(message sdk.Message) string {
 	var b strings.Builder
 	for _, part := range message.Content {
 		if text, ok := part.(sdk.TextPart); ok {

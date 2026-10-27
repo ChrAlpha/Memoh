@@ -1,4 +1,4 @@
-package tools
+package application
 
 import (
 	"context"
@@ -15,20 +15,21 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/background"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
-func newStepPersistProvider(t *testing.T, agent SpawnAgent, admitter SubagentAdmitter) (*SpawnProvider, *fakeAgentMessageService) {
+func newStepPersistProvider(t *testing.T, agent agenttools.SpawnAgent, admitter agenttools.SubagentAdmitter) (*SubagentService, *fakeAgentMessageService) {
 	t.Helper()
 	mgr := background.New(nil)
 	messageSvc := newFakeAgentMessageService()
-	p := NewSpawnProvider(nil, nil, nil, nil, nil, mgr)
+	p := NewSubagentService(nil, nil, nil, nil, nil, mgr)
 	p.sessionService = &fakeAgentSessionService{}
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
 	p.SetSubagentAdmitter(admitter)
-	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+	p.modelResolver = func(context.Context, agenttools.SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{
 			Model:            &sdk.Model{},
 			UUID:             "00000000-0000-0000-0000-000000000123",
@@ -53,35 +54,35 @@ func TestSubagentAttemptDisposition(t *testing.T) {
 		err             error
 		stepPersisted   bool
 		attemptsRemain  bool
-		wantDisposition SpawnAttemptDisposition
+		wantDisposition agenttools.SpawnAttemptDisposition
 	}{
 		{
 			name:            "owning cancellation wins provider race",
 			ctx:             explicitCancelCtx,
 			err:             errors.New("api error 500: raced cancellation"),
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptAbort,
+			wantDisposition: agenttools.SpawnAttemptAbort,
 		},
 		{
 			name:            "custom owning cause is failure",
 			ctx:             customCancelCtx,
 			err:             customCause,
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "watchdog retries while budget remains",
 			ctx:             context.Background(),
-			err:             ErrWatchdogTimedOut,
+			err:             agenttools.ErrWatchdogTimedOut,
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptRetry,
+			wantDisposition: agenttools.SpawnAttemptRetry,
 		},
 		{
 			name:            "wrapped watchdog retries while budget remains",
 			ctx:             context.Background(),
-			err:             fmt.Errorf("stream ended: %w", ErrWatchdogTimedOut),
+			err:             fmt.Errorf("stream ended: %w", agenttools.ErrWatchdogTimedOut),
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptRetry,
+			wantDisposition: agenttools.SpawnAttemptRetry,
 		},
 		{
 			name: "network error is failure",
@@ -92,63 +93,63 @@ func TestSubagentAttemptDisposition(t *testing.T) {
 				Err: errors.New("connection reset by peer"),
 			},
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "provider server error is failure",
 			ctx:             context.Background(),
 			err:             errors.New("api error 529"),
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "provider rate limit is failure",
 			ctx:             context.Background(),
 			err:             errors.New("provider returned 429: rate limit exceeded"),
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "truncated stream is failure",
 			ctx:             context.Background(),
 			err:             io.ErrUnexpectedEOF,
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "cancellation inside the attempt is failure",
 			ctx:             context.Background(),
 			err:             context.Canceled,
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "deadline inside the attempt is failure",
 			ctx:             context.Background(),
 			err:             context.DeadlineExceeded,
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "persisted checkpoint forbids retry",
 			ctx:             context.Background(),
-			err:             ErrWatchdogTimedOut,
+			err:             agenttools.ErrWatchdogTimedOut,
 			stepPersisted:   true,
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "exhausted budget is failure",
 			ctx:             context.Background(),
-			err:             ErrWatchdogTimedOut,
-			wantDisposition: SpawnAttemptFailure,
+			err:             agenttools.ErrWatchdogTimedOut,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 		{
 			name:            "generic abort is failure",
 			ctx:             context.Background(),
 			err:             errors.New("agent run aborted"),
 			attemptsRemain:  true,
-			wantDisposition: SpawnAttemptFailure,
+			wantDisposition: agenttools.SpawnAttemptFailure,
 		},
 	}
 	for _, tc := range tests {
@@ -168,19 +169,19 @@ func TestSubagentDoesNotRetryAfterPersistedStep(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			retryErr := ErrWatchdogTimedOut
+		generateFunc: func(_ context.Context, cfg agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
+			retryErr := agenttools.ErrWatchdogTimedOut
 			if cfg.OnStepPersisted != nil {
 				cfg.OnStepPersisted()
 			}
-			if cfg.ResolveAttempt == nil || cfg.ResolveAttempt(retryErr) != SpawnAttemptFailure {
+			if cfg.ResolveAttempt == nil || cfg.ResolveAttempt(retryErr) != agenttools.SpawnAttemptFailure {
 				t.Errorf("persisted attempt disposition is not failure")
 			}
 			return nil, retryErr
 		},
 	}
 	p, _ := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":   "worker",
@@ -198,7 +199,7 @@ func TestSubagentDoesNotRetryAfterPersistedStep(t *testing.T) {
 		!strings.Contains(errText, "send a follow-up message to continue") {
 		t.Fatalf("error does not tell the parent how to continue: %q", errText)
 	}
-	assertCatalogFailure(t, result, apperror.CodeAgentResponseTimeout, ErrWatchdogTimedOut.Error())
+	assertCatalogFailure(t, result, apperror.CodeAgentResponseTimeout, agenttools.ErrWatchdogTimedOut.Error())
 }
 
 // TestSubagentStillRetriesBeforeAnyPersistedStep: a watchdog timeout with no
@@ -207,21 +208,21 @@ func TestSubagentStillRetriesBeforeAnyPersistedStep(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{}
-	agent.generateFunc = func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+	agent.generateFunc = func(_ context.Context, cfg agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
 		if agent.generateCount.Load() == 1 {
-			retryErr := ErrWatchdogTimedOut
+			retryErr := agenttools.ErrWatchdogTimedOut
 			if cfg.Attempt != 1 || cfg.MaxAttempts != subagentMaxRetries+1 {
 				t.Errorf("attempt metadata = %d/%d, want 1/%d", cfg.Attempt, cfg.MaxAttempts, subagentMaxRetries+1)
 			}
-			if cfg.ResolveAttempt == nil || cfg.ResolveAttempt(retryErr) != SpawnAttemptRetry {
+			if cfg.ResolveAttempt == nil || cfg.ResolveAttempt(retryErr) != agenttools.SpawnAttemptRetry {
 				t.Errorf("pre-commit attempt disposition is not retry")
 			}
 			return nil, retryErr
 		}
-		return &SpawnResult{Text: "recovered"}, nil
+		return &agenttools.SpawnResult{Text: "recovered"}, nil
 	}
 	p, _ := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":   "worker",
@@ -248,15 +249,15 @@ func TestSubagentDoesNotRetryProviderFailure(t *testing.T) {
 
 	providerErr := apperror.Wrap(apperror.CodeAgentProviderOverloaded, errors.New("mid-stream retry: all 5 attempts failed (last: api error 529)"), nil)
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			if cfg.ResolveAttempt == nil || cfg.ResolveAttempt(providerErr) != SpawnAttemptFailure {
+		generateFunc: func(_ context.Context, cfg agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
+			if cfg.ResolveAttempt == nil || cfg.ResolveAttempt(providerErr) != agenttools.SpawnAttemptFailure {
 				t.Errorf("provider failure disposition is not failure")
 			}
 			return nil, providerErr
 		},
 	}
 	p, _ := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":   "worker",
@@ -293,8 +294,8 @@ func TestSubagentSkipsTerminalPersistWhenStepsOwnHistory(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			return &SpawnResult{
+		generateFunc: func(_ context.Context, _ agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
+			return &agenttools.SpawnResult{
 				Text: "done",
 				Messages: []sdk.Message{
 					sdk.AssistantMessage("done"),
@@ -304,7 +305,7 @@ func TestSubagentSkipsTerminalPersistWhenStepsOwnHistory(t *testing.T) {
 		},
 	}
 	p, messageSvc := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":   "worker",
@@ -336,15 +337,15 @@ func TestSubagentMessagesFileUnderAdmittedTurn(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			return &SpawnResult{
+		generateFunc: func(_ context.Context, _ agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
+			return &agenttools.SpawnResult{
 				Text:     "done",
 				Messages: []sdk.Message{sdk.AssistantMessage("done")},
 			}, nil
 		},
 	}
 	p, messageSvc := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
 		"id":   "worker",
@@ -397,17 +398,17 @@ func newAbortableSubagentAdmitter() *abortableSubagentAdmitter {
 	}
 }
 
-func (f *abortableSubagentAdmitter) AdmitSubagentRun(ctx context.Context, _, threadID, invocationID string, _ []byte) (context.Context, SubagentAdmission, func(SubagentTerminal), error) {
+func (f *abortableSubagentAdmitter) AdmitSubagentRun(ctx context.Context, _, threadID, invocationID string, _ []byte) (context.Context, agenttools.SubagentAdmission, func(agenttools.SubagentTerminal), error) {
 	runCtx, cancel := context.WithCancel(ctx)
 	f.mu.Lock()
 	f.cancels[threadID] = cancel
 	f.mu.Unlock()
 	f.admitted <- threadID
-	return runCtx, SubagentAdmission{
+	return runCtx, agenttools.SubagentAdmission{
 		RunID:        "run-" + invocationID,
 		TurnID:       "turn-" + invocationID,
 		TurnPosition: 1,
-	}, func(SubagentTerminal) {}, nil
+	}, func(agenttools.SubagentTerminal) {}, nil
 }
 
 func (f *abortableSubagentAdmitter) abortRun(threadID string) bool {
@@ -429,7 +430,7 @@ func TestSubagentAbortedRunReportsKilled(t *testing.T) {
 
 	var touched atomic.Bool
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ agenttools.SpawnRunConfig, touchFn func()) (*agenttools.SpawnResult, error) {
 			touched.Store(true)
 			ticker := time.NewTicker(10 * time.Millisecond)
 			defer ticker.Stop()
@@ -445,7 +446,7 @@ func TestSubagentAbortedRunReportsKilled(t *testing.T) {
 	}
 	admitter := newAbortableSubagentAdmitter()
 	p, _ := newStepPersistProvider(t, agent, admitter)
-	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+	session := agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"}
 
 	resultCh := make(chan map[string]any, 1)
 	go func() {

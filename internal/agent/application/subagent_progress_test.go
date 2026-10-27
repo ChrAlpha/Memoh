@@ -1,4 +1,4 @@
-package tools
+package application
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/background"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 )
 
 func TestRunSpawnProgressStopsWithParentWhileManagedChildContinues(t *testing.T) {
@@ -29,10 +30,10 @@ func TestRunSpawnProgressStopsWithParentWhileManagedChildContinues(t *testing.T)
 	defer manager.CompleteAgentTask(taskID, background.AgentTaskResult{Status: background.TaskCompleted})
 
 	ticks := make(chan time.Time, 2)
-	events := make(chan ToolStreamEvent, 1)
+	events := make(chan agenttools.ToolStreamEvent, 1)
 	done := make(chan struct{})
 	go func() {
-		runSpawnProgress(parentCtx, func(event ToolStreamEvent) {
+		runSpawnProgress(parentCtx, func(event agenttools.ToolStreamEvent) {
 			events <- event
 		}, ticks)
 		close(done)
@@ -41,8 +42,8 @@ func TestRunSpawnProgressStopsWithParentWhileManagedChildContinues(t *testing.T)
 	ticks <- time.Now()
 	select {
 	case event := <-events:
-		if event.Type != StreamEventSpawnProgress {
-			t.Fatalf("event type = %q, want %q", event.Type, StreamEventSpawnProgress)
+		if event.Type != agenttools.StreamEventSpawnProgress {
+			t.Fatalf("event type = %q, want %q", event.Type, agenttools.StreamEventSpawnProgress)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("spawn progress did not emit for controlled tick")

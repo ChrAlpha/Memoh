@@ -1,4 +1,4 @@
-package tools
+package application
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/models"
@@ -28,26 +29,26 @@ import (
 //     string on the sdk.Request (internal/models/sdk.go:181-228), fed from
 //     native.RunConfig's five reasoning fields (native/agent.go:935-945).
 //
-// The subagent path loses both. SpawnProvider.resolveModel builds a fresh
+// The subagent path loses both. SubagentService.resolveModel builds a fresh
 // *sdk.Model with no ReasoningConfig, and runSubagentTask never assigned the lone
-// SpawnRunConfig.ReasoningEffort field, so both carriers of the decision were
+// agenttools.SpawnRunConfig.ReasoningEffort field, so both carriers of the decision were
 // empty. These tests pin both halves now that resolveModel resolves reasoning
 // against the subagent's own model.
 
 // TestSpawnRunConfigCarriesResolvedReasoning drives the real spawn_agent tool and
-// asserts the SpawnRunConfig handed to the runtime carries a resolved decision.
+// asserts the agenttools.SpawnRunConfig handed to the runtime carries a resolved decision.
 // The field it replaced was declared but never assigned anywhere in the
 // production tree, so the spawn adapter forwarded an empty string forever.
 func TestSpawnRunConfigCarriesResolvedReasoning(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	provider, _, _, _ := newAgentControlProvider(t, agent)
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:     "bot-1",
 		SessionID: "parent-1",
 		UserID:    "user-1",
 	}
 
-	mustExecuteAgentTool(t, provider, session, ToolSpawnAgent().String(), map[string]any{
+	mustExecuteAgentTool(t, provider, session, agenttools.ToolSpawnAgent().String(), map[string]any{
 		"id":   "worker",
 		"task": "summarize the repo",
 	})
@@ -81,7 +82,7 @@ func TestResolveModelResolvesReasoningForTheSubagentModel(t *testing.T) {
 	provider.queries = queries
 	provider.modelResolver = provider.resolveModel
 
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:                "bot-1",
 		SessionID:            "parent-1",
 		UserID:               "user-1",
@@ -127,7 +128,7 @@ func TestSubagentMayRunADifferentModelThanParent(t *testing.T) {
 	provider.modelResolver = provider.resolveModel
 
 	// Parent is on provider-b.
-	session := SessionContext{
+	session := agenttools.SessionContext{
 		BotID:                "bot-1",
 		SessionID:            "parent-1",
 		UserID:               "user-1",
@@ -137,7 +138,7 @@ func TestSubagentMayRunADifferentModelThanParent(t *testing.T) {
 	}
 
 	// The caller selects another model within the same provider.
-	mustExecuteAgentTool(t, provider, session, ToolSpawnAgent().String(), map[string]any{
+	mustExecuteAgentTool(t, provider, session, agenttools.ToolSpawnAgent().String(), map[string]any{
 		"id":       "worker",
 		"task":     "inspect",
 		"model_id": "other-model",
@@ -211,10 +212,10 @@ func TestResolveSubagentReasoningFollowsTheSubagentModel(t *testing.T) {
 func TestResolveSubagentReasoningPreservesParentTurnOverride(t *testing.T) {
 	t.Parallel()
 
-	provider := &SpawnProvider{}
+	provider := &SubagentService{}
 	model := models.GetResponse{Model: models.Model{Config: models.ModelConfig{Reasoning: &models.ModelReasoning{Toggle: true, Efforts: []string{models.ReasoningEffortLow, models.ReasoningEffortHigh}}}}}
 
-	cfg, err := provider.resolveSubagentReasoning(context.Background(), SessionContext{
+	cfg, err := provider.resolveSubagentReasoning(context.Background(), agenttools.SessionContext{
 		ReasoningStoredEffort:    models.ReasoningEffortHigh,
 		ReasoningRequestedEffort: models.ReasoningEffortDisable,
 	}, model, string(models.ClientTypeOpenAICompletions))
@@ -225,7 +226,7 @@ func TestResolveSubagentReasoningPreservesParentTurnOverride(t *testing.T) {
 		t.Fatalf("subagent ignored parent-turn Off override: %+v", cfg)
 	}
 
-	cfg, err = provider.resolveSubagentReasoning(context.Background(), SessionContext{
+	cfg, err = provider.resolveSubagentReasoning(context.Background(), agenttools.SessionContext{
 		ReasoningStoredEffort:    models.ReasoningEffortDisable,
 		ReasoningRequestedEffort: models.ReasoningEffortHigh,
 	}, model, string(models.ClientTypeOpenAICompletions))
@@ -250,7 +251,7 @@ func (q subagentReasoningSettingsQueries) GetSettingsByBotID(context.Context, pg
 func TestResolveSubagentReasoningUsesStoredFallbackWhenRequestedOffIsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	provider := &SpawnProvider{settings: settings.NewService(
+	provider := &SubagentService{settings: settings.NewService(
 		slog.Default(),
 		subagentReasoningSettingsQueries{effort: models.ReasoningEffortHigh},
 		nil,
@@ -258,7 +259,7 @@ func TestResolveSubagentReasoningUsesStoredFallbackWhenRequestedOffIsUnavailable
 	)}
 	model := models.GetResponse{Model: models.Model{Config: models.ModelConfig{Reasoning: &models.ModelReasoning{Efforts: []string{models.ReasoningEffortLow, models.ReasoningEffortHigh}}}}}
 
-	cfg, err := provider.resolveSubagentReasoning(context.Background(), SessionContext{
+	cfg, err := provider.resolveSubagentReasoning(context.Background(), agenttools.SessionContext{
 		BotID:                    "00000000-0000-0000-0000-000000000001",
 		ReasoningRequestedEffort: models.ReasoningEffortDisable,
 	}, model, string(models.ClientTypeOpenAICompletions))
@@ -274,7 +275,7 @@ func TestResolveSubagentReasoningPropagatesSettingsError(t *testing.T) {
 	t.Parallel()
 
 	wantErr := errors.New("settings unavailable")
-	provider := &SpawnProvider{settings: settings.NewService(
+	provider := &SubagentService{settings: settings.NewService(
 		slog.Default(),
 		subagentReasoningSettingsQueries{err: wantErr},
 		nil,
@@ -282,7 +283,7 @@ func TestResolveSubagentReasoningPropagatesSettingsError(t *testing.T) {
 	)}
 	model := models.GetResponse{Model: models.Model{Config: models.ModelConfig{Reasoning: &models.ModelReasoning{Efforts: []string{models.ReasoningEffortLow, models.ReasoningEffortHigh}}}}}
 
-	_, err := provider.resolveSubagentReasoning(context.Background(), SessionContext{
+	_, err := provider.resolveSubagentReasoning(context.Background(), agenttools.SessionContext{
 		BotID: "00000000-0000-0000-0000-000000000001",
 	}, model, string(models.ClientTypeOpenAICompletions))
 	if !errors.Is(err, wantErr) {
@@ -291,10 +292,10 @@ func TestResolveSubagentReasoningPropagatesSettingsError(t *testing.T) {
 }
 
 func TestSubagentOpenCodeGoReasoningKeepsProviderPolicy(t *testing.T) {
-	provider := &SpawnProvider{}
+	provider := &SubagentService{}
 	for id, effort := range map[string]string{"gpt-6-luna": "max", "gpt-5.6-luna": "max", "glm-5.3": "max", "qwen3.8-flash": "xhigh"} {
 		model := models.GetResponse{Model: models.Model{ModelID: id, Config: models.ModelConfig{Reasoning: &models.ModelReasoning{Efforts: []string{"low", "medium", effort}}}}}
-		cfg, err := provider.resolveSubagentReasoning(context.Background(), SessionContext{ReasoningRequestedEffort: effort}, model, string(models.ClientTypeOpenCodeGo))
+		cfg, err := provider.resolveSubagentReasoning(context.Background(), agenttools.SessionContext{ReasoningRequestedEffort: effort}, model, string(models.ClientTypeOpenCodeGo))
 		if err != nil || cfg == nil || cfg.Effort != effort || cfg.Adaptive {
 			t.Fatalf("%s: %+v, %v", id, cfg, err)
 		}

@@ -1,4 +1,4 @@
-package tools
+package application
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 )
 
 // --- Watchdog unit tests ---
@@ -23,8 +25,8 @@ func TestWatchdogFiresAfterInactivity(t *testing.T) {
 	// Do not touch — watchdog should fire after timeout.
 	select {
 	case <-ctx.Done():
-		if !errors.Is(context.Cause(ctx), ErrWatchdogTimedOut) {
-			t.Fatalf("expected ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
+		if !errors.Is(context.Cause(ctx), agenttools.ErrWatchdogTimedOut) {
+			t.Fatalf("expected agenttools.ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
 		}
 	case <-time.After(timeout + 200*time.Millisecond):
 		t.Fatal("watchdog did not fire within expected time")
@@ -77,8 +79,8 @@ func TestWatchdogFiresAfterTouchesStop(t *testing.T) {
 	// Now wait for the watchdog to fire after we stop touching.
 	select {
 	case <-ctx.Done():
-		if !errors.Is(context.Cause(ctx), ErrWatchdogTimedOut) {
-			t.Fatalf("expected ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
+		if !errors.Is(context.Cause(ctx), agenttools.ErrWatchdogTimedOut) {
+			t.Fatalf("expected agenttools.ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
 		}
 	case <-time.After(timeout + 500*time.Millisecond):
 		t.Fatal("watchdog did not fire after touches stopped")
@@ -122,8 +124,8 @@ func TestWatchdogRespectsParentCancellation(t *testing.T) {
 		t.Fatal("watchdog context was not cancelled when parent was cancelled")
 	}
 
-	// The cause should be context.Canceled (from parent), not ErrWatchdogTimedOut.
-	if errors.Is(context.Cause(ctx), ErrWatchdogTimedOut) {
+	// The cause should be context.Canceled (from parent), not agenttools.ErrWatchdogTimedOut.
+	if errors.Is(context.Cause(ctx), agenttools.ErrWatchdogTimedOut) {
 		t.Fatal("watchdog should not have fired — parent was cancelled")
 	}
 }
@@ -229,8 +231,8 @@ func TestWatchdogTimerResetOnTouch(t *testing.T) {
 	// Now wait for it to actually fire (no more touches).
 	select {
 	case <-ctx.Done():
-		if !errors.Is(context.Cause(ctx), ErrWatchdogTimedOut) {
-			t.Fatalf("expected ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
+		if !errors.Is(context.Cause(ctx), agenttools.ErrWatchdogTimedOut) {
+			t.Fatalf("expected agenttools.ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
 		}
 	case <-time.After(timeout + 200*time.Millisecond):
 		t.Fatal("watchdog did not fire after expected time")
@@ -255,35 +257,35 @@ func TestWatchdogFiresExactlyOnce(t *testing.T) {
 	wd.Stop()
 
 	// Verify context cause is still the original fire.
-	if !errors.Is(context.Cause(ctx), ErrWatchdogTimedOut) {
-		t.Fatalf("expected ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
+	if !errors.Is(context.Cause(ctx), agenttools.ErrWatchdogTimedOut) {
+		t.Fatalf("expected agenttools.ErrWatchdogTimedOut, got: %v", context.Cause(ctx))
 	}
 }
 
 // --- Integration: watchdog + mock GenerateWithWatchdog ---
 
-// mockSpawnAgent implements SpawnAgent for testing.
+// mockSpawnAgent implements agenttools.SpawnAgent for testing.
 type mockSpawnAgent struct {
 	// generateFunc is the function called by GenerateWithWatchdog.
 	// It receives the context and a touchFn. The implementation should
 	// call touchFn to simulate activity, or not call it to simulate a hang.
-	generateFunc func(ctx context.Context, cfg SpawnRunConfig, touchFn func()) (*SpawnResult, error)
+	generateFunc func(ctx context.Context, cfg agenttools.SpawnRunConfig, touchFn func()) (*agenttools.SpawnResult, error)
 
 	// generateCount tracks how many times GenerateWithWatchdog was called.
 	generateCount atomic.Int32
 }
 
-func (m *mockSpawnAgent) Generate(_ context.Context, _ SpawnRunConfig) (*SpawnResult, error) {
+func (m *mockSpawnAgent) Generate(_ context.Context, _ agenttools.SpawnRunConfig) (*agenttools.SpawnResult, error) {
 	_ = m // interface satisfaction only
 	return nil, errors.New("not implemented in mock")
 }
 
-func (m *mockSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+func (m *mockSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg agenttools.SpawnRunConfig, touchFn func()) (*agenttools.SpawnResult, error) {
 	m.generateCount.Add(1)
 	if m.generateFunc != nil {
 		return m.generateFunc(ctx, cfg, touchFn)
 	}
-	return &SpawnResult{Text: "ok"}, nil
+	return &agenttools.SpawnResult{Text: "ok"}, nil
 }
 
 func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
@@ -293,7 +295,7 @@ func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
 	callCount := atomic.Int32{}
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ agenttools.SpawnRunConfig, touchFn func()) (*agenttools.SpawnResult, error) {
 			count := callCount.Add(1)
 			if count <= 2 {
 				// First 2 calls: don't touch — simulate a stuck agent.
@@ -308,10 +310,10 @@ func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
 				case <-ticker.C:
 					touchFn()
 				case <-ctx.Done():
-					if errors.Is(context.Cause(ctx), ErrWatchdogTimedOut) {
+					if errors.Is(context.Cause(ctx), agenttools.ErrWatchdogTimedOut) {
 						return nil, context.Cause(ctx)
 					}
-					return &SpawnResult{Text: "completed"}, nil
+					return &agenttools.SpawnResult{Text: "completed"}, nil
 				}
 			}
 		},
@@ -324,7 +326,7 @@ func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
 	var lastErr error
 	for attempt := 0; attempt <= 3; attempt++ {
 		wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+		_, err := agent.GenerateWithWatchdog(wdCtx, agenttools.SpawnRunConfig{}, wd.Touch)
 		wd.Stop()
 
 		if err == nil {
@@ -332,7 +334,7 @@ func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
 			return
 		}
 		lastErr = err
-		if !errors.Is(err, ErrWatchdogTimedOut) {
+		if !errors.Is(err, agenttools.ErrWatchdogTimedOut) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	}
@@ -347,7 +349,7 @@ func TestWatchdogParentCancelStopsImmediately(t *testing.T) {
 
 	started := make(chan struct{})
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
 			close(started)
 			<-ctx.Done()
 			return nil, context.Cause(ctx)
@@ -361,7 +363,7 @@ func TestWatchdogParentCancelStopsImmediately(t *testing.T) {
 
 	doneCh := make(chan error, 1)
 	go func() {
-		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+		_, err := agent.GenerateWithWatchdog(wdCtx, agenttools.SpawnRunConfig{}, wd.Touch)
 		wd.Stop()
 		doneCh <- err
 	}()
@@ -371,8 +373,8 @@ func TestWatchdogParentCancelStopsImmediately(t *testing.T) {
 
 	select {
 	case err := <-doneCh:
-		if errors.Is(err, ErrWatchdogTimedOut) {
-			t.Fatal("should not be ErrWatchdogTimedOut — parent was cancelled")
+		if errors.Is(err, agenttools.ErrWatchdogTimedOut) {
+			t.Fatal("should not be agenttools.ErrWatchdogTimedOut — parent was cancelled")
 		}
 		// Expected: parent cancellation propagated.
 	case <-time.After(2 * time.Second):
@@ -385,7 +387,7 @@ func TestWatchdogKeepsActiveAgentAlive(t *testing.T) {
 
 	timeout := 200 * time.Millisecond
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ agenttools.SpawnRunConfig, touchFn func()) (*agenttools.SpawnResult, error) {
 			// Simulate a long-running agent that keeps touching the watchdog.
 			ticker := time.NewTicker(50 * time.Millisecond)
 			defer ticker.Stop()
@@ -396,7 +398,7 @@ func TestWatchdogKeepsActiveAgentAlive(t *testing.T) {
 				case <-ticker.C:
 					touchFn()
 				case <-elapsed:
-					return &SpawnResult{Text: "done"}, nil
+					return &agenttools.SpawnResult{Text: "done"}, nil
 				case <-ctx.Done():
 					return nil, context.Cause(ctx)
 				}
@@ -408,7 +410,7 @@ func TestWatchdogKeepsActiveAgentAlive(t *testing.T) {
 	defer safetyCancel()
 
 	wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-	result, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+	result, err := agent.GenerateWithWatchdog(wdCtx, agenttools.SpawnRunConfig{}, wd.Touch)
 	wd.Stop()
 
 	if err != nil {
@@ -426,7 +428,7 @@ func TestWatchdogSafetyNetFiresWhenAgentTouchesButNeverConverges(t *testing.T) {
 	safetyTimeout := 300 * time.Millisecond
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ agenttools.SpawnRunConfig, touchFn func()) (*agenttools.SpawnResult, error) {
 			// Agent keeps touching but never completes — safety net should fire.
 			ticker := time.NewTicker(50 * time.Millisecond)
 			defer ticker.Stop()
@@ -445,14 +447,14 @@ func TestWatchdogSafetyNetFiresWhenAgentTouchesButNeverConverges(t *testing.T) {
 	defer safetyCancel()
 
 	wdCtx, wd := NewSubagentWatchdog(safetyCtx, watchdogTimeout, slog.Default())
-	_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+	_, err := agent.GenerateWithWatchdog(wdCtx, agenttools.SpawnRunConfig{}, wd.Touch)
 	wd.Stop()
 
 	if err == nil {
 		t.Fatal("expected error from safety net timeout")
 	}
-	// Safety net fires as context.DeadlineExceeded, not ErrWatchdogTimedOut.
-	if errors.Is(err, ErrWatchdogTimedOut) {
+	// Safety net fires as context.DeadlineExceeded, not agenttools.ErrWatchdogTimedOut.
+	if errors.Is(err, agenttools.ErrWatchdogTimedOut) {
 		t.Fatal("should be safety net (DeadlineExceeded), not watchdog timeout")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -465,8 +467,8 @@ func TestWatchdogStoppedAfterSuccess(t *testing.T) {
 
 	timeout := 100 * time.Millisecond
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			return &SpawnResult{Text: "instant"}, nil
+		generateFunc: func(_ context.Context, _ agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
+			return &agenttools.SpawnResult{Text: "instant"}, nil
 		},
 	}
 
@@ -474,7 +476,7 @@ func TestWatchdogStoppedAfterSuccess(t *testing.T) {
 	defer safetyCancel()
 
 	wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-	result, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+	result, err := agent.GenerateWithWatchdog(wdCtx, agenttools.SpawnRunConfig{}, wd.Touch)
 	wd.Stop()
 
 	if err != nil {
@@ -499,7 +501,7 @@ func TestWatchdogRetryBudget(t *testing.T) {
 
 	callCount := atomic.Int32{}
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
 			callCount.Add(1)
 			<-ctx.Done() // always stuck
 			return nil, context.Cause(ctx)
@@ -512,14 +514,14 @@ func TestWatchdogRetryBudget(t *testing.T) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+		_, err := agent.GenerateWithWatchdog(wdCtx, agenttools.SpawnRunConfig{}, wd.Touch)
 		wd.Stop()
 		if err == nil {
 			t.Fatal("should not succeed")
 		}
 		lastErr = err
-		if !errors.Is(err, ErrWatchdogTimedOut) {
-			t.Fatalf("attempt %d: expected ErrWatchdogTimedOut, got: %v", attempt, err)
+		if !errors.Is(err, agenttools.ErrWatchdogTimedOut) {
+			t.Fatalf("attempt %d: expected agenttools.ErrWatchdogTimedOut, got: %v", attempt, err)
 		}
 	}
 
@@ -527,7 +529,7 @@ func TestWatchdogRetryBudget(t *testing.T) {
 	if calls != int32(maxRetries+1) {
 		t.Fatalf("expected %d calls (maxRetries+1), got %d", maxRetries+1, calls)
 	}
-	if lastErr == nil || !errors.Is(lastErr, ErrWatchdogTimedOut) {
-		t.Fatalf("last error should be ErrWatchdogTimedOut, got: %v", lastErr)
+	if lastErr == nil || !errors.Is(lastErr, agenttools.ErrWatchdogTimedOut) {
+		t.Fatalf("last error should be agenttools.ErrWatchdogTimedOut, got: %v", lastErr)
 	}
 }

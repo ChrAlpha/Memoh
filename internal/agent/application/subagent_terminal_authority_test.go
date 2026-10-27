@@ -1,4 +1,4 @@
-package tools
+package application
 
 import (
 	"context"
@@ -10,11 +10,12 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/background"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 type terminalRaceSpawnAgent struct {
-	terminalResult *SpawnResult
+	terminalResult *agenttools.SpawnResult
 	terminalErr    error
 	resolved       chan struct{}
 	release        chan struct{}
@@ -23,21 +24,21 @@ type terminalRaceSpawnAgent struct {
 func TestRunSubagentTaskRejectsCleanEndAfterOwningAbort(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(_ context.Context, cfg agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
 			cancel(context.Canceled)
 			if cfg.ResolveCompletion == nil {
 				t.Fatal("completion resolver is nil")
 			}
-			if got := cfg.ResolveCompletion(); got != SpawnAttemptAbort {
+			if got := cfg.ResolveCompletion(); got != agenttools.SpawnAttemptAbort {
 				t.Fatalf("completion disposition = %v, want abort", got)
 			}
-			return &SpawnResult{Text: "late success"}, nil
+			return &agenttools.SpawnResult{Text: "late success"}, nil
 		},
 	}
-	p := &SpawnProvider{
+	p := &SubagentService{
 		agent:  agent,
 		logger: slog.New(slog.DiscardHandler),
-		modelResolver: func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+		modelResolver: func(context.Context, agenttools.SessionContext, string, string, string) (resolvedSubagentModel, error) {
 			return resolvedSubagentModel{}, nil
 		},
 	}
@@ -47,10 +48,10 @@ func TestRunSubagentTaskRejectsCleanEndAfterOwningAbort(t *testing.T) {
 		agentID:        "worker",
 		agentSessionID: "session-clean-end-abort",
 		message:        "work",
-		parentSession:  SessionContext{BotID: "bot-1"},
+		parentSession:  agenttools.SessionContext{BotID: "bot-1"},
 	})
 
-	if !result.AttemptResolved || result.AttemptOutcome != SpawnAttemptAbort {
+	if !result.AttemptResolved || result.AttemptOutcome != agenttools.SpawnAttemptAbort {
 		t.Fatalf("attempt outcome = resolved %v disposition %v, want abort", result.AttemptResolved, result.AttemptOutcome)
 	}
 	if !errors.Is(result.Cause, context.Canceled) || result.Text != "" {
@@ -58,23 +59,23 @@ func TestRunSubagentTaskRejectsCleanEndAfterOwningAbort(t *testing.T) {
 	}
 }
 
-func (a *terminalRaceSpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
+func (a *terminalRaceSpawnAgent) Generate(ctx context.Context, cfg agenttools.SpawnRunConfig) (*agenttools.SpawnResult, error) {
 	return a.GenerateWithWatchdog(ctx, cfg, func() {})
 }
 
-func (a *terminalRaceSpawnAgent) GenerateWithWatchdog(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+func (a *terminalRaceSpawnAgent) GenerateWithWatchdog(_ context.Context, cfg agenttools.SpawnRunConfig, _ func()) (*agenttools.SpawnResult, error) {
 	if a.terminalErr != nil {
 		if cfg.ResolveAttempt == nil {
 			return nil, errors.New("attempt resolver is unavailable")
 		}
-		if got := cfg.ResolveAttempt(a.terminalErr); got != SpawnAttemptFailure {
+		if got := cfg.ResolveAttempt(a.terminalErr); got != agenttools.SpawnAttemptFailure {
 			return nil, errors.New("attempt resolver did not preserve failure")
 		}
 	} else {
 		if cfg.ResolveCompletion == nil {
 			return nil, errors.New("completion resolver is unavailable")
 		}
-		if got := cfg.ResolveCompletion(); got != SpawnAttemptCompleted {
+		if got := cfg.ResolveCompletion(); got != agenttools.SpawnAttemptCompleted {
 			return nil, errors.New("completion resolver did not preserve completion")
 		}
 	}
@@ -86,7 +87,7 @@ func (a *terminalRaceSpawnAgent) GenerateWithWatchdog(_ context.Context, cfg Spa
 func TestSpawnedResolvedTerminalSurvivesLateBackgroundStop(t *testing.T) {
 	tests := []struct {
 		name       string
-		result     *SpawnResult
+		result     *agenttools.SpawnResult
 		err        error
 		wantStatus background.TaskStatus
 		wantReport string
@@ -94,7 +95,7 @@ func TestSpawnedResolvedTerminalSurvivesLateBackgroundStop(t *testing.T) {
 	}{
 		{
 			name:       "completed",
-			result:     &SpawnResult{Text: "finished report"},
+			result:     &agenttools.SpawnResult{Text: "finished report"},
 			wantStatus: background.TaskCompleted,
 			wantReport: "finished report",
 		},
@@ -114,12 +115,12 @@ func TestSpawnedResolvedTerminalSurvivesLateBackgroundStop(t *testing.T) {
 				release:        make(chan struct{}),
 			}
 			mgr := background.New(nil)
-			p := NewSpawnProvider(nil, nil, nil, nil, nil, mgr)
+			p := NewSubagentService(nil, nil, nil, nil, nil, mgr)
 			p.sessionService = &fakeAgentSessionService{}
 			p.SetAgent(agent)
 			p.SetMessageService(newFakeAgentMessageService())
 			p.SetSubagentAdmitter(&fakeSubagentAdmitter{})
-			p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
+			p.modelResolver = func(context.Context, agenttools.SessionContext, string, string, string) (resolvedSubagentModel, error) {
 				return resolvedSubagentModel{
 					Model:            &sdk.Model{},
 					UUID:             "00000000-0000-0000-0000-000000000123",
@@ -129,7 +130,7 @@ func TestSpawnedResolvedTerminalSurvivesLateBackgroundStop(t *testing.T) {
 				}, nil
 			}
 
-			toolList, err := p.Tools(context.Background(), SessionContext{BotID: "bot1", SessionID: "parent1"})
+			toolList, err := subagentTestTools(p).Tools(context.Background(), agenttools.SessionContext{BotID: "bot1", SessionID: "parent1"})
 			if err != nil {
 				t.Fatalf("Tools returned error: %v", err)
 			}
