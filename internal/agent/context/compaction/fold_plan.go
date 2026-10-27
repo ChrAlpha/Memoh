@@ -14,9 +14,9 @@ import (
 
 const (
 	// roomShare is the share of a request's room (fixedRoom) a fold keeps
-	// verbatim within its budget, and the share its summary may take, so a
-	// fold leaves the steps after it room instead of refilling the request it
-	// just emptied.
+	// verbatim within its budget, and the share the instruction asks its
+	// summary to stay within, so a fold that gets such a summary leaves the
+	// steps after it room instead of refilling the request it just emptied.
 	roomShare = 4
 	// verbatimCapTokens is the most a fold keeps verbatim of what it may
 	// fold: anchors newest first, then the newest complete call groups. It
@@ -55,7 +55,9 @@ func verbatimBudget(ev Event) int {
 	return min(verbatimCapTokens, fixedRoom(ev)/roomShare)
 }
 
-// summaryBudget is the most a summary of ev may take: its share of the room.
+// summaryBudget is the length the instruction asks a summary of ev to stay
+// within: its share of the room. It is a target; what a pass requires of the
+// summary is foldPass's.
 func summaryBudget(ev Event) int {
 	return fixedRoom(ev) / roomShare
 }

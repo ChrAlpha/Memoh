@@ -70,12 +70,17 @@ to load. The latest step is such a call group, and so is the
 deferred call and answer a decision continuation resumes from: a step within
 the budget stays, a larger one folds in the same pass as what is before it.
 32000 tokens holds three results at the tool output bound, or two beside a
-long input. The summary may take another quarter of the room, so a fold
-that keeps no more than the budget leaves about half of it to the steps after
-it. What stays whatever it takes, the input the next call answers and the
-messages no row holds, can take more, and a Discuss batch is kept by its own
-rule. The 32000-token bound was calibrated on call-group sizes
-of real agent sessions, and every event logs
+long input. The instruction asks the summary to stay within another quarter
+of the room, so a fold that keeps no more than the budget and gets such a
+summary leaves about half of it to the steps after it. That half is the
+target, not a guarantee: a pass commits any summary shorter than what it
+replaces, and the summary the next request carries only has to fit the room
+that request has, so a longer one brings the next fold sooner rather than
+failing the run; an in-run event logs the request's size after it against
+its allowance (`context compacted`). What stays whatever it takes, the input
+the next call answers and the messages no row holds, can take more, and a
+Discuss batch is kept by its own rule. The 32000-token bound was calibrated on
+call-group sizes of real agent sessions, and every event logs
 `compaction retention` with the budget, the call groups it kept and the
 latest group's size, to check it against Memoh's own traffic.
 Each pass forks that request up to the newest messages it keeps and asks the

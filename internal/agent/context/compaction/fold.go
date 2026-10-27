@@ -131,7 +131,10 @@ func (s *Service) passes(ctx context.Context, ev Event) ([]Pass, error) {
 }
 
 // foldPass forks the request once and commits the summary it gets as the
-// session's next checkpoint. It reports false when nothing before the
+// session's next checkpoint: one shorter than what it replaces that, when the
+// next request carries it, fits the room that request has. A summary longer
+// than the instruction asks for is committed too; it brings the next fold
+// sooner rather than fail the run. It reports false when nothing before the
 // messages the event keeps can be folded.
 func (s *Service) foldPass(ctx context.Context, ev Event, rows requestRows) (Pass, bool, error) {
 	parent, err := s.checkpoints.Active(ctx, ev.SessionID)
