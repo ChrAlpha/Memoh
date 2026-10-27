@@ -11,6 +11,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
 	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/oauthctx"
 	"github.com/felinics/memoh/internal/providers"
@@ -18,8 +19,9 @@ import (
 )
 
 // compactForBudget folds the session history before the protected tail into
-// one summary that fits historyBudget, in as many passes as the summarizer
-// needs to read it all. It reports why when the history could not be folded;
+// one summary, in as many passes as the summarizer needs to read it all, so
+// that what the history renders fits historyBudget: the summary and the rows
+// it keeps raw. It reports why when the history could not be folded;
 // a failed pass leaves the history it did not commit as it was.
 func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTokens, historyBudget int, turnModelID string) error {
 	if s.compactionService == nil || s.settingsService == nil {
@@ -34,24 +36,35 @@ func (s *Service) compactForBudget(ctx context.Context, req ChatRequest, inputTo
 		return err
 	}
 	cfg.ProtectedSources = compactionProtectedSources(req)
-	if anchors := req.compactionAnchors(); len(anchors) > 0 {
+	switch anchors := req.compactionAnchors(); {
+	case len(anchors) > 0:
+		// A continuation keeps its input and steers within the anchor cap,
+		// and the deferred call and answer it resumes from after the summary.
 		cfg.Anchors, cfg.ProtectedSources = anchors, req.continuationTail
-	} else if len(req.discussCurrentSources) > 0 {
-		// Discuss admission budgets the retained inputs separately. Keep each
-		// input in place without pinning completed tool steps from a failed run
-		// that follow an older, still-unanswered input.
-		cfg.Anchors, cfg.ProtectedSources = cfg.ProtectedSources, nil
+	case len(req.discussCurrentSources) > 0:
+		// A Discuss run keeps the inputs it answers where they are while they
+		// leave the summary room, without pinning completed tool steps of a
+		// failed run that follow an older, still-unanswered input.
+		cfg.Anchors, cfg.ProtectedSources, cfg.AnchorPolicy = cfg.ProtectedSources, nil, compaction.AnchorsFirst
 	}
 	cfg.CurrentRequest = cmp.Or(req.ModelQuery, req.Query)
-	// Loading is byte-bounded, but all unsummarized session history remains
-	// eligible. An age or loaded-suffix bound would strand the older backlog.
-	if cutoff := strings.TrimSpace(req.HistoryCutoffBeforeMessageID); cutoff != "" {
-		message, err := s.messageService.GetByIDBySession(ctx, req.ThreadID, cutoff)
-		if err != nil {
-			return fmt.Errorf("load history cutoff: %w", err)
-		}
-		cfg.CandidatesBefore = message.CreatedAt
+	// Every row of the thread before the request's own turn that the
+	// checkpoint has not folded is a candidate, however far a request's view
+	// reaches: the summary absorbs the oldest of them and the checkpoint moves
+	// on. The request's rows land at its admitted turn when its first step
+	// commits, after whatever other writers append meanwhile, so a fold that
+	// reached past that turn would stop holding once they land. An edit or
+	// retry compacts only the history before its cutoff, onto the checkpoint
+	// its replacement keeps.
+	cut, err := s.loadHistoryCut(ctx, req)
+	if err != nil {
+		return err
 	}
+	cfg.CandidatesBefore = cut.before
+	if cfg.CandidatesBefore == nil && req.TurnPosition != nil {
+		cfg.CandidatesBefore = &messagepkg.HistoryPosition{Turn: *req.TurnPosition}
+	}
+	cfg.ReplacedTurnID = cut.replacedTurnID
 	cfg.HistoryBudgetTokens = historyBudget
 
 	start := time.Now()
@@ -105,14 +118,13 @@ func (s *Service) buildCompactionConfig(ctx context.Context, req ChatRequest, bo
 		CodexAccountID:        creds.CodexAccountID,
 		BaseURL:               providers.ProviderConfigString(resolution.Provider, "base_url"),
 		ChatCompletionsCompat: providers.ProviderConfigString(resolution.Provider, models.ChatCompletionsCompatConfigKey),
-		PromptCacheTTL:        providers.ProviderConfigString(resolution.Provider, "prompt_cache_ttl"),
 		WindowTokens:          resolution.WindowTokens,
 		MaxOutputTokens:       resolution.Model.Config.MaxOutputTokensLimit(),
 	})
 	cfg.BotID = req.BotID
 	cfg.SessionID = req.ThreadID
 	cfg.TotalInputTokens = inputTokens
-	cfg.HTTPClient = s.compactionHTTPClient
+	cfg.HTTPClient = s.streamHTTPClient
 	return cfg, nil
 }
 

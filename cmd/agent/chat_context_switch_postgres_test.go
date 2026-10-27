@@ -29,6 +29,7 @@ import (
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
+	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	"github.com/felinics/memoh/internal/runtimefence"
@@ -101,6 +102,8 @@ type effectLoop struct {
 	downFrom            int32
 	// resultBytes sizes each effect's result; zero keeps the default.
 	resultBytes int
+	// parallel is how many effects one step calls at once; zero is one.
+	parallel int
 	// prose fills each result with words the summarizer reads instead of a
 	// repeated character run it treats as a media blob.
 	prose bool
@@ -113,6 +116,14 @@ type effectLoop struct {
 	arrived  []timeline.RenderedSegment
 	effects  []int
 	requests []string
+	// folds is how many summaries the session had asked for when each
+	// request was sent, and runs the run that sent it; replaced marks the
+	// requests a turn replacement started from, and outOfBand the runs that
+	// a row was written beside without rendering it.
+	folds     []int32
+	runs      []string
+	replaced  map[int]bool
+	outOfBand map[string]bool
 }
 
 type approveExec struct{}
@@ -132,6 +143,7 @@ func newEffectLoop(t *testing.T, entry runEntry) *effectLoop {
 	f := newBacklogFixture(t)
 	s := &effectLoop{f: f}
 	f.stream = s.serve
+	t.Cleanup(func() { s.checkRequests(t) })
 	f.agent.SetToolProviders([]tools.ToolProvider{s})
 	if _, err := f.pool.Exec(f.ctx, `UPDATE models SET config=config || '{"compatibilities":["tool-call"]}'::jsonb WHERE id=$1`, f.chatModel); err != nil {
 		t.Fatal(err)
@@ -157,6 +169,94 @@ func newEffectLoop(t *testing.T, entry runEntry) *effectLoop {
 		}
 	}
 	return s
+}
+
+// checkRequests holds every request the session sent its model to the
+// contract: its tool calls and results pair in both directions, and between
+// two folds a request extends the one before it, whichever run sent it. A
+// turn replacement starts over from the request before the replaced turn,
+// and a row written beside a run without the run rendering it takes its
+// place in the next run's request.
+func (s *effectLoop) checkRequests(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, request := range s.requests {
+		if err := pairedToolParts(request); err != nil {
+			t.Errorf("request %d: %v", i+1, err)
+		}
+		if i == 0 || s.folds[i] != s.folds[i-1] || s.replaced[i] ||
+			s.runs[i] != s.runs[i-1] && s.outOfBand[s.runs[i-1]] {
+			continue
+		}
+		before, after := requestMessages(t, s.requests[i-1]), requestMessages(t, request)
+		if at := divergence(before, after); at >= 0 {
+			t.Errorf("request %d rewrote message %d of the request before it with no fold between them:\nbefore: %.300s\nafter:  %.300s", i+1, at, before[at], messageAt(after, at))
+		}
+	}
+}
+
+// activeRun is the run that holds the session's active slot.
+func (s *effectLoop) activeRun() string {
+	var run string
+	_ = s.f.pool.QueryRow(s.f.ctx, `SELECT run_id::text FROM session_runs WHERE session_id=$1 AND state IN ('accepted', 'running', 'waiting_decision', 'finishing') LIMIT 1`, s.f.sessionID).Scan(&run)
+	return run
+}
+
+// pairedToolParts reports a tool call a request leaves without its result,
+// or a result it sends without its call.
+func pairedToolParts(request string) error {
+	var body struct {
+		Messages []struct {
+			Role       string `json:"role"`
+			ToolCallID string `json:"tool_call_id"`
+			ToolCalls  []struct {
+				ID string `json:"id"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(request), &body); err != nil {
+		return err
+	}
+	var open []string
+	for i, message := range body.Messages {
+		if message.Role == "tool" {
+			at := slices.Index(open, message.ToolCallID)
+			if at < 0 {
+				return fmt.Errorf("message %d is a result for %q without its call", i, message.ToolCallID)
+			}
+			open = slices.Delete(open, at, at+1)
+			continue
+		}
+		if len(open) > 0 {
+			return fmt.Errorf("message %d follows calls %v left without results", i, open)
+		}
+		for _, call := range message.ToolCalls {
+			open = append(open, call.ID)
+		}
+	}
+	if len(open) > 0 {
+		return fmt.Errorf("the request ends with calls %v left without results", open)
+	}
+	return nil
+}
+
+// divergence is the first message of before that after does not carry at
+// the same place, or -1 when after extends before.
+func divergence(before, after []string) int {
+	for i, message := range before {
+		if i >= len(after) || after[i] != message {
+			return i
+		}
+	}
+	return -1
+}
+
+func messageAt(messages []string, i int) string {
+	if i < len(messages) {
+		return messages[i]
+	}
+	return "(none)"
 }
 
 // window sets the context window of the model the runs use.
@@ -214,6 +314,12 @@ func (s *effectLoop) Tools(context.Context, tools.SessionContext) ([]toolexec.To
 // never renders.
 func (s *effectLoop) writeForeignRow(ctx context.Context) error {
 	f := s.f
+	s.mu.Lock()
+	if s.outOfBand == nil {
+		s.outOfBand = map[string]bool{}
+	}
+	s.outOfBand[s.runs[len(s.runs)-1]] = true
+	s.mu.Unlock()
 	content, err := historyfrag.MarshalStoredModelMessage(turn.ModelMessage{Role: "assistant", Content: turn.NewTextContent(foreignRow)})
 	if err != nil {
 		return err
@@ -229,32 +335,44 @@ func (s *effectLoop) serve(w http.ResponseWriter, body []byte) {
 	request := string(body)
 	s.mu.Lock()
 	s.requests = append(s.requests, request)
+	s.folds = append(s.folds, s.f.summaries.Load())
+	s.runs = append(s.runs, s.activeRun())
 	reply := fmt.Sprintf("REPLY_%03d", len(s.requests))
-	call, arguments := "", ""
+	var calls []any
+	addCall := func(name, arguments string) {
+		id := fmt.Sprintf("call_%03d", len(s.requests))
+		if len(calls) > 0 {
+			id += fmt.Sprintf("_%d", len(calls))
+		}
+		calls = append(calls, map[string]any{"index": len(calls), "id": id, "type": "function", "function": map[string]any{"name": name, "arguments": arguments}})
+	}
 	if s.marker != "" && strings.Contains(request, s.marker) {
 		switch {
 		case s.pendingDecision && s.calls >= s.decisionAfter:
-			s.pendingDecision, call, arguments = false, "exec", `{"command":"ls"}`
+			s.pendingDecision = false
 			if s.askUser {
-				call, arguments = "ask_user", `{"questions":[{"text":"How should we proceed?","kind":"text"}]}`
+				addCall("ask_user", `{"questions":[{"text":"How should we proceed?","kind":"text"}]}`)
+			} else {
+				addCall("exec", `{"command":"ls"}`)
 			}
 		case s.calls < s.steps:
-			s.calls++
-			call, arguments = "numbered_effect", fmt.Sprintf(`{"index":%d}`, s.calls)
+			for range max(s.parallel, 1) {
+				if s.calls == s.steps {
+					break
+				}
+				s.calls++
+				addCall("numbered_effect", fmt.Sprintf(`{"index":%d}`, s.calls))
+			}
 		}
 	}
-	id := fmt.Sprintf("call_%03d", len(s.requests))
 	hold := s.hold
 	s.mu.Unlock()
 	if hold != nil && strings.Contains(request, busyInput) {
 		<-hold
 	}
 	delta, finish := map[string]any{"role": "assistant", "content": reply}, "stop"
-	if call != "" {
-		delta = map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{
-			"index": 0, "id": id, "type": "function", "function": map[string]any{"name": call, "arguments": arguments},
-		}}}
-		finish = "tool_calls"
+	if len(calls) > 0 {
+		delta, finish = map[string]any{"role": "assistant", "tool_calls": calls}, "tool_calls"
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	for _, choice := range []map[string]any{{"index": 0, "delta": delta, "finish_reason": nil}, {"index": 0, "delta": map[string]any{}, "finish_reason": finish}} {
@@ -488,6 +606,12 @@ func (s *effectLoop) replace(first string, start replaceTurn) string {
 func (s *effectLoop) replaceLatest(start replaceTurn) string {
 	f := s.f
 	f.t.Helper()
+	s.mu.Lock()
+	if s.replaced == nil {
+		s.replaced = map[int]bool{}
+	}
+	s.replaced[len(s.requests)] = true
+	s.mu.Unlock()
 	var targetTurnID string
 	if err := f.pool.QueryRow(f.ctx, `SELECT turn_id FROM bot_history_messages WHERE session_id=$1 AND turn_id IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1`, f.sessionID).Scan(&targetTurnID); err != nil {
 		f.t.Fatal(err)
@@ -552,6 +676,7 @@ type inRunScenario struct {
 }
 
 var inRunScenarios = []inRunScenario{
+	{name: "history-full", run: historyFullScenario},
 	{name: "prefix-full", run: prefixFullScenario},
 	{name: "long-loop", run: longLoopScenario},
 	{name: "decision-after-progress", run: decisionAfterProgressScenario},
@@ -575,12 +700,13 @@ func TestPostgresInRunCompactionByEntry(t *testing.T) {
 }
 
 // Replacing a turn that compacted in place leaves its summary behind: the
-// replacement's first step hides the turn and moves the session to a new
-// compaction epoch, so the attempt renders the history before the turn raw
-// and folds it, with its own steps, into a summary of its own. Every effect
-// of the attempt runs once, no summary of the current epoch covers a row of
-// the replaced turn, and the next turn renders the attempt's summary without
-// compacting.
+// replacement's first step hides the turn and moves the session back to the
+// newest checkpoint that does not depend on it, so the attempt renders the
+// history before the turn raw and folds it, with its own steps, into a
+// summary of its own. Every effect of the attempt runs once, the checkpoint
+// the replaced turn left active is not on the chain of the session's active
+// one, which holds one summary, and the next turn renders the attempt's
+// summary without compacting.
 func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 	const steps = 14
 	web := runEntryNamed("web")
@@ -594,13 +720,15 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 			if code, _ := s.run(web, loopInput, steps); code != "" || f.summaries.Load() == 0 {
 				t.Fatalf("the turn to replace: code=%q summary_calls=%d, want it answered after compacting in place", code, f.summaries.Load())
 			}
-			epoch := func() (epoch int64) {
-				if err := f.pool.QueryRow(f.ctx, `SELECT compaction_epoch FROM bot_sessions WHERE id=$1`, f.sessionID).Scan(&epoch); err != nil {
-					t.Fatal(err)
+			queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
+			active := func() sqlc.BotHistoryCheckpoint {
+				row, err := queries.GetActiveHistoryCheckpoint(f.ctx, dbpkg.ParseUUIDOrEmpty(f.sessionID))
+				if err != nil {
+					t.Fatalf("load the active history checkpoint: %v", err)
 				}
-				return epoch
+				return row
 			}
-			before, summaries := epoch(), f.summaries.Load()
+			before, summaries := active().ID, f.summaries.Load()
 			s.mu.Lock()
 			s.marker, s.steps, s.calls, s.effects, s.start = loopInput, steps, 0, nil, len(s.requests)
 			s.mu.Unlock()
@@ -611,16 +739,18 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 			if code := s.replaceLatest(s.replacement(edit)); code != "" || !slices.Equal(s.effects, want) || f.summaries.Load() == summaries {
 				t.Fatalf("replacement: code=%q effects=%v summary_calls=%d, want every effect once on a summary of its own", code, s.effects, f.summaries.Load()-summaries)
 			}
-			var active, coveredHidden int
-			if err := f.pool.QueryRow(f.ctx, `SELECT count(DISTINCT c.id), count(h.id) FILTER (WHERE NOT h.turn_visible)
-				FROM bot_history_message_compacts c JOIN bot_sessions s ON s.id=c.session_id AND s.compaction_epoch=c.compaction_epoch
-				LEFT JOIN bot_history_messages h ON h.compact_id=c.id
-				WHERE c.session_id=$1 AND c.status='ok' AND c.superseded_by IS NULL`, f.sessionID).Scan(&active, &coveredHidden); err != nil {
+			var descends bool
+			if err := f.pool.QueryRow(f.ctx, `WITH RECURSIVE chain AS (
+				SELECT id, parent_id FROM bot_history_checkpoints WHERE id = $1
+				UNION ALL
+				SELECT parent.id, parent.parent_id FROM bot_history_checkpoints parent JOIN chain ON parent.id = chain.parent_id
+			) SELECT EXISTS (SELECT 1 FROM chain WHERE id = $2)`, active().ID, before).Scan(&descends); err != nil {
 				t.Fatal(err)
 			}
-			if epoch() == before || active != 1 || coveredHidden != 0 {
-				t.Fatalf("epoch moved=%v active summaries=%d covering %d hidden rows, want the replaced turn's summary retired and one summary covering none of it", epoch() != before, active, coveredHidden)
+			if descends || f.activeSummaries() != 1 {
+				t.Fatalf("active checkpoint descends from the replaced turn's=%v summaries=%d, want the replaced turn's summary left behind and one summary of the attempt's own", descends, f.activeSummaries())
 			}
+			assertActiveCheckpointHolds(t, f.ctx, queries, f.sessionID)
 			s.window(16000)
 			summaries = f.summaries.Load()
 			code, requests := s.run(web, "NEXT_ROUND_QUESTION", 0)
@@ -633,10 +763,10 @@ func TestPostgresReplacingACompactedTurnFoldsAgain(t *testing.T) {
 	}
 }
 
-// Even without provider cache usage, a fold asks for its summary
-// at the end of the request the run sent last instead of in a request of its
-// own: the same tools, cache key and messages, then the compaction request.
-func TestPostgresInRunFoldExtendsTheRunRequest(t *testing.T) {
+// A fold asks for its summary by forking the request the run sends next
+// before its latest step, which is the request the run sent last: the same
+// tools, cache key and messages, then the compaction request.
+func TestPostgresInRunFoldForksTheRunRequest(t *testing.T) {
 	const steps = 14
 	web := runEntryNamed("web")
 	s := newEffectLoop(t, web)
@@ -673,7 +803,7 @@ func TestPostgresInRunFoldExtendsTheRunRequest(t *testing.T) {
 				slices.EqualFunc(r.Messages, ask.Messages[:len(ask.Messages)-1], func(a, b json.RawMessage) bool { return string(a) == string(b) })
 		})
 		if !extends {
-			t.Fatalf("summary request %d does not extend a request the run sent", i+1)
+			t.Fatalf("summary request %d does not fork a request the run sent", i+1)
 		}
 	}
 }
@@ -783,6 +913,40 @@ func markersInOrder(request string, markers ...string) bool {
 		at += next
 	}
 	return true
+}
+
+// When the history a run starts with does not fit beside its input, the run
+// folds that history before its first step: the first request it sends
+// already carries one summary in place of the earlier turns and the input
+// verbatim, the effect runs once, and the next turn replays the same summary
+// without compacting.
+func historyFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
+	f := s.f
+	for i := range 3 {
+		if code, _ := s.run(entry, fmt.Sprintf("HISTORY_TURN_%d ", i)+strings.Repeat("h", 2400), 0); code != "" {
+			t.Fatalf("history turn %d failed with %s", i, code)
+		}
+	}
+	if f.summaries.Load() != 0 {
+		t.Fatalf("the history turns compacted %d times, want them to fit", f.summaries.Load())
+	}
+	// The input is larger than the anchor cap: the step after the first
+	// folds it too.
+	input := loopInput + " " + strings.Repeat("i", 10000)
+	code, requests := s.run(entry, input, 1)
+	if code != "" || !slices.Equal(s.effects, []int{1}) || len(requests) == 0 || f.summaries.Load() == 0 {
+		t.Fatalf("code=%q effects=%v summary_calls=%d, want the run answered after one effect and a fold", code, s.effects, f.summaries.Load())
+	}
+	first := requests[0]
+	if summary := summaryContents(t, first); len(summary) != 1 || strings.Contains(first, "HISTORY_TURN_0 ") || strings.Count(first, input) != 1 {
+		t.Fatalf("first request: summaries=%d raw_history=%v inputs=%d, want the history folded before the first step and the input verbatim",
+			len(summary), strings.Contains(first, "HISTORY_TURN_0 "), strings.Count(first, input))
+	}
+	summaries := f.summaries.Load()
+	code, requests = s.run(entry, "NEXT_ROUND_QUESTION", 0)
+	if code != "" || len(requests) == 0 || f.summaries.Load() != summaries || len(summaryContents(t, requests[0])) != 1 {
+		t.Fatalf("next turn: code=%q summary_calls=%d, want the summary replayed without compacting", code, f.summaries.Load()-summaries)
+	}
 }
 
 // When the history a run starts with fills the request, the first step that
@@ -914,7 +1078,7 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE state <> 'completed') FROM session_runs WHERE session_id=$1`, f.sessionID).Scan(&running); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%'), count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%' AND c.status='ok'), count(*) FILTER (WHERE h.content::text LIKE $2 AND h.compact_id IS NULL) FROM bot_history_messages h LEFT JOIN bot_history_message_compacts c ON c.id=h.compact_id WHERE h.session_id=$1`, f.sessionID, "%"+foreignRow+"%").Scan(&toolRows, &foldedRows, &foreign); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%'), count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%' AND h.folded), count(*) FILTER (WHERE h.content::text LIKE $2 AND NOT h.folded) FROM (`+historyRowsSQL+`) h`, f.sessionID, "%"+foreignRow+"%").Scan(&toolRows, &foldedRows, &foreign); err != nil {
 		t.Fatal(err)
 	}
 	if running != 0 || toolRows != steps || foldedRows != first-1 || foreign != 1 || f.activeSummaries() != 1 {
@@ -946,16 +1110,19 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	}
 	code, requests = s.run(entry, "SUMMARIZER_DOWN_INPUT", steps)
 	f.onSummary = nil
-	wantAttempts := []bool{false, false}
-	if len(summaryAttempts) > 0 && summaryAttempts[0] {
-		wantAttempts = []bool{true, true, false, false}
+	if code != "context.budget_unsatisfied" || !slices.Equal(summaryAttempts, []bool{true, true}) || len(s.effects) == 0 || len(s.effects) >= steps || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) {
+		t.Fatalf("summarizer down: code=%q summary_attempts=%v provider_calls=%d effects=%v, want budget_unsatisfied after the fork request was retried once, with the effects so far run once", code, summaryAttempts, len(requests), s.effects)
 	}
-	if code != "context.budget_unsatisfied" || !slices.Equal(summaryAttempts, wantAttempts) || len(s.effects) == 0 || len(s.effects) >= steps || !slices.IsSorted(s.effects) || len(slices.Compact(slices.Clone(s.effects))) != len(s.effects) {
-		t.Fatalf("summarizer down: code=%q summary_attempts=%v provider_calls=%d effects=%v, want budget_unsatisfied after each attempted summary path was retried once, with the effects so far run once", code, summaryAttempts, len(requests), s.effects)
-	}
+	// A run's lifecycle is written once session_runs took its terminal
+	// transition, which is what an entry that polls the run waits for.
 	var reasons, failedRows int
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, f.sessionID).Scan(&reasons); err != nil {
-		t.Fatal(err)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, f.sessionID).Scan(&reasons); err != nil {
+			t.Fatal(err)
+		}
+		if reasons > 0 || time.Now().After(deadline) {
+			break
+		}
 	}
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='tool' AND content::text LIKE '%TOOL_RESULT_%' AND created_at >= (SELECT max(created_at) FROM bot_history_messages WHERE session_id=$1 AND role='user' AND content::text LIKE '%SUMMARIZER_DOWN_INPUT%')`, f.sessionID).Scan(&failedRows); err != nil {
 		t.Fatal(err)

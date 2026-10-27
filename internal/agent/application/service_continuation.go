@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -69,18 +70,19 @@ func (s *Service) prepareContinuationRunConfig(
 	eventCh chan<- WSStreamEvent,
 	req ChatRequest,
 ) (native.RunConfig, error) {
-	loaded, err := s.loadHistoryRecords(ctx, fallback, summaryScope.SessionID, 0, false)
+	read := func() ([]ModelMessage, []historyfrag.HistoryRecord, bool, error) {
+		loaded, truncated, err := s.loadHistoryRecords(ctx, fallback, summaryScope, 0, historyCut{})
+		if err != nil {
+			return nil, nil, false, err
+		}
+		messages, retained := historyMessagesFromRecords(projectInterruptedHistoryReasoning(pruneHistoryForGateway(loaded)))
+		return messages, retained, truncated, nil
+	}
+	messages, retained, truncated, err := read()
 	if err != nil {
 		return native.RunConfig{}, err
 	}
-	loaded = pruneHistoryForGateway(loaded)
 	req.inputInHistory = true
-	loaded, err = s.replaceCompactedMessages(ctx, summaryScope.SessionID, summaryScope, loaded, compactionArtifactBoundary{})
-	if err != nil {
-		return native.RunConfig{}, err
-	}
-	loaded = projectInterruptedHistoryReasoning(loaded)
-	messages, retained := historyMessagesFromRecords(loaded)
 	if req.continuationToolCallID != "" && req.RunHandle.RunID != "" {
 		start := slices.IndexFunc(retained, func(record historyfrag.HistoryRecord) bool {
 			return slices.ContainsFunc(extractAssistantToolCallParts(record.ModelMessage), func(call sdk.ToolCallPart) bool {
@@ -105,12 +107,29 @@ func (s *Service) prepareContinuationRunConfig(
 			req.continuationAnchors = append(req.continuationAnchors, turn.ContextMessageSource{Kind: "history", ID: id.String()})
 		}
 	}
+	if truncated {
+		// A load the byte budget truncated would start later than its
+		// checkpoint's position: the rows it left out fold from rows first,
+		// keeping what the continuation resumes from, and the history loads
+		// again.
+		pressure := 0
+		for _, message := range messages {
+			pressure += estimateMessageTokens(message)
+		}
+		if err := s.compactForBudget(ctx, req, pressure, base.ContextBudgetMaxTokens, base.CurrentModelUUID); err != nil {
+			return native.RunConfig{}, truncatedLoadFailure(err)
+		}
+		if messages, retained, truncated, err = read(); err == nil && truncated {
+			err = truncatedLoadFailure(errors.New("compacted history still exceeds the load budget"))
+		}
+		if err != nil {
+			return native.RunConfig{}, err
+		}
+	}
 	messages = sanitizeMessages(messages)
 	historyEstimates := make([]int, len(messages))
-	pressure := 0
 	for i := range messages {
 		historyEstimates[i] = estimateMessageTokens(messages[i])
-		pressure += historyEstimates[i]
 	}
 	base.ContextHistoryTokenEstimates = historyEstimates
 	base.ContextTrimmableMessages = len(messages)
@@ -127,11 +146,11 @@ func (s *Service) prepareContinuationRunConfig(
 	outgoing := repairToolCallClosures(nonNilModelMessages(messages), syntheticToolClosureError)
 	base.ContextProvenance = contextProvenance(outgoing, retained, append(compactionProtectedSources(req), req.continuationAnchors...))
 	base.Messages = modelMessagesToSDKMessages(outgoing)
+	base.ContextTail = req.continuationTail
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil
 	base.Query = ""
 	base.LiveToolStream = eventCh != nil
 	base.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)
-	base.RecoverContextBudget = s.chatBudgetRecovery(req, chatHistoryLayout{historyCount: len(messages), pressureTokens: pressure})
 	return s.prepareRunConfig(ctx, base), nil
 }

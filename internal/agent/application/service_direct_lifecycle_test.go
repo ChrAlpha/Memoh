@@ -59,13 +59,6 @@ func (*directLifecycleQueries) GetBotByID(
 	return sqlc.GetBotByIDRow{}, pgx.ErrNoRows
 }
 
-func (*directLifecycleQueries) ListCompactionArtifactLineageBySession(
-	context.Context,
-	pgtype.UUID,
-) ([]sqlc.BotHistoryMessageCompact, error) {
-	return nil, nil
-}
-
 type directLifecycleFixture struct {
 	service    *Service
 	lifecycles *synchronizedLifecycleStore
