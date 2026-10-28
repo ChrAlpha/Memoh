@@ -16,12 +16,23 @@ import (
 // historyContextFragsForMessages is the fragment of each summary the
 // messages render, at the message that renders it.
 func historyContextFragsForMessages(messages []ModelMessage, records []historyfrag.HistoryRecord) []contextfrag.ContextFrag {
+	summaries := make(map[string]historyfrag.HistoryRecord)
+	for _, record := range records {
+		if record.Kind == contextfrag.KindConversationSummary {
+			summaries[record.Ref.ID] = record
+		}
+	}
 	var frags []contextfrag.ContextFrag
-	for i, index := range matchHistoryRecords(messages, records) {
-		if index < 0 || records[index].Kind != contextfrag.KindConversationSummary {
+	for i, message := range messages {
+		source := message.ContextSource
+		if source == nil || source.Kind != "summary" {
 			continue
 		}
-		frag := historyfrag.ToFrag(records[index])
+		record, ok := summaries[source.ID]
+		if !ok {
+			continue
+		}
+		frag := historyfrag.ToFrag(record)
 		frag.ID = fmt.Sprintf("message.%03d", i)
 		frag.Provenance.Index = i
 		frags = append(frags, frag)
@@ -29,87 +40,51 @@ func historyContextFragsForMessages(messages []ModelMessage, records []historyfr
 	return frags
 }
 
+// historySourceMessageIDsForMessages names, for each message, the row it
+// copies as stored: a fork snapshot can then reference the row instead of
+// its bytes. A message that renders a row differently (a closure repaired
+// from it, content sanitized) names none.
 func historySourceMessageIDsForMessages(messages []ModelMessage, records []historyfrag.HistoryRecord) []string {
+	rows := make(map[string]historyfrag.HistoryRecord, len(records))
+	for _, record := range records {
+		if id := strings.TrimSpace(record.DBMessageID); id != "" {
+			rows[id] = record
+		}
+	}
 	sourceIDs := make([]string, len(messages))
-	for i, index := range matchHistoryRecords(messages, records) {
-		if index >= 0 {
-			sourceIDs[i] = strings.TrimSpace(records[index].DBMessageID)
+	for i, message := range messages {
+		source := message.ContextSource
+		if source == nil || source.Kind != "history" {
+			continue
+		}
+		if record, ok := rows[source.ID]; ok && modelMessageSourceKey(record.ModelMessage) == modelMessageSourceKey(message) {
+			sourceIDs[i] = source.ID
 		}
 	}
 	return sourceIDs
 }
 
-// contextProvenance names what each message of a request renders, for a run
-// that compacts in place: the inbound message or row a message carries as
-// its source, or else the record it was loaded from, matched in order by
-// content (a summary renders its compaction log). A message that renders the
+// contextProvenance names what each message of a request renders, by
+// position, for a run that compacts in place: the source the message
+// carries, the row, inbound message or summary it was loaded from. A
+// message without one is runtime context. A message that renders the
 // request's own input is an anchor.
-func contextProvenance(messages []ModelMessage, records []historyfrag.HistoryRecord, inputs []turn.ContextMessageSource) []native.MessageProvenance {
-	matched := matchHistoryRecords(messages, records)
-	var out []native.MessageProvenance
+func contextProvenance(messages []ModelMessage, inputs []turn.ContextMessageSource) []native.MessageProvenance {
+	sent := modelMessagesToSDKMessages(messages)
+	out := make([]native.MessageProvenance, len(messages))
 	for i, message := range messages {
-		var source turn.ContextMessageSource
-		switch index := matched[i]; {
-		case message.ContextSource != nil:
-			source = *message.ContextSource
-		case index >= 0 && records[index].SourceKind == historyfrag.SourceCompactionLog:
-			source = turn.ContextMessageSource{Kind: "summary", ID: records[index].Ref.ID}
-		case index >= 0:
-			source = turn.ContextMessageSource{Kind: "history", ID: strings.TrimSpace(records[index].DBMessageID)}
-		default:
+		out[i].Message = sent[i]
+		if message.ContextSource == nil || message.ContextSource.ID == "" {
 			continue
 		}
-		sent := modelMessagesToSDKMessages([]ModelMessage{message})
-		if len(sent) != 1 {
-			continue
-		}
-		anchor := source.Current || slices.ContainsFunc(inputs, func(input turn.ContextMessageSource) bool {
+		source := *message.ContextSource
+		out[i].Anchor = source.Current || slices.ContainsFunc(inputs, func(input turn.ContextMessageSource) bool {
 			return input.Kind == source.Kind && input.ID == source.ID
 		})
 		source.Current = false
-		out = append(out, native.MessageProvenance{
-			Message: sent[0],
-			Sources: []turn.ContextMessageSource{source},
-			Anchor:  anchor,
-		})
+		out[i].Sources = []turn.ContextMessageSource{source}
 	}
 	return out
-}
-
-// matchHistoryRecords pairs each message, in order, with the index of the
-// stored record it was loaded from (a row, or the compaction log a summary
-// renders), or -1.
-func matchHistoryRecords(messages []ModelMessage, records []historyfrag.HistoryRecord) []int {
-	matched := make([]int, len(messages))
-	for i := range matched {
-		matched[i] = -1
-	}
-	positions := make(map[string][]int, len(records))
-	for i, record := range records {
-		if strings.TrimSpace(record.DBMessageID) == "" && record.SourceKind != historyfrag.SourceCompactionLog {
-			continue
-		}
-		key := modelMessageSourceKey(record.ModelMessage)
-		positions[key] = append(positions[key], i)
-	}
-	cursors := make(map[string]int, len(positions))
-	lastMatched := -1
-	for i, message := range messages {
-		key := modelMessageSourceKey(message)
-		candidates := positions[key]
-		cursor := cursors[key]
-		for cursor < len(candidates) && candidates[cursor] <= lastMatched {
-			cursor++
-		}
-		cursors[key] = cursor
-		if cursor >= len(candidates) {
-			continue
-		}
-		matched[i] = candidates[cursor]
-		cursors[key] = cursor + 1
-		lastMatched = matched[i]
-	}
-	return matched
 }
 
 func modelMessageSourceKey(message ModelMessage) string {

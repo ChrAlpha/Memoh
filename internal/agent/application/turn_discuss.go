@@ -520,17 +520,19 @@ func discussRunRequest(cmd turn.StartTurnCommand, h *discussHandle, admitted []t
 	return req
 }
 
-// discussContextProvenance names what each composed message renders: the
-// inbound message or stored reply Channel read it from, at the version it
-// read, or the summary it renders. The inputs of the batch are anchors.
+// discussContextProvenance names what each composed message renders, by
+// position: the inbound message or stored reply Channel read it from, at the
+// version it read, or the summary it renders. The inputs of the batch are
+// anchors.
 func discussContextProvenance(admitted []turn.DiscussMessage, messages []sdk.Message) []native.MessageProvenance {
-	var out []native.MessageProvenance
-	for i, message := range admitted {
-		if i >= len(messages) {
-			break
+	out := make([]native.MessageProvenance, len(messages))
+	for i := range out {
+		out[i].Message = messages[i]
+		if i >= len(admitted) {
+			continue
 		}
 		var source turn.ContextMessageSource
-		switch {
+		switch message := admitted[i]; {
 		case message.CompactionArtifactID != "":
 			source = turn.ContextMessageSource{Kind: "summary", ID: message.CompactionArtifactID}
 		case message.Source != nil && message.Source.ID != "":
@@ -538,9 +540,9 @@ func discussContextProvenance(admitted []turn.DiscussMessage, messages []sdk.Mes
 		default:
 			continue
 		}
-		anchor := source.Current
+		out[i].Anchor = source.Current
 		source.Current = false
-		out = append(out, native.MessageProvenance{Message: messages[i], Sources: []turn.ContextMessageSource{source}, Anchor: anchor})
+		out[i].Sources = []turn.ContextMessageSource{source}
 	}
 	return out
 }
