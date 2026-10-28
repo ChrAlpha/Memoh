@@ -1,6 +1,8 @@
 package models
 
 import (
+	"slices"
+
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
@@ -226,18 +228,10 @@ func (l PromptCacheLayout) AdvanceRun(messages []sdk.Message, end int) []sdk.Mes
 		return messages
 	}
 	end = min(end, len(messages))
-	tail := -1
-	for i := end - 1; i >= l.prefix; i-- {
-		if _, ok := withCacheControl(messages[i].Content, l.cc); ok {
-			tail = i
-			break
-		}
-	}
+	out, tail := withMessageCacheBreakpoint(messages, l.prefix, end-1, l.cc)
 	if tail < 0 {
 		return messages
 	}
-	out := make([]sdk.Message, len(messages))
-	copy(out, messages)
 	previous := -1
 	for i := len(out) - 1; i >= l.prefix; i-- {
 		if i == tail || !hasCacheControl(out[i].Content) {
@@ -254,23 +248,28 @@ func (l PromptCacheLayout) AdvanceRun(messages []sdk.Message, end int) []sdk.Mes
 			out[i].Content = clearedCacheControls(out[i].Content)
 		}
 	}
-	out, _ = withMessageCacheBreakpoint(out, tail, tail, l.cc)
 	return out
 }
 
 // withMessageCacheBreakpoint sets a cache_control breakpoint on the last
-// content part of messages[index], or — if that part cannot carry one —
-// scans back to the nearest earlier message in [floor, index] whose last part
-// can. Every content part carries cache_control except reasoning, which
-// Anthropic does not let a breakpoint sit on; a stable message ending in
-// reasoning must not silently drop the breakpoint, since that would leave the
-// caller believing the declared prefix is cached when Anthropic never cached
-// anything. Returns the updated messages and the index that received the
-// breakpoint, or -1 if no message in [floor, index] qualifies.
+// content part of messages[index], or — if that message cannot carry one on
+// the wire — scans back to the nearest earlier message in [floor, index] that
+// can. A message cannot when it ends in reasoning, which Anthropic does not
+// let a breakpoint sit on, or when it is a system message inside the
+// conversation, which Twilight rewrites into tagged user text without the
+// breakpoint. Placement must not silently drop the breakpoint, since that
+// would leave the caller believing the declared prefix is cached when
+// Anthropic never cached anything. Returns the updated messages and the index
+// that received the breakpoint, or -1 if no message in [floor, index]
+// qualifies.
 func withMessageCacheBreakpoint(messages []sdk.Message, floor, index int, cc *sdk.CacheControl) ([]sdk.Message, int) {
 	out := make([]sdk.Message, len(messages))
 	copy(out, messages)
+	conversation := slices.IndexFunc(messages, func(message sdk.Message) bool { return message.Role != sdk.MessageRoleSystem })
 	for i := index; i >= floor; i-- {
+		if conversation >= 0 && i > conversation && out[i].Role == sdk.MessageRoleSystem {
+			continue
+		}
 		if content, ok := withCacheControl(out[i].Content, cc); ok {
 			out[i].Content = content
 			return out, i
