@@ -47,7 +47,9 @@ type ContextSwitch struct {
 type ContextSplice struct {
 	Request    sdk.Request
 	Provenance []*MessageProvenance
-	Tokens     int
+	// Tokens uses the planner's raw estimate, like AllowanceTokens. Final
+	// provider admission separately enforces the calibrated input budget.
+	Tokens int
 }
 
 // ContextFold is one pass an event committed: its summary, and the request
@@ -125,9 +127,16 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	if s == nil || allowance <= 0 {
 		return false, nil
 	}
-	usage := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
+	usage := requestInputTokens(cfg, *params)
 	if usage <= allowance {
 		return false, nil
+	}
+	// The planner prices fragments with the raw estimator. Translate a
+	// matching usage measurement into that unit too: otherwise an oversized
+	// measured summary could still take its locally-fitting rewrite skip.
+	estimated := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
+	if usage > estimated {
+		allowance = max(1, int(float64(allowance)*float64(estimated)/float64(usage)))
 	}
 	provenance := s.align(params.Messages)
 	window, reserve := providerWindow(cfg)
@@ -136,6 +145,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		splice.from[i] = i
 	}
 	tokens := usage
+	applied := false
 	sw := ContextSwitch{
 		Request:         *params,
 		Provenance:      provenance,
@@ -146,9 +156,10 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		Summarize:       forkSummarizer(cfg.Model, cfg.ModelIdleWindow),
 		Fold: func(fold ContextFold) ContextSplice {
 			splice.apply(fold)
-			tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
+			applied = true
 			request := *params
 			request.Messages = splice.messages
+			tokens = contextfrag.ProviderEnvelopeTokens(request.System, request.Messages, request.Tools)
 			return ContextSplice{Request: request, Provenance: splice.provenance, Tokens: tokens}
 		},
 	}
@@ -172,6 +183,9 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 			return false, err
 		}
 		return false, fmt.Errorf("%w: context switch: %w", contextfrag.ErrBudgetUnsatisfied, err)
+	}
+	if !applied {
+		return false, nil
 	}
 	recordFoldedInputImages(cfg.ContextMutations, params.Messages, provenance, splice.from)
 	params.Messages = splice.messages
@@ -263,7 +277,7 @@ func (s *contextSwitchState) remap(refs []dynamicSourceRef) []dynamicSourceRef {
 // removed. It reports false when no splice happened since the last dispatch.
 //
 //nolint:gocritic // hugeParam: the run configuration and request are copied into the next dispatch.
-func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch, params sdk.Request) (RunConfig, bool) {
+func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch, params sdk.Request, admitted []dynamicSourceRef) (RunConfig, bool) {
 	if s == nil || s.moved == nil {
 		return cfg, false
 	}
@@ -276,7 +290,7 @@ func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch
 	plan := &cfg.ContextCachePlan
 	stableBefore := messagesTokens(cfg.Messages[:min(plan.StableMessageCount, len(cfg.Messages))])
 	cfg.Messages = messages
-	cfg.retryDynamicRefs = shiftDynamicSourceRefs(dispatch.handoff.admitted(), -offset)
+	cfg.retryDynamicRefs = shiftDynamicSourceRefs(admitted, -offset)
 	cfg.initialProviderPrefixSet = true
 	cfg.initialProviderMessageCount = s.movedCount(dispatch.initialMessageCount) - offset
 	for _, count := range []*int{&plan.StableMessageCount, &plan.MidStableMessageCount} {

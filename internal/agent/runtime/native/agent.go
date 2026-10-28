@@ -27,6 +27,7 @@ import (
 
 // Agent is the core agent that handles LLM interactions.
 type Agent struct {
+	usage              usageCache
 	client             *sdk.Client
 	toolProviders      []tools.ToolProvider
 	bridgeProvider     bridge.Provider
@@ -317,7 +318,7 @@ func prepareProviderAttempt(
 			dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, cfg.contextSwitch.remap(dynamicRefs), params.Messages)
 		}
 	}
-	if overflow := providerAttemptEnvelopeOverflow(params, allowance); overflow > 0 {
+	if overflow := requestInputTokens(cfg, *params) - allowance; allowance > 0 && overflow > 0 {
 		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, fmt.Errorf(
 			"%w: input_overflow=%d allowance=%d",
 			contextfrag.ErrBudgetUnsatisfied,

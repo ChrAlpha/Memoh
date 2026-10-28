@@ -451,10 +451,52 @@ A provider call is retried when the SDK classifies its `*sdk.APIError` as
 `rate_limited` or `server_error`, when the stream was cut off
 (`sdk.ErrStreamIncomplete`, `io.ErrUnexpectedEOF`, or a stream that closed
 before its finish-step part), or when the chain holds a `net.Error`.
-Cancellation and expired deadlines are never retried, and every other `Kind` is
-final. Error text is never read. A `Retry-After` or `retry-after-ms` header on
+Cancellation and expired deadlines are never retried. Other failures do not
+enter this transient retry policy. A `Retry-After` or `retry-after-ms` header on
 the provider's answer sets the wait when it is at most one minute; otherwise the
 backoff does.
+
+An explicit provider context-window rejection follows a separate transition.
+The runtime recognizes token-window error codes and narrowly defined provider
+compatibility messages on `sdk.APIError`, including stream errors. A generic
+400, request-byte limit, output cap or rate limit does not trigger a fold.
+Before the failed attempt has produced output or executed tools, an armed run
+tightens the rejected request's allowance and calls its existing durable fold.
+Only committed passes that reduce the request permit rebuilding the dispatch
+and retrying the same step. Recovery is bounded to two attempts per unfinished
+step, independently of transient retries; completed steps are retained. An
+unreducible request, failed commit, cancellation or exhausted recovery stops
+with the existing context-budget error and leaves committed checkpoints intact.
+
+A provider can also exhaust the window with a `length` finish instead of an
+API error. When measured input exceeds the configured input allowance and
+the attempt produced no output tokens, reasoning, text, tool input, files or
+sources, the runtime uses the same bounded fold-and-retry transition before
+committing the step. It does not report an empty answer as completed work.
+Its consumed usage remains in the run total, while the step-end marker is
+reserved for the completed retry so queued inputs anchor after its output.
+Ordinary output truncation, missing usage and intentional empty `stop` replies
+do not enter this recovery path. Usage identifies consumed input; it does not
+establish the provider's hard window size.
+
+Summary requests have their own bound of three overflow recoveries per pass.
+Each rejection tightens the input budget of that exact fork, using provider
+token counts when available. The engine replans at complete tool groups,
+reduces retained content and uses its existing multi-pass/group-read rules.
+The run's output settings and original history remain intact. An unchanged
+request is never sent again as an overflow recovery.
+
+Successful native calls calibrate subsequent admission using actual input
+usage plus estimated appended content and 5% uncertainty, alongside the
+configured output reserve. SDK input usage already includes cache reads and
+writes; output and reasoning counts are not added again. Measurements match
+the model, endpoint, request envelope and complete message prefix. Changes to
+history, tools or model settings invalidate the baseline, as does missing/zero
+usage. A bounded process cache retains only hashes and counts for up to 256
+threads; restart safely falls back to estimation and overflow recovery.
+`provider input usage measured` records estimate, actual input and allowance;
+success above the application budget is preserved and corrected before a
+subsequent matching request, without replaying its output or effects.
 
 A retried attempt is recorded once, as a WARN event for `agent.model_call`, and
 the stream reports it as a `retry` event carrying the attempt counters, the wait
