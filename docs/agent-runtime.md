@@ -468,6 +468,15 @@ step, independently of transient retries; completed steps are retained. An
 unreducible request, failed commit, cancellation or exhausted recovery stops
 with the existing context-budget error and leaves committed checkpoints intact.
 
+A provider can also exhaust the window with a `length` finish instead of an
+API error. When measured input exceeds the configured input allowance and
+the attempt produced no output tokens, reasoning, text, tool input, files or
+sources, the runtime uses the same bounded fold-and-retry transition before
+committing the step. It does not report an empty answer as completed work.
+Ordinary output truncation, missing usage and intentional empty `stop` replies
+do not enter this recovery path. Usage identifies consumed input; it does not
+establish the provider's hard window size.
+
 Summary requests have their own bound of three overflow recoveries per pass.
 Each rejection tightens the input budget of that exact fork, using provider
 token counts when available. The engine replans at complete tool groups,

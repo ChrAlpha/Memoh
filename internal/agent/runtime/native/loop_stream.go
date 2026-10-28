@@ -610,7 +610,7 @@ func (e *streamEngine) run() {
 			attemptStep++
 			continue
 		}
-		if _, overflow := modelretry.ContextOverflow(failure); overflow {
+		if _, overflow := contextRecoveryFeedback(failure); overflow {
 			recovered, err := e.agent.recoverContextOverflow(e.streamCtx, e.cfg, &stepParams, failure, &contextRecoveries)
 			if !recovered {
 				e.endWithFailure(StreamEvent{Type: EventError, Cause: err})
@@ -814,6 +814,7 @@ func (e *streamEngine) consumeStep(
 		stepRawFinishReason string
 		sawFinishStep       bool
 		sawFile             bool
+		sawSource           bool
 	)
 
 partLoop:
@@ -941,6 +942,9 @@ partLoop:
 				e.aborted = true
 			}
 
+		case *sdk.StreamSourcePart:
+			sawSource = true
+
 		case *sdk.StreamFilePart:
 			sawFile = true
 			mediaType := p.File.MediaType
@@ -1050,6 +1054,11 @@ partLoop:
 	// The tool batch's OnPart callback bridges approval, progress, result,
 	// and error parts onto the event channel.
 	e.agent.observeRequestUsage(e.streamCtx, e.cfg, request, result.Usage)
+	if !sawFile && !sawSource && !e.interruptedStep.toolActivity {
+		if err := exhaustedContextResult(e.cfg, result); err != nil {
+			return false, err
+		}
+	}
 	sr, kind, err := settleStep(e.streamCtx, e.dispatch, result, stepTextMeta, e.bridgeToolPart)
 	if err != nil {
 		e.localFailure(err)

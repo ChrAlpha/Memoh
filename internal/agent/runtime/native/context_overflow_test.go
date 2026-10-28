@@ -60,89 +60,217 @@ func TestAgentGenerateCompactsProviderOverflowBeforeRetryingSameStep(t *testing.
 	}
 }
 
-func TestContextOverflowKeepsCommittedToolEffectsInBothLoops(t *testing.T) {
+func TestEmptyContextExhaustionRecoversBeforeCommittingInBothLoops(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
-			effects, commits, folds, committedInputs := 0, 0, 0, 0
+			folds, commits := 0, 0
 			provider := &atomicMockProvider{handler: func(call int, req sdk.Request) (sdk.ModelResult, error) {
-				switch call {
-				case 1:
-					return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "effect-1", ToolName: "effect", Input: toolexec.ArgumentsFromValue(map[string]any{})}}}, nil
-				case 2:
-					return sdk.ModelResult{}, &sdk.APIError{Code: "context_length_exceeded"}
-				default:
-					if !providerAttemptContainsText(req.Messages, "STEER: retain the current goal") {
-						t.Fatal("retry lost the admitted steer")
-					}
-					if effects != 1 || folds != 1 || commits != 1 {
-						t.Fatalf("effects=%d folds=%d commits=%d", effects, folds, commits)
-					}
-					if callID, resultID := unpairedToolParts(req.Messages); callID != "" || resultID != "" {
-						t.Fatal("retry broke call/result pairing")
-					}
-					foundEffect := false
-					for _, message := range req.Messages {
-						for _, part := range message.Content {
-							if result, ok := part.(sdk.ToolResultPart); ok && strings.Contains(result.Result.String(), "effect completed") {
-								foundEffect = true
-							}
-						}
-					}
-					if !foundEffect {
-						t.Fatal("retry lost the completed effect")
-					}
-					return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+				if call == 1 {
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 1048570, TotalTokens: 1048570}}, nil
 				}
+				if folds != 1 || providerAttemptContainsText(req.Messages, "old evidence") || !providerAttemptContainsText(req.Messages, "current task") {
+					t.Fatal("empty exhausted response retried without a committed reduction")
+				}
+				return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 			}}
-			a := New(Deps{})
-			a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{Name: "effect", Parameters: &jsonschema.Schema{Type: "object"}, Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
-				effects++
-				return sdk.TextOutput("effect completed"), nil
-			}}}}})
-			history := sdk.UserMessage(strings.Repeat("evidence ", 10000))
-			input := sdk.UserMessage("Perform one effect then finish")
+			history := sdk.UserMessage(strings.Repeat("old evidence ", 8000))
+			input := sdk.UserMessage("current task")
 			cfg := generateRetryRun(provider, fastRetry)
 			cfg.Messages = []sdk.Message{history, input}
-			cfg.SupportsToolCall = true
-			cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 200000, 8000
+			cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 1000000, 8192
 			cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
 			cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
 				folds++
-				sw.Fold(foldCovering(sw, "checkpoint", sdk.UserMessage("Evidence summarized"), rowSources("history")...))
-				return "committed", nil
+				sw.Fold(ContextFold{SummaryID: "checkpoint", Summary: sdk.UserMessage("Earlier evidence summarized"), Order: []int{-1, 1}})
+				return "committed checkpoint", nil
 			}
 			cfg.OnStepCommitted = func(_ context.Context, index int, record *step.Record) (StepDirective, error) {
-				if index != commits {
-					t.Fatalf("commit index=%d, want %d", index, commits)
-				}
 				commits++
-				if providerAttemptContainsText(record.Messages, "STEER: retain the current goal") {
-					committedInputs++
+				if index != 0 || record.Result.Text != "done" {
+					t.Errorf("committed empty exhaustion as completed work: index=%d text=%q", index, record.Result.Text)
 				}
-				var provenance []MessageProvenance
-				for i := range record.Messages {
-					provenance = append(provenance, MessageProvenance{Sources: rowSources(fmt.Sprintf("step-%d-%d", index, i))})
-				}
-				dir := StepDirective{Provenance: provenance}
-				if index == 0 {
-					dir.NextInputs = []DirectiveInput{{ID: "steer-1", Text: "STEER: retain the current goal"}}
-				}
-				return dir, nil
+				return StepDirective{}, nil
 			}
+			a := New(Deps{})
 			if stream {
 				for event := range a.Stream(context.Background(), cfg) {
 					if event.Type == EventError {
 						t.Fatal(event.Cause)
 					}
+					if event.Type == EventRuntimeNotice {
+						t.Error("recovered empty attempt emitted an output-truncation notice")
+					}
 				}
 			} else if _, err := a.Generate(context.Background(), cfg); err != nil {
 				t.Fatal(err)
 			}
-			if effects != 1 || commits != 2 || folds != 1 || provider.calls.Load() != 3 {
-				t.Fatalf("effects=%d commits=%d folds=%d calls=%d", effects, commits, folds, provider.calls.Load())
+			if folds != 1 || commits != 1 || provider.calls.Load() != 2 {
+				t.Fatalf("folds=%d commits=%d calls=%d", folds, commits, provider.calls.Load())
 			}
-			if committedInputs != 1 {
-				t.Fatalf("persisted steers=%d, want the admitted steer exactly once", committedInputs)
+		})
+	}
+}
+
+func TestContextOverflowKeepsCommittedToolEffectsInBothLoops(t *testing.T) {
+	for _, emptyLength := range []bool{false, true} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("empty_length=%v/stream=%v", emptyLength, stream), func(t *testing.T) {
+				effects, commits, folds, committedInputs := 0, 0, 0, 0
+				provider := &atomicMockProvider{handler: func(call int, req sdk.Request) (sdk.ModelResult, error) {
+					switch call {
+					case 1:
+						return sdk.ModelResult{FinishReason: sdk.FinishReasonToolCalls, ToolCalls: []sdk.ToolCall{{ToolCallID: "effect-1", ToolName: "effect", Input: toolexec.ArgumentsFromValue(map[string]any{})}}}, nil
+					case 2:
+						if emptyLength {
+							return sdk.ModelResult{FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 1048570, TotalTokens: 1048570}}, nil
+						}
+						return sdk.ModelResult{}, &sdk.APIError{Code: "context_length_exceeded"}
+					default:
+						if !providerAttemptContainsText(req.Messages, "STEER: retain the current goal") {
+							t.Fatal("retry lost the admitted steer")
+						}
+						if effects != 1 || folds != 1 || commits != 1 {
+							t.Fatalf("effects=%d folds=%d commits=%d", effects, folds, commits)
+						}
+						if callID, resultID := unpairedToolParts(req.Messages); callID != "" || resultID != "" {
+							t.Fatal("retry broke call/result pairing")
+						}
+						foundEffect := false
+						for _, message := range req.Messages {
+							for _, part := range message.Content {
+								if result, ok := part.(sdk.ToolResultPart); ok && strings.Contains(result.Result.String(), "effect completed") {
+									foundEffect = true
+								}
+							}
+						}
+						if !foundEffect {
+							t.Fatal("retry lost the completed effect")
+						}
+						return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+					}
+				}}
+				a := New(Deps{})
+				a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{Name: "effect", Parameters: &jsonschema.Schema{Type: "object"}, Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+					effects++
+					return sdk.TextOutput("effect completed"), nil
+				}}}}})
+				history := sdk.UserMessage(strings.Repeat("evidence ", 10000))
+				input := sdk.UserMessage("Perform one effect then finish")
+				cfg := generateRetryRun(provider, fastRetry)
+				cfg.Messages = []sdk.Message{history, input}
+				cfg.SupportsToolCall = true
+				cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 1000000, 8192
+				cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+				cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
+					folds++
+					sw.Fold(foldCovering(sw, "checkpoint", sdk.UserMessage("Evidence summarized"), rowSources("history")...))
+					return "committed", nil
+				}
+				cfg.OnStepCommitted = func(_ context.Context, index int, record *step.Record) (StepDirective, error) {
+					if index != commits {
+						t.Fatalf("commit index=%d, want %d", index, commits)
+					}
+					commits++
+					if providerAttemptContainsText(record.Messages, "STEER: retain the current goal") {
+						committedInputs++
+					}
+					var provenance []MessageProvenance
+					for i := range record.Messages {
+						provenance = append(provenance, MessageProvenance{Sources: rowSources(fmt.Sprintf("step-%d-%d", index, i))})
+					}
+					dir := StepDirective{Provenance: provenance}
+					if index == 0 {
+						dir.NextInputs = []DirectiveInput{{ID: "steer-1", Text: "STEER: retain the current goal"}}
+					}
+					return dir, nil
+				}
+				if stream {
+					for event := range a.Stream(context.Background(), cfg) {
+						if event.Type == EventError {
+							t.Fatal(event.Cause)
+						}
+					}
+				} else if _, err := a.Generate(context.Background(), cfg); err != nil {
+					t.Fatal(err)
+				}
+				if effects != 1 || commits != 2 || folds != 1 || provider.calls.Load() != 3 {
+					t.Fatalf("effects=%d commits=%d folds=%d calls=%d", effects, commits, folds, provider.calls.Load())
+				}
+				if committedInputs != 1 {
+					t.Fatalf("persisted steers=%d, want the admitted steer exactly once", committedInputs)
+				}
+			})
+		}
+	}
+}
+
+func TestLengthFinishesDoNotReplayCompletedOrUnmeasuredWork(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result sdk.ModelResult
+	}{
+		{"text", sdk.ModelResult{Text: "partial answer", FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 1048570}}},
+		{"output budget", sdk.ModelResult{FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 1048570, OutputTokens: 8192}}},
+		{"input fits", sdk.ModelResult{FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 991808}}},
+		{"missing usage", sdk.ModelResult{FinishReason: sdk.FinishReasonLength}},
+		{"intentional silence", sdk.ModelResult{FinishReason: sdk.FinishReasonStop, Usage: sdk.Usage{InputTokens: 1048570}}},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", tc.name, stream), func(t *testing.T) {
+				provider := &atomicMockProvider{handler: func(int, sdk.Request) (sdk.ModelResult, error) { return tc.result, nil }}
+				cfg := generateRetryRun(provider, fastRetry)
+				cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 1000000, 8192
+				cfg.SwitchContext = func(context.Context, ContextSwitch) (string, error) {
+					t.Fatal("finished output was compacted for replay")
+					return "", nil
+				}
+				a := New(Deps{})
+				if stream {
+					for event := range a.Stream(context.Background(), cfg) {
+						if event.Type == EventError {
+							t.Fatal(event.Cause)
+						}
+					}
+				} else if _, err := a.Generate(context.Background(), cfg); err != nil {
+					t.Fatal(err)
+				}
+				if provider.calls.Load() != 1 {
+					t.Fatalf("calls=%d, want no replay", provider.calls.Load())
+				}
+			})
+		}
+	}
+}
+
+func TestStreamLengthFinishDoesNotReplayNonTextOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		part sdk.StreamPart
+	}{
+		{"file", &sdk.StreamFilePart{File: sdk.GeneratedFile{MediaType: "image/png", Data: "eA=="}}},
+		{"source", &sdk.StreamSourcePart{}},
+		{"reasoning", &sdk.ReasoningDeltaPart{ID: "reasoning", Text: "already reasoned"}},
+		{"tool input", &sdk.ToolInputStartPart{ID: "partial", ToolName: "effect"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			provider := agentStreamTestProvider(func(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
+				calls++
+				return closedAgentTestStream(tc.part, &sdk.FinishStepPart{FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 1048570}}), nil
+			})
+			cfg := generateRetryRun(provider, fastRetry)
+			cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 1000000, 8192
+			cfg.SwitchContext = func(context.Context, ContextSwitch) (string, error) {
+				t.Fatal("non-text output was compacted for replay")
+				return "", nil
+			}
+			for event := range New(Deps{}).Stream(context.Background(), cfg) {
+				if event.Type == EventError {
+					t.Fatal(event.Cause)
+				}
+			}
+			if calls != 1 {
+				t.Fatalf("calls=%d, want no replay", calls)
 			}
 		})
 	}
