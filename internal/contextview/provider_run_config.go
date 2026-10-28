@@ -450,6 +450,7 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 	appendContextSourceWarnings(&manifest, cfg.ContextSourceWarnings)
 
 	cfg.System = payload.System
+	cfg.ContextProvenance = renderedProvenance(cfg.ContextProvenance, payload.Messages, payload.Origins)
 	cfg.Messages = payload.Messages
 	ordered, err := orderedSelectedFrags(view.Selected, view.Placement)
 	if err != nil {
@@ -659,6 +660,7 @@ func materializeLegacyQuery(cfg agentpkg.RunConfig, includeHookContext bool) age
 	}
 	cfg.Messages = cloneMessages(cfg.Messages)
 	cfg.ForkContextSourceMessageIDs = append([]string(nil), cfg.ForkContextSourceMessageIDs...)
+	cfg.ContextProvenance = slices.Clone(cfg.ContextProvenance)
 	if includeHookContext {
 		cfg = insertFallbackHookContext(cfg)
 	}
@@ -674,6 +676,7 @@ func materializeLegacyQuery(cfg agentpkg.RunConfig, includeHookContext bool) age
 	if cfg.Query != "" {
 		cfg.Messages = append(cfg.Messages, sdk.UserMessage(cfg.Query, imageParts...))
 		cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
+		cfg.ContextProvenance = append(cfg.ContextProvenance, agentpkg.MessageProvenance{Message: cfg.Messages[len(cfg.Messages)-1]})
 		index := len(cfg.Messages) - 1
 		cfg.ContextCurrentUserMessageIndex = &index
 		cfg.ContextQueryMaterialized = true
@@ -690,12 +693,16 @@ func materializeLegacyQuery(cfg agentpkg.RunConfig, includeHookContext bool) age
 		if i < len(cfg.ForkContextSourceMessageIDs) {
 			cfg.ForkContextSourceMessageIDs[i] = ""
 		}
+		if i < len(cfg.ContextProvenance) {
+			cfg.ContextProvenance[i].Message = cfg.Messages[i]
+		}
 		cfg.ContextCurrentUserMessageIndex = intPointer(i)
 		cfg.ContextQueryMaterialized = true
 		return cfg
 	}
 	cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 	cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
+	cfg.ContextProvenance = append(cfg.ContextProvenance, agentpkg.MessageProvenance{Message: cfg.Messages[len(cfg.Messages)-1]})
 	cfg.ContextCurrentUserMessageIndex = intPointer(len(cfg.Messages) - 1)
 	cfg.ContextQueryMaterialized = true
 	return cfg
@@ -722,6 +729,9 @@ func insertFallbackHookContext(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 		if len(cfg.ForkContextSourceMessageIDs) == len(cfg.Messages)-1 {
 			cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
 		}
+		if len(cfg.ContextProvenance) == len(cfg.Messages)-1 {
+			cfg.ContextProvenance = append(cfg.ContextProvenance, agentpkg.MessageProvenance{Message: cfg.Messages[len(cfg.Messages)-1]})
+		}
 		return cfg
 	}
 
@@ -739,6 +749,14 @@ func insertFallbackHookContext(cfg agentpkg.RunConfig) agentpkg.RunConfig {
 		sourceIDs = append(sourceIDs, cfg.ForkContextSourceMessageIDs[currentIndex+1:]...)
 		sourceIDs = append(sourceIDs, "", currentSourceID)
 		cfg.ForkContextSourceMessageIDs = sourceIDs
+	}
+	if len(cfg.ContextProvenance) == messageCount {
+		current := cfg.ContextProvenance[currentIndex]
+		provenance := make([]agentpkg.MessageProvenance, 0, messageCount+1)
+		provenance = append(provenance, cfg.ContextProvenance[:currentIndex]...)
+		provenance = append(provenance, cfg.ContextProvenance[currentIndex+1:]...)
+		provenance = append(provenance, agentpkg.MessageProvenance{Message: messages[messageCount-1]}, current)
+		cfg.ContextProvenance = provenance
 	}
 	if len(cfg.ContextHistoryTokenEstimates) == messageCount {
 		currentEstimate := cfg.ContextHistoryTokenEstimates[currentIndex]
@@ -949,4 +967,17 @@ func warnMissingContextWindow(ctx context.Context, logger *slog.Logger, cfg agen
 		slog.String("session_id", cfg.ContextScope.SessionID),
 		slog.String("model_id", cfg.CurrentModelID),
 	)
+}
+
+// renderedProvenance is what each message the view rendered renders: what
+// the request message it renders does, or nothing for one the view adds.
+func renderedProvenance(request []agentpkg.MessageProvenance, messages []sdk.Message, origins []int) []agentpkg.MessageProvenance {
+	out := make([]agentpkg.MessageProvenance, len(messages))
+	for i := range out {
+		if i < len(origins) && origins[i] >= 0 && origins[i] < len(request) {
+			out[i] = request[origins[i]]
+		}
+		out[i].Message = messages[i]
+	}
+	return out
 }

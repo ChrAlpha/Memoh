@@ -235,6 +235,10 @@ type Provenance struct {
 	SourceID  string `json:"source_id,omitempty"`
 	Collector string `json:"collector,omitempty"`
 	Index     int    `json:"index,omitempty"`
+	// FromMessage marks a fragment that renders message Index of the
+	// request it was collected from, as is or edited; Index of any other
+	// fragment is only its order among what its collector read.
+	FromMessage bool `json:"from_message,omitempty"`
 }
 
 // AttentionReason explains why an IM/group-chat event deserves attention.

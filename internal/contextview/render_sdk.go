@@ -15,8 +15,11 @@ import (
 )
 
 type SDKRenderedPayload struct {
-	System       string
-	Messages     []sdk.Message
+	System   string
+	Messages []sdk.Message
+	// Origins is, for each message, the index of the request message it
+	// renders, or -1 for one the view itself adds.
+	Origins      []int
 	Query        string
 	InlineImages []sdk.ImagePart
 }
@@ -120,7 +123,7 @@ func renderCurrentUserFrag(payload *SDKRenderedPayload, frag contextfrag.Context
 			}
 		case contextfrag.PartSDKMessage:
 			if msg := sdkMessagePart(part); msg != nil {
-				payload.Messages = append(payload.Messages, cloneSDKMessage(*msg))
+				payload.appendMessage(*msg, frag)
 			}
 		}
 	}
@@ -130,10 +133,20 @@ func renderMessageFrag(payload *SDKRenderedPayload, frag contextfrag.ContextFrag
 	for _, part := range frag.Parts {
 		if part.Type == contextfrag.PartSDKMessage {
 			if msg := sdkMessagePart(part); msg != nil {
-				payload.Messages = append(payload.Messages, cloneSDKMessage(*msg))
+				payload.appendMessage(*msg, frag)
 			}
 		}
 	}
+}
+
+// appendMessage renders msg of frag, from the request message frag renders.
+func (p *SDKRenderedPayload) appendMessage(msg sdk.Message, frag contextfrag.ContextFrag) {
+	origin := -1
+	if frag.Provenance.FromMessage {
+		origin = frag.Provenance.Index
+	}
+	p.Messages = append(p.Messages, cloneSDKMessage(msg))
+	p.Origins = append(p.Origins, origin)
 }
 
 func materializeRenderedCurrent(payload *SDKRenderedPayload) {
@@ -145,6 +158,7 @@ func materializeRenderedCurrent(payload *SDKRenderedPayload) {
 	}
 	if payload.Query != "" {
 		payload.Messages = append(payload.Messages, sdk.UserMessage(payload.Query, images...))
+		payload.Origins = append(payload.Origins, -1)
 		payload.Query = ""
 		payload.InlineImages = nil
 		return
@@ -160,6 +174,7 @@ func materializeRenderedCurrent(payload *SDKRenderedPayload) {
 		}
 	}
 	payload.Messages = append(payload.Messages, sdk.UserMessage("", images...))
+	payload.Origins = append(payload.Origins, -1)
 	payload.InlineImages = nil
 }
 
