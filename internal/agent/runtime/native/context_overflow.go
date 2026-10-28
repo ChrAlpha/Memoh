@@ -66,13 +66,16 @@ func (a *Agent) recoverContextOverflow(ctx context.Context, cfg RunConfig, reque
 		return false, fmt.Errorf("%w: provider context recovery exhausted: %w", contextfrag.ErrBudgetUnsatisfied, failure)
 	}
 	before := contextfrag.ProviderEnvelopeTokens(request.System, request.Messages, request.Tools)
-	allowance := feedback.InputBudget(min(before, providerInputAllowance(cfg)))
+	// fold accepts an admission allowance and converts it once into the
+	// planner's raw estimate. Tightening the raw estimate here would apply
+	// that conversion twice when a matching usage measurement is present.
+	allowance := feedback.InputBudget(min(requestInputTokens(cfg, *request), providerInputAllowance(cfg)))
 	changed, err := cfg.contextSwitch.fold(ctx, cfg, request, allowance)
 	if err != nil {
 		return false, err
 	}
 	after := contextfrag.ProviderEnvelopeTokens(request.System, request.Messages, request.Tools)
-	if !changed || after >= before || after > allowance {
+	if !changed || after >= before || requestInputTokens(cfg, *request) > allowance {
 		return false, fmt.Errorf("%w: provider context recovery made no progress: %w", contextfrag.ErrBudgetUnsatisfied, failure)
 	}
 	*recoveries++
