@@ -194,6 +194,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 		finalTexts  []string
 		allSteps    []step.Record
 		allMessages []sdk.Message
+		// recoveryUsage was consumed by empty exhausted attempts that cannot
+		// commit as steps, but still belongs in this run's provider usage.
+		recoveryUsage sdk.Usage
 	)
 
 	// retries counts the model calls made again across the whole run, the
@@ -236,6 +239,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 		if err == nil {
 			a.observeRequestUsage(genCtx, cfg, stepParams, result.Usage)
 			err = exhaustedContextResult(cfg, result)
+			if err != nil {
+				recoveryUsage = recoveryUsage.Add(result.Usage)
+			}
 		}
 		if err != nil {
 			recovered, recoveryErr := a.recoverContextOverflow(genCtx, cfg, &stepParams, err, &recoveries)
@@ -323,7 +329,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	if deferred != nil {
 		finalMessages = annotateDeferredApproval(finalMessages, *deferred)
 	}
-	usage := aggregateStepUsage(allSteps)
+	usage := aggregateStepUsage(allSteps).Add(recoveryUsage)
 	return &GenerateResult{
 		InternalFeedbackIndexes: feedbackIndexes,
 		Messages:                finalMessages,

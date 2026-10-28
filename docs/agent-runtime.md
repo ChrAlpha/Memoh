@@ -473,6 +473,8 @@ API error. When measured input exceeds the configured input allowance and
 the attempt produced no output tokens, reasoning, text, tool input, files or
 sources, the runtime uses the same bounded fold-and-retry transition before
 committing the step. It does not report an empty answer as completed work.
+Its consumed usage remains in the run total, while the step-end marker is
+reserved for the completed retry so queued inputs anchor after its output.
 Ordinary output truncation, missing usage and intentional empty `stop` replies
 do not enter this recovery path. Usage identifies consumed input; it does not
 establish the provider's hard window size.
