@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
@@ -77,4 +78,19 @@ func TestNewHTTPClientWithNilBaseDoesNotPanic(t *testing.T) {
 		t.Fatalf("execute request with nil base client: %v", err)
 	}
 	_ = resp.Body.Close()
+}
+
+// A model stream's client has no overall timeout because its caller bounds
+// the stream's silence; Copilot keeps that, and keeps the limit a caller set.
+func TestNewHTTPClientKeepsTheBaseClientsTimeout(t *testing.T) {
+	t.Parallel()
+
+	for _, timeout := range []time.Duration{0, time.Minute} {
+		if got := NewHTTPClient(&http.Client{Timeout: timeout}).Timeout; got != timeout {
+			t.Fatalf("NewHTTPClient(Timeout: %s).Timeout = %s, want it kept", timeout, got)
+		}
+	}
+	if got := NewHTTPClient(nil).Timeout; got != defaultHTTPClientTimeout {
+		t.Fatalf("NewHTTPClient(nil).Timeout = %s, want %s", got, defaultHTTPClientTimeout)
+	}
 }

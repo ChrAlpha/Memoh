@@ -167,12 +167,13 @@ func storeCachedToken(githubToken, token string, expiresAt time.Time) {
 	}
 }
 
+// defaultHTTPClient copies base with the limits its caller gave it: a model
+// stream's client has no overall timeout because its caller bounds the
+// stream's silence instead. Only a request without a client gets the short
+// one.
 func defaultHTTPClient(base *http.Client) *http.Client {
 	if base != nil {
 		clone := *base
-		if clone.Timeout == 0 {
-			clone.Timeout = defaultHTTPClientTimeout
-		}
 		return &clone
 	}
 	return &http.Client{Timeout: defaultHTTPClientTimeout}

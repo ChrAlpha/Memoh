@@ -162,7 +162,13 @@ on, is offered no tools: its request writes every message out as text under
 its role, tool calls and tool results included, media named. It is asked for
 as much output as the window leaves, up to its cap, and never less than half
 of what the summary may need; a pass reads less rather than ask for less. The
-summarizer streams through the client the runs stream through. An event folds
+summarizer streams through the client the runs stream through, with its own
+five-minute silence window. Whatever the provider's response yields renews it:
+its headers, text, reasoning, and keepalive frames the SDK drops, such as
+Anthropic `ping` events and SSE comments. Its first byte and its total length
+have no separate deadline; a window that expires cuts the call off as an
+incomplete stream, which is retried once, unless the provider had already
+answered with an error. An event folds
 every row the caller does not keep into one rolling summary, reading again
 for what one bounded read left; it keeps what a run's fold keeps, with the
 input, a continuation's steers or a Discuss batch as anchors.

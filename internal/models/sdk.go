@@ -57,10 +57,12 @@ type SDKModelConfig struct {
 type ReasoningConfig = reasoning.Config
 
 // NewSDKChatModel builds a Twilight AI SDK Model from the resolved model config.
+// Its client reports provider activity to a StreamResult watching the call.
 func NewSDKChatModel(cfg SDKModelConfig) *sdk.Model {
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = NewProviderHTTPClient(0)
 	}
+	cfg.HTTPClient = observeActivity(cfg.HTTPClient)
 	chatCompletionsCompat := ResolveChatCompletionsCompat(cfg.BaseURL, cfg.ChatCompletionsCompat)
 
 	switch ClientType(cfg.ClientType) {
