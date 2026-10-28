@@ -508,8 +508,10 @@ generation sweep finds the run, reclaims its fence and reserves it, without the
 the backend is single-instance. A process that dies without a graceful shutdown
 leaves the same pointers, so the same recovery applies. A run the generation
 sweep found, on either backend, has no pointer left once its fence is reclaimed,
-so a reservation that fails afterwards ends the run as `lost`. No answer is
-synthesized.
+so a reservation that fails afterwards ends the run as `lost`. The successor
+shows the run as it was: a view the live backend kept is reused, otherwise the
+run's persisted steps and decision cards are rebuilt from history, and the new
+owner's stream continues from those blocks. No answer is synthesized.
 Decision commands cannot begin after shutdown closes admission. A previously
 accepted native answer moves its run to `running` in the same fenced PostgreSQL
 transaction as the decision response. `input_json.decision_continuations` records

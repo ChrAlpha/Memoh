@@ -50,6 +50,11 @@ func (m *Manager) recoverWaitingDecision(ctx context.Context, candidate LeaseCan
 	if err != nil || len(preserved) == 0 {
 		return false, err
 	}
+	// Read before the reclaim, while the retry pointer still finds the run.
+	messages, err := decisions.ParkedRunMessages(ctx, run)
+	if err != nil {
+		return false, fmt.Errorf("load parked run messages: %w", err)
+	}
 
 	if m.distributed != nil {
 		ref, live, err := m.distributed.LoadRunRef(ctx, Key{BotID: run.BotID, SessionID: run.SessionID}, run.RunID)
@@ -94,7 +99,7 @@ func (m *Manager) recoverWaitingDecision(ctx context.Context, candidate LeaseCan
 	run.FencingToken = newToken
 	run.LiveGeneration = liveGeneration
 	run.OwnerSince = time.Now().UTC()
-	if err := m.reserveRecoveredWaitingDecision(ctx, run); err != nil {
+	if err := m.reserveRecoveredWaitingDecision(ctx, run, messages); err != nil {
 		if !candidate.ExpiresAt.IsZero() {
 			return false, err
 		}
@@ -174,7 +179,11 @@ func recoveryDecisionKind(commandType string) (string, error) {
 	}
 }
 
-func (m *Manager) reserveRecoveredWaitingDecision(ctx context.Context, run ledger.Run) error {
+// reserveRecoveredWaitingDecision reserves the run for this owner. A live
+// view the backend kept is shown as it was; otherwise the run is shown from
+// messages, what it persisted. Either way this owner's converter continues
+// from the view, so the continuation extends it rather than overwriting it.
+func (m *Manager) reserveRecoveredWaitingDecision(ctx context.Context, run ledger.Run, messages []chatview.UIMessage) error {
 	if m == nil || m.backend == nil {
 		return errors.New("waiting-decision recovery requires a live backend")
 	}
@@ -245,10 +254,17 @@ func (m *Manager) reserveRecoveredWaitingDecision(ctx context.Context, run ledge
 		snapshot.Seq++
 		snapshot.UpdatedAt = now
 		if snapshot.CurrentRunView == nil || snapshot.CurrentRunView.RunID != handle.RunID {
+			restored, err := cloneUIMessages(messages)
+			if err != nil {
+				return snapshot, false, err
+			}
+			if restored == nil {
+				restored = []chatview.UIMessage{}
+			}
 			snapshot.CurrentRunView = &CurrentRunView{
 				RunID: handle.RunID, TurnID: run.TurnID, TurnPosition: run.TurnPosition,
 				InvocationID: run.InvocationID,
-				StartedAt:    run.CreatedAt, Messages: []chatview.UIMessage{},
+				StartedAt:    run.CreatedAt, Messages: restored,
 			}
 		}
 		view := snapshot.CurrentRunView
@@ -270,6 +286,7 @@ func (m *Manager) reserveRecoveredWaitingDecision(ctx context.Context, run ledge
 		}
 		return err
 	}
+	ctrl.converter.Resume(snapshot.CurrentRunView.Messages)
 	ctrl.markReady()
 	// The previous producer is gone, so this owner has no local terminal write
 	// to wait for before reconstructing and continuing the durable decision.

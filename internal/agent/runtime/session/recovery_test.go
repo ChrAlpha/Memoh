@@ -10,6 +10,7 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/runtime/session/ledger"
+	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
@@ -398,6 +399,10 @@ func parkAskUser(t *testing.T, manager *Manager, decisions *fakeDecisionStore, i
 		t.Fatal(err)
 	}
 	decisions.mu.Lock()
+	decisions.parked = []chatview.UIMessage{
+		{ID: 0, Type: chatview.UIMessageText, Content: "Let me ask."},
+		{ID: 1, Type: chatview.UIMessageTool, Name: "ask_user", ToolCallID: "call-" + invocationID, UserInput: &chatview.UIUserInput{UserInputID: "ask-" + invocationID, Status: "pending", CanRespond: true}},
+	}
 	decisions.target = DecisionTarget{
 		Type: CommandUserInputResponse, ID: "ask-" + invocationID, BotID: testBotID,
 		SessionID: testSessionID, RunID: admission.RunID, TurnID: admission.Handle.TurnID,
@@ -453,6 +458,16 @@ func answerAfterRestart(t *testing.T, runs *fakeLedger, decisions *fakeDecisionS
 	}
 	if run.State != ledger.StateWaitingDecision || run.FencingToken <= handle.FencingToken || run.OwnerID != "after-restart" {
 		t.Fatalf("recovered run = %+v, want waiting_decision owned by the new process under a newer token", run)
+	}
+	// The restarted backend kept nothing of the run, so it is shown from what
+	// the run persisted: the question stays on screen and answerable.
+	snapshot, ok, err := next.backend.Load(ctx, Key{BotID: handle.BotID, SessionID: handle.SessionID})
+	if err != nil || !ok || snapshot.CurrentRunView == nil {
+		t.Fatalf("recovered snapshot: ok=%v err=%v", ok, err)
+	}
+	view := snapshot.CurrentRunView
+	if view.Status != RunStatusWaitingDecision || len(view.Messages) != 2 || view.Messages[1].UserInput == nil || !view.Messages[1].UserInput.CanRespond {
+		t.Fatalf("recovered view = %+v, want the persisted question as an answerable card", view)
 	}
 	response := DecisionResponse{
 		ControlID: "answer-after-restart", Type: CommandUserInputResponse,
