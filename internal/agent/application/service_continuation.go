@@ -109,25 +109,22 @@ func (s *Service) prepareContinuationRunConfig(
 			return native.RunConfig{}, err
 		}
 	}
-	messages = sanitizeMessages(messages)
-	historyEstimates := make([]int, len(messages))
-	for i := range messages {
-		historyEstimates[i] = estimateMessageTokens(messages[i])
-	}
-	base.ContextHistoryTokenEstimates = historyEstimates
-	base.ContextTrimmableMessages = len(messages)
-
-	base.ContextFrags = historyContextFragsForMessages(messages, retained)
 	// Close any tool call left open by an interrupted turn before the transcript
 	// reaches providers that enforce strict assistant-tool adjacency. A process
 	// restart can orphan a deferred ask_user / tool-approval call while a later
-	// request still completes normally; repairing here (not in ContextFrags)
-	// keeps the fragments faithful to history while the outgoing messages stay
-	// provider-valid. Applies to every continuation path that resumes after a
-	// deferred tool call. Provenance names the outgoing messages, closures
-	// included, so a fold removes each closure with its call.
-	outgoing := repairToolCallClosures(nonNilModelMessages(messages), syntheticToolClosureError)
-	base.ContextProvenance = contextProvenance(outgoing, retained, append(compactionInputs(req), req.continuationAnchors...))
+	// request still completes normally. Applies to every continuation path that
+	// resumes after a deferred tool call. Everything below names the outgoing
+	// messages by position, closures included, so a fold removes each closure
+	// with its call.
+	outgoing := repairToolCallClosures(nonNilModelMessages(sanitizeMessages(messages)), syntheticToolClosureError)
+	historyEstimates := make([]int, len(outgoing))
+	for i := range outgoing {
+		historyEstimates[i] = estimateMessageTokens(outgoing[i])
+	}
+	base.ContextHistoryTokenEstimates = historyEstimates
+	base.ContextTrimmableMessages = len(outgoing)
+	base.ContextFrags = historyContextFragsForMessages(outgoing, retained)
+	base.ContextProvenance = contextProvenance(outgoing, append(compactionInputs(req), req.continuationAnchors...))
 	base.Messages = modelMessagesToSDKMessages(outgoing)
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil

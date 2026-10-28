@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"fmt"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -160,14 +159,11 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 			continue
 		}
 		if index := frag.Provenance.Index; index >= 0 && index < len(messages) {
-			// The input renders the same sources without its images.
-			for j := range provenance {
-				if reflect.DeepEqual(provenance[j].Message, messages[index]) {
-					provenance[j].Message = kept
-					break
-				}
-			}
 			messages[index] = kept
+			// The input renders the same sources without its images.
+			if index < len(provenance) {
+				provenance[index].Message = kept
+			}
 		}
 		shed = append(shed, frag.Provenance.SourceID)
 	}

@@ -13,7 +13,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -601,7 +600,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.ContextFrags = historyContextFragsForMessages(messages, historyRecords)
 	forkMessages := nonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(forkMessages, historyRecords)
-	runCfg.ContextProvenance = contextProvenance(forkMessages, historyRecords, compactionInputs(req))
+	runCfg.ContextProvenance = contextProvenance(forkMessages, compactionInputs(req))
 	runCfg.Messages = modelMessagesToSDKMessages(forkMessages)
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {
@@ -1418,23 +1417,20 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			)
 			if currentIndex != nil {
 				i := *currentIndex
-				rendered := cfg.Messages[i]
 				cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
 				if i < len(cfg.ForkContextSourceMessageIDs) {
 					cfg.ForkContextSourceMessageIDs[i] = ""
 				}
 				// The input renders the same sources with its media.
-				for j := range cfg.ContextProvenance {
-					if reflect.DeepEqual(cfg.ContextProvenance[j].Message, rendered) {
-						cfg.ContextProvenance[j].Message = cfg.Messages[i]
-						break
-					}
+				if i < len(cfg.ContextProvenance) {
+					cfg.ContextProvenance[i].Message = cfg.Messages[i]
 				}
 			} else {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 				cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
 				index := len(cfg.Messages) - 1
 				currentIndex = &index
+				cfg.ContextProvenance = append(cfg.ContextProvenance, native.MessageProvenance{Message: cfg.Messages[index]})
 			}
 			cfg.ContextCurrentUserMessageIndex = currentIndex
 			cfg.ContextQueryMaterialized = true
