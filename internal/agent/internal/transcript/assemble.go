@@ -88,7 +88,11 @@ func (t *Reader) Assemble(ctx context.Context, r Request) (Assembled, error) {
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	compactable := totalCompactableHistoryTokens(loaded)
-	annotated := injectWorkspaceTransitionRecords(loaded)
+	currentRequestID := ""
+	if r.Chat.ReusePersistedUserMessage {
+		currentRequestID = strings.TrimSpace(r.Chat.RequiredHistoryMessageID)
+	}
+	annotated := injectWorkspaceTransitionRecords(injectRuntimeContextRecords(loaded, currentRequestID))
 	messages := make([]runreq.ModelMessage, 0, len(annotated))
 	for _, record := range annotated {
 		messages = append(messages, record.ModelMessage)

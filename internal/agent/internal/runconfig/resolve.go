@@ -16,6 +16,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/models"
 )
@@ -197,14 +198,6 @@ func (b *Builder) Resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	if notice != nil {
 		messages = append(messages, *notice)
 	}
-	var memoryMessageIndex *int
-	if memoryMsg != nil {
-		messages = append(messages, *memoryMsg)
-		memoryMessageIndex = runreq.IntPointer(len(messages) - 1)
-	}
-	if requestedSkillMsg != nil {
-		messages = append(messages, *requestedSkillMsg)
-	}
 	if !req.ReusePersistedUserMessage {
 		messages = append(messages, reqMessages...)
 	}
@@ -251,7 +244,7 @@ func (b *Builder) Resolve(ctx context.Context, req runreq.ChatRequest) (runreq.R
 	forkMessages := runreq.NonNilModelMessages(messages)
 	runCfg.ForkContextSourceMessageIDs = transcript.SourceMessageIDsForMessages(forkMessages, historyRecords)
 	runCfg.Messages = runreq.ModelMessagesToSDKMessages(forkMessages)
-	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
+	runCfg.ContextTurn = turnContext(memoryMsg, requestedSkillMsg)
 	if req.ReusePersistedUserMessage {
 		markRequiredHistoryMessageCurrent(&runCfg, req.RequiredHistoryMessageID)
 	} else {
@@ -295,4 +288,26 @@ func userQueryNeedsHeader(req runreq.ChatRequest, attachmentCount int) bool {
 		return true
 	}
 	return attachmentCount > 0 && req.UserMessageKind != runreq.UserMessageKindSkillActivation
+}
+
+// turnContext is the runtime context the turn observed for its input, in the
+// order the request carries it after the input: the memory it recalled, then
+// the skills its user requested.
+func turnContext(memory, skills *runreq.ModelMessage) []native.TurnContext {
+	var out []native.TurnContext
+	for _, item := range []struct {
+		kind    string
+		message *runreq.ModelMessage
+	}{
+		{messagepkg.RuntimeContextMemoryRecall, memory},
+		{messagepkg.RuntimeContextRequestedSkills, skills},
+	} {
+		if item.message == nil {
+			continue
+		}
+		for _, sent := range runreq.ModelMessagesToSDKMessages([]runreq.ModelMessage{*item.message}) {
+			out = append(out, native.TurnContext{Kind: item.kind, Message: sent})
+		}
+	}
+	return out
 }

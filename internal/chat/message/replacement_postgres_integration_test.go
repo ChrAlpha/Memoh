@@ -3,6 +3,7 @@ package message
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -317,5 +318,52 @@ func assertBoundReplacementRow(t *testing.T, f boundReplacementFixture, messageI
 	}
 	if gotTurn != turnID || gotSeq != seq || gotVisible != visible {
 		t.Fatalf("row %s binding = (%s, %d, %v), want (%s, %d, %v)", messageID, gotTurn, gotSeq, gotVisible, turnID, seq, visible)
+	}
+}
+
+// A step's request metadata lands on the request the step is bound to: a
+// retry's copy, not the attempt it replaces, and the request itself when an
+// earlier step wrote it.
+func TestPostgresRuntimeFenceRequestMetadataLandsOnTheBoundRequest(t *testing.T) {
+	f := newBoundReplacementFixture(t, PersistInput{
+		Content:  []byte(`{"role":"user","content":"original request"}`),
+		Metadata: map[string]any{"runtime_context": "attempt one"},
+	})
+	metadataOf := func(id string) map[string]any {
+		t.Helper()
+		var raw []byte
+		if err := f.pool.QueryRow(f.owner, `SELECT metadata FROM bot_history_messages WHERE id = $1`, id).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var metadata map[string]any
+		if err := json.Unmarshal(raw, &metadata); err != nil {
+			t.Fatal(err)
+		}
+		return metadata
+	}
+	first, err := f.service.PersistAgentStep(f.owner, AgentStep{
+		RunID: f.runID, Replacement: &f.replacement,
+		Messages:        []PersistInput{f.input("assistant", `{"role":"assistant","content":"first step"}`, f.user.ID)},
+		RequestMetadata: map[string]any{"runtime_context": "attempt two"},
+	})
+	if err != nil || len(first) != 2 {
+		t.Fatalf("replacement step = (%#v, %v)", first, err)
+	}
+	if got := metadataOf(first[0].ID)["runtime_context"]; got != "attempt two" {
+		t.Fatalf("the retry's request records %v, want attempt two", got)
+	}
+	if got := metadataOf(f.user.ID)["runtime_context"]; got != "attempt one" {
+		t.Fatalf("the replaced attempt's request records %v, want it untouched", got)
+	}
+
+	if _, err := f.service.PersistAgentStep(f.owner, AgentStep{
+		RunID:           f.runID,
+		Messages:        []PersistInput{f.input("assistant", `{"role":"assistant","content":"second step"}`, first[0].ID)},
+		RequestMetadata: map[string]any{"runtime_context": nil},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := metadataOf(first[0].ID)["runtime_context"]; !ok || got != nil {
+		t.Fatalf("the request records %v after a step cleared it", got)
 	}
 }

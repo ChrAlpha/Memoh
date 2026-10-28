@@ -98,6 +98,13 @@ type InjectMessage struct {
 }
 
 // RunConfig holds everything needed for a single agent invocation.
+// TurnContext is one piece of runtime context a turn observed for its input,
+// such as the memory it recalled. Kind names what it is.
+type TurnContext struct {
+	Kind    string
+	Message sdk.Message
+}
+
 type RunConfig struct {
 	capabilityChanges      *atomic.Bool
 	capabilityRefreshCount int
@@ -133,13 +140,16 @@ type RunConfig struct {
 	ContextScope                   contextfrag.Scope
 	ContextCurrentUserMessageIndex *int
 	ContextMemoryMessageIndex      *int
-	ContextQueryMaterialized       bool
-	ContextToolUsage               string
-	ContextToolUsageFrags          []contextfrag.ContextFrag
-	ContextHookText                string
-	ContextToolDefs                []contextfrag.ToolDefAccounting
-	ContextToolDefsResolved        bool
-	ContextBudgetMaxTokens         int
+	// ContextTurn is runtime context the turn observed for its input; the
+	// request carries it right after the input, where the turn persists it.
+	ContextTurn              []TurnContext
+	ContextQueryMaterialized bool
+	ContextToolUsage         string
+	ContextToolUsageFrags    []contextfrag.ContextFrag
+	ContextHookText          string
+	ContextToolDefs          []contextfrag.ToolDefAccounting
+	ContextToolDefsResolved  bool
+	ContextBudgetMaxTokens   int
 	// ModelMaxOutputTokens is the model's configured output cap; zero means unknown.
 	ModelMaxOutputTokens         int
 	ContextHistoryTokenEstimates []int

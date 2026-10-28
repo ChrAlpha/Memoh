@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/internal/botenv"
 	"github.com/felinics/memoh/internal/agent/internal/transcript"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/hooks"
 )
 
@@ -127,6 +128,18 @@ func (b *Builder) Prepare(ctx context.Context, cfg native.RunConfig) native.RunC
 			cfg.ContextQueryMaterialized = true
 		}
 	}
+
+	// The runtime context the turn observed follows its input, where the turn
+	// persists it: a later turn replays it in the same place.
+	for _, item := range cfg.ContextTurn {
+		cfg.Messages = append(cfg.Messages, item.Message)
+		cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
+		if item.Kind == messagepkg.RuntimeContextMemoryRecall {
+			index := len(cfg.Messages) - 1
+			cfg.ContextMemoryMessageIndex = &index
+		}
+	}
+	cfg.ContextTurn = nil
 
 	hookBuild := buildHookSystemSections([]promptHookOutput{
 		{Event: hooks.EventBeforePromptBuild, Result: beforePromptResult},

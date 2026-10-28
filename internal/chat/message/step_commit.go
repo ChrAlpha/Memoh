@@ -19,6 +19,7 @@ import (
 var ErrAgentStepNotWritable = errors.New("agent step is no longer writable")
 
 type agentStepQueries interface {
+	MergeTurnRequestRowMetadata(context.Context, sqlc.MergeTurnRequestRowMetadataParams) (int64, error)
 	MergeRunInterruptedRowMetadata(context.Context, sqlc.MergeRunInterruptedRowMetadataParams) (int64, error)
 	LockSessionRunForAgentStepCommit(context.Context, sqlc.LockSessionRunForAgentStepCommitParams) (pgtype.UUID, error)
 }
@@ -151,7 +152,31 @@ func (s *DBService) persistAgentStepTx(ctx context.Context, queries dbstore.Quer
 	txService := *s
 	txService.queries = queries
 	txService.publisher = nil
-	return txService.persistBoundMessages(ctx, step.Messages, step.Replacement)
+	persisted, requestID, err := txService.persistBoundMessages(ctx, step.Messages, step.Replacement)
+	if err != nil || len(step.RequestMetadata) == 0 {
+		return persisted, err
+	}
+	if requestID == "" {
+		return nil, errors.New("agent step request metadata requires a request row")
+	}
+	pgRequestID, err := dbpkg.ParseUUID(requestID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid agent step request id: %w", err)
+	}
+	payload, err := json.Marshal(step.RequestMetadata)
+	if err != nil {
+		return nil, fmt.Errorf("encode agent step request metadata: %w", err)
+	}
+	merged, err := writer.MergeTurnRequestRowMetadata(ctx, sqlc.MergeTurnRequestRowMetadataParams{
+		RequestMetadata: payload, BotID: pgBotID, SessionID: pgSessionID, RequestMessageID: pgRequestID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("record agent step request metadata: %w", err)
+	}
+	if merged != 1 {
+		return nil, fmt.Errorf("agent step request %s is not a request row of the session", requestID)
+	}
+	return persisted, nil
 }
 
 func validateAgentStep(ctx context.Context, s *DBService, step AgentStep) (string, string, error) {

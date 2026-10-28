@@ -3535,6 +3535,18 @@ WHERE message.team_id = public.memoh_current_team_id()
 ORDER BY message.created_at DESC, message.id DESC
 LIMIT 1;
 
+-- name: MergeTurnRequestRowMetadata :execrows
+-- Records on a turn's request row what its run observed for that request, such
+-- as the runtime context the request carried. Only the given keys are merged
+-- into the row's metadata; everything else on the row stays as written.
+UPDATE bot_history_messages
+SET metadata = COALESCE(metadata, '{}'::jsonb) || sqlc.arg(request_metadata)::jsonb
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND session_id = sqlc.arg(session_id)
+  AND id = sqlc.arg(request_message_id)
+  AND role = 'user';
+
 -- name: MergeRunInterruptedRowMetadata :execrows
 -- Names the failure of the run on the interrupted checkpoint rows the run itself
 -- wrote. The caller names the rows: they are the ones its step committer wrote

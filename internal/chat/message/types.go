@@ -204,6 +204,10 @@ type AgentStep struct {
 	// Replacement starts a new attempt in the same transaction as its first
 	// messages. Subsequent steps append normally to their persisted request.
 	Replacement *TurnReplacement
+	// RequestMetadata is merged into the turn's request row in the same
+	// transaction, whether the step writes the request or it was written
+	// before.
+	RequestMetadata map[string]any
 }
 
 // TurnSlot names a turn before any of its rows exist. Admission already draws
@@ -320,6 +324,16 @@ const (
 func IsInternalFeedback(metadata map[string]any) bool {
 	return metadata[MessageSourceMetadataKey] == MessageSourceInternalFeedback
 }
+
+// Runtime context a turn observed for its input (the memory it recalled, the
+// skills its user requested) is recorded on the turn's request row under
+// RuntimeContextMetadataKey, as the stored messages the request carried
+// right after the input; history replays them there.
+const (
+	RuntimeContextMetadataKey     = "runtime_context"
+	RuntimeContextMemoryRecall    = "memory_recall"
+	RuntimeContextRequestedSkills = "requested_skills"
+)
 
 func historyBindingRole(role string, metadata map[string]any) string {
 	if role == "user" && IsInternalFeedback(metadata) {

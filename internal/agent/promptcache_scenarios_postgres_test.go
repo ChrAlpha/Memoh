@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -28,26 +30,72 @@ func chatToolTurns(t *testing.T, e *benchEnv) {
 	requireReuse(t, e.pairs("chat, tools each turn"), noBreak)
 }
 
-// Recalled memory rides only the turn it was recalled for: the run puts it in
-// a user message between the history and the user's input and stores neither
-// the message nor its text, so the first request of the next turn no longer has
-// it where the previous request did. That request differs from the previous one
-// at the recalled message, inside the history, and everything after it (the
-// previous turn's input and all of its tool steps) is past the reusable prefix.
-// This is the measured cost of recall, not a property the benchmark endorses:
-// it happens whether the recalled text changes from turn to turn or not.
-// Requests inside a turn reuse the full prompt.
+// Recalled memory follows the turn's input, and the turn stores it there as
+// internal feedback, so the next turn's history carries it exactly where the
+// previous request did: every request reuses the whole previous prompt,
+// whether the recalled text changes from turn to turn or not.
 func chatRecallTurns(t *testing.T, e *benchEnv, scenario string) {
 	e.chatTurn("t1", "What is the capital of France?", nil, toolThenAnswer("france", "Paris.")...)
 	e.chatTurn("t2", "And of Italy?", nil, toolThenAnswer("italy", "Rome.")...)
 	e.chatTurn("t3", "And of Spain?", nil, toolThenAnswer("spain", "Madrid.")...)
-	pairs := e.pairs(scenario)
-	requireReuse(t, pairs, breakInto(map[string]string{"t2": "history", "t3": "history"}))
-	for _, p := range pairs {
-		if p.kind == crossTurn && p.report.Break != nil && !strings.HasPrefix(p.report.Break.Prev, "<memory-context>") {
-			t.Errorf("request %s first differs at %v, want the previous turn's recalled memory", p.name(), p.report.Break)
+	requireReuse(t, e.pairs(scenario), noBreak)
+
+	// Each turn's recall follows that turn's input, the earlier ones replayed
+	// from history.
+	var last []byte
+	for _, request := range e.wire.recorded() {
+		if request.Turn == "t3" && request.Step == 1 {
+			last = request.Body
 		}
 	}
+	var order []string
+	for _, text := range requestTexts(t, last) {
+		switch {
+		case strings.Contains(text, "<memory-context>"):
+			order = append(order, "recall")
+		case strings.Contains(text, "What is the capital of France?"):
+			order = append(order, "t1")
+		case strings.Contains(text, "And of Italy?"):
+			order = append(order, "t2")
+		case strings.Contains(text, "And of Spain?"):
+			order = append(order, "t3")
+		}
+	}
+	if want := []string{"t1", "recall", "t2", "recall", "t3", "recall"}; !slices.Equal(order, want) {
+		t.Errorf("t3's first request carries %v, want %v", order, want)
+	}
+}
+
+// requestTexts is every string of a request body, in order.
+func requestTexts(t *testing.T, body []byte) []string {
+	t.Helper()
+	var value any
+	if err := json.Unmarshal(body, &value); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	var out []string
+	var walk func(any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case string:
+			out = append(out, v)
+		case []any:
+			for _, item := range v {
+				walk(item)
+			}
+		case map[string]any:
+			keys := make([]string, 0, len(v))
+			for key := range v {
+				keys = append(keys, key)
+			}
+			slices.Sort(keys)
+			for _, key := range keys {
+				walk(v[key])
+			}
+		}
+	}
+	walk(value)
+	return out
 }
 
 func chatRecallDiffers(t *testing.T, e *benchEnv) {

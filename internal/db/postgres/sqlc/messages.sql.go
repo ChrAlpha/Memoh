@@ -6367,6 +6367,39 @@ func (q *Queries) MergeRunInterruptedRowMetadata(ctx context.Context, arg MergeR
 	return result.RowsAffected(), nil
 }
 
+const mergeTurnRequestRowMetadata = `-- name: MergeTurnRequestRowMetadata :execrows
+UPDATE bot_history_messages
+SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $2
+  AND session_id = $3
+  AND id = $4
+  AND role = 'user'
+`
+
+type MergeTurnRequestRowMetadataParams struct {
+	RequestMetadata  []byte      `json:"request_metadata"`
+	BotID            pgtype.UUID `json:"bot_id"`
+	SessionID        pgtype.UUID `json:"session_id"`
+	RequestMessageID pgtype.UUID `json:"request_message_id"`
+}
+
+// Records on a turn's request row what its run observed for that request, such
+// as the runtime context the request carried. Only the given keys are merged
+// into the row's metadata; everything else on the row stays as written.
+func (q *Queries) MergeTurnRequestRowMetadata(ctx context.Context, arg MergeTurnRequestRowMetadataParams) (int64, error) {
+	result, err := q.db.Exec(ctx, mergeTurnRequestRowMetadata,
+		arg.RequestMetadata,
+		arg.BotID,
+		arg.SessionID,
+		arg.RequestMessageID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const replaceHistoryTurn = `-- name: ReplaceHistoryTurn :one
 WITH RECURSIVE owner_session AS MATERIALIZED (
   SELECT session.id

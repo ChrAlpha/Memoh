@@ -374,7 +374,7 @@ func (s *DBService) persistRoundInTx(ctx context.Context, inputs []PersistInput,
 				}
 			}
 			var err error
-			persisted, err = txService.persistBoundMessages(ctx, inputs, options.Replacement)
+			persisted, _, err = txService.persistBoundMessages(ctx, inputs, options.Replacement)
 			if err != nil {
 				return err
 			}

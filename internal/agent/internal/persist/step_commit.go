@@ -11,6 +11,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/internal/outcome"
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
@@ -53,6 +54,33 @@ type StepCommitter struct {
 	// failure is the first error a step's write ended with, other than losing
 	// the run's ownership.
 	failure error
+}
+
+// runtimeContextMetadata is the request-row metadata recording the runtime
+// context the run's request carried after its input, so a later turn replays
+// it there. A replacement's request starts as a copy of the attempt it
+// replaces, so one that carried none clears what that attempt recorded. A
+// context that cannot be encoded is left out: the next turn then only misses
+// the cache.
+func (c *StepCommitter) runtimeContextMetadata(ctx context.Context) map[string]any {
+	items := make([]historyfrag.RuntimeContext, 0, len(c.rc.RunConfig.ContextTurn))
+	for _, item := range c.rc.RunConfig.ContextTurn {
+		for _, message := range runreq.SDKMessagesToModelMessages([]sdk.Message{item.Message}) {
+			items = append(items, historyfrag.RuntimeContext{Kind: item.Kind, Message: message})
+		}
+	}
+	if len(items) == 0 {
+		if c.req.TurnReplacement != nil {
+			return map[string]any{messagepkg.RuntimeContextMetadataKey: nil}
+		}
+		return nil
+	}
+	metadata, err := historyfrag.RuntimeContextMetadata(items)
+	if err != nil {
+		c.writer.logger.WarnContext(ctx, "runtime context not recorded on the request", slog.String("run_id", c.req.RunID), slog.Any("error", err))
+		return nil
+	}
+	return metadata
 }
 
 // StepOption adjusts a committer at construction.
@@ -243,7 +271,10 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 		c.nextStep++
 		return native.StepDirective{}, nil
 	}
-	if (hasAssistantOutput || failure.Code != "" || mode == stepSteered) && len(c.persisted) == 0 && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
+	// The run's first write files its request, unless admission already did,
+	// and records on it the runtime context the request carried.
+	firstWrite := (hasAssistantOutput || failure.Code != "" || mode == stepSteered) && len(c.persisted) == 0
+	if firstWrite && !c.req.UserMessagePersisted && !c.req.ReusePersistedUserMessage {
 		messages = runreq.PrependTurnUserMessage(c.req, messages)
 	}
 	storeReq := c.req
@@ -277,6 +308,9 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 	}
 	c.stampSteerTurn(inputs)
 	agentStep := messagepkg.AgentStep{RunID: c.req.RunID, Messages: inputs, Interrupted: interrupted}
+	if firstWrite && len(inputs) > 0 {
+		agentStep.RequestMetadata = c.runtimeContextMetadata(ctx)
+	}
 	if !c.replacementStarted && len(inputs) > 0 {
 		agentStep.Replacement = c.req.TurnReplacement
 	}

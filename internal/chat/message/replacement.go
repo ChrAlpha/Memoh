@@ -32,14 +32,15 @@ type boundReplacementQueries interface {
 // persistBoundMessages is shared by step commits and terminal round commits.
 // A retry copies its request before appending output; an edit writes the new
 // request first. Every row has its final turn and sequence at insertion time.
-// The caller owns the transaction and publishes only after it commits.
-func (s *DBService) persistBoundMessages(ctx context.Context, inputs []PersistInput, replacement *TurnReplacement) ([]Message, error) {
+// It reports the request row the messages are bound to. The caller owns the
+// transaction and publishes only after it commits.
+func (s *DBService) persistBoundMessages(ctx context.Context, inputs []PersistInput, replacement *TurnReplacement) ([]Message, string, error) {
 	if len(inputs) == 0 {
-		return nil, errors.New("turn persistence requires messages")
+		return nil, "", errors.New("turn persistence requires messages")
 	}
 	for _, input := range inputs {
 		if input.SkipHistoryTurn {
-			return nil, errors.New("turn persistence cannot skip turn ownership")
+			return nil, "", errors.New("turn persistence cannot skip turn ownership")
 		}
 	}
 	requestID := strings.TrimSpace(inputs[0].TurnRequestMessageID)
@@ -47,7 +48,7 @@ func (s *DBService) persistBoundMessages(ctx context.Context, inputs []PersistIn
 	if replacement != nil {
 		cloned, anchor, err := s.prepareBoundReplacement(ctx, inputs[0], *replacement)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		persisted = append(persisted, cloned...)
 		requestID = anchor
@@ -57,14 +58,14 @@ func (s *DBService) persistBoundMessages(ctx context.Context, inputs []PersistIn
 		input.TurnRequestMessageID = requestID
 		if replacement != nil && requestID == "" {
 			if !strings.EqualFold(strings.TrimSpace(input.Role), "user") || IsInternalFeedback(input.Metadata) {
-				return nil, errors.New("replacement requires a request before its output")
+				return nil, "", errors.New("replacement requires a request before its output")
 			}
 			input.TurnID = replacement.ReplacementTurnID
 			input.TurnPosition = replacement.ReplacementTurnPosition
 		}
 		message, err := s.persist(ctx, input)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !IsInternalFeedback(input.Metadata) {
 			requestID = message.ID
@@ -73,10 +74,10 @@ func (s *DBService) persistBoundMessages(ctx context.Context, inputs []PersistIn
 	}
 	if replacement != nil {
 		if err := s.selectBoundReplacement(ctx, inputs[0], *replacement); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	return persisted, nil
+	return persisted, requestID, nil
 }
 
 // prepareBoundReplacement runs inside the first write transaction. The session

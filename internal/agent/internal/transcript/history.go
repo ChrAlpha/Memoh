@@ -11,6 +11,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
@@ -31,6 +32,39 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 		result = append(result, record)
 	}
 	return result
+}
+
+// injectRuntimeContextRecords replays, right after each request row, the
+// runtime context its request carried (the memory its turn recalled, the
+// skills its user requested), as the request sent it. The run's own request,
+// when the history holds it, stays bare: the run supplies its context anew.
+func injectRuntimeContextRecords(records []historyfrag.HistoryRecord, currentRequestID string) []historyfrag.HistoryRecord {
+	var out []historyfrag.HistoryRecord
+	for i, record := range records {
+		items := historyfrag.RuntimeContextFromMetadata(record.DBMessageID, record.Metadata)
+		if len(items) == 0 || (currentRequestID != "" && record.DBMessageID == currentRequestID) {
+			if out != nil {
+				out = append(out, record)
+			}
+			continue
+		}
+		if out == nil {
+			out = append(make([]historyfrag.HistoryRecord, 0, len(records)+len(items)), records[:i]...)
+		}
+		out = append(out, record)
+		for _, item := range items {
+			out = append(out, historyfrag.HistoryRecord{
+				ModelMessage: item.Message,
+				Synthetic:    true,
+				Metadata:     map[string]any{messagepkg.RuntimeContextMetadataKey: item.Kind},
+				Scope:        record.Scope,
+			})
+		}
+	}
+	if out == nil {
+		return records
+	}
+	return out
 }
 
 func renderWorkspaceTransition(previous, current *agentapi.WorkspaceTarget) string {
