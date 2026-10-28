@@ -1,6 +1,7 @@
 package models
 
 import (
+	"slices"
 	"testing"
 
 	anthropicmessages "github.com/felinics/twilight/provider/anthropic/messages"
@@ -273,5 +274,36 @@ func TestApplyPromptCachePlanPlacesMidSpanBreakpoint(t *testing.T) {
 	}
 	if actualStableCount != 4 {
 		t.Fatalf("actual stable message count = %d, want 4", actualStableCount)
+	}
+}
+
+// TestApplyPromptCachePlanSkipsSystemMessageInsideConversation covers a
+// stable span ending in a system event row: Twilight sends a system message
+// inside the conversation as tagged user text without its breakpoint, so the
+// breakpoint goes to the message before it. A system message that leads the
+// conversation joins the system blocks and keeps its breakpoint.
+func TestApplyPromptCachePlanSkipsSystemMessageInsideConversation(t *testing.T) {
+	t.Parallel()
+
+	model := anthropicTestModel()
+	messages := []sdk.Message{
+		sdk.SystemMessage("session created"),
+		sdk.UserMessage("question"),
+		sdk.AssistantMessage("answer"),
+		sdk.SystemMessage("workspace switched"),
+		sdk.UserMessage("volatile question"),
+	}
+
+	layout := ApplyPromptCacheWithPlan(model, "5m", contextfrag.CachePlan{StableMessageCount: 4}, "", messages, nil)
+	if layout.StableMessageCount != 3 {
+		t.Fatalf("actual stable message count = %d, want 3 (breakpoint before the system row)", layout.StableMessageCount)
+	}
+	if breakpoints := messageBreakpoints(layout.Messages); !slices.Equal(breakpoints, []int{2}) {
+		t.Fatalf("breakpoints = %v, want [2]", breakpoints)
+	}
+
+	leading := ApplyPromptCacheWithPlan(model, "5m", contextfrag.CachePlan{StableMessageCount: 1}, "", messages, nil)
+	if leading.StableMessageCount != 1 {
+		t.Fatalf("leading system message: stable count = %d, want 1", leading.StableMessageCount)
 	}
 }
