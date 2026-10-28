@@ -25,7 +25,13 @@ func TestMessageSnapshotIsImmutableAndProviderNeutral(t *testing.T) {
 				ProviderMetadata: partmeta.Fold(map[string]any{"opaque": "value"}),
 			},
 		},
-	}}
+	}, sdk.ToolMessage(sdk.ToolResultPart{
+		ToolCallID:   "call-1",
+		ToolName:     "read",
+		Result:       toolexec.OutputFromValue("contents"),
+		IsError:      true,
+		CacheControl: &sdk.CacheControl{Type: "ephemeral"},
+	})}
 	snapshot := NewMessageSnapshot(original)
 	original[0].Content[0] = sdk.TextPart{Text: "mutated"}
 
@@ -40,6 +46,12 @@ func TestMessageSnapshotIsImmutableAndProviderNeutral(t *testing.T) {
 	call := messages[0].Content[1].(sdk.ToolCallPart)
 	if call.ToolCallID != "call-1" || len(call.ProviderMetadata) != 0 {
 		t.Fatalf("unexpected provider-neutral tool call: %+v", call)
+	}
+	// The parent run's cache breakpoints sit on tool results too; a fork
+	// that inherited them would send more than Anthropic accepts.
+	result := messages[1].Content[0].(sdk.ToolResultPart)
+	if result.ToolCallID != "call-1" || result.Result.String() != "contents" || !result.IsError || result.CacheControl != nil {
+		t.Fatalf("unexpected provider-neutral tool result: %+v", result)
 	}
 }
 
