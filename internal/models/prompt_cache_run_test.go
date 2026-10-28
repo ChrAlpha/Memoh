@@ -201,3 +201,36 @@ func TestClearCacheControlsClearsEveryPartKind(t *testing.T) {
 		t.Fatalf("breakpoints left at %v", breakpoints)
 	}
 }
+
+// TestApplyPromptCacheClearsInheritedBreakpoints covers a forked run whose
+// messages carry its parent's breakpoints, rolling ones included: the layout owns every
+// breakpoint of the request, so they are cleared before it places its own.
+func TestApplyPromptCacheClearsInheritedBreakpoints(t *testing.T) {
+	t.Parallel()
+
+	cc := &sdk.CacheControl{Type: "ephemeral"}
+	parent := runTestLayout(anthropicTestModel(), "5m", "system")
+	inherited := slices.Clone(parent.Messages[1:5])
+	for _, step := range [][]sdk.Message{toolStep(1, 2), toolStep(2, 2)} {
+		results := slices.Clone(step[1].Content)
+		last := results[len(results)-1].(sdk.ToolResultPart)
+		last.CacheControl = cc
+		results[len(results)-1] = last
+		step[1].Content = results
+		inherited = append(inherited, step...)
+	}
+	inherited = append(inherited, sdk.UserMessage("forked task"))
+	plan := contextfrag.CachePlan{StableMessageCount: len(inherited) - 1, MidStableMessageCount: 2, StablePrefixTokenEstimate: 5000}
+
+	before := messageBreakpoints(inherited)
+
+	layout := ApplyPromptCacheWithPlan(anthropicTestModel(), "5m", plan, "system", inherited, nil)
+	got := layout.AdvanceRun(layout.Messages, len(layout.Messages))
+
+	if breakpoints, want := messageBreakpoints(got), []int{0, 2, len(got) - 2, len(got) - 1}; !slices.Equal(breakpoints, want) {
+		t.Fatalf("breakpoints = %v, want %v", breakpoints, want)
+	}
+	if after := messageBreakpoints(inherited); !slices.Equal(after, before) {
+		t.Fatalf("the input was mutated: breakpoints %v, were %v", after, before)
+	}
+}

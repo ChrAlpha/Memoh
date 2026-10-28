@@ -236,10 +236,10 @@ func providerNeutralMessages(messages []sdk.Message) []sdk.Message {
 					clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: toolexec.ArgumentsFromValue(value.Input)})
 				}
 			case sdk.ToolResultPart:
-				clean.Content = append(clean.Content, value)
+				clean.Content = append(clean.Content, sdk.ToolResultPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Result: value.Result, IsError: value.IsError})
 			case *sdk.ToolResultPart:
 				if value != nil {
-					clean.Content = append(clean.Content, *value)
+					clean.Content = append(clean.Content, sdk.ToolResultPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Result: value.Result, IsError: value.IsError})
 				}
 			default:
 				clean.Content = append(clean.Content, part)

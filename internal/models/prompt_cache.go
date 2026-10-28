@@ -163,9 +163,12 @@ func PromptCacheKey(model *sdk.Model, ttl, sessionID string) string {
 //   - The plan's stable history span ends in a breakpoint, and a span long
 //     enough gets a second one at its midpoint.
 //
-// That leaves one breakpoint for a run's own calls; see AdvanceRun.
+// That leaves one breakpoint for a run's own calls; see AdvanceRun. The
+// layout owns every breakpoint of the request: any the input messages carry
+// (a forked run inherits its parent's) is cleared first, so the request
+// never exceeds the four Anthropic accepts.
 func applyAnthropicPromptCache(cc *sdk.CacheControl, plan contextfrag.CachePlan, layout PromptCacheLayout) PromptCacheLayout {
-	messages := layout.Messages
+	messages := withoutCacheControls(layout.Messages)
 	marked := 0
 	belowMinimum := plan.StablePrefixTokenEstimate > 0 && plan.StablePrefixTokenEstimate < MinCacheablePrefixTokens
 	if plan.StableMessageCount > 0 && plan.StableMessageCount <= len(messages) {
@@ -313,6 +316,18 @@ func clearedCacheControls(content []sdk.MessagePart) []sdk.MessagePart {
 	for i, part := range content {
 		out[i], _ = partWithCacheControl(part, nil)
 	}
+	return out
+}
+
+// withoutCacheControls returns messages without breakpoints, copied only when
+// one carried any.
+func withoutCacheControls(messages []sdk.Message) []sdk.Message {
+	if !slices.ContainsFunc(messages, func(message sdk.Message) bool { return hasCacheControl(message.Content) }) {
+		return messages
+	}
+	out := make([]sdk.Message, len(messages))
+	copy(out, messages)
+	ClearCacheControls(out)
 	return out
 }
 
