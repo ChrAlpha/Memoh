@@ -863,6 +863,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		CurrentModelID:           chatModel.ModelID,
 		CurrentModelProvider:     provider.Name,
 		CurrentModelProviderID:   chatModel.ProviderID,
+		ModelEndpoint:            baseURL,
 		ReasoningConfig:          reasoningConfig,
 		ReasoningStoredEffort:    strings.TrimSpace(botSettings.ReasoningEffort),
 		ReasoningRequestedEffort: strings.TrimSpace(p.ReasoningEffort),

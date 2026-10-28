@@ -107,12 +107,15 @@ type RunConfig struct {
 	// RunID is the stable identity allocated by durable admission for this
 	// invocation. Direct callers without admission receive one at the
 	// application creation boundary before the native runtime starts.
-	RunID                       string
-	Model                       *sdk.Model
-	CurrentModelUUID            string
-	CurrentModelID              string
-	CurrentModelProvider        string
-	CurrentModelProviderID      string
+	RunID                  string
+	Model                  *sdk.Model
+	CurrentModelUUID       string
+	CurrentModelID         string
+	CurrentModelProvider   string
+	CurrentModelProviderID string
+	// ModelEndpoint binds usage measurements to the configured endpoint. It
+	// participates only in a digest and is never emitted in diagnostics.
+	ModelEndpoint               string
 	ForkContext                 *tools.MessageSnapshot
 	ForkContextSourceMessageIDs []string
 	// ReasoningConfig is the resolved thinking decision, carried whole. It was
@@ -156,6 +159,7 @@ type RunConfig struct {
 	initialProviderMessageCount  int
 	initialProviderPrefixSet     bool
 	providerAttemptState         *providerAttemptState
+	requestUsage                 *requestUsageMeter
 	retryDynamicRefs             []dynamicSourceRef
 	dynamicInputs                *loopDynamicInputs
 	contextStepFailure           func(error)
