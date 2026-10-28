@@ -359,7 +359,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 			finalMessages = annotateDeferredApproval(finalMessages, *eng.deferred)
 		}
 		finalMessages = toolExecutionMetadata.annotate(finalMessages)
-		totalUsage = aggregateStepUsage(eng.steps)
+		totalUsage = aggregateStepUsage(eng.steps).Add(eng.recoveryUsage)
 	}
 	for _, index := range interruptedFeedbackIndexes {
 		feedbackIndexes = append(feedbackIndexes, len(finalMessages)+index)
@@ -506,7 +506,9 @@ type streamEngine struct {
 	mu sync.Mutex
 
 	// published state, read by the segment owner after events closes.
-	steps           []step.Record
+	steps []step.Record
+	// Empty exhausted attempts consume provider usage without committing a step.
+	recoveryUsage   sdk.Usage
 	outMessages     []sdk.Message
 	deferred        *toolexec.ToolApprovalResult
 	interruptedStep interruptedStepCapture
@@ -844,13 +846,6 @@ partLoop:
 			stepResponse = p.Response
 			stepFinishReason = p.FinishReason
 			stepRawFinishReason = p.RawFinishReason
-			// Emitted after every part of the step and before the commit
-			// barrier runs. The session runtime uses it to know the step's
-			// live projection is complete before it anchors a queue steer to
-			// it; the index is the durable step index the commit will use.
-			if !e.emit(StreamEvent{Type: EventStepEnd, StepNumber: e.baseCfg.StepIndexOffset + len(e.steps)}) {
-				e.aborted = true
-			}
 
 		case *sdk.TextStartPart:
 			if !e.emit(StreamEvent{Type: EventTextStart}) {
@@ -1051,14 +1046,23 @@ partLoop:
 		Response:             stepResponse,
 	}
 
-	// The tool batch's OnPart callback bridges approval, progress, result,
-	// and error parts onto the event channel.
 	e.agent.observeRequestUsage(e.streamCtx, e.cfg, request, result.Usage)
 	if !sawFile && !sawSource && !e.interruptedStep.toolActivity {
 		if err := exhaustedContextResult(e.cfg, result); err != nil {
+			e.recoveryUsage = e.recoveryUsage.Add(result.Usage)
 			return false, err
 		}
 	}
+	// Only a settled attempt can release the session's step-consumed barrier.
+	// Recovery reuses this durable step index, so an empty exhausted attempt
+	// must not let a queued steer anchor before the retry's output is consumed.
+	// The marker still precedes tool execution and the commit barrier.
+	if !e.emit(StreamEvent{Type: EventStepEnd, StepNumber: e.baseCfg.StepIndexOffset + len(e.steps)}) {
+		e.aborted = true
+		return true, nil
+	}
+	// The tool batch's OnPart callback bridges approval, progress, result,
+	// and error parts onto the event channel.
 	sr, kind, err := settleStep(e.streamCtx, e.dispatch, result, stepTextMeta, e.bridgeToolPart)
 	if err != nil {
 		e.localFailure(err)

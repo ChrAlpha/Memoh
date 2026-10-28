@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -66,12 +67,12 @@ func TestEmptyContextExhaustionRecoversBeforeCommittingInBothLoops(t *testing.T)
 			folds, commits := 0, 0
 			provider := &atomicMockProvider{handler: func(call int, req sdk.Request) (sdk.ModelResult, error) {
 				if call == 1 {
-					return sdk.ModelResult{FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 1048570, TotalTokens: 1048570}}, nil
+					return sdk.ModelResult{FinishReason: sdk.FinishReasonLength, Usage: sdk.Usage{InputTokens: 1048570, CachedInputTokens: 1048448, TotalTokens: 1048570}}, nil
 				}
 				if folds != 1 || providerAttemptContainsText(req.Messages, "old evidence") || !providerAttemptContainsText(req.Messages, "current task") {
 					t.Fatal("empty exhausted response retried without a committed reduction")
 				}
-				return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+				return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop, Usage: sdk.Usage{InputTokens: 100, OutputTokens: 1, TotalTokens: 101}}, nil
 			}}
 			history := sdk.UserMessage(strings.Repeat("old evidence ", 8000))
 			input := sdk.UserMessage("current task")
@@ -92,7 +93,9 @@ func TestEmptyContextExhaustionRecoversBeforeCommittingInBothLoops(t *testing.T)
 				return StepDirective{}, nil
 			}
 			a := New(Deps{})
+			var usage sdk.Usage
 			if stream {
+				stepEnds, sawText := 0, false
 				for event := range a.Stream(context.Background(), cfg) {
 					if event.Type == EventError {
 						t.Fatal(event.Cause)
@@ -100,9 +103,33 @@ func TestEmptyContextExhaustionRecoversBeforeCommittingInBothLoops(t *testing.T)
 					if event.Type == EventRuntimeNotice {
 						t.Error("recovered empty attempt emitted an output-truncation notice")
 					}
+					if event.Type == EventTextDelta {
+						sawText = true
+					}
+					if event.Type == EventStepEnd {
+						stepEnds++
+						if !sawText || event.StepNumber != 0 {
+							t.Error("unfinished attempt released the step-consumed barrier")
+						}
+					}
+					if event.Type == EventAgentEnd {
+						if err := json.Unmarshal(event.Usage, &usage); err != nil {
+							t.Fatal(err)
+						}
+					}
 				}
-			} else if _, err := a.Generate(context.Background(), cfg); err != nil {
-				t.Fatal(err)
+				if stepEnds != 1 {
+					t.Errorf("step-end markers=%d, want only the committed step", stepEnds)
+				}
+			} else {
+				result, err := a.Generate(context.Background(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				usage = *result.Usage
+			}
+			if usage.InputTokens != 1048670 || usage.OutputTokens != 1 || usage.TotalTokens != 1048671 || usage.CachedInputTokens != 1048448 {
+				t.Errorf("usage lost the consumed empty attempt or double-counted cache: %+v", usage)
 			}
 			if folds != 1 || commits != 1 || provider.calls.Load() != 2 {
 				t.Fatalf("folds=%d commits=%d calls=%d", folds, commits, provider.calls.Load())
