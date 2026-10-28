@@ -28,13 +28,15 @@ func RepairToolClosureFrags(frags []ContextFrag, scope Scope, collector string) 
 	repaired := make([]ContextFrag, 0, len(frags))
 	pendingOrder := make([]string, 0, 2)
 	pendingNames := make(map[string]string, 2)
+	pendingCalls := make(map[string]Provenance, 2)
 	syntheticIndex := 0
 
 	flush := func() {
 		for _, callID := range pendingOrder {
-			repaired = append(repaired, syntheticToolClosureFrag(callID, pendingNames[callID], syntheticIndex, scope, collector))
+			repaired = append(repaired, syntheticToolClosureFrag(callID, pendingNames[callID], syntheticIndex, pendingCalls[callID], scope, collector))
 			syntheticIndex++
 			delete(pendingNames, callID)
+			delete(pendingCalls, callID)
 		}
 		pendingOrder = pendingOrder[:0]
 	}
@@ -63,6 +65,7 @@ func RepairToolClosureFrags(frags []ContextFrag, scope Scope, collector string) 
 					continue
 				}
 				pendingNames[callID] = strings.TrimSpace(call.ToolName)
+				pendingCalls[callID] = frag.Provenance
 				pendingOrder = append(pendingOrder, callID)
 			}
 		case sdk.MessageRoleTool:
@@ -78,6 +81,7 @@ func RepairToolClosureFrags(frags []ContextFrag, scope Scope, collector string) 
 				}
 				kept = append(kept, result)
 				delete(pendingNames, callID)
+				delete(pendingCalls, callID)
 				for i, id := range pendingOrder {
 					if id == callID {
 						pendingOrder = append(pendingOrder[:i], pendingOrder[i+1:]...)
@@ -101,7 +105,10 @@ func RepairToolClosureFrags(frags []ContextFrag, scope Scope, collector string) 
 	return repaired
 }
 
-func syntheticToolClosureFrag(callID, toolName string, index int, scope Scope, collector string) ContextFrag {
+// syntheticToolClosureFrag closes call callID as interrupted. The closure
+// renders from the message that made the call: it sits at the call's index
+// and goes wherever the call does.
+func syntheticToolClosureFrag(callID, toolName string, index int, call Provenance, scope Scope, collector string) ContextFrag {
 	msg := sdk.Message{
 		Role: sdk.MessageRoleTool,
 		Content: []sdk.MessagePart{sdk.ToolResultPart{
@@ -112,18 +119,19 @@ func syntheticToolClosureFrag(callID, toolName string, index int, scope Scope, c
 		}},
 	}
 	return MessageFrag(MessageFragInput{
-		ID:         fmt.Sprintf("history.tool_closure.%03d", index),
-		Message:    msg,
-		Kind:       KindConversationEvent,
-		Slot:       SlotHistory,
-		Priority:   PriorityForMessage(msg),
-		CacheClass: CacheNever,
-		Trust:      TrustWorkspace,
-		Scope:      scope,
-		Source:     SourceToolClosureRepair,
-		SourceID:   "tool_closure." + callID,
-		Collector:  collector,
-		Index:      index,
+		ID:          fmt.Sprintf("history.tool_closure.%03d", index),
+		Message:     msg,
+		Kind:        KindConversationEvent,
+		Slot:        SlotHistory,
+		Priority:    PriorityForMessage(msg),
+		CacheClass:  CacheNever,
+		Trust:       TrustWorkspace,
+		Scope:       scope,
+		Source:      SourceToolClosureRepair,
+		SourceID:    "tool_closure." + callID,
+		Collector:   collector,
+		Index:       call.Index,
+		FromMessage: call.FromMessage,
 	})
 }
 

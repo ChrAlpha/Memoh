@@ -277,6 +277,7 @@ type MessageFragInput struct {
 	SourceID           string
 	Collector          string
 	Index              int
+	FromMessage        bool
 	TokenEstimate      int
 	Budget             BudgetPolicy
 	Render             RenderPolicy
@@ -305,10 +306,11 @@ func MessageFrag(input MessageFragInput) ContextFrag {
 		Scope:              normalizeScope(input.Scope),
 		Render:             renderPolicy,
 		Provenance: Provenance{
-			Source:    strings.TrimSpace(input.Source),
-			SourceID:  strings.TrimSpace(input.SourceID),
-			Collector: strings.TrimSpace(input.Collector),
-			Index:     input.Index,
+			Source:      strings.TrimSpace(input.Source),
+			SourceID:    strings.TrimSpace(input.SourceID),
+			Collector:   strings.TrimSpace(input.Collector),
+			Index:       input.Index,
+			FromMessage: input.FromMessage,
 		},
 		Parts: []Part{{
 			Type:       PartSDKMessage,

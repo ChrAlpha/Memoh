@@ -78,6 +78,7 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 			Source:        contextfrag.SourceRunConfig,
 			Collector:     historyMessagesCollectorName,
 			Index:         i,
+			FromMessage:   true,
 			Budget:        budget,
 			TokenEstimate: estimate,
 		}))
@@ -121,6 +122,7 @@ func (*materializedCurrentUserCollector) Collect(_ context.Context, req CollectR
 		Source:        contextfrag.SourceRunConfig,
 		Collector:     materializedCurrentUserCollectorName,
 		Index:         index,
+		FromMessage:   true,
 		Budget:        contextfrag.BudgetPolicy{Overflow: contextfrag.OverflowKeep},
 		TokenEstimate: estimate,
 	})}, nil
