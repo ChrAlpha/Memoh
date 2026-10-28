@@ -125,7 +125,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	if s == nil || allowance <= 0 {
 		return false, nil
 	}
-	usage := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
+	usage := requestInputTokens(cfg, *params)
 	if usage <= allowance {
 		return false, nil
 	}
@@ -136,6 +136,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		splice.from[i] = i
 	}
 	tokens := usage
+	applied := false
 	sw := ContextSwitch{
 		Request:         *params,
 		Provenance:      provenance,
@@ -146,9 +147,10 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		Summarize:       forkSummarizer(cfg.Model, cfg.ModelIdleWindow),
 		Fold: func(fold ContextFold) ContextSplice {
 			splice.apply(fold)
-			tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
+			applied = true
 			request := *params
 			request.Messages = splice.messages
+			tokens = requestInputTokens(cfg, request)
 			return ContextSplice{Request: request, Provenance: splice.provenance, Tokens: tokens}
 		},
 	}
@@ -172,6 +174,9 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 			return false, err
 		}
 		return false, fmt.Errorf("%w: context switch: %w", contextfrag.ErrBudgetUnsatisfied, err)
+	}
+	if !applied {
+		return false, nil
 	}
 	recordFoldedInputImages(cfg.ContextMutations, params.Messages, provenance, splice.from)
 	params.Messages = splice.messages
