@@ -92,18 +92,19 @@ func latestComposedUserMessageIndex(messages []timeline.ContextMessage) int {
 func discussComposedMessageFrag(message timeline.ContextMessage, index int, currentUser bool, scope contextfrag.Scope) contextfrag.ContextFrag {
 	msg := discussContextMessageToSDK(message)
 	input := contextfrag.MessageFragInput{
-		ID:         fmt.Sprintf("discuss.message.%03d", index),
-		Message:    msg,
-		Kind:       contextfrag.KindConversationEvent,
-		Slot:       contextfrag.SlotHistory,
-		Priority:   contextfrag.PriorityForMessage(msg),
-		CacheClass: contextfrag.CacheNever,
-		Trust:      trustForDiscussRole(message.Role),
-		Scope:      scope,
-		Source:     discussContextSource,
-		SourceID:   fmt.Sprintf("message.%03d", index),
-		Collector:  discussContextCollectorName,
-		Index:      index,
+		ID:          fmt.Sprintf("discuss.message.%03d", index),
+		Message:     msg,
+		Kind:        contextfrag.KindConversationEvent,
+		Slot:        contextfrag.SlotHistory,
+		Priority:    contextfrag.PriorityForMessage(msg),
+		CacheClass:  contextfrag.CacheNever,
+		Trust:       trustForDiscussRole(message.Role),
+		Scope:       scope,
+		Source:      discussContextSource,
+		SourceID:    fmt.Sprintf("message.%03d", index),
+		Collector:   discussContextCollectorName,
+		Index:       index,
+		FromMessage: true,
 	}
 	if message.Source != nil {
 		input.SourceID = message.Source.ID
