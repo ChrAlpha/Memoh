@@ -20331,17 +20331,8 @@ const docTemplate = `{
         "contextfrag.ContextRef": {
             "type": "object",
             "properties": {
-                "content_hash": {
-                    "type": "string"
-                },
                 "durability": {
                     "$ref": "#/definitions/contextfrag.RefDurability"
-                },
-                "hash_algo": {
-                    "type": "string"
-                },
-                "hash_scope": {
-                    "type": "string"
                 },
                 "id": {
                     "type": "string"
@@ -20453,9 +20444,6 @@ const docTemplate = `{
                 "counts": {
                     "$ref": "#/definitions/contextfrag.ManifestCounts"
                 },
-                "final_input_hash": {
-                    "type": "string"
-                },
                 "memory_recall": {
                     "$ref": "#/definitions/contextfrag.MemoryRecallTrace"
                 },
@@ -20479,9 +20467,6 @@ const docTemplate = `{
                 },
                 "stable_message_count": {
                     "type": "integer"
-                },
-                "stable_prefix_hash": {
-                    "type": "string"
                 },
                 "stable_prefix_token_estimate": {
                     "type": "integer"
@@ -20779,9 +20764,6 @@ const docTemplate = `{
             "properties": {
                 "attempt": {
                     "type": "integer"
-                },
-                "post_prepare_input_hash": {
-                    "type": "string"
                 },
                 "step_index": {
                     "type": "integer"

@@ -15,45 +15,13 @@ func BuildManifest(frags []ContextFrag) Manifest {
 	}
 	manifest.Items = make([]ManifestItem, 0, len(frags))
 	for _, frag := range frags {
-		ref := frag.Ref
-		if err := ValidateContextRef(ref); err != nil {
-			normalized := WithContextRef(frag, ref)
-			ref = normalized.Ref
-		}
-		manifest.ValidationWarnings = append(manifest.ValidationWarnings, ContextRefWarnings(ref)...)
-		item := ManifestItem{
-			ID:                 frag.ID,
-			Ref:                ref,
-			Kind:               frag.Kind,
-			Slot:               frag.Slot,
-			Role:               frag.Role,
-			Priority:           frag.Priority,
-			RetentionTier:      frag.RetentionTier,
-			DropPriority:       frag.DropPriority,
-			RequiredCapability: frag.RequiredCapability,
-			CacheClass:         frag.CacheClass,
-			Trust:              frag.Trust,
-			Source:             frag.Provenance.Source,
-			SourceID:           frag.Provenance.SourceID,
-			Collector:          frag.Provenance.Collector,
-			ConflictKey:        frag.ConflictKey,
-			Render:             frag.Render,
-			Scope:              frag.Scope,
-		}
+		item := NewManifestItem(frag)
+		manifest.ValidationWarnings = append(manifest.ValidationWarnings, ContextRefWarnings(item.Ref)...)
 		for _, part := range frag.Parts {
-			item.PartTypes = append(item.PartTypes, part.Type)
-			switch part.Type {
-			case PartText:
-				item.TextBytes += len(part.Text)
-			case PartSDKMessage:
-				item.TextBytes += messageTextBytes(partMessage(part))
-				item.ImageCount += messageImageCount(partMessage(part))
+			if part.Type == PartSDKMessage {
 				manifest.Counts.Messages++
-			case PartImage:
-				item.ImageCount++
 			}
 		}
-		item.TokenEstimate = ResolveFragTokens(frag)
 		manifest.Counts.TextBytes += item.TextBytes
 		manifest.Counts.Images += item.ImageCount
 		manifest.Counts.TokenEstimate += item.TokenEstimate
@@ -64,6 +32,47 @@ func BuildManifest(frags []ContextFrag) Manifest {
 	manifest.TrustBreakdown = trustBreakdownFromItems(manifest.Items)
 	manifest.RenderedOutputs = renderedOutputRefs(frags)
 	return manifest
+}
+
+// NewManifestItem is the non-sensitive summary of one fragment.
+func NewManifestItem(frag ContextFrag) ManifestItem {
+	ref := frag.Ref
+	if err := ValidateContextRef(ref); err != nil {
+		ref = WithContextRef(frag, ref).Ref
+	}
+	item := ManifestItem{
+		ID:                 frag.ID,
+		Ref:                ref,
+		Kind:               frag.Kind,
+		Slot:               frag.Slot,
+		Role:               frag.Role,
+		Priority:           frag.Priority,
+		RetentionTier:      frag.RetentionTier,
+		DropPriority:       frag.DropPriority,
+		RequiredCapability: frag.RequiredCapability,
+		CacheClass:         frag.CacheClass,
+		Trust:              frag.Trust,
+		Source:             frag.Provenance.Source,
+		SourceID:           frag.Provenance.SourceID,
+		Collector:          frag.Provenance.Collector,
+		ConflictKey:        frag.ConflictKey,
+		Render:             frag.Render,
+		Scope:              frag.Scope,
+	}
+	for _, part := range frag.Parts {
+		item.PartTypes = append(item.PartTypes, part.Type)
+		switch part.Type {
+		case PartText:
+			item.TextBytes += len(part.Text)
+		case PartSDKMessage:
+			item.TextBytes += messageTextBytes(partMessage(part))
+			item.ImageCount += messageImageCount(partMessage(part))
+		case PartImage:
+			item.ImageCount++
+		}
+	}
+	item.TokenEstimate = ResolveFragTokens(frag)
+	return item
 }
 
 // trustBreakdownFromItems rolls manifest items up by TrustLevel, ordered by

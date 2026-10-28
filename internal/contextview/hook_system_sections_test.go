@@ -150,7 +150,7 @@ func TestHookSystemSectionsDropOptionalBeforePreferredWithNotice(t *testing.T) {
 	if !hasFragID(result.Selected, systemBudgetMarkerID) {
 		t.Fatalf("selected = %v, want required omission marker", fragIDs(result.Selected))
 	}
-	payload, _ := renderSDKPayload(t, result.Selected, placementFor(result.Selected))
+	payload := renderSDKPayload(t, result.Selected, placementFor(result.Selected))
 	if !strings.Contains(payload.System, optional.ID) {
 		t.Fatalf("system budget marker = %q, want omitted hook ID", payload.System)
 	}
@@ -246,14 +246,14 @@ func TestApplyProviderRunConfigRebindsHookWarningAfterTrim(t *testing.T) {
 	})
 
 	item := manifestItemByID(got.ContextManifest.Items, hook.ID)
-	if item == nil || item.Ref.ContentHash == sourceRef.ContentHash {
-		t.Fatalf("trimmed item = %#v, want recomputed content hash distinct from %#v", item, sourceRef)
+	if item == nil || item.Ref != sourceRef {
+		t.Fatalf("trimmed item = %#v, want the identity of %#v", item, sourceRef)
 	}
 	for _, warning := range got.ContextManifest.ValidationWarnings {
 		if warning.Code != "hook_system_section_required_clamped" {
 			continue
 		}
-		if warning.Ref.ID != item.Ref.ID || warning.Ref.ContentHash != item.Ref.ContentHash {
+		if warning.Ref != item.Ref {
 			t.Fatalf("trim warning ref = %#v, want final item ref %#v", warning.Ref, item.Ref)
 		}
 		return
@@ -331,8 +331,7 @@ func hasValidationWarning(
 	for _, warning := range warnings {
 		if warning.Code == want.Code &&
 			warning.Message == want.Message &&
-			warning.Ref.ID == want.Ref.ID &&
-			warning.Ref.ContentHash == want.Ref.ContentHash {
+			warning.Ref == want.Ref {
 			return true
 		}
 	}

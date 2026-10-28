@@ -1,10 +1,7 @@
 package contextfrag
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"reflect"
 	"sync"
 )
 
@@ -96,24 +93,22 @@ type CacheUsageRecord struct {
 	CacheWrite1hTokens int `json:"cache_write_1h_tokens,omitempty"`
 }
 
-// StepSnapshot records the content-light audit for one provider attempt.
+// StepSnapshot records one provider attempt of a step.
 type StepSnapshot struct {
-	Attempt              int    `json:"attempt,omitempty"`
-	StepIndex            int    `json:"step_index"`
-	PostPrepareInputHash string `json:"post_prepare_input_hash,omitempty"`
+	Attempt   int `json:"attempt,omitempty"`
+	StepIndex int `json:"step_index"`
 }
 
 // MutationLedger records post-render changes, provider-attempt metadata, and
 // content-light step snapshots. All methods are nil-safe.
 type MutationLedger struct {
-	mu             sync.Mutex
-	records        []MutationRecord
-	cacheUsage     []CacheUsageRecord
-	finalInputHash string
-	steps          []StepSnapshot
-	attempt        int
-	model          string
-	clientType     string
+	mu         sync.Mutex
+	records    []MutationRecord
+	cacheUsage []CacheUsageRecord
+	steps      []StepSnapshot
+	attempt    int
+	model      string
+	clientType string
 }
 
 func NewMutationLedger() *MutationLedger {
@@ -165,24 +160,6 @@ func (l *MutationLedger) CacheUsageRecords() []CacheUsageRecord {
 	out := make([]CacheUsageRecord, len(l.cacheUsage))
 	copy(out, l.cacheUsage)
 	return out
-}
-
-func (l *MutationLedger) SetFinalInputHash(hash string) {
-	if l == nil {
-		return
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.finalInputHash = hash
-}
-
-func (l *MutationLedger) FinalInputHash() string {
-	if l == nil {
-		return ""
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.finalInputHash
 }
 
 // AppendStepSnapshot stamps a provider-step audit with the current attempt.
@@ -238,61 +215,19 @@ func (l *MutationLedger) ModelInfo() (string, string) {
 	return l.model, l.clientType
 }
 
-// ProviderInputHash hashes the assembled provider payload deterministically.
-func ProviderInputHash(system string, messages any) string {
-	return ProviderPayloadHash(system, messages, nil)
-}
-
-// ProviderPayloadHash includes tool definitions when supplied while preserving
-// the legacy hash shape when tools are empty. It is a content fingerprint only;
-// envelope decisions price payloads through ProviderEnvelopeTokens.
-func ProviderPayloadHash(system string, messages any, tools any) string {
-	tools = nilIfEmptyValue(tools)
-	raw, err := json.Marshal(struct {
-		System   string `json:"system"`
-		Messages any    `json:"messages"`
-		Tools    any    `json:"tools,omitempty"`
-	}{System: system, Messages: messages, Tools: tools})
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
-}
-
-func nilIfEmptyValue(value any) any {
-	if value == nil {
-		return nil
-	}
-	rv := reflect.ValueOf(value)
-	switch rv.Kind() {
-	case reflect.Map, reflect.Slice:
-		if rv.IsNil() || rv.Len() == 0 {
-			return nil
-		}
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Pointer:
-		if rv.IsNil() {
-			return nil
-		}
-	}
-	return value
-}
-
 func (l *MutationLedger) MarshalJSON() ([]byte, error) {
 	model, clientType := l.ModelInfo()
 	return json.Marshal(struct {
-		Records        []MutationRecord   `json:"records,omitempty"`
-		CacheUsage     []CacheUsageRecord `json:"cache_usage,omitempty"`
-		FinalInputHash string             `json:"final_input_hash,omitempty"`
-		Steps          []StepSnapshot     `json:"steps,omitempty"`
-		Model          string             `json:"model,omitempty"`
-		ClientType     string             `json:"client_type,omitempty"`
+		Records    []MutationRecord   `json:"records,omitempty"`
+		CacheUsage []CacheUsageRecord `json:"cache_usage,omitempty"`
+		Steps      []StepSnapshot     `json:"steps,omitempty"`
+		Model      string             `json:"model,omitempty"`
+		ClientType string             `json:"client_type,omitempty"`
 	}{
-		Records:        l.Records(),
-		CacheUsage:     l.CacheUsageRecords(),
-		FinalInputHash: l.FinalInputHash(),
-		Steps:          l.StepSnapshots(),
-		Model:          model,
-		ClientType:     clientType,
+		Records:    l.Records(),
+		CacheUsage: l.CacheUsageRecords(),
+		Steps:      l.StepSnapshots(),
+		Model:      model,
+		ClientType: clientType,
 	})
 }

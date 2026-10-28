@@ -11,9 +11,9 @@ import (
 const MetadataContextLifecycleKey = "context_lifecycle"
 
 // LifecycleSnapshotVersion is the durable snapshot schema version. Version 2
-// flattened the version-1 cache_plan object into stable_prefix_hash,
-// stable_message_count, and stable_prefix_token_estimate and added the
-// enriched attempt, breakdown, and memory recall audits.
+// flattened the version-1 cache_plan object into stable_message_count and
+// stable_prefix_token_estimate and added the enriched attempt, breakdown, and
+// memory recall audits.
 const LifecycleSnapshotVersion = 2
 
 // LifecycleSnapshotFromMetadata extracts the persisted lifecycle snapshot
@@ -87,7 +87,6 @@ type LifecycleSnapshot struct {
 	SelectionDecisions        []SelectionDecision `json:"selection_decisions,omitempty"`
 	Selection                 SelectionTrace      `json:"selection"`
 	BudgetPlan                *ContextBudgetPlan  `json:"budget_plan,omitempty"`
-	StablePrefixHash          string              `json:"stable_prefix_hash,omitempty"`
 	StableMessageCount        int                 `json:"stable_message_count,omitempty"`
 	StablePrefixTokenEstimate int                 `json:"stable_prefix_token_estimate,omitempty"`
 	CacheReadTokens           int                 `json:"cache_read_tokens"`
@@ -95,7 +94,6 @@ type LifecycleSnapshot struct {
 	CacheUsage                []CacheUsageRecord  `json:"cache_usage,omitempty"`
 	CacheComparison           *CacheComparison    `json:"cache_comparison,omitempty"`
 	Mutations                 []MutationRecord    `json:"mutations,omitempty"`
-	FinalInputHash            string              `json:"final_input_hash,omitempty"`
 	Model                     string              `json:"model,omitempty"`
 	ClientType                string              `json:"client_type,omitempty"`
 	Steps                     []StepSnapshot      `json:"steps,omitempty"`
@@ -189,7 +187,6 @@ func (h *LifecycleHolder) Snapshot() (LifecycleSnapshot, bool) {
 	}
 	if ledger != nil {
 		snapshot.Mutations = ledger.Records()
-		snapshot.FinalInputHash = ledger.FinalInputHash()
 		snapshot.CacheUsage = ledger.CacheUsageRecords()
 		snapshot.CacheReadTokens, snapshot.CacheWriteTokens = cacheUsageTotals(snapshot.CacheUsage)
 		snapshot.Model, snapshot.ClientType = ledger.ModelInfo()
@@ -217,13 +214,11 @@ func BuildLifecycleSnapshot(manifest Manifest) LifecycleSnapshot {
 		snapshot.BudgetPlan = &plan
 	}
 	if manifest.CachePlan != nil {
-		snapshot.StablePrefixHash = manifest.CachePlan.StablePrefixHash
 		snapshot.StableMessageCount = manifest.CachePlan.StableMessageCount
 		snapshot.StablePrefixTokenEstimate = manifest.CachePlan.StablePrefixTokenEstimate
 	}
 	if manifest.Mutations != nil {
 		snapshot.Mutations = manifest.Mutations.Records()
-		snapshot.FinalInputHash = manifest.Mutations.FinalInputHash()
 		snapshot.CacheUsage = manifest.Mutations.CacheUsageRecords()
 		snapshot.CacheReadTokens, snapshot.CacheWriteTokens = cacheUsageTotals(snapshot.CacheUsage)
 		snapshot.Model, snapshot.ClientType = manifest.Mutations.ModelInfo()
@@ -276,9 +271,6 @@ func DecodeLifecycleSnapshot(raw []byte) (LifecycleSnapshot, error) {
 	}
 	snapshot := compat.LifecycleSnapshot
 	if compat.LegacyCachePlan != nil {
-		if snapshot.StablePrefixHash == "" {
-			snapshot.StablePrefixHash = compat.LegacyCachePlan.StablePrefixHash
-		}
 		if snapshot.StableMessageCount == 0 {
 			snapshot.StableMessageCount = compat.LegacyCachePlan.StableMessageCount
 		}

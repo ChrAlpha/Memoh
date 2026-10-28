@@ -57,7 +57,7 @@ func assertRejectedInitialStep(t *testing.T, ledger *contextfrag.MutationLedger)
 	if len(steps) != 1 {
 		t.Fatalf("step snapshots = %#v, want exactly the rejected initial step", steps)
 	}
-	if steps[0].StepIndex != 0 || steps[0].PostPrepareInputHash != "" {
+	if steps[0].StepIndex != 0 {
 		t.Fatalf("initial step snapshot = %#v, want step 0 rejected before dispatch", steps[0])
 	}
 }

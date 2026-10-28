@@ -95,7 +95,7 @@ func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 	t.Parallel()
 	ledger := contextfrag.NewMutationLedger()
 	holder := contextfrag.NewLifecycleHolder()
-	plan := contextfrag.CachePlan{StablePrefixHash: "prefix", StableMessageCount: 2}
+	plan := contextfrag.CachePlan{StableMessageCount: 2}
 	budgetPlan := contextfrag.ContextBudgetPlan{Window: 1000, HistoryBudget: 400}
 	selection := contextfrag.SelectionTrace{Selected: 1, Dropped: 1, DropReasons: map[string]int{"history_budget": 1}}
 	decisions := []contextfrag.SelectionDecision{{ID: "old", Decision: contextfrag.DecisionDropped, Reason: "history_budget"}}
@@ -113,7 +113,7 @@ func TestRefreshContextFragPreservesProviderAccounting(t *testing.T) {
 		ContextLifecycle: holder,
 	}
 	cfg = cfg.RefreshContextFrag()
-	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.StablePrefixHash != "prefix" || cfg.ContextManifest.Mutations != ledger {
+	if cfg.ContextManifest.CachePlan == nil || cfg.ContextManifest.CachePlan.StableMessageCount != 2 || cfg.ContextManifest.Mutations != ledger {
 		t.Fatalf("manifest accounting = %#v", cfg.ContextManifest)
 	}
 	if len(cfg.ContextManifest.ToolDefs) != 1 || cfg.ContextManifest.ToolDefs[0].Name != "read" {

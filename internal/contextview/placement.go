@@ -27,7 +27,6 @@ func (StablePrefixPlacer) Place(selected []contextfrag.ContextFrag, _ contextfra
 	}
 	firstVolatile = renderedStablePrefixEnd(selected, firstVolatile)
 	return PlacementPlan{
-		StablePrefixHash:   stablePrefixHash(selected[:firstVolatile]),
 		FirstVolatileIndex: firstVolatile,
 		Items:              items,
 	}
@@ -78,15 +77,4 @@ func placementRef(frag contextfrag.ContextFrag) contextfrag.ContextRef {
 		return frag.Ref
 	}
 	return contextfrag.WithContextRef(frag, frag.Ref).Ref
-}
-
-func stablePrefixHash(frags []contextfrag.ContextFrag) string {
-	if len(frags) == 0 {
-		return ""
-	}
-	hash, err := sdkRenderedPayloadHash(renderSDKPayloadFromFrags(frags))
-	if err != nil {
-		return ""
-	}
-	return hash
 }
