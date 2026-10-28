@@ -211,3 +211,6 @@ require (
 )
 
 tool github.com/swaggo/swag/cmd/swag
+
+// Pin the Anthropic terminal-usage fix until it is available in an upstream release.
+replace github.com/felinics/twilight => github.com/ChrAlpha/memoh-twilight-ai v0.0.0-20261028154229-20c743e256e2
