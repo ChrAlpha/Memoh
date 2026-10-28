@@ -87,7 +87,7 @@ func countCacheControlBreakpoints(messages []sdk.Message, tools []toolexec.Tool)
 // to end: a StableMessageCount produced by the context view (history frags are
 // now CacheStable) actually reaches models.ApplyPromptCacheWithPlan and lands a
 // cache_control breakpoint on the last stable history message, in addition to
-// the pre-existing system and last-tool breakpoints Anthropic already got.
+// the system breakpoint that also caches the tools.
 func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 	t.Parallel()
 
@@ -115,7 +115,8 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 
 	tools := []toolexec.Tool{{Name: "search"}}
 	model := anthropicCacheTestModel()
-	newSystem, newMessages, newTools, systemPrepended, _ := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
+	layout := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
+	newSystem, newMessages, newTools, systemPrepended := layout.System, layout.Messages, layout.Tools, layout.SystemPrepended
 
 	if !systemPrepended {
 		t.Fatal("expected the system prompt to be promoted into a message for Anthropic")
@@ -138,8 +139,10 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 		t.Fatalf("last stable history message (index %d) should carry a cache breakpoint", stableIndex)
 	}
 
-	if len(newTools) == 0 || newTools[len(newTools)-1].CacheControl == nil {
-		t.Fatal("last tool should carry a cache breakpoint")
+	// Tools precede the system prompt in Anthropic's cached prefix, so the
+	// system breakpoint caches them too.
+	if len(newTools) == 0 || newTools[len(newTools)-1].CacheControl != nil {
+		t.Fatal("tools should be covered by the system breakpoint, not carry their own")
 	}
 
 	// Real traversal, not a hand-incremented counter that can only ever
@@ -148,8 +151,8 @@ func TestApplyProviderRunConfigAnthropicMessageLevelBreakpoint(t *testing.T) {
 	// extra, unwanted breakpoint appeared somewhere else in the payload.
 	const anthropicBreakpointLimit = 4
 	total := countCacheControlBreakpoints(newMessages, newTools)
-	if total != 3 {
-		t.Fatalf("total cache_control breakpoints = %d, want exactly 3 (system + last-history-message + last-tool)", total)
+	if total != 2 {
+		t.Fatalf("total cache_control breakpoints = %d, want exactly 2 (system + last-history-message)", total)
 	}
 	if total > anthropicBreakpointLimit {
 		t.Fatalf("total cache_control breakpoints = %d, exceeds Anthropic's hard limit of %d", total, anthropicBreakpointLimit)
@@ -184,7 +187,8 @@ func TestApplyProviderRunConfigNonAnthropicUnaffected(t *testing.T) {
 
 	tools := []toolexec.Tool{{Name: "search"}}
 	model := openAICacheTestModel()
-	newSystem, newMessages, newTools, systemPrepended, _ := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
+	layout := models.ApplyPromptCacheWithPlan(model, models.DefaultPromptCacheTTL, got.ContextCachePlan, got.System, got.Messages, tools)
+	newSystem, newMessages, newTools, systemPrepended := layout.System, layout.Messages, layout.Tools, layout.SystemPrepended
 
 	if systemPrepended {
 		t.Fatal("non-Anthropic models must not get system promotion")

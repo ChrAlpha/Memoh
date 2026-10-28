@@ -380,9 +380,9 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	if cfg.initialProviderPrefixSet {
 		providerAttemptPrefixCount = cfg.initialProviderMessageCount
 	}
-	system, messages, planTools, systemPrepended, actualStableCount := models.ApplyPromptCacheWithPlan(
-		cfg.Model, cfg.PromptCacheTTL, plan, cfg.System, cfg.Messages, sdkTools,
-	)
+	cacheLayout := models.ApplyPromptCacheWithPlan(cfg.Model, cfg.PromptCacheTTL, plan, cfg.System, cfg.Messages, sdkTools)
+	system, planTools, systemPrepended := cacheLayout.System, cacheLayout.Tools, cacheLayout.SystemPrepended
+	messages := cacheLayout.AdvanceRun(cacheLayout.Messages, runCacheEnd(cacheLayout.Messages))
 	// A mid-stream retry re-dispatches the boundary whose dynamic messages
 	// were admitted by the failed attempt; their stored positions shift with
 	// the promoted system message.
@@ -390,7 +390,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 	if systemPrepended {
 		providerRefs = shiftDynamicSourceRefs(providerRefs, 1)
 	}
-	plan.StableMessageCount = actualStableCount
+	plan.StableMessageCount = cacheLayout.StableMessageCount
 	if systemPrepended {
 		providerAttemptPrefixCount++
 	}
@@ -465,6 +465,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 			return nil
 		}
 		defer func() { prepareIndex++ }()
+		p.Messages = cacheLayout.AdvanceRun(p.Messages, runCacheEnd(p.Messages))
 		return prepareProviderAttempt(ctx, cfg, handoff, systemPrepended, initialProviderMessageCount, prepareIndex+1, cfg.dynamicInputs.pendingRefs(), p)
 	}
 
@@ -485,6 +486,16 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 		initialMessageCount: initialProviderMessageCount,
 		systemPrepended:     systemPrepended,
 	}, nil
+}
+
+// runCacheEnd is where the run's rolling cache breakpoint may end in messages:
+// before the background summary carriers, which every call rebuilds.
+func runCacheEnd(messages []sdk.Message) int {
+	end := len(messages)
+	for end > 0 && contextfrag.IsBackgroundSummaryCarrier(messages[end-1]) {
+		end--
+	}
+	return end
 }
 
 // contextStepFailureCapture records the first context-preparation failure the

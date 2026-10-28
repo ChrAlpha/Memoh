@@ -50,7 +50,7 @@ func textCacheControl(t *testing.T, msg sdk.Message) *sdk.CacheControl {
 	return tp.CacheControl
 }
 
-func TestApplyPromptCache_AnthropicDefaultMovesSystemAndCachesLastTool(t *testing.T) {
+func TestApplyPromptCache_AnthropicSystemBreakpointCoversTools(t *testing.T) {
 	model := newAnthropicTestModel(t)
 	system := "you are a helpful bot"
 	messages := []sdk.Message{sdk.UserMessage("hi")}
@@ -74,6 +74,21 @@ func TestApplyPromptCache_AnthropicDefaultMovesSystemAndCachesLastTool(t *testin
 	if cc == nil || cc.Type != "ephemeral" || cc.TTL != "" {
 		t.Errorf("system message cache: got %+v, want ephemeral 5m default", cc)
 	}
+	// Anthropic caches tools before the system prompt, so the system
+	// breakpoint already covers them; a tool breakpoint would spend a slot.
+	for i, tool := range gotTools {
+		if tool.CacheControl != nil {
+			t.Errorf("tool %d should not carry its own breakpoint, got %+v", i, tool.CacheControl)
+		}
+	}
+}
+
+func TestApplyPromptCache_AnthropicWithoutSystemCachesLastTool(t *testing.T) {
+	model := newAnthropicTestModel(t)
+	tools := []toolexec.Tool{{Name: "first"}, {Name: "second"}}
+
+	_, _, gotTools := ApplyPromptCache(model, "", "", []sdk.Message{sdk.UserMessage("hi")}, tools)
+
 	if got := gotTools[0].CacheControl; got != nil {
 		t.Errorf("first tool should not be cached, got %+v", got)
 	}
@@ -84,7 +99,7 @@ func TestApplyPromptCache_AnthropicDefaultMovesSystemAndCachesLastTool(t *testin
 
 func TestApplyPromptCache_AnthropicOneHourTTL(t *testing.T) {
 	model := newAnthropicTestModel(t)
-	gotSystem, gotMessages, gotTools := ApplyPromptCache(
+	gotSystem, gotMessages, _ := ApplyPromptCache(
 		model,
 		PromptCacheTTL1h,
 		"system text",
@@ -98,6 +113,7 @@ func TestApplyPromptCache_AnthropicOneHourTTL(t *testing.T) {
 	if cc == nil || cc.TTL != "1h" {
 		t.Errorf("system cache TTL: got %+v, want 1h", cc)
 	}
+	_, _, gotTools := ApplyPromptCache(model, PromptCacheTTL1h, "", []sdk.Message{sdk.UserMessage("hi")}, []toolexec.Tool{{Name: "only"}})
 	if got := gotTools[0].CacheControl; got == nil || got.TTL != "1h" {
 		t.Errorf("tool cache TTL: got %+v, want 1h", got)
 	}
@@ -167,7 +183,7 @@ func TestApplyPromptCache_AnthropicDoesNotMutateInput(t *testing.T) {
 	model := newAnthropicTestModel(t)
 	tools := []toolexec.Tool{{Name: "first"}, {Name: "second"}}
 	messages := []sdk.Message{sdk.UserMessage("hi")}
-	_, _, _ = ApplyPromptCache(model, "", "system", messages, tools)
+	_, _, _ = ApplyPromptCache(model, "", "", messages, tools)
 	if tools[1].CacheControl != nil {
 		t.Errorf("source tool slice was mutated: %+v", tools[1].CacheControl)
 	}

@@ -11,6 +11,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/models"
 )
 
 // MessageProvenance is what one message a run sends renders: the stored
@@ -74,7 +75,7 @@ func newContextSwitchState(cfg RunConfig) *contextSwitchState {
 
 func (s *contextSwitchState) know(provenance MessageProvenance) {
 	messages := cloneProviderMessages([]sdk.Message{provenance.Message})
-	clearProviderCacheControls(messages)
+	models.ClearCacheControls(messages)
 	provenance.Message = messages[0]
 	s.known = append(s.known, provenance)
 }
@@ -102,7 +103,7 @@ func (s *contextSwitchState) committed(messages []sdk.Message, provenance []Mess
 // run knows for it; a message the run knows nothing about matches nil.
 func (s *contextSwitchState) align(messages []sdk.Message) []*MessageProvenance {
 	cleared := cloneProviderMessages(messages)
-	clearProviderCacheControls(cleared)
+	models.ClearCacheControls(cleared)
 	out := make([]*MessageProvenance, len(messages))
 	next := 0
 	for i := range cleared {
@@ -290,7 +291,7 @@ func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch
 		offset = 1
 	}
 	messages := cloneProviderMessages(params.Messages[offset:])
-	clearProviderCacheControls(messages)
+	models.ClearCacheControls(messages)
 	plan := &cfg.ContextCachePlan
 	stableBefore := messagesTokens(cfg.Messages[:min(plan.StableMessageCount, len(cfg.Messages))])
 	cfg.Messages = messages

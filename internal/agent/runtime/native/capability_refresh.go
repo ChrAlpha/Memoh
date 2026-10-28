@@ -103,7 +103,7 @@ func (a *Agent) refreshCapabilities(
 	exec = canonicalizeProviderToolSchemas(exec)
 	// The definitions carry the same prompt-cache marking the dispatch put on
 	// the original set, so the refreshed request stays cacheable.
-	_, _, planTools, _, _ := models.ApplyPromptCacheWithPlan(cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, exec)
+	planTools := models.ApplyPromptCacheWithPlan(cfg.Model, cfg.PromptCacheTTL, cfg.ContextCachePlan, cfg.System, cfg.Messages, exec).Tools
 	var executable []toolexec.Tool
 	if len(planTools) > 0 && cfg.SupportsToolCall {
 		executable = planTools
