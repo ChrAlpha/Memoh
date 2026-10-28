@@ -266,7 +266,7 @@ func TestAgentUsesSuccessfulUsageBeforeNextTurnWithoutReplayingSuccess(t *testin
 }
 
 func TestUsageBaselineIsInvalidatedByRequestChangesOrMissingUsage(t *testing.T) {
-	for _, change := range []string{"system", "model", "endpoint", "history", "zero usage"} {
+	for _, change := range []string{"system", "model", "endpoint", "history", "unicode JSON", "image", "tool schema", "zero usage"} {
 		t.Run(change, func(t *testing.T) {
 			provider := &atomicMockProvider{handler: func(int, sdk.Request) (sdk.ModelResult, error) {
 				usage := sdk.Usage{InputTokens: 218601}
@@ -281,11 +281,24 @@ func TestUsageBaselineIsInvalidatedByRequestChangesOrMissingUsage(t *testing.T) 
 			cfg.ModelEndpoint = "https://endpoint-one.test"
 			cfg.Messages = []sdk.Message{sdk.UserMessage(strings.Repeat("evidence ", 10000)), sdk.UserMessage("task")}
 			cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 200000, 8000
+			cfg.SupportsImageInput = change == "image"
+			cfg.SupportsToolCall = change == "tool schema"
 			cfg.SwitchContext = func(context.Context, ContextSwitch) (string, error) {
 				t.Error("reused usage from another request")
 				return "", errors.New("unexpected fold")
 			}
 			a := New(Deps{})
+			setSchema := func(value string) {
+				a.SetToolProviders([]agenttools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
+					Name: "lookup", Parameters: &jsonschema.Schema{Type: "object", Properties: map[string]*jsonschema.Schema{"mode": {Type: "string", Enum: []any{value}}}},
+					Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
+						return sdk.TextOutput("unused"), nil
+					},
+				}}}})
+			}
+			if change == "tool schema" {
+				setSchema("first")
+			}
 			if _, err := a.Generate(context.Background(), cfg); err != nil {
 				t.Fatal(err)
 			}
@@ -300,6 +313,12 @@ func TestUsageBaselineIsInvalidatedByRequestChangesOrMissingUsage(t *testing.T) 
 				cfg.ModelEndpoint = "https://endpoint-two.test"
 			case "history":
 				cfg.Messages[0] = sdk.UserMessage("Edited history")
+			case "unicode JSON":
+				cfg.Messages[0] = sdk.UserMessage(strings.Repeat(`{"任务":"诊断","数据":[123456789,987654321]}`, 2000))
+			case "image":
+				cfg.Messages[0].Content = append(cfg.Messages[0].Content, sdk.ImagePart{Image: "data:image/png;base64,AAAA", MediaType: "image/png"})
+			case "tool schema":
+				setSchema("second")
 			}
 			cfg.Messages = append(cfg.Messages, sdk.AssistantMessage("done"), sdk.UserMessage("next"))
 			if _, err := a.Generate(context.Background(), cfg); err != nil {
