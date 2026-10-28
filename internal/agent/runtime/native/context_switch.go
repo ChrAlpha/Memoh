@@ -47,7 +47,9 @@ type ContextSwitch struct {
 type ContextSplice struct {
 	Request    sdk.Request
 	Provenance []*MessageProvenance
-	Tokens     int
+	// Tokens uses the planner's raw estimate, like AllowanceTokens. Final
+	// provider admission separately enforces the calibrated input budget.
+	Tokens int
 }
 
 // ContextFold is one pass an event committed: its summary, and the request
@@ -157,7 +159,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 			applied = true
 			request := *params
 			request.Messages = splice.messages
-			tokens = requestInputTokens(cfg, request)
+			tokens = contextfrag.ProviderEnvelopeTokens(request.System, request.Messages, request.Tools)
 			return ContextSplice{Request: request, Provenance: splice.provenance, Tokens: tokens}
 		},
 	}

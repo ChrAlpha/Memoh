@@ -10,6 +10,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/models"
@@ -59,22 +60,39 @@ func TestMeasuredUsageRewritesLocallyFittingSummary(t *testing.T) {
 	held := s.q.hold(earlier)
 	summary := SummaryMessage(earlier)
 	input := sdk.UserMessage("Continue this task")
+	verifyMeasuredFold(t, s, []sdk.Message{summary, input}, []native.MessageProvenance{
+		{Message: summary, Sources: []turn.ContextMessageSource{{Kind: "summary", ID: summaryIDs(held)[0]}}},
+		{Message: input, Sources: []turn.ContextMessageSource{s.row()}, Anchor: true},
+	}, "", 218601, nil)
+}
+
+func TestMeasuredUsageKeepsItsPrefixWhenFoldingAppendedResults(t *testing.T) {
+	s := newFoldSession(t)
+	input := sdk.UserMessage("Continue this task")
+	provenance := []native.MessageProvenance{{Message: input, Sources: []turn.ContextMessageSource{s.row()}, Anchor: true}}
+	appended := []sdk.Message{callMessage("a"), resultMessage("a", strings.Repeat("a", 40000)), callMessage("b"), resultMessage("b", strings.Repeat("b", 40000))}
+	for _, message := range appended {
+		provenance = append(provenance, native.MessageProvenance{Message: message, Sources: []turn.ContextMessageSource{s.row()}})
+	}
+	verifyMeasuredFold(t, s, []sdk.Message{input}, provenance, strings.Repeat("fixed system ", 9000), 170000, appended)
+}
+
+func verifyMeasuredFold(t *testing.T, s *foldSession, messages []sdk.Message, provenance []native.MessageProvenance, system string, actual int, appended []sdk.Message) {
+	t.Helper()
 	calls, summaries := 0, 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"id":"response","model":"usage-model","choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":218601,"completion_tokens":1,"total_tokens":218602}}`)
+		_, _ = fmt.Fprintf(w, `{"id":"response","model":"usage-model","choices":[{"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":%d,"completion_tokens":1,"total_tokens":%d}}`, actual, actual+1)
 	}))
 	defer server.Close()
 	model := models.NewSDKChatModel(models.SDKModelConfig{ModelID: "usage-model", ClientType: "openai-completions", BaseURL: server.URL, HTTPClient: server.Client()})
 	cfg := native.RunConfig{
-		Model: model, Messages: []sdk.Message{summary, input}, ContextBudgetMaxTokens: 200000, ModelMaxOutputTokens: 8000,
-		Identity: native.SessionContext{BotID: s.botID, SessionID: s.session},
-		ContextProvenance: []native.MessageProvenance{
-			{Message: summary, Sources: []turn.ContextMessageSource{{Kind: "summary", ID: summaryIDs(held)[0]}}},
-			{Message: input, Sources: []turn.ContextMessageSource{s.row()}, Anchor: true},
-		},
+		Model: model, System: system, Messages: messages, ContextBudgetMaxTokens: 200000, ModelMaxOutputTokens: 8000,
+		Identity:          native.SessionContext{BotID: s.botID, SessionID: s.session},
+		ContextProvenance: provenance,
 		SwitchContext: func(ctx context.Context, sw native.ContextSwitch) (string, error) {
+			tokens := sw.UsageTokens
 			sources := make([]Source, len(sw.Provenance))
 			for i, p := range sw.Provenance {
 				if p != nil {
@@ -90,6 +108,7 @@ func TestMeasuredUsageRewritesLocallyFittingSummary(t *testing.T) {
 				},
 				Apply: func(pass Pass) (sdk.Request, []Source) {
 					next := sw.Fold(native.ContextFold{SummaryID: pass.SummaryID, Summary: SummaryMessage(pass.Summary), Order: pass.Order})
+					tokens = next.Tokens
 					out := make([]Source, len(next.Provenance))
 					for i, p := range next.Provenance {
 						if p != nil {
@@ -99,6 +118,9 @@ func TestMeasuredUsageRewritesLocallyFittingSummary(t *testing.T) {
 					return next.Request, out
 				},
 			})
+			if err == nil && tokens > sw.AllowanceTokens {
+				return "", fmt.Errorf("%w: splice tokens=%d planner allowance=%d", contextfrag.ErrBudgetUnsatisfied, tokens, sw.AllowanceTokens)
+			}
 			return "", err
 		},
 	}
@@ -106,7 +128,9 @@ func TestMeasuredUsageRewritesLocallyFittingSummary(t *testing.T) {
 	if _, err := agent.Generate(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-	cfg.Messages = append(cfg.Messages, sdk.AssistantMessage("done"), sdk.UserMessage("Continue"))
+	cfg.Messages = append(cfg.Messages, sdk.AssistantMessage("done"))
+	cfg.Messages = append(cfg.Messages, appended...)
+	cfg.Messages = append(cfg.Messages, sdk.UserMessage("Continue"))
 	if _, err := agent.Generate(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
