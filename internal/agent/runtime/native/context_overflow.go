@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -14,13 +15,47 @@ import (
 
 const maxContextRecoveries = 2
 
+// Some providers finish with length and zero output when input consumes the
+// window instead of returning an API error. Measured input above our allowance
+// makes that an unfinished step. Ordinary output truncation and any generated
+// content remain completed work and must not be replayed.
+func exhaustedContextResult(cfg RunConfig, result sdk.ModelResult) error {
+	if result.FinishReason != sdk.FinishReasonLength || result.Usage.OutputTokens != 0 || result.Usage.ReasoningTokens != 0 ||
+		result.Text != "" || result.Reasoning != "" || len(result.ReasoningParts) != 0 ||
+		len(result.ToolCalls) != 0 || len(result.Files) != 0 || len(result.Sources) != 0 {
+		return nil
+	}
+	allowance := providerInputAllowance(cfg)
+	if allowance <= 0 || result.Usage.InputTokens <= allowance {
+		return nil
+	}
+	return &emptyContextExhaustion{inputTokens: result.Usage.InputTokens}
+}
+
+type emptyContextExhaustion struct{ inputTokens int }
+
+func (*emptyContextExhaustion) Error() string {
+	return "model exhausted context without producing output"
+}
+
+func (*emptyContextExhaustion) Unwrap() error { return contextfrag.ErrBudgetUnsatisfied }
+
+func contextRecoveryFeedback(err error) (modelretry.Overflow, bool) {
+	var exhausted *emptyContextExhaustion
+	if errors.As(err, &exhausted) {
+		// Usage reports the consumed input, not the provider's hard limit.
+		return modelretry.Overflow{InputTokens: exhausted.inputTokens}, true
+	}
+	return modelretry.ContextOverflow(err)
+}
+
 // recoverContextOverflow runs at the failed model step, before any output
 // from that attempt commits or any of its tools execute. It uses a smaller
 // allowance to force the existing durable fold even when the local estimate
 // passed admission. A new dispatch is permitted only after an applied pass
 // actually reduces the rejected request.
 func (a *Agent) recoverContextOverflow(ctx context.Context, cfg RunConfig, request *sdk.Request, failure error, recoveries *int) (bool, error) {
-	feedback, overflow := modelretry.ContextOverflow(failure)
+	feedback, overflow := contextRecoveryFeedback(failure)
 	if !overflow || cfg.contextSwitch == nil {
 		return false, failure
 	}

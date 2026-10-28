@@ -233,6 +233,10 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			return nil, fmt.Errorf("generate: %w", err)
 		}
 		result, err := a.generateStep(genCtx, cfg, stepParams, sdkStep, &retries)
+		if err == nil {
+			a.observeRequestUsage(genCtx, cfg, stepParams, result.Usage)
+			err = exhaustedContextResult(cfg, result)
+		}
 		if err != nil {
 			recovered, recoveryErr := a.recoverContextOverflow(genCtx, cfg, &stepParams, err, &recoveries)
 			if recovered {
@@ -250,7 +254,6 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			return nil, recoveryErr
 		}
 		recoveries = 0
-		a.observeRequestUsage(genCtx, cfg, stepParams, result.Usage)
 		lastResult = result
 
 		sr, kind, err := settleStep(genCtx, thread.dispatch, result, result.TextProviderMetadata, nil)
