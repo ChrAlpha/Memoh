@@ -79,8 +79,9 @@ func TestPostgresCompactionCommitsEveryAdmittedRow(t *testing.T) {
 	}
 
 	summarizer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(w, `{"id":"summary","object":"chat.completion","model":"compact-model","choices":[{"index":0,"message":{"role":"assistant","content":"The short messages were exchanged."},"finish_reason":"stop"}]}`)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, `data: {"id":"summary","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"The short messages were exchanged."},"finish_reason":null}]}`+"\n\n"+
+			`data: {"id":"summary","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
 	}))
 	t.Cleanup(summarizer.Close)
 

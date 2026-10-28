@@ -106,13 +106,12 @@ func (*pairingQueries) CompleteCompactionLog(_ context.Context, arg sqlc.Complet
 type pairingSummarizer struct{ summary string }
 
 func (s pairingSummarizer) RoundTrip(*http.Request) (*http.Response, error) {
-	body := `{"id":"stub","object":"chat.completion","created":0,"model":"stub",` +
-		`"choices":[{"index":0,"message":{"role":"assistant","content":"` + s.summary + `"},"finish_reason":"stop"}],` +
-		`"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}`
+	body := `data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"` + s.summary + `"},"finish_reason":null}]}` + "\n\n" +
+		`data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}` + "\n\ndata: [DONE]\n\n"
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(body)),
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}, nil
 }
 

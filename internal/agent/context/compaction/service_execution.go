@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/jackc/pgx/v5"
@@ -26,6 +27,11 @@ import (
 // minSummaryTokens is the least room a summary must have to be worth
 // writing: below it a pass fails before calling the summarizer.
 const minSummaryTokens = 32
+
+// summarySilence is how long the summarizer may send nothing. A large cold
+// prompt can take minutes before its first token, and a long summary as long
+// again to write; neither is bounded while the provider keeps sending.
+const summarySilence = 5 * time.Minute
 
 // doCompaction runs one pass: it folds the earlier summaries and the oldest
 // candidates into one summary and commits it. It reports false when there was
@@ -262,7 +268,9 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 		// provider asks for; a rejected request is not made again.
 		return modelretry.Do(models.WithModelSession(ctx, cfg.SessionID), s.logger, "agent.compaction",
 			modelretry.Config{MaxAttempts: 1, FastAttempts: 1}, modelretry.Retryable,
-			func(ctx context.Context) (sdk.ModelResult, error) { return model.Generate(ctx, request) })
+			func(ctx context.Context) (sdk.ModelResult, error) {
+				return models.StreamResult(ctx, model, request, summarySilence)
+			})
 	}
 	var result sdk.ModelResult
 	if extended != nil {

@@ -210,6 +210,13 @@ continuations use the same phase-aware application watchdog:
 - Context budget recovery before and during a native run pauses the model
   watchdog while its synchronous compaction runs; the model window restarts
   when recovery returns. Cancellation and execution budgets still apply.
+- The compaction summarizer streams with its own five-minute silence window.
+  Whatever the provider's response yields renews it: its headers, text,
+  reasoning, and keepalive frames the SDK drops, such as Anthropic `ping`
+  events and SSE comments. Its first byte and its total length have no separate
+  deadline; a window that expires cuts the call off as an incomplete stream,
+  which is retried once, unless the provider had already answered with an
+  error.
 
 Conversation messages only append between compaction events. A tool result is
 bounded once, when the tool returns (`tool_output_max_bytes`, 32 KiB by default, and

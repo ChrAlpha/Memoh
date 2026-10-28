@@ -51,13 +51,13 @@ func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
 	if s.reasoning > 0 && (s.maxTokens-s.reasoning)*4 < len(s.summary) {
 		finishReason = "length"
 	}
-	resp := `{"id":"stub","object":"chat.completion","created":0,"model":"stub",` +
-		`"choices":[{"index":0,"message":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":` + jsonStr(finishReason) + `}],` +
-		`"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}`
+	// The summarizer streams its answer.
+	resp := `data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":null}]}` + "\n\n" +
+		`data: {"id":"stub","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":` + jsonStr(finishReason) + `}],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120}}` + "\n\ndata: [DONE]\n\n"
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(resp)),
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}, nil
 }
 
