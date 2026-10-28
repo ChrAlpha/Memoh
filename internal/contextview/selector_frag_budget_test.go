@@ -40,14 +40,13 @@ func TestFragBudgetTrimsPureTextFragOverMaxChars(t *testing.T) {
 	}
 }
 
-func TestFragBudgetTrimRefreshesAccountingAndHash(t *testing.T) {
+func TestFragBudgetTrimRefreshesAccountingAndKeepsIdentity(t *testing.T) {
 	t.Parallel()
 	selector := &FragmentSelector{}
 	frag := textFrag("trimmed", contextfrag.SlotHistory, contextfrag.KindConversationEvent, sdk.MessageRoleAssistant, strings.Repeat("z", 80))
 	frag.Budget = contextfrag.BudgetPolicy{MaxChars: 30, Overflow: contextfrag.OverflowTrim}
 	frag.TokenEstimate = 999
 	frag = contextfrag.WithContextRef(frag, frag.Ref)
-	originalHash := frag.Ref.ContentHash
 	result := selector.Select([]contextfrag.ContextFrag{frag}, selector.ProfileFor(contextfrag.IntentRunConfigPreProvider), BudgetEnvelope{})
 	if len(result.Selected) != 1 || len(result.Edited) != 1 {
 		t.Fatalf("result = %#v", result)
@@ -56,8 +55,8 @@ func TestFragBudgetTrimRefreshesAccountingAndHash(t *testing.T) {
 	if trimmed.TokenEstimate != 0 {
 		t.Fatalf("token estimate = %d, want recomputation", trimmed.TokenEstimate)
 	}
-	if trimmed.Ref.ContentHash == "" || trimmed.Ref.ContentHash == originalHash {
-		t.Fatalf("content hash = %q, original = %q", trimmed.Ref.ContentHash, originalHash)
+	if trimmed.Ref != frag.Ref {
+		t.Fatalf("trimmed ref = %#v, want the identity of %#v", trimmed.Ref, frag.Ref)
 	}
 	if len(trimmed.Parts[0].Text) > frag.Budget.MaxChars {
 		t.Fatalf("trimmed text = %q", trimmed.Parts[0].Text)

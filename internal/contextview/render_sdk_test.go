@@ -30,7 +30,7 @@ func TestSDKRendererPreservesSystemSectionBytes(t *testing.T) {
 			Parts: []contextfrag.Part{{Type: contextfrag.PartText, Text: " hook tail "}},
 		},
 	}
-	payload, _ := renderSDKPayload(t, frags, placementFor(frags))
+	payload := renderSDKPayload(t, frags, placementFor(frags))
 	if payload.System != "  first\n\n\n\n\n hook tail " {
 		t.Fatalf("system = %q", payload.System)
 	}
@@ -76,7 +76,7 @@ func TestSDKRendererSystemRenderGroupsUseDeclaredJoiners(t *testing.T) {
 		),
 	}
 
-	payload, _ := renderSDKPayload(t, frags, placementFor(frags))
+	payload := renderSDKPayload(t, frags, placementFor(frags))
 	want := "prompt\n\n" +
 		"## Platform Identities\n\nKnown identities.\n\n" +
 		"<identity channel=\"telegram\" username=\"@memoh\"/>\n" +
@@ -99,7 +99,7 @@ func TestSDKRendererPreservesMessagesAndMaterializesRawCurrentInput(t *testing.T
 		contextfrag.MessageFrag(contextfrag.MessageFragInput{ID: "current", Message: sdk.UserMessage(query), Kind: contextfrag.KindCurrentUserMessage, Slot: contextfrag.SlotCurrentUser}),
 		contextfrag.ImageFrag("images", images, contextfrag.Scope{}, contextfrag.SourceRunConfig),
 	}
-	payload, _ := renderSDKPayload(t, frags, placementFor(frags))
+	payload := renderSDKPayload(t, frags, placementFor(frags))
 	want := []sdk.Message{sdk.AssistantMessage("answer"), sdk.UserMessage(query, images[0])}
 	assertMessagesEqual(t, payload.Messages, want)
 	if payload.Query != "" || len(payload.InlineImages) != 0 {
@@ -115,20 +115,20 @@ func TestSDKRendererImageOnlyInputInjectsLatestUser(t *testing.T) {
 		messageFrag("assistant", sdk.AssistantMessage("working")),
 		contextfrag.ImageFrag("images", []sdk.ImagePart{image}, contextfrag.Scope{}, contextfrag.SourceRunConfig),
 	}
-	payload, _ := renderSDKPayload(t, frags, placementFor(frags))
+	payload := renderSDKPayload(t, frags, placementFor(frags))
 	assertMessagesEqual(t, payload.Messages, []sdk.Message{
 		sdk.UserMessage("pipeline query", image),
 		sdk.AssistantMessage("working"),
 	})
 }
 
-func TestSDKRendererValidatesPlacementAndHashesDeterministically(t *testing.T) {
+func TestSDKRendererValidatesPlacementAndRendersDeterministically(t *testing.T) {
 	t.Parallel()
 	frag := textFrag("system", contextfrag.SlotSystem, contextfrag.KindSystemPrompt, sdk.MessageRoleSystem, "system")
-	first, firstHash := renderSDKPayload(t, []contextfrag.ContextFrag{frag}, placementFor([]contextfrag.ContextFrag{frag}))
-	second, secondHash := renderSDKPayload(t, []contextfrag.ContextFrag{frag}, placementFor([]contextfrag.ContextFrag{frag}))
-	if firstHash == "" || firstHash != secondHash || !reflect.DeepEqual(first, second) {
-		t.Fatalf("first = %#v (%q), second = %#v (%q)", first, firstHash, second, secondHash)
+	first := renderSDKPayload(t, []contextfrag.ContextFrag{frag}, placementFor([]contextfrag.ContextFrag{frag}))
+	second := renderSDKPayload(t, []contextfrag.ContextFrag{frag}, placementFor([]contextfrag.ContextFrag{frag}))
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("first = %#v, second = %#v", first, second)
 	}
 	_, err := (&SDKMessagesRenderer{}).Render(context.Background(), RenderInput{Selected: []contextfrag.ContextFrag{frag}})
 	if err == nil {
@@ -136,7 +136,7 @@ func TestSDKRendererValidatesPlacementAndHashesDeterministically(t *testing.T) {
 	}
 }
 
-func renderSDKPayload(t *testing.T, frags []contextfrag.ContextFrag, placement PlacementPlan) (*SDKRenderedPayload, string) {
+func renderSDKPayload(t *testing.T, frags []contextfrag.ContextFrag, placement PlacementPlan) *SDKRenderedPayload {
 	t.Helper()
 	rendered, err := (&SDKMessagesRenderer{}).Render(context.Background(), RenderInput{
 		Intent: contextfrag.IntentRunConfigPreProvider, Selected: frags, Placement: placement, Target: contextfrag.RenderSDKMessages,
@@ -148,7 +148,7 @@ func renderSDKPayload(t *testing.T, frags []contextfrag.ContextFrag, placement P
 	if !ok {
 		t.Fatalf("payload type = %T", rendered.Data)
 	}
-	return payload, rendered.ContentHash
+	return payload
 }
 
 func placementFor(frags []contextfrag.ContextFrag) PlacementPlan {

@@ -328,11 +328,10 @@ func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch
 		}
 	}
 	// The stable prefix is no longer the one the view compiled: its estimate
-	// follows the messages the splice changed, and it has no compiled hash.
+	// follows the messages the splice changed.
 	if plan.StablePrefixTokenEstimate > 0 {
 		plan.StablePrefixTokenEstimate += messagesTokens(messages[:min(plan.StableMessageCount, len(messages))]) - stableBefore
 	}
-	plan.StablePrefixHash = ""
 	s.moved = nil
 	return cfg, true
 }

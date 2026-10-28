@@ -13,17 +13,15 @@ import (
 
 // TestProviderAttemptHandoffRejectRevokesStagedAttempt pins the loop's
 // dispatch-boundary reject: a staged attempt that will not be dispatched (dead
-// or budget-failed context) leaves the last dispatched hash, step snapshots,
-// fork snapshot, and retry input untouched, revokes the boundary's dynamic
+// or budget-failed context) leaves the step snapshots, fork snapshot, and
+// retry input untouched, revokes the boundary's dynamic
 // admission, and clears the stale staging so a later publish cannot reuse it.
 func TestProviderAttemptHandoffRejectRevokesStagedAttempt(t *testing.T) {
 	t.Parallel()
 
 	oldParams := sdk.Request{Messages: []sdk.Message{sdk.UserMessage("last dispatched")}}
-	oldHash := contextfrag.ProviderPayloadHash(oldParams.System, oldParams.Messages, oldParams.Tools)
 	ledger := contextfrag.NewMutationLedger()
-	ledger.SetFinalInputHash(oldHash)
-	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: oldHash})
+	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0})
 	fork := agenttools.NewMessageSnapshot(oldParams.Messages)
 	attemptState := &providerAttemptState{}
 	attemptState.store(&oldParams, 0, false, nil)
@@ -53,10 +51,7 @@ func TestProviderAttemptHandoffRejectRevokesStagedAttempt(t *testing.T) {
 	// The loop's dispatch boundary refuses the attempt instead of publishing.
 	handoff.reject()
 
-	if got := ledger.FinalInputHash(); got != oldHash {
-		t.Fatalf("final input hash = %q, want prior hash %q", got, oldHash)
-	}
-	if got := ledger.StepSnapshots(); len(got) != 1 || got[0].PostPrepareInputHash != oldHash {
+	if got := ledger.StepSnapshots(); len(got) != 1 || got[0].StepIndex != 0 {
 		t.Fatalf("step snapshots = %#v, want only prior dispatched attempt", got)
 	}
 	if got := ledger.Records(); len(got) != 0 {
@@ -82,8 +77,8 @@ func TestProviderAttemptHandoffRejectRevokesStagedAttempt(t *testing.T) {
 }
 
 // TestProviderAttemptHandoffPublishAppliesAttemptState pins the publish
-// boundary the loops run immediately before invoking the provider: it advances
-// the final input hash, appends the step snapshot, stores the fork and retry
+// boundary the loops run immediately before invoking the provider: it appends
+// the step snapshot, stores the fork and retry
 // state, and makes the attempt's dynamic
 // messages durable for its step — exactly once per staged attempt.
 func TestProviderAttemptHandoffPublishAppliesAttemptState(t *testing.T) {
@@ -98,7 +93,6 @@ func TestProviderAttemptHandoffPublishAppliesAttemptState(t *testing.T) {
 		Tools:    []sdk.ToolDefinition{{Name: "lookup"}},
 	}
 	dynamic.append(admitted, false, "admitted dynamic input", 1)
-	wantHash := contextfrag.ProviderPayloadHash(params.System, params.Messages, params.Tools)
 	ledger := contextfrag.NewMutationLedger()
 	fork := agenttools.NewMessageSnapshot(nil)
 	attemptState := &providerAttemptState{}
@@ -115,11 +109,8 @@ func TestProviderAttemptHandoffPublishAppliesAttemptState(t *testing.T) {
 		t.Fatalf("publish provider attempt: %v", err)
 	}
 
-	if got := ledger.FinalInputHash(); got != wantHash {
-		t.Fatalf("final input hash = %q, want %q", got, wantHash)
-	}
 	steps := ledger.StepSnapshots()
-	if len(steps) != 1 || steps[0].StepIndex != 1 || steps[0].PostPrepareInputHash != wantHash {
+	if len(steps) != 1 || steps[0].StepIndex != 1 {
 		t.Fatalf("step snapshots = %#v, want published step 1", steps)
 	}
 	forkMessages, err := fork.Messages()

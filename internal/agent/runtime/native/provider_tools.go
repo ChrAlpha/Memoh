@@ -10,9 +10,9 @@ import (
 )
 
 // canonicalizeProviderToolSchemas mirrors Twilight's buildConfig schema
-// resolution before provider-attempt budgeting and hashing. Twilight treats
-// an already-resolved *jsonschema.Schema as final, so the SDK cannot rewrite
-// the audited tool payload later.
+// resolution before provider-attempt budgeting. Twilight treats an
+// already-resolved *jsonschema.Schema as final, so the SDK cannot rewrite the
+// budgeted tool payload later.
 func canonicalizeProviderToolSchemas(tools []toolexec.Tool) []toolexec.Tool {
 	if len(tools) == 0 {
 		return tools

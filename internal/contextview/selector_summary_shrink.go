@@ -135,13 +135,7 @@ func summaryFragText(frag contextfrag.ContextFrag) (string, func(string) context
 			nextPart := part
 			nextPart.Text = text
 			next.Parts = []contextfrag.Part{nextPart}
-			conflictKey := next.ConflictKey
 			next.TokenEstimate = 0
-			next.Ref.HashAlgo = ""
-			next.Ref.HashScope = ""
-			next.Ref.ContentHash = ""
-			next = contextfrag.WithContextRef(next, next.Ref)
-			next.ConflictKey = conflictKey
 			return next
 		}, true
 	}

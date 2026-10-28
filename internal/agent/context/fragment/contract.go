@@ -27,28 +27,6 @@ func (ref ContextRef) StableKey() string {
 	return key
 }
 
-func (ref ContextRef) EqualIdentity(other ContextRef) bool {
-	if strings.TrimSpace(ref.Namespace) != strings.TrimSpace(other.Namespace) {
-		return false
-	}
-	if strings.TrimSpace(ref.ID) != strings.TrimSpace(other.ID) {
-		return false
-	}
-	if ref.Version != other.Version {
-		return false
-	}
-	if strings.TrimSpace(ref.Schema) != strings.TrimSpace(other.Schema) {
-		return false
-	}
-	if normalizeRefDurability(ref.Durability) != normalizeRefDurability(other.Durability) {
-		return false
-	}
-	if ref.Range == nil || other.Range == nil {
-		return ref.Range == nil && other.Range == nil
-	}
-	return ref.Range.Start == other.Range.Start && ref.Range.End == other.Range.End
-}
-
 func (ref ContextRef) IsDurable() bool {
 	return normalizeRefDurability(ref.Durability) == RefDurable
 }
@@ -72,20 +50,6 @@ func ValidateContextRef(ref ContextRef) error {
 	if ref.Range != nil && ref.Range.End < ref.Range.Start {
 		return fmt.Errorf("context ref range end %d before start %d", ref.Range.End, ref.Range.Start)
 	}
-	if strings.TrimSpace(ref.HashAlgo) != "" && ref.HashAlgo != HashAlgoSHA256 {
-		return fmt.Errorf("unsupported context ref hash algo %q", ref.HashAlgo)
-	}
-	if hashScope := strings.TrimSpace(ref.HashScope); hashScope != "" && !knownHashScope(hashScope) {
-		return fmt.Errorf("unsupported context ref hash scope %q", ref.HashScope)
-	}
-	if strings.TrimSpace(ref.ContentHash) != "" {
-		if strings.TrimSpace(ref.HashAlgo) == "" {
-			return errors.New("context ref hash algo is required when content hash is set")
-		}
-		if strings.TrimSpace(ref.HashScope) == "" {
-			return errors.New("context ref hash scope is required when content hash is set")
-		}
-	}
 	return nil
 }
 
@@ -105,56 +69,10 @@ func ValidateSchemaVersions(versions []SchemaVersion) error {
 	return nil
 }
 
-func (edit ContextEdit) Targets(ref ContextRef) bool {
-	for _, got := range edit.Refs {
-		if got.EqualIdentity(ref) {
-			return true
-		}
-	}
-	return false
-}
-
-func CheckEditPreconditions(edit ContextEdit, stateRefs []ContextRef) []ContextConflict {
-	var conflicts []ContextConflict
-	if edit.Schema.Name != SchemaContextEdit || edit.Schema.Version != CurrentSchemaVersion {
-		conflicts = append(conflicts, ContextConflict{
-			Kind:     ConflictInvalidSchema,
-			Expected: fmt.Sprintf("%s@%d", SchemaContextEdit, CurrentSchemaVersion),
-			Actual:   fmt.Sprintf("%s@%d", edit.Schema.Name, edit.Schema.Version),
-		})
-	} else if err := ValidateSchemaVersions([]SchemaVersion{edit.Schema}); err != nil {
-		conflicts = append(conflicts, ContextConflict{
-			Kind:     ConflictInvalidSchema,
-			Expected: fmt.Sprintf("%s@%d", SchemaContextEdit, CurrentSchemaVersion),
-			Actual:   fmt.Sprintf("%s@%d", edit.Schema.Name, edit.Schema.Version),
-		})
-	}
-
-	byKey := make(map[string]ContextRef, len(stateRefs))
-	for _, ref := range stateRefs {
-		byKey[ref.StableKey()] = ref
-	}
-
-	for key, expected := range edit.Preconditions.ExpectedHashes {
-		ref, ok := byKey[key]
-		if !ok {
-			conflicts = append(conflicts, ContextConflict{Kind: ConflictMissingRef, Key: key, Expected: expected})
-			continue
-		}
-		if ref.ContentHash != expected {
-			conflicts = append(conflicts, ContextConflict{
-				Kind:     ConflictContentHashMismatch,
-				Key:      key,
-				Expected: expected,
-				Actual:   ref.ContentHash,
-			})
-		}
-	}
-	return conflicts
-}
-
+// WithContextRef gives frag its ref: the identity it names, else the
+// source its provenance names, else its own ID. A fragment with a source is
+// durable; any other is synthetic.
 func WithContextRef(frag ContextFrag, ref ContextRef) ContextFrag {
-	hash, hashErr := CanonicalFragmentHash(frag)
 	hasExplicitID := strings.TrimSpace(ref.ID) != ""
 	hasSourceID := strings.TrimSpace(frag.Provenance.SourceID) != ""
 	ref.Namespace = firstNonEmpty(ref.Namespace, frag.Provenance.Source, "context_frag")
@@ -163,26 +81,15 @@ func WithContextRef(frag ContextFrag, ref ContextRef) ContextFrag {
 		ref.ID = strings.TrimSpace(ref.ID)
 	case hasSourceID:
 		ref.ID = strings.TrimSpace(frag.Provenance.SourceID)
-	case hashErr == nil && hash.Value != "":
-		ref.ID = hash.Value
 	default:
 		ref.ID = strings.TrimSpace(frag.ID)
 	}
 	ref.Schema = firstNonEmpty(ref.Schema, SchemaContextRef)
 	if ref.Durability == "" {
-		switch {
-		case hasExplicitID || hasSourceID:
+		ref.Durability = RefSynthetic
+		if hasExplicitID || hasSourceID {
 			ref.Durability = RefDurable
-		case hashErr == nil && hash.Value != "":
-			ref.Durability = RefSynthetic
-		default:
-			ref.Durability = RefDebug
 		}
-	}
-	if hashErr == nil && !hasPreservedSourcePayloadHash(ref) {
-		ref.HashAlgo = hash.Algo
-		ref.HashScope = hash.Scope
-		ref.ContentHash = hash.Value
 	}
 	frag.Ref = ref
 	return frag
@@ -192,21 +99,6 @@ func WithContextRef(frag ContextFrag, ref ContextRef) ContextFrag {
 // schemas share CurrentSchemaVersion until per-schema migration ranges exist.
 func UsesLockstepSchemaVersions() bool {
 	return true
-}
-
-func knownHashScope(scope string) bool {
-	switch scope {
-	case HashScopeCanonicalFragment, HashScopeSourcePayload:
-		return true
-	default:
-		return false
-	}
-}
-
-func hasPreservedSourcePayloadHash(ref ContextRef) bool {
-	return strings.TrimSpace(ref.ContentHash) != "" &&
-		strings.TrimSpace(ref.HashAlgo) == HashAlgoSHA256 &&
-		strings.TrimSpace(ref.HashScope) == HashScopeSourcePayload
 }
 
 func ContextRefWarnings(ref ContextRef) []ValidationWarning {
@@ -233,7 +125,6 @@ func DefaultSchemaVersions() []SchemaVersion {
 		{Name: SchemaContextManifest, Version: CurrentSchemaVersion},
 		{Name: SchemaContextFrag, Version: CurrentSchemaVersion},
 		{Name: SchemaContextRef, Version: CurrentSchemaVersion},
-		{Name: SchemaContextEdit, Version: CurrentSchemaVersion},
 		{Name: SchemaRenderPolicy, Version: CurrentSchemaVersion},
 	}
 }
@@ -267,7 +158,7 @@ func normalizeRefDurability(durability RefDurability) RefDurability {
 
 func knownSchemaName(name string) bool {
 	switch name {
-	case SchemaContextManifest, SchemaContextFrag, SchemaContextRef, SchemaContextEdit, SchemaRenderPolicy:
+	case SchemaContextManifest, SchemaContextFrag, SchemaContextRef, SchemaRenderPolicy:
 		return true
 	default:
 		return false

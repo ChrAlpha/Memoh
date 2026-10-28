@@ -38,7 +38,7 @@ func TestSelectionDecisionsUsesContextRefWhenIDsCollide(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Selected) != 1 || view.Selected[0].Ref.ContentHash != sources[0].Ref.ContentHash {
+	if len(view.Selected) != 1 || view.Selected[0].Ref != sources[0].Ref {
 		t.Fatalf("selector winner = %#v, want first ContextRef", view.Selected)
 	}
 	if len(view.Manifest.SelectionDecisions) != 2 {
@@ -46,10 +46,11 @@ func TestSelectionDecisionsUsesContextRefWhenIDsCollide(t *testing.T) {
 	}
 	firstDecision := view.Manifest.SelectionDecisions[0]
 	secondDecision := view.Manifest.SelectionDecisions[1]
-	if firstDecision.Decision != contextfrag.DecisionSelected || firstDecision.Ref.ContentHash != sources[0].Ref.ContentHash {
+	// The colliding identity of the second source carries its occurrence.
+	if firstDecision.Decision != contextfrag.DecisionSelected || firstDecision.Ref != sources[0].Ref || firstDecision.TextBytes != len("winner") {
 		t.Fatalf("winner decision = %#v, want selected first ContextRef", firstDecision)
 	}
-	if secondDecision.Decision != contextfrag.DecisionDropped || secondDecision.Ref.ContentHash != sources[1].Ref.ContentHash {
+	if secondDecision.Decision != contextfrag.DecisionDropped || secondDecision.Ref.ID != "same-id#1" || secondDecision.TextBytes != len("loser") {
 		t.Fatalf("loser decision = %#v, want dropped second ContextRef", secondDecision)
 	}
 }
@@ -104,7 +105,7 @@ func TestSelectionDecisionsAttributeTrimmedThenDroppedFragByID(t *testing.T) {
 	if dropped.Decision != contextfrag.DecisionDropped || dropped.Reason != systemBudgetDropReason {
 		t.Fatalf("decision for %s = %#v, want dropped/%s", oversized.ID, dropped, systemBudgetDropReason)
 	}
-	if dropped.Ref.ContentHash != sources[1].Ref.ContentHash {
-		t.Fatalf("dropped ref hash = %q, want source hash %q", dropped.Ref.ContentHash, sources[1].Ref.ContentHash)
+	if dropped.Ref != sources[1].Ref {
+		t.Fatalf("dropped ref = %#v, want the source's %#v", dropped.Ref, sources[1].Ref)
 	}
 }

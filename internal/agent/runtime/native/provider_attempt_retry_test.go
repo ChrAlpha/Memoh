@@ -117,8 +117,7 @@ func TestAgentStreamMidStreamRetryResendsTheAccumulatedRequest(t *testing.T) {
 	if retrySnapshot == nil {
 		t.Fatalf("step snapshots = %#v, want one recorded for the retry attempt", steps)
 	}
-	wantHash := contextfrag.ProviderPayloadHash(retryParams.System, retryParams.Messages, retryParams.Tools)
-	if retrySnapshot.StepIndex != 0 || retrySnapshot.PostPrepareInputHash != wantHash {
+	if retrySnapshot.StepIndex != 0 {
 		t.Fatalf("retry step snapshot = %#v", retrySnapshot)
 	}
 	if countProviderAttemptMutations(ledger.Records(), contextfrag.MutationContextBudgetFailure) != 0 {

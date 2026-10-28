@@ -100,9 +100,6 @@ func TestFromDBMessageBuildsDurableRecordScopeAndFrag(t *testing.T) {
 	if frag.Ref.Namespace != "bot_history_message" || frag.Ref.ID != "row-1" || frag.Ref.Durability != contextfrag.RefDurable {
 		t.Fatalf("frag ref should be durable DB row identity: %#v", frag.Ref)
 	}
-	if frag.Ref.ContentHash == "" || frag.Ref.HashAlgo != contextfrag.HashAlgoSHA256 || frag.Ref.HashScope != contextfrag.HashScopeSourcePayload {
-		t.Fatalf("frag ref missing source payload hash: %#v", frag.Ref)
-	}
 	if frag.Kind != contextfrag.KindConversationEvent || frag.Slot != contextfrag.SlotHistory {
 		t.Fatalf("unexpected frag kind/slot: %s %s", frag.Kind, frag.Slot)
 	}
@@ -122,24 +119,6 @@ func TestFromDBMessageBuildsDurableRecordScopeAndFrag(t *testing.T) {
 	}
 	if frag.Provenance.Source != string(SourceDBMessage) || frag.Provenance.SourceID != "row-1" || frag.Provenance.Collector != CollectorHistoryRecords {
 		t.Fatalf("unexpected frag provenance: %#v", frag.Provenance)
-	}
-}
-
-func TestDBMessageSourceHashIncludesMessageMetadata(t *testing.T) {
-	t.Parallel()
-
-	msg := messagepkg.Message{
-		ID:       "row-1",
-		BotID:    "bot-1",
-		Role:     "user",
-		Content:  turn.NewTextContent("hello"),
-		Metadata: map[string]any{"reply": map[string]any{"sender": "Alice"}},
-	}
-	changed := msg
-	changed.Metadata = map[string]any{"reply": map[string]any{"sender": "Bob"}}
-
-	if DBMessageSourceHash(msg).Value == DBMessageSourceHash(changed).Value {
-		t.Fatal("message metadata change should affect DB source payload hash")
 	}
 }
 
@@ -199,7 +178,7 @@ func TestFromDBMessageDuplicateContentUsesDurableRowIDs(t *testing.T) {
 	}
 }
 
-func TestFromDBMessageContentHashChangesWhenRowContentChanges(t *testing.T) {
+func TestFromDBMessageKeepsRowIdentityWhenContentChanges(t *testing.T) {
 	t.Parallel()
 
 	original, err := FromDBMessage(messagepkg.Message{
@@ -226,102 +205,9 @@ func TestFromDBMessageContentHashChangesWhenRowContentChanges(t *testing.T) {
 	if originalFrag.Ref.ID != editedFrag.Ref.ID {
 		t.Fatalf("same DB row should keep stable durable identity: original=%#v edited=%#v", originalFrag.Ref, editedFrag.Ref)
 	}
-	if originalFrag.Ref.ContentHash == "" || editedFrag.Ref.ContentHash == "" || originalFrag.Ref.ContentHash == editedFrag.Ref.ContentHash {
-		t.Fatalf("content hash should fence row content changes: original=%#v edited=%#v", originalFrag.Ref, editedFrag.Ref)
-	}
 }
 
-func TestDBMessageSourceHashIgnoresJoinedDisplayName(t *testing.T) {
-	t.Parallel()
-
-	msg := messagepkg.Message{
-		ID:                "row-1",
-		BotID:             "bot-1",
-		SessionID:         "session-1",
-		SenderDisplayName: "Alice",
-		Role:              "user",
-		Content:           persistedModelMessage(t, turn.ModelMessage{Role: "user", Content: turn.NewTextContent("hello")}),
-	}
-	original := DBMessageSourceHash(msg)
-	msg.SenderDisplayName = "Alice Renamed"
-
-	if renamed := DBMessageSourceHash(msg); renamed != original {
-		t.Fatalf("joined display name changed persisted source hash: original=%#v renamed=%#v", original, renamed)
-	}
-}
-
-func TestFromDBMessageContentHashChangesWhenAssetsChange(t *testing.T) {
-	t.Parallel()
-
-	msg := messagepkg.Message{
-		ID:      "row-1",
-		BotID:   "bot-1",
-		Role:    "user",
-		Content: persistedModelMessage(t, turn.ModelMessage{Role: "user", Content: turn.NewTextContent("with asset")}),
-		Assets: []messagepkg.MessageAsset{{
-			ContentHash: "asset-hash-1",
-			Role:        "attachment",
-			Ordinal:     0,
-			Mime:        "image/png",
-		}},
-	}
-	original, err := FromDBMessage(msg, ScopeFallback{})
-	if err != nil {
-		t.Fatalf("original FromDBMessage failed: %v", err)
-	}
-	msg.Assets[0].ContentHash = "asset-hash-2"
-	edited, err := FromDBMessage(msg, ScopeFallback{})
-	if err != nil {
-		t.Fatalf("edited FromDBMessage failed: %v", err)
-	}
-
-	originalFrag := ToFrag(original)
-	editedFrag := ToFrag(edited)
-	if originalFrag.Ref.ID != editedFrag.Ref.ID {
-		t.Fatalf("same DB row should keep stable durable identity: original=%#v edited=%#v", originalFrag.Ref, editedFrag.Ref)
-	}
-	if originalFrag.Ref.ContentHash == "" || editedFrag.Ref.ContentHash == "" || originalFrag.Ref.ContentHash == editedFrag.Ref.ContentHash {
-		t.Fatalf("content hash should fence asset changes: original=%#v edited=%#v", originalFrag.Ref, editedFrag.Ref)
-	}
-}
-
-func TestFromDBMessageContentHashUsesPersistedAssetIdentityFields(t *testing.T) {
-	t.Parallel()
-
-	msg := messagepkg.Message{
-		ID:      "row-1",
-		BotID:   "bot-1",
-		Role:    "user",
-		Content: persistedModelMessage(t, turn.ModelMessage{Role: "user", Content: turn.NewTextContent("with asset")}),
-		Assets: []messagepkg.MessageAsset{{
-			ContentHash: "asset-hash-1",
-			Role:        "attachment",
-			Ordinal:     0,
-			Mime:        "image/png",
-			SizeBytes:   1234,
-			StorageKey:  "objects/asset-hash-1",
-			Name:        "image.png",
-			Metadata:    map[string]any{"width": float64(640)},
-		}},
-	}
-	inMemory, err := FromDBMessage(msg, ScopeFallback{})
-	if err != nil {
-		t.Fatalf("inMemory FromDBMessage failed: %v", err)
-	}
-	msg.Assets[0].Mime = ""
-	msg.Assets[0].SizeBytes = 0
-	msg.Assets[0].StorageKey = ""
-	hydrated, err := FromDBMessage(msg, ScopeFallback{})
-	if err != nil {
-		t.Fatalf("hydrated FromDBMessage failed: %v", err)
-	}
-
-	if ToFrag(inMemory).Ref.ContentHash != ToFrag(hydrated).Ref.ContentHash {
-		t.Fatalf("non-persisted asset fields changed source hash: inMemory=%#v hydrated=%#v", ToFrag(inMemory).Ref, ToFrag(hydrated).Ref)
-	}
-}
-
-func TestFromDBMessageHashesLifecycleAuditWithoutKeepingIt(t *testing.T) {
+func TestFromDBMessageDropsLifecycleAuditFromRecord(t *testing.T) {
 	t.Parallel()
 
 	raw := json.RawMessage(`{"ratio": 1.50, "reply": {"sender": "<Bob & Co>"}, "agent_step_interrupted": true, "context_lifecycle": {"version": 2, "selection_decisions": [{"id": "history:1", "decision": "kept", "token_estimate": 12}]}}`)
@@ -340,16 +226,10 @@ func TestFromDBMessageHashesLifecycleAuditWithoutKeepingIt(t *testing.T) {
 	undecoded := base
 	undecoded.RawMetadata = raw
 
-	// Computed before lifecycle audits were dropped from records: a record
-	// hashes as it did when it kept them.
-	const wantHash = "f521a80e2e022e592dc032da9d3849533b88cea65f18a546edb74db4bfd6c029"
 	for name, msg := range map[string]messagepkg.Message{"decoded": withDecoded, "undecoded": undecoded} {
 		record, err := FromDBMessage(msg, ScopeFallback{})
 		if err != nil {
 			t.Fatalf("%s: FromDBMessage failed: %v", name, err)
-		}
-		if record.Ref.ContentHash != wantHash || DBMessageSourceHash(msg).Value != wantHash {
-			t.Fatalf("%s: source hash = %s, want %s", name, record.Ref.ContentHash, wantHash)
 		}
 		if _, ok := record.Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
 			t.Fatalf("%s: record kept the lifecycle audit", name)
@@ -437,9 +317,6 @@ func TestFromDBMessageScopeFallbackDoesNotChangeDurableRefID(t *testing.T) {
 	}
 	if ToFrag(first).Ref.ID != ToFrag(second).Ref.ID {
 		t.Fatalf("fallback scope changed durable frag identity: first=%#v second=%#v", ToFrag(first).Ref, ToFrag(second).Ref)
-	}
-	if ToFrag(first).Ref.ContentHash != ToFrag(second).Ref.ContentHash {
-		t.Fatalf("fallback scope changed durable content hash: first=%#v second=%#v", ToFrag(first).Ref, ToFrag(second).Ref)
 	}
 }
 

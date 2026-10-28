@@ -99,10 +99,7 @@ func (h *providerAttemptHandoff) publish(params sdk.Request) error {
 	}
 
 	h.cfg.dynamicInputs.commit(pending.admitted)
-	hash := contextfrag.ProviderPayloadHash(params.System, params.Messages, params.Tools)
 	h.cfg.providerAttemptState.store(&params, pending.snapshot.StepIndex, pending.systemPrepended, pending.admitted)
-	h.cfg.ContextMutations.SetFinalInputHash(hash)
-	pending.snapshot.PostPrepareInputHash = hash
 	h.cfg.ContextMutations.AppendStepSnapshot(pending.snapshot)
 	h.pending = nil
 	return nil

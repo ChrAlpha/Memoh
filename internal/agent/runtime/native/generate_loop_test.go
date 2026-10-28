@@ -360,9 +360,6 @@ func TestAgentGenerateFailsClosedWhenStepRequestOutgrowsTheWindow(t *testing.T) 
 	if len(steps) != 2 || steps[0].StepIndex != 0 || steps[1].StepIndex != 1 {
 		t.Fatalf("step snapshots = %#v, want exactly one entry for initial and failed steps", steps)
 	}
-	if steps[1].PostPrepareInputHash != "" {
-		t.Fatalf("failed step snapshot has provider input hash %q, want none", steps[1].PostPrepareInputHash)
-	}
 	records := ledger.Records()
 	if len(records) != 1 ||
 		records[0].Kind != contextfrag.MutationContextBudgetFailure ||
