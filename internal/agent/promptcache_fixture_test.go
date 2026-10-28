@@ -86,12 +86,14 @@ func (benchToolProvider) Tools(context.Context, tools.SessionContext) ([]toolexe
 	}}, nil
 }
 
-// benchMemory is the bot's memory provider. After each round it writes one
-// memory the way the built-in provider does, through the file store with the
-// context it was handed, and reports that it has.
+// benchMemory is the bot's memory provider. Before each turn it recalls what
+// recall returns for the turn's memory query, nothing when recall is nil. After
+// each round it writes one memory the way the built-in provider does, through
+// the file store with the context it was handed, and reports that it has.
 type benchMemory struct {
 	memprovider.Provider
 	files   *storefs.Service
+	recall  func(query string) string
 	written chan struct{}
 
 	mu sync.Mutex
@@ -100,8 +102,11 @@ type benchMemory struct {
 
 func (*benchMemory) Type() string { return "bench" }
 
-func (*benchMemory) OnBeforeChat(context.Context, memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
-	return nil, nil
+func (m *benchMemory) OnBeforeChat(_ context.Context, req memprovider.BeforeChatRequest) (*memprovider.BeforeChatResult, error) {
+	if m.recall == nil {
+		return nil, nil
+	}
+	return &memprovider.BeforeChatResult{ContextText: m.recall(req.Query), ResultCount: 1}, nil
 }
 
 func (m *benchMemory) OnAfterChat(ctx context.Context, req memprovider.AfterChatRequest) error {
@@ -208,6 +213,9 @@ type benchOptions struct {
 	contextWindow int
 	// compaction summarizes with the real compaction service when set.
 	compaction bool
+	// recall is what the memory provider recalls for a turn's memory query;
+	// nil recalls nothing.
+	recall func(query string) string
 }
 
 // benchEnv is one session of one client type, run end to end.
@@ -251,7 +259,7 @@ func newBenchEnv(t *testing.T, clientType models.ClientType, opts benchOptions) 
 	if err := files.PersistMemories(ctx, e.botID, []storefs.MemoryItem{benchMemoryItem(0)}, nil); err != nil {
 		t.Fatalf("seed memory: %v", err)
 	}
-	e.memory = &benchMemory{files: files, written: make(chan struct{}, 256)}
+	e.memory = &benchMemory{files: files, recall: opts.recall, written: make(chan struct{}, 256)}
 	registry := memprovider.NewRegistry(logger)
 	registry.Register(agenttest.MemoryProviderID, e.memory)
 
@@ -543,14 +551,15 @@ func printBenchTable(t *testing.T) {
 	benchRowsMu.Lock()
 	defer benchRowsMu.Unlock()
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n%-30s %-20s %-13s %-14s %7s  %s\n", "scenario", "client type", "boundary", "requests", "reused", "first difference")
+	fmt.Fprintf(&b, "\n%-30s %-20s %-13s %-14s %7s %8s  %s\n", "scenario", "client type", "boundary", "requests", "reused", "lost B", "first difference")
 	for _, row := range benchRows {
 		first := "none"
 		if row.report.Break != nil {
 			first = row.report.Break.String()
 		}
-		fmt.Fprintf(&b, "%-30s %-20s %-13s %-14s %6.1f%%  %s\n",
-			row.scenario, row.client, row.kind, row.from+">"+row.to, 100*row.report.Ratio(), first)
+		fmt.Fprintf(&b, "%-30s %-20s %-13s %-14s %6.1f%% %8d  %s\n",
+			row.scenario, row.client, row.kind, row.from+">"+row.to, 100*row.report.Ratio(),
+			row.report.PrevBytes-row.report.ReusableBytes, first)
 	}
 	t.Log(b.String())
 }

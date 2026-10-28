@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,52 @@ func chatToolTurns(t *testing.T, e *benchEnv) {
 	e.chatTurn("t2", "And of Italy?", nil, toolThenAnswer("italy", "Rome.")...)
 	e.chatTurn("t3", "And of Spain?", nil, toolThenAnswer("spain", "Madrid.")...)
 	requireReuse(t, e.pairs("chat, tools each turn"), noBreak)
+}
+
+// Recalled memory rides only the turn it was recalled for: the run puts it in
+// a user message between the history and the user's input and stores neither
+// the message nor its text, so the first request of the next turn no longer has
+// it where the previous request did. That request differs from the previous one
+// at the recalled message, inside the history, and everything after it (the
+// previous turn's input and all of its tool steps) is past the reusable prefix.
+// This is the measured cost of recall, not a property the benchmark endorses:
+// it happens whether the recalled text changes from turn to turn or not.
+// Requests inside a turn reuse the full prompt.
+func chatRecallTurns(t *testing.T, e *benchEnv, scenario string) {
+	e.chatTurn("t1", "What is the capital of France?", nil, toolThenAnswer("france", "Paris.")...)
+	e.chatTurn("t2", "And of Italy?", nil, toolThenAnswer("italy", "Rome.")...)
+	e.chatTurn("t3", "And of Spain?", nil, toolThenAnswer("spain", "Madrid.")...)
+	pairs := e.pairs(scenario)
+	requireReuse(t, pairs, breakInto(map[string]string{"t2": "history", "t3": "history"}))
+	for _, p := range pairs {
+		if p.kind == crossTurn && p.report.Break != nil && !strings.HasPrefix(p.report.Break.Prev, "<memory-context>") {
+			t.Errorf("request %s first differs at %v, want the previous turn's recalled memory", p.name(), p.report.Break)
+		}
+	}
+}
+
+func chatRecallDiffers(t *testing.T, e *benchEnv) {
+	chatRecallTurns(t, e, "chat, recall differs each turn")
+}
+
+func chatRecallSame(t *testing.T, e *benchEnv) {
+	chatRecallTurns(t, e, "chat, same recall each turn")
+}
+
+// recallPerQuery recalls what a search for the turn's request would find, so
+// every turn recalls different text.
+func recallPerQuery(query string) string {
+	request, _, _ := strings.Cut(strings.TrimPrefix(query, "Current user request:\n"), "\n")
+	return "<memory-context>\nRelevant memory context (use when helpful):\n" +
+		"- [memory] Earlier the user asked " + strconv.Quote(request) + " and wanted a one-word answer.\n" +
+		"- [memory] The user mentioned fact number 0.\n</memory-context>"
+}
+
+// recallSame recalls the same text for every query.
+func recallSame(string) string {
+	return "<memory-context>\nRelevant memory context (use when helpful):\n" +
+		"- [memory] The user prefers one-word answers about capitals.\n" +
+		"- [memory] The user mentioned fact number 0.\n</memory-context>"
 }
 
 // Memory written after a turn rewrites MEMORY.md, which sits in the system
@@ -127,6 +174,8 @@ func TestPromptCacheReuse(t *testing.T) {
 	}
 	scenarios := []benchScenario{
 		{name: "chat, tools each turn", run: chatToolTurns},
+		{name: "chat, recall differs each turn", opts: benchOptions{recall: recallPerQuery}, run: chatRecallDiffers},
+		{name: "chat, same recall each turn", opts: benchOptions{recall: recallSame}, run: chatRecallSame},
 		{name: "memory write, then cold cache", run: memoryWriteWaitsForColdCache},
 		{name: "workspace file change", run: workspaceFileChange},
 		{name: "discuss, several batches", opts: benchOptions{discuss: true}, run: discussBatches},
