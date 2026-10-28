@@ -4,10 +4,8 @@ package db_test
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -81,7 +79,6 @@ SELECT $3, $1, bot.id, 'local', 'context lifecycle', '{}' FROM bot
 		t.Fatalf("seed context lifecycle owner: %v", err)
 	}
 
-	contentHash := fmt.Sprintf("%x", sha256.Sum256([]byte(secret)))
 	snapshot := contextfrag.LifecycleSnapshot{
 		Version: contextfrag.LifecycleSnapshotVersion,
 		View:    contextfrag.ViewRunConfigPreProvider,
@@ -94,11 +91,9 @@ SELECT $3, $1, bot.id, 'local', 'context lifecycle', '{}' FROM bot
 		SelectionDecisions: []contextfrag.SelectionDecision{{
 			ID: "system-policy",
 			Ref: contextfrag.ContextRef{
-				Namespace:   "native-system",
-				ID:          "policy",
-				HashAlgo:    "sha256",
-				ContentHash: contentHash,
-				Schema:      "context-frag/v1",
+				Namespace: "native-system",
+				ID:        "policy",
+				Schema:    "context-frag/v1",
 			},
 			Slot:          contextfrag.SlotSystem,
 			Source:        "embedded-template",

@@ -828,7 +828,7 @@ func cachePlanFromPlacement(placement PlacementPlan) contextfrag.CachePlan {
 			stableMessages++
 		}
 	}
-	return contextfrag.CachePlan{StablePrefixHash: placement.StablePrefixHash, StableMessageCount: stableMessages}
+	return contextfrag.CachePlan{StableMessageCount: stableMessages}
 }
 
 func stablePrefixTokenEstimate(placement PlacementPlan, selected []contextfrag.ContextFrag, toolDefs []contextfrag.ToolDefAccounting) int {

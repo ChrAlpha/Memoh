@@ -14,7 +14,6 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	tools "github.com/felinics/memoh/internal/agent/tool"
-	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestGenerateAppliesContextViewBeforeProviderOptions(t *testing.T) {
@@ -57,47 +56,6 @@ func TestGenerateAppliesContextViewBeforeProviderOptions(t *testing.T) {
 	params := modelProvider.lastParams()
 	if params.System != "compiled system" || !reflect.DeepEqual(params.Messages, []sdk.Message{sdk.UserMessage("compiled message")}) {
 		t.Fatalf("provider payload = system %q messages %#v", params.System, params.Messages)
-	}
-	wantHash := contextfrag.ProviderPayloadHash(params.System, params.Messages, params.Tools)
-	if ledger.FinalInputHash() != wantHash {
-		t.Fatalf("final input hash = %q, want %q", ledger.FinalInputHash(), wantHash)
-	}
-}
-
-func TestGenerateFinalInputHashTracksLastProviderStep(t *testing.T) {
-	t.Parallel()
-	ledger := contextfrag.NewMutationLedger()
-	var lastParams sdk.Request
-	modelProvider := &atomicMockProvider{handler: func(call int, params sdk.Request) (sdk.ModelResult, error) {
-		if call == 1 {
-			return sdk.ModelResult{
-				FinishReason: sdk.FinishReasonToolCalls,
-				ToolCalls:    []sdk.ToolCall{{ToolCallID: "hash-call", ToolName: "hash_tool"}},
-			}, nil
-		}
-		lastParams = params
-		return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
-	}}
-	a := New(Deps{ContextViewApplier: func(_ context.Context, cfg RunConfig) (RunConfig, error) {
-		cfg.ContextMutations = ledger
-		return cfg, nil
-	}})
-	a.SetToolProviders([]tools.ToolProvider{staticToolProvider{tools: []toolexec.Tool{{
-		Name: "hash_tool",
-		Execute: func(*toolexec.ToolExecContext, sdk.ToolArguments) (sdk.ToolOutput, error) {
-			return toolexec.OutputFromValue("ok"), nil
-		},
-	}}}})
-
-	if _, err := a.Generate(context.Background(), RunConfig{
-		Model:    &sdk.Model{ID: "hash-model", Provider: modelProvider},
-		Messages: []sdk.Message{sdk.UserMessage("run the tool")}, SupportsToolCall: true,
-	}); err != nil {
-		t.Fatalf("Generate error: %v", err)
-	}
-	wantHash := contextfrag.ProviderPayloadHash(lastParams.System, lastParams.Messages, lastParams.Tools)
-	if ledger.FinalInputHash() != wantHash {
-		t.Fatalf("final input hash = %q, want last provider step %q", ledger.FinalInputHash(), wantHash)
 	}
 }
 

@@ -143,10 +143,7 @@ func trimFragText(frag contextfrag.ContextFrag) (contextfrag.ContextFrag, bool) 
 	}
 	frag.Parts = parts
 	frag.TokenEstimate = 0
-	frag.Ref.HashAlgo = ""
-	frag.Ref.HashScope = ""
-	frag.Ref.ContentHash = ""
-	return contextfrag.WithContextRef(frag, frag.Ref), true
+	return frag, true
 }
 
 func fragTrimLimit(budget contextfrag.BudgetPolicy) (charLimit, tokenByteLimit int) {

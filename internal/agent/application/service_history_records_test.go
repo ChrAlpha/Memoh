@@ -102,8 +102,7 @@ func TestHistoryContextFragsForMessagesCarriesActiveSummaryCoverage(t *testing.T
 		if item.Kind == contextfrag.KindConversationSummary {
 			providerSummaryItems++
 			if item.Ref.Namespace != summary.Ref.Namespace || item.Ref.ID != summary.Ref.ID ||
-				item.Ref.Version != summary.Ref.Version || item.Ref.Durability != contextfrag.RefDurable ||
-				item.Ref.ContentHash == "" {
+				item.Ref.Version != summary.Ref.Version || item.Ref.Durability != contextfrag.RefDurable {
 				t.Fatalf("provider summary ref lost durable identity: got %#v source %#v", item.Ref, summary.Ref)
 			}
 		}
@@ -200,14 +199,11 @@ func assertSameJSON(t *testing.T, got any, want any) {
 func historyRecord(id string, msg ModelMessage, mutate func(*historyfrag.HistoryRecord)) historyfrag.HistoryRecord {
 	record := historyfrag.HistoryRecord{
 		Ref: contextfrag.ContextRef{
-			Namespace:   "bot_history_message",
-			ID:          id,
-			Version:     1,
-			HashAlgo:    contextfrag.HashAlgoSHA256,
-			HashScope:   contextfrag.HashScopeSourcePayload,
-			ContentHash: testHistorySourceHash(id),
-			Schema:      contextfrag.SchemaContextRef,
-			Durability:  contextfrag.RefDurable,
+			Namespace:  "bot_history_message",
+			ID:         id,
+			Version:    1,
+			Schema:     contextfrag.SchemaContextRef,
+			Durability: contextfrag.RefDurable,
 		},
 		Kind:         contextfrag.KindConversationEvent,
 		SourceKind:   historyfrag.SourceDBMessage,
@@ -219,10 +215,6 @@ func historyRecord(id string, msg ModelMessage, mutate func(*historyfrag.History
 		mutate(&record)
 	}
 	return record
-}
-
-func testHistorySourceHash(id string) string {
-	return "test-source-hash-" + id
 }
 
 func recordTexts(records []historyfrag.HistoryRecord) []string {

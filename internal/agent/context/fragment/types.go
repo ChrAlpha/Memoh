@@ -69,14 +69,7 @@ const (
 	SchemaContextManifest = "context_manifest"
 	SchemaContextFrag     = "context_frag"
 	SchemaContextRef      = "context_ref"
-	SchemaContextEdit     = "context_edit"
 	SchemaRenderPolicy    = "render_policy"
-)
-
-const (
-	HashAlgoSHA256             = "sha256"
-	HashScopeCanonicalFragment = "canonical_fragment"
-	HashScopeSourcePayload     = "source_payload"
 )
 
 type SchemaVersion struct {
@@ -90,21 +83,12 @@ type ContentRange struct {
 }
 
 type ContextRef struct {
-	Namespace   string        `json:"namespace"`
-	ID          string        `json:"id"`
-	Version     int           `json:"version,omitempty"`
-	Range       *ContentRange `json:"range,omitempty"`
-	HashAlgo    string        `json:"hash_algo,omitempty"`
-	ContentHash string        `json:"content_hash,omitempty"`
-	HashScope   string        `json:"hash_scope,omitempty"`
-	Schema      string        `json:"schema"`
-	Durability  RefDurability `json:"durability,omitempty"`
-}
-
-type FragmentHash struct {
-	Algo  string `json:"algo"`
-	Scope string `json:"scope"`
-	Value string `json:"value"`
+	Namespace  string        `json:"namespace"`
+	ID         string        `json:"id"`
+	Version    int           `json:"version,omitempty"`
+	Range      *ContentRange `json:"range,omitempty"`
+	Schema     string        `json:"schema"`
+	Durability RefDurability `json:"durability,omitempty"`
 }
 
 type RefDurability string
@@ -520,22 +504,6 @@ const (
 	EditAnnotate ContextEditOp = "annotate"
 )
 
-type ContextEdit struct {
-	EditID        string            `json:"edit_id"`
-	Slot          Slot              `json:"slot"`
-	Op            ContextEditOp     `json:"op"`
-	Refs          []ContextRef      `json:"refs,omitempty"`
-	Payload       []ContextFrag     `json:"payload,omitempty"`
-	Preconditions EditPreconditions `json:"preconditions,omitempty"`
-	Schema        SchemaVersion     `json:"schema"`
-}
-
-type EditPreconditions struct {
-	ExpectedRevision string            `json:"expected_revision,omitempty"`
-	MaxSequence      int64             `json:"max_sequence,omitempty"`
-	ExpectedHashes   map[string]string `json:"expected_hashes,omitempty"`
-}
-
 type ContextEditTrace struct {
 	EditID string        `json:"edit_id,omitempty"`
 	Op     ContextEditOp `json:"op,omitempty"`
@@ -559,19 +527,4 @@ type ValidationWarning struct {
 	Code    string     `json:"code"`
 	Message string     `json:"message,omitempty"`
 	Ref     ContextRef `json:"ref,omitempty"`
-}
-
-type ConflictKind string
-
-const (
-	ConflictMissingRef          ConflictKind = "missing_ref"
-	ConflictContentHashMismatch ConflictKind = "content_hash_mismatch"
-	ConflictInvalidSchema       ConflictKind = "invalid_schema"
-)
-
-type ContextConflict struct {
-	Kind     ConflictKind `json:"kind"`
-	Key      string       `json:"key,omitempty"`
-	Expected string       `json:"expected,omitempty"`
-	Actual   string       `json:"actual,omitempty"`
 }

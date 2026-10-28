@@ -32,14 +32,11 @@ func TestRepairToolClosureFragsRefreshesRebuiltMessageAccounting(t *testing.T) {
 	})
 	result.ConflictKey = "history.tool-result"
 	result = WithContextRef(result, ContextRef{
-		Namespace:   "history",
-		ID:          "result-row",
-		Version:     3,
-		HashAlgo:    HashAlgoSHA256,
-		HashScope:   HashScopeSourcePayload,
-		ContentHash: "stale-source-hash",
-		Schema:      SchemaContextRef,
-		Durability:  RefDurable,
+		Namespace:  "history",
+		ID:         "result-row",
+		Version:    3,
+		Schema:     SchemaContextRef,
+		Durability: RefDurable,
 	})
 
 	repaired := RepairToolClosureFrags([]ContextFrag{assistant, result}, Scope{}, "test")
@@ -61,18 +58,8 @@ func TestRepairToolClosureFragsRefreshesRebuiltMessageAccounting(t *testing.T) {
 	if resolved, estimated := ResolveFragTokens(got), EstimateFragTokens(got); resolved != estimated || resolved == 999 {
 		t.Fatalf("rebuilt token accounting = %d, estimated = %d, stale = 999", resolved, estimated)
 	}
-	if !got.Ref.EqualIdentity(result.Ref) {
-		t.Fatalf("rebuilt ref identity = %#v, want %#v", got.Ref, result.Ref)
-	}
-	if got.Ref.HashScope != HashScopeCanonicalFragment || got.Ref.ContentHash == "" || got.Ref.ContentHash == result.Ref.ContentHash {
-		t.Fatalf("rebuilt ref hash was not refreshed: got %#v, original %#v", got.Ref, result.Ref)
-	}
-	expected, err := CanonicalFragmentHash(got)
-	if err != nil {
-		t.Fatalf("hash rebuilt fragment: %v", err)
-	}
-	if got.Ref.ContentHash != expected.Value {
-		t.Fatalf("rebuilt ref hash = %q, want canonical %q", got.Ref.ContentHash, expected.Value)
+	if got.Ref != result.Ref {
+		t.Fatalf("rebuilt ref = %#v, want the identity it had %#v", got.Ref, result.Ref)
 	}
 	if got.ConflictKey != result.ConflictKey {
 		t.Fatalf("rebuilt conflict key = %q, want %q", got.ConflictKey, result.ConflictKey)

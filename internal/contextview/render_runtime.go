@@ -2,8 +2,6 @@ package contextview
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -16,7 +14,6 @@ const defaultRuntimeContextURI = "memoh://context/current-turn"
 type RuntimeRenderedPayload struct {
 	ContextMarkdown string
 	ContextURI      string
-	ContentHash     string
 }
 
 type RuntimeRenderMode string
@@ -55,16 +52,9 @@ func (r *RuntimeFullContextRenderer) Render(_ context.Context, input RenderInput
 	if uri == "" {
 		uri = defaultRuntimeContextURI
 	}
-	hash := runtimeTextContentHash(markdown)
-	payload := &RuntimeRenderedPayload{
-		ContextMarkdown: markdown,
-		ContextURI:      uri,
-		ContentHash:     hash,
-	}
 	return RenderedPayload{
-		Target:      contextfrag.RenderRuntimeFullContext,
-		ContentHash: hash,
-		Data:        payload,
+		Target: contextfrag.RenderRuntimeFullContext,
+		Data:   &RuntimeRenderedPayload{ContextMarkdown: markdown, ContextURI: uri},
 	}, nil
 }
 
@@ -105,9 +95,4 @@ func renderRuntimeSelectedMarkdown(input RenderInput) (string, error) {
 		)
 	}
 	return finalized, nil
-}
-
-func runtimeTextContentHash(text string) string {
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
 }

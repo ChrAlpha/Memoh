@@ -2,9 +2,6 @@ package contextview
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -35,12 +32,7 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 	if err != nil {
 		return RenderedPayload{}, err
 	}
-	payload := renderSDKPayloadFromFrags(ordered)
-	hash, err := sdkRenderedPayloadHash(payload)
-	if err != nil {
-		return RenderedPayload{}, err
-	}
-	return RenderedPayload{Target: contextfrag.RenderSDKMessages, ContentHash: hash, Data: payload}, nil
+	return RenderedPayload{Target: contextfrag.RenderSDKMessages, Data: renderSDKPayloadFromFrags(ordered)}, nil
 }
 
 func renderSDKPayloadFromFrags(ordered []contextfrag.ContextFrag) *SDKRenderedPayload {
@@ -196,20 +188,6 @@ func cloneSDKMessage(msg sdk.Message) sdk.Message {
 	out := msg
 	out.Content = append([]sdk.MessagePart(nil), msg.Content...)
 	return out
-}
-
-func sdkRenderedPayloadHash(payload *SDKRenderedPayload) (string, error) {
-	raw, err := json.Marshal(struct {
-		System       string          `json:"system"`
-		Messages     []sdk.Message   `json:"messages"`
-		Query        string          `json:"query"`
-		InlineImages []sdk.ImagePart `json:"inline_images"`
-	}{payload.System, payload.Messages, payload.Query, payload.InlineImages})
-	if err != nil {
-		return "", fmt.Errorf("marshal sdk rendered payload: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func sortSystemFragsByPriority(ordered []contextfrag.ContextFrag) []contextfrag.ContextFrag {

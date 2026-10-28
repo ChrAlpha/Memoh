@@ -105,13 +105,6 @@ func TestPrepareHistoryContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
 	if _, ok := record.Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
 		t.Fatal("history record kept the lifecycle audit")
 	}
-	decoded := checkpoint
-	if err := json.Unmarshal(checkpoint.RawMetadata, &decoded.Metadata); err != nil {
-		t.Fatal(err)
-	}
-	if want := historyfrag.DBMessageSourceHash(decoded).Value; record.Ref.ContentHash != want {
-		t.Fatalf("undecoded row hash = %s, want the decoded row's %s", record.Ref.ContentHash, want)
-	}
 }
 
 // admissionHistoryMessage mirrors the byte-budgeted loaders, which hand over

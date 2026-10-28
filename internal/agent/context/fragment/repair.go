@@ -156,11 +156,5 @@ func RebuildFragMessage(frag ContextFrag, msg sdk.Message) ContextFrag {
 		SDKMessage: &cloned,
 	}}
 	rebuilt.TokenEstimate = 0
-
-	ref := rebuilt.Ref
-	ref.HashAlgo = ""
-	ref.HashScope = ""
-	ref.ContentHash = ""
-	rebuilt.Ref = ContextRef{}
-	return WithContextRef(rebuilt, ref)
+	return WithContextRef(rebuilt, frag.Ref)
 }

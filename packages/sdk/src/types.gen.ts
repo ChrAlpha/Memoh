@@ -1188,10 +1188,7 @@ export type ContextfragContextBudgetPlan = {
 };
 
 export type ContextfragContextRef = {
-    content_hash?: string;
     durability?: ContextfragRefDurability;
-    hash_algo?: string;
-    hash_scope?: string;
     id?: string;
     namespace?: string;
     range?: ContextfragContentRange;
@@ -1219,14 +1216,12 @@ export type ContextfragLifecycleSnapshot = {
     cache_write_tokens?: number;
     client_type?: string;
     counts?: ContextfragManifestCounts;
-    final_input_hash?: string;
     memory_recall?: ContextfragMemoryRecallTrace;
     model?: string;
     mutations?: Array<ContextfragMutationRecord>;
     selection?: ContextfragSelectionTrace;
     selection_decisions?: Array<ContextfragSelectionDecision>;
     stable_message_count?: number;
-    stable_prefix_hash?: string;
     stable_prefix_token_estimate?: number;
     steps?: Array<ContextfragStepSnapshot>;
     tool_defs?: Array<ContextfragToolDefAccounting>;
@@ -1315,7 +1310,6 @@ export type ContextfragSlot = 'system' | 'before_history' | 'history' | 'after_h
 
 export type ContextfragStepSnapshot = {
     attempt?: number;
-    post_prepare_input_hash?: string;
     step_index?: number;
 };
 
