@@ -6,6 +6,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/step"
+	"github.com/felinics/memoh/internal/models"
 )
 
 type providerAttemptState struct {
@@ -63,7 +64,7 @@ func (s *providerAttemptState) retryInput(previousSteps []step.Record) (provider
 		messages = messages[1:]
 		dynamicRefs = shiftDynamicSourceRefs(dynamicRefs, -1)
 	}
-	clearProviderCacheControls(messages)
+	models.ClearCacheControls(messages)
 	if stepIndex >= 0 && stepIndex < len(previousSteps) {
 		stepMessages := cloneProviderMessages(previousSteps[stepIndex].Messages)
 		messages = append(messages, stepMessages...)
@@ -95,24 +96,6 @@ func cloneProviderMessages(messages []sdk.Message) []sdk.Message {
 		}
 	}
 	return cloned
-}
-
-func clearProviderCacheControls(messages []sdk.Message) {
-	for i := range messages {
-		for j, part := range messages[i].Content {
-			switch value := part.(type) {
-			case sdk.TextPart:
-				value.CacheControl = nil
-				messages[i].Content[j] = value
-			case sdk.ImagePart:
-				value.CacheControl = nil
-				messages[i].Content[j] = value
-			case sdk.FilePart:
-				value.CacheControl = nil
-				messages[i].Content[j] = value
-			}
-		}
-	}
 }
 
 // retryProviderAttemptMessages falls back to durable history when no provider

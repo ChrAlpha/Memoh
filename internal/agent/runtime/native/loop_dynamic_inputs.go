@@ -10,6 +10,7 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/step"
+	"github.com/felinics/memoh/internal/models"
 )
 
 // loopDynamicInputs owns the user messages the step loop itself appends to the
@@ -302,8 +303,8 @@ func verifyDynamicRefs(dynamic *loopDynamicInputs, refs []dynamicSourceRef, mess
 func providerMessagesEqual(left, right []sdk.Message) bool {
 	leftComparable := cloneProviderMessages(left)
 	rightComparable := cloneProviderMessages(right)
-	clearProviderCacheControls(leftComparable)
-	clearProviderCacheControls(rightComparable)
+	models.ClearCacheControls(leftComparable)
+	models.ClearCacheControls(rightComparable)
 	return reflect.DeepEqual(leftComparable, rightComparable)
 }
 
