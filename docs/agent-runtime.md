@@ -536,7 +536,11 @@ ends any other way (the reaper, graceful shutdown, the memory finish handoff, an
 unreservable recovery) has its pending ask_user requests and tool approvals
 canceled with it, scoped to that run and fence. A request must never stay
 answerable on a run that cannot apply the answer. If that cleanup fails, answering
-the request finds the terminal run and closes it then.
+the request finds the terminal run and closes it then. A WebSocket answer to a
+decision that no longer accepts one is acknowledged with `applied: false` and
+`user_input.expired` or `tool_approval.expired`, the error the other transports
+return; the Web client drops its optimistic answer and shows the request as
+expired until the transcript reloads its authoritative state.
 
 The continuation keeps its original durable turn and request message ID. A
 response retry uses the existing control-ID deduplication contract; tests cover
