@@ -130,7 +130,7 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 		excess += contextfrag.ResolveProviderBudgetFragTokens(contextview.TrimNoticeFrag(contextfrag.Scope{}))
 	}
 	var shed []string
-	frags, messages, provenance := slices.Clone(cfg.ContextSourceFrags), slices.Clone(cfg.Messages), slices.Clone(cfg.ContextProvenance)
+	frags, messages := slices.Clone(cfg.ContextSourceFrags), slices.Clone(cfg.Messages)
 	for i, frag := range frags {
 		if excess <= 0 {
 			break
@@ -158,19 +158,16 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 		if len(kept.Content) == len(msg.Content) {
 			continue
 		}
+		// The input renders the same sources without its images.
 		if index := frag.Provenance.Index; index >= 0 && index < len(messages) {
 			messages[index] = kept
-			// The input renders the same sources without its images.
-			if index < len(provenance) {
-				provenance[index].Message = kept
-			}
 		}
 		shed = append(shed, frag.Provenance.SourceID)
 	}
 	if len(shed) == 0 {
 		return cfg, false
 	}
-	cfg.ContextSourceFrags, cfg.Messages, cfg.ContextProvenance = frags, messages, provenance
+	cfg.ContextSourceFrags, cfg.Messages = frags, messages
 	if cfg.ContextMutations != nil {
 		cfg.ContextMutations.Record(contextfrag.MutationCurrentInputImagesOmitted, "sources="+strings.Join(shed, ","))
 	}

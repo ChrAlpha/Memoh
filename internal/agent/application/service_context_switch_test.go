@@ -80,7 +80,7 @@ func TestContextProvenanceNamesTheCallRowForItsClosure(t *testing.T) {
 	messages, _, _ := normalizeContextMessages([]ModelMessage{records[0].ModelMessage, records[1].ModelMessage}, nil, nil)
 	got := contextProvenance(messages, nil)
 	call := got[0].Sources
-	if len(messages) != 3 || len(got) != 3 || got[1].Message.Role != sdk.MessageRoleTool || !reflect.DeepEqual(got[1].Sources, call) ||
+	if len(messages) != 3 || len(got) != 3 || messages[1].Role != "tool" || !reflect.DeepEqual(got[1].Sources, call) ||
 		call[0].ID != "call-row" || got[1].Anchor || got[2].Sources[0].ID != "later-row" {
 		t.Fatalf("closure provenance = %+v, want the closure named by its call row", got)
 	}
@@ -132,11 +132,9 @@ func TestContextProvenanceKeepsTheSourceOfAMovedDecisionResult(t *testing.T) {
 		t.Fatalf("provenance = %+v, want every message named", got)
 	}
 	sources := map[string]string{}
-	for _, p := range got {
-		for _, part := range p.Message.Content {
-			if result, ok := part.(sdk.ToolResultPart); ok {
-				sources[result.ToolCallID] = p.Sources[0].ID
-			}
+	for i, p := range got {
+		for _, result := range extractToolResultParts(messages[i]) {
+			sources[result.ToolCallID] = p.Sources[0].ID
 		}
 	}
 	if sources["ask-1"] != "call-row" || sources["ask-2"] != "result-row" || sources["other"] != "result-row" {

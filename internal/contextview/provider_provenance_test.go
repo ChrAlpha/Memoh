@@ -38,9 +38,6 @@ func TestProviderViewCarriesProvenanceByPosition(t *testing.T) {
 		ContextHookText:                "hook context",
 		ContextTrimmableMessages:       2,
 	}
-	for i := range cfg.ContextProvenance {
-		cfg.ContextProvenance[i].Message = cfg.Messages[i]
-	}
 	cfg.ContextSourceFrags = CollectNonSystemProviderSourceFrags(context.Background(), cfg)
 
 	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
@@ -67,9 +64,6 @@ func TestProviderViewCarriesProvenanceByPosition(t *testing.T) {
 		p := got.ContextProvenance[i]
 		if !reflect.DeepEqual(p.Sources, w.Sources) || p.Anchor != w.Anchor {
 			t.Fatalf("message %d renders %v anchor=%v, want %v anchor=%v", i, p.Sources, p.Anchor, w.Sources, w.Anchor)
-		}
-		if !reflect.DeepEqual(p.Message, got.Messages[i]) {
-			t.Fatalf("provenance %d describes another message: %+v", i, p.Message)
 		}
 	}
 }

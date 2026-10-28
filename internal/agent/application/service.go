@@ -1388,7 +1388,6 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		cfg.ContextCurrentUserMessageIndex = &index
 		cfg.ContextQueryMaterialized = true
 		cfg.ContextProvenance = append(cfg.ContextProvenance, native.MessageProvenance{
-			Message: cfg.Messages[index],
 			Sources: []turnpkg.ContextMessageSource{requestSource},
 			Anchor:  true,
 		})
@@ -1412,19 +1411,17 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			if currentIndex != nil {
 				i := *currentIndex
 				cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
+				// The input renders the same sources with its media, but no
+				// longer the bytes a fork could reference.
 				if i < len(cfg.ForkContextSourceMessageIDs) {
 					cfg.ForkContextSourceMessageIDs[i] = ""
-				}
-				// The input renders the same sources with its media.
-				if i < len(cfg.ContextProvenance) {
-					cfg.ContextProvenance[i].Message = cfg.Messages[i]
 				}
 			} else {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 				cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
 				index := len(cfg.Messages) - 1
 				currentIndex = &index
-				cfg.ContextProvenance = append(cfg.ContextProvenance, native.MessageProvenance{Message: cfg.Messages[index]})
+				cfg.ContextProvenance = append(cfg.ContextProvenance, native.MessageProvenance{})
 			}
 			cfg.ContextCurrentUserMessageIndex = currentIndex
 			cfg.ContextQueryMaterialized = true
