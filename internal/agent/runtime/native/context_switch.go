@@ -16,9 +16,8 @@ import (
 
 // MessageProvenance is what one message a run sends renders: the stored
 // messages behind it, and whether the run keeps it where it is (its input, a
-// steer) when it compacts.
+// steer) when it compacts. A message with no sources is runtime context.
 type MessageProvenance struct {
-	Message sdk.Message
 	Sources []turn.ContextMessageSource
 	Anchor  bool
 }
@@ -60,30 +59,43 @@ type ContextFold struct {
 }
 
 // contextSwitchState follows an armed run's request across its dispatches:
-// the provenance of what it renders and, from a splice until the re-dispatch
-// that follows it, where each message of the spliced request was before (-1
-// for a summary).
+// what each message renders, and, from a splice until the re-dispatch that
+// follows it, where each message of the spliced request was before (-1 for a
+// summary). The compiled prefix of a dispatch (after a promoted system
+// message) holds still until the next splice, so it is known by position;
+// what the loop rebuilds after it at each boundary (committed steps, inputs,
+// hook and background messages) is known by what the steps committed.
 type contextSwitchState struct {
-	known []MessageProvenance
-	moved []int
+	compiled []MessageProvenance
+	appended []knownMessage
+	moved    []int
+	// mismatch is set when the run compiled a request its provenance does
+	// not describe; a fold of it fails rather than guess.
+	mismatch error
+}
+
+// knownMessage is a message after the compiled prefix the run knows the
+// provenance of.
+type knownMessage struct {
+	message    sdk.Message
+	provenance MessageProvenance
 }
 
 func newContextSwitchState(cfg RunConfig) *contextSwitchState {
 	if cfg.SwitchContext == nil {
 		return nil
 	}
-	s := &contextSwitchState{}
-	for _, provenance := range cfg.ContextProvenance {
-		s.know(provenance)
+	s := &contextSwitchState{compiled: slices.Clone(cfg.ContextProvenance)}
+	if len(cfg.ContextProvenance) != len(cfg.Messages) {
+		s.mismatch = fmt.Errorf("context provenance names %d messages, the request has %d", len(cfg.ContextProvenance), len(cfg.Messages))
 	}
 	return s
 }
 
-func (s *contextSwitchState) know(provenance MessageProvenance) {
-	messages := cloneProviderMessages([]sdk.Message{provenance.Message})
+func (s *contextSwitchState) know(message sdk.Message, provenance MessageProvenance) {
+	messages := cloneProviderMessages([]sdk.Message{message})
 	clearProviderCacheControls(messages)
-	provenance.Message = messages[0]
-	s.known = append(s.known, provenance)
+	s.appended = append(s.appended, knownMessage{message: messages[0], provenance: provenance})
 }
 
 // committed records what a step persisted: messages are the ones it added to
@@ -93,35 +105,52 @@ func (s *contextSwitchState) committed(messages []sdk.Message, provenance []Mess
 		return
 	}
 	for i, p := range provenance {
-		p.Message = messages[i]
-		s.know(p)
+		s.know(messages[i], p)
 	}
 }
 
-// align matches each message of a request, in order, to the provenance the
-// run knows for it; a message the run knows nothing about matches nil.
-func (s *contextSwitchState) align(messages []sdk.Message) []*MessageProvenance {
-	cleared := cloneProviderMessages(messages)
-	clearProviderCacheControls(cleared)
+// align names what each message of a request renders: the compiled prefix,
+// which starts at offset, by position, and the messages after it by the
+// ones the run knows, in order. A message the run knows nothing about is
+// runtime context and matches nil.
+func (s *contextSwitchState) align(messages []sdk.Message, offset int) ([]*MessageProvenance, error) {
+	if s.mismatch != nil {
+		return nil, s.mismatch
+	}
+	end := offset + len(s.compiled)
+	if end > len(messages) {
+		return nil, fmt.Errorf("context provenance names %d compiled messages, the request has %d", len(s.compiled), len(messages)-offset)
+	}
 	out := make([]*MessageProvenance, len(messages))
+	for i := range s.compiled {
+		if p := &s.compiled[i]; len(p.Sources) > 0 || p.Anchor {
+			out[offset+i] = p
+		}
+	}
+	rest := cloneProviderMessages(messages[end:])
+	clearProviderCacheControls(rest)
 	next := 0
-	for i := range cleared {
-		for j := next; j < len(s.known); j++ {
-			if reflect.DeepEqual(s.known[j].Message, cleared[i]) {
-				out[i], next = &s.known[j], j+1
+	for i := range rest {
+		for j := next; j < len(s.appended); j++ {
+			if reflect.DeepEqual(s.appended[j].message, rest[i]) {
+				if p := &s.appended[j].provenance; len(p.Sources) > 0 || p.Anchor {
+					out[end+i] = p
+				}
+				next = j + 1
 				break
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // fold runs one compaction event when params does not fit allowance, and
 // splices each pass it commits into params; the event decides what stays
-// verbatim. Every message no pass covers stays as it was. It reports whether
-// params changed; an event that leaves the request over its allowance fails
-// as the event says.
-func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, allowance int) (bool, error) {
+// verbatim. Every message no pass covers stays as it was. offset is where the
+// compiled prefix starts in params: after a system message the prompt-cache
+// plan promoted into it. It reports whether params changed; an event that
+// leaves the request over its allowance fails as the event says.
+func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, offset, allowance int) (bool, error) {
 	if s == nil || allowance <= 0 {
 		return false, nil
 	}
@@ -129,7 +158,10 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	if usage <= allowance {
 		return false, nil
 	}
-	provenance := s.align(params.Messages)
+	provenance, err := s.align(params.Messages, offset)
+	if err != nil {
+		return false, fmt.Errorf("%w: context switch: %w", contextfrag.ErrBudgetUnsatisfied, err)
+	}
 	window, reserve := providerWindow(cfg)
 	splice := requestSplice{messages: params.Messages, provenance: provenance, from: make([]int, len(params.Messages))}
 	for i := range splice.from {
@@ -175,13 +207,24 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	}
 	recordFoldedInputImages(cfg.ContextMutations, params.Messages, provenance, splice.from)
 	params.Messages = splice.messages
-	s.known = nil
-	for _, p := range splice.provenance {
-		if p != nil {
-			s.know(*p)
+	s.moved = splice.from
+	// The next dispatch compiles the spliced request up to where the old
+	// compiled prefix ended; the loop rebuilds what follows.
+	end := s.movedCount(offset + len(s.compiled))
+	s.compiled = make([]MessageProvenance, max(0, end-offset))
+	for i := range s.compiled {
+		if p := splice.provenance[offset+i]; p != nil {
+			s.compiled[i] = *p
 		}
 	}
-	s.moved = splice.from
+	s.appended = nil
+	for i := end; i < len(splice.messages); i++ {
+		var p MessageProvenance
+		if splice.provenance[i] != nil {
+			p = *splice.provenance[i]
+		}
+		s.know(splice.messages[i], p)
+	}
 	return true, nil
 }
 
@@ -197,7 +240,7 @@ type requestSplice struct {
 // apply rewrites the request as the pass left it: the messages fold.Order
 // keeps, in its order, with the summary in its place.
 func (sp *requestSplice) apply(fold ContextFold) {
-	summary := &MessageProvenance{Message: fold.Summary, Sources: []turn.ContextMessageSource{{Kind: "summary", ID: fold.SummaryID}}}
+	summary := &MessageProvenance{Sources: []turn.ContextMessageSource{{Kind: "summary", ID: fold.SummaryID}}}
 	var next requestSplice
 	for _, i := range fold.Order {
 		if i < 0 {

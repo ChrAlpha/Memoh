@@ -70,10 +70,8 @@ func historySourceMessageIDsForMessages(messages []ModelMessage, records []histo
 // message without one is runtime context. A message that renders the
 // request's own input is an anchor.
 func contextProvenance(messages []ModelMessage, inputs []turn.ContextMessageSource) []native.MessageProvenance {
-	sent := modelMessagesToSDKMessages(messages)
 	out := make([]native.MessageProvenance, len(messages))
 	for i, message := range messages {
-		out[i].Message = sent[i]
 		if message.ContextSource == nil || message.ContextSource.ID == "" {
 			continue
 		}

@@ -306,7 +306,11 @@ func prepareProviderAttempt(
 	// A step request only grows between compaction events. A request that
 	// still does not fit after compaction ends the run without pruning.
 	if cfg.contextSwitch != nil {
-		switched, err := cfg.contextSwitch.fold(ctx, cfg, params, allowance)
+		offset := 0
+		if systemPrepended {
+			offset = 1
+		}
+		switched, err := cfg.contextSwitch.fold(ctx, cfg, params, offset, allowance)
 		switch {
 		case ctx.Err() != nil:
 			handoff.reject()
