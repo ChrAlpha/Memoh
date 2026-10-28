@@ -561,7 +561,7 @@ func (e *streamEngine) run() {
 			readMedia:     e.readMedia,
 			drainInjected: e.drainInjectedMessages,
 		})
-		if next, ok := e.baseCfg.contextSwitch.redispatch(e.cfg, e.dispatch, stepParams); ok {
+		if next, ok := e.baseCfg.contextSwitch.redispatch(e.cfg, e.dispatch, stepParams, e.dispatch.handoff.admitted()); ok {
 			// A later mid-stream retry dispatches from the request as the
 			// event left it.
 			e.baseCfg.ContextCachePlan = next.ContextCachePlan
@@ -616,7 +616,8 @@ func (e *streamEngine) run() {
 				e.endWithFailure(StreamEvent{Type: EventError, Cause: err})
 				return
 			}
-			next, _ := e.baseCfg.contextSwitch.redispatch(e.cfg, e.dispatch, stepParams)
+			refs := e.baseCfg.contextSwitch.remap(e.baseCfg.providerAttemptState.publishedRefs())
+			next, _ := e.baseCfg.contextSwitch.redispatch(e.cfg, e.dispatch, stepParams, refs)
 			e.baseCfg.ContextCachePlan = next.ContextCachePlan
 			e.baseCfg.initialProviderMessageCount = next.initialProviderMessageCount
 			e.cfg = next
@@ -971,7 +972,7 @@ partLoop:
 				(stepText != "" || !stepReasoning.empty() || e.interruptedStep.toolActivity || sawFile || sawFinishStep) {
 				// A rejection after visible/provider-owned work is not proof
 				// that replay is safe. Preserve the interrupted frontier.
-				e.endWithFailure(StreamEvent{Type: EventError, Cause: &modelCallFailure{err: p.Error}})
+				e.endWithFailure(StreamEvent{Type: EventError, Cause: &modelCallFailure{err: errs.WrapDependency(p.Error, "model stream", slog.Int("step", attemptStep))}})
 				break
 			}
 			retry = e.providerFailure(errs.WrapDependency(p.Error, "model stream", slog.Int("step", attemptStep)))
@@ -998,7 +999,17 @@ partLoop:
 	if retry != nil {
 		// Drain the failed stream before folding: the retry input must not
 		// race the provider goroutine still flushing its buffer.
-		drainStreamUntilClosed(provParts, streamCancelDrainGrace, e.interruptedStep.observe)
+		lateOutput := false
+		drainStreamUntilClosed(provParts, streamCancelDrainGrace, func(part sdk.StreamPart) {
+			e.interruptedStep.observe(part)
+			_, file := part.(*sdk.StreamFilePart)
+			lateOutput = lateOutput || file || e.interruptedStep.finished || e.interruptedStep.text.Len() > 0 ||
+				!e.interruptedStep.reasoningBlocks.empty() || e.interruptedStep.toolActivity
+		})
+		if _, overflow := modelretry.ContextOverflow(retry); overflow && lateOutput {
+			e.endWithFailure(StreamEvent{Type: EventError, Cause: retry})
+			return true, nil
+		}
 		return false, retry
 	}
 	if stepErrored {

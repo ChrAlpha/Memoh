@@ -8,6 +8,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/models/modelretry"
 )
 
@@ -40,9 +41,11 @@ func (a *Agent) recoverContextOverflow(ctx context.Context, cfg RunConfig, reque
 		return false, fmt.Errorf("%w: provider context recovery made no progress: %w", contextfrag.ErrBudgetUnsatisfied, failure)
 	}
 	*recoveries++
-	a.logger.WarnContext(ctx, "provider context overflow recovered",
+	event := errlog.Event(ctx, "agent.context_recovery", failure, errlog.Options{})
+	a.logger.LogAttrs(ctx, event.Level, "provider context overflow recovered", append([]slog.Attr{
 		slog.String("run_id", cfg.RunID), slog.Int("attempt", *recoveries),
 		slog.Int("estimated_input_before", before), slog.Int("estimated_input_after", after),
-		slog.Int("input_allowance", allowance), slog.Int("provider_input_tokens", feedback.InputTokens), slog.Int("provider_limit_tokens", feedback.LimitTokens))
+		slog.Int("input_allowance", allowance), slog.Int("provider_input_tokens", feedback.InputTokens), slog.Int("provider_limit_tokens", feedback.LimitTokens),
+	}, event.Attrs()...)...)
 	return true, nil
 }

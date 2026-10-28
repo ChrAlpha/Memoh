@@ -18,6 +18,7 @@ import (
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/models/modelretry"
 )
@@ -178,6 +179,7 @@ func (s *Service) foldPass(ctx context.Context, event *Event, rows requestRows) 
 		if !overflow || recovery >= 3 || ctx.Err() != nil {
 			return fail(err)
 		}
+		rejection := err
 		// Tighten the input of the rejected fork, not an unrelated configured
 		// window. Replan at complete call groups and use the existing bounded
 		// group reader when even one group is too large. Raw rows stay intact.
@@ -194,9 +196,11 @@ func (s *Service) foldPass(ctx context.Context, event *Event, rows requestRows) 
 		}
 		previousInput = input
 		*event = ev
-		s.logger.WarnContext(ctx, "compaction summary context overflow, reducing input",
+		event := errlog.Event(ctx, "agent.compaction", rejection, errlog.Options{})
+		s.logger.LogAttrs(ctx, event.Level, "compaction summary context overflow, reducing input", append([]slog.Attr{
 			slog.String("session_id", ev.SessionID), slog.Int("attempt", recovery+1),
-			slog.Int("rejected_input_estimate", input), slog.Int("input_allowance", budget))
+			slog.Int("rejected_input_estimate", input), slog.Int("input_allowance", budget),
+		}, event.Attrs()...)...)
 	}
 	summary := strings.TrimSpace(result.Text)
 	replay := summaryReplayTokens(summary)

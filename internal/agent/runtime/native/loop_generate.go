@@ -208,7 +208,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			readMedia: readMediaState,
 		})
 		recoveredDispatch = false
-		if next, ok := cfg.contextSwitch.redispatch(cfg, thread.dispatch, stepParams); ok {
+		if next, ok := cfg.contextSwitch.redispatch(cfg, thread.dispatch, stepParams, thread.dispatch.handoff.admitted()); ok {
 			cfg.ContextCachePlan = next.ContextCachePlan
 			dispatch, err := a.buildGenerateDispatch(genCtx, next, sdkTools, approvalTools, prepareStep)
 			if err != nil {
@@ -236,7 +236,8 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 		if err != nil {
 			recovered, recoveryErr := a.recoverContextOverflow(genCtx, cfg, &stepParams, err, &recoveries)
 			if recovered {
-				next, _ := cfg.contextSwitch.redispatch(cfg, thread.dispatch, stepParams)
+				refs := cfg.contextSwitch.remap(cfg.providerAttemptState.publishedRefs())
+				next, _ := cfg.contextSwitch.redispatch(cfg, thread.dispatch, stepParams, refs)
 				cfg.ContextCachePlan = next.ContextCachePlan
 				dispatch, buildErr := a.buildGenerateDispatch(genCtx, next, sdkTools, approvalTools, prepareStep)
 				if buildErr != nil {

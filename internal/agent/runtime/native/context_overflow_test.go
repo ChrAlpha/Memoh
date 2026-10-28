@@ -63,7 +63,7 @@ func TestAgentGenerateCompactsProviderOverflowBeforeRetryingSameStep(t *testing.
 func TestContextOverflowKeepsCommittedToolEffectsInBothLoops(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
-			effects, commits, folds := 0, 0, 0
+			effects, commits, folds, committedInputs := 0, 0, 0, 0
 			provider := &atomicMockProvider{handler: func(call int, req sdk.Request) (sdk.ModelResult, error) {
 				switch call {
 				case 1:
@@ -71,6 +71,9 @@ func TestContextOverflowKeepsCommittedToolEffectsInBothLoops(t *testing.T) {
 				case 2:
 					return sdk.ModelResult{}, &sdk.APIError{Code: "context_length_exceeded"}
 				default:
+					if !providerAttemptContainsText(req.Messages, "STEER: retain the current goal") {
+						t.Fatal("retry lost the admitted steer")
+					}
 					if effects != 1 || folds != 1 || commits != 1 {
 						t.Fatalf("effects=%d folds=%d commits=%d", effects, folds, commits)
 					}
@@ -113,11 +116,18 @@ func TestContextOverflowKeepsCommittedToolEffectsInBothLoops(t *testing.T) {
 					t.Fatalf("commit index=%d, want %d", index, commits)
 				}
 				commits++
+				if providerAttemptContainsText(record.Messages, "STEER: retain the current goal") {
+					committedInputs++
+				}
 				var provenance []MessageProvenance
 				for i := range record.Messages {
 					provenance = append(provenance, MessageProvenance{Sources: rowSources(fmt.Sprintf("step-%d-%d", index, i))})
 				}
-				return StepDirective{Provenance: provenance}, nil
+				dir := StepDirective{Provenance: provenance}
+				if index == 0 {
+					dir.NextInputs = []DirectiveInput{{ID: "steer-1", Text: "STEER: retain the current goal"}}
+				}
+				return dir, nil
 			}
 			if stream {
 				for event := range a.Stream(context.Background(), cfg) {
@@ -131,22 +141,29 @@ func TestContextOverflowKeepsCommittedToolEffectsInBothLoops(t *testing.T) {
 			if effects != 1 || commits != 2 || folds != 1 || provider.calls.Load() != 3 {
 				t.Fatalf("effects=%d commits=%d folds=%d calls=%d", effects, commits, folds, provider.calls.Load())
 			}
+			if committedInputs != 1 {
+				t.Fatalf("persisted steers=%d, want the admitted steer exactly once", committedInputs)
+			}
 		})
 	}
 }
 
 func TestStreamContextOverflowOnlyRecoversBeforeOutput(t *testing.T) {
-	for _, partial := range []bool{false, true} {
-		t.Run(fmt.Sprintf("partial=%v", partial), func(t *testing.T) {
+	for _, output := range []string{"none", "before error", "after error"} {
+		t.Run(output, func(t *testing.T) {
 			calls, folds := 0, 0
 			provider := agentStreamTestProvider(func(_ context.Context, _ sdk.Request) (<-chan sdk.StreamPart, error) {
 				calls++
 				if calls == 1 {
 					parts := []sdk.StreamPart{&sdk.StartStepPart{}}
-					if partial {
+					if output == "before error" {
 						parts = append(parts, &sdk.TextDeltaPart{ID: "text", Text: "partial answer"})
 					}
-					return closedAgentTestStream(append(parts, &sdk.ErrorPart{Error: &sdk.APIError{Code: "context_length_exceeded"}})...), nil
+					parts = append(parts, &sdk.ErrorPart{Error: &sdk.APIError{Code: "context_length_exceeded"}})
+					if output == "after error" {
+						parts = append(parts, &sdk.TextDeltaPart{ID: "text", Text: "buffered answer"})
+					}
+					return closedAgentTestStream(parts...), nil
 				}
 				return closedAgentTestStream(&sdk.TextDeltaPart{ID: "text", Text: "done"}, &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}), nil
 			})
@@ -164,7 +181,7 @@ func TestStreamContextOverflowOnlyRecoversBeforeOutput(t *testing.T) {
 			for event := range New(Deps{}).Stream(context.Background(), cfg) {
 				failed = failed || event.Type == EventError
 			}
-			if partial {
+			if output != "none" {
 				if !failed || calls != 1 || folds != 0 {
 					t.Fatalf("failed=%v calls=%d folds=%d", failed, calls, folds)
 				}
