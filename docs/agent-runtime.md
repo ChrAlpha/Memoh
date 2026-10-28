@@ -395,7 +395,11 @@ carries it as stored. No run prunes, stubs, or drops a stored conversation messa
 it already sent. Dynamic background-task snapshots and before-model hooks keep
 their existing refresh behavior.
 When the next call does not fit, a run armed for in-run compaction folds its
-eligible sources into the rolling summary. Any other run, or an event that
+eligible sources into the rolling summary. What each message stands for (the
+rows, inbound messages or summary it renders) travels with it by position from
+the history load through the context view to the compiled request; only the
+messages a run appends after its compiled prefix are recognized by what its
+steps committed. Any other run, or an event that
 cannot make the call fit, ends with `context.budget_unsatisfied` or
 `context.protected_overflow`.
 

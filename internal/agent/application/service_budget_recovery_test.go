@@ -247,8 +247,8 @@ func TestShedOlderBatchImagesShedsOnlyTheImagesNeeded(t *testing.T) {
 	}
 	batch := map[string]turn.ContextMessageSource{"album": {Kind: "external", ID: "album", Current: true}, "newest": {Kind: "external", ID: "newest", Current: true}}
 	provenance := []native.MessageProvenance{
-		{Message: album, Sources: []turn.ContextMessageSource{{Kind: "external", ID: "album"}}, Anchor: true},
-		{Message: sdk.UserMessage("newest input"), Sources: []turn.ContextMessageSource{{Kind: "external", ID: "newest"}}, Anchor: true},
+		{Sources: []turn.ContextMessageSource{{Kind: "external", ID: "album"}}, Anchor: true},
+		{Sources: []turn.ContextMessageSource{{Kind: "external", ID: "newest"}}, Anchor: true},
 	}
 	cfg := native.RunConfig{ContextSourceFrags: frags, Messages: []sdk.Message{album, sdk.UserMessage("newest input")}, ContextProvenance: provenance, ContextMutations: contextfrag.NewMutationLedger()}
 	budget := contextfrag.ResolveProviderBudgetFragTokens(frags[0]) - contextfrag.EstimateImageTokens
@@ -265,7 +265,7 @@ func TestShedOlderBatchImagesShedsOnlyTheImagesNeeded(t *testing.T) {
 	if len(kept) != 2 || kept[0] != image("Mg==").Image {
 		t.Fatalf("album kept %v, want only its oldest image shed", kept)
 	}
-	if !reflect.DeepEqual(shed.ContextProvenance[0].Message, shed.Messages[0]) || !reflect.DeepEqual(cfg.ContextProvenance[0].Message, album) {
+	if !reflect.DeepEqual(shed.ContextProvenance, provenance) || !reflect.DeepEqual(cfg.Messages[0], album) {
 		t.Fatal("the album without its image no longer renders what it named")
 	}
 	if records := cfg.ContextMutations.Records(); len(records) != 1 || records[0].Detail != "sources=album" {

@@ -527,7 +527,6 @@ func discussRunRequest(cmd turn.StartTurnCommand, h *discussHandle, admitted []t
 func discussContextProvenance(admitted []turn.DiscussMessage, messages []sdk.Message) []native.MessageProvenance {
 	out := make([]native.MessageProvenance, len(messages))
 	for i := range out {
-		out[i].Message = messages[i]
 		if i >= len(admitted) {
 			continue
 		}
