@@ -129,6 +129,13 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	if usage <= allowance {
 		return false, nil
 	}
+	// The planner prices fragments with the raw estimator. Translate a
+	// matching usage measurement into that unit too: otherwise an oversized
+	// measured summary could still take its locally-fitting rewrite skip.
+	estimated := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
+	if usage > estimated {
+		allowance = max(1, int(float64(allowance)*float64(estimated)/float64(usage)))
+	}
 	provenance := s.align(params.Messages)
 	window, reserve := providerWindow(cfg)
 	splice := requestSplice{messages: params.Messages, provenance: provenance, from: make([]int, len(params.Messages))}
@@ -268,7 +275,7 @@ func (s *contextSwitchState) remap(refs []dynamicSourceRef) []dynamicSourceRef {
 // removed. It reports false when no splice happened since the last dispatch.
 //
 //nolint:gocritic // hugeParam: the run configuration and request are copied into the next dispatch.
-func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch, params sdk.Request) (RunConfig, bool) {
+func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch, params sdk.Request, admitted []dynamicSourceRef) (RunConfig, bool) {
 	if s == nil || s.moved == nil {
 		return cfg, false
 	}
@@ -281,7 +288,7 @@ func (s *contextSwitchState) redispatch(cfg RunConfig, dispatch generateDispatch
 	plan := &cfg.ContextCachePlan
 	stableBefore := messagesTokens(cfg.Messages[:min(plan.StableMessageCount, len(cfg.Messages))])
 	cfg.Messages = messages
-	cfg.retryDynamicRefs = shiftDynamicSourceRefs(dispatch.handoff.admitted(), -offset)
+	cfg.retryDynamicRefs = shiftDynamicSourceRefs(admitted, -offset)
 	cfg.initialProviderPrefixSet = true
 	cfg.initialProviderMessageCount = s.movedCount(dispatch.initialMessageCount) - offset
 	for _, count := range []*int{&plan.StableMessageCount, &plan.MidStableMessageCount} {
