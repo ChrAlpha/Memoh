@@ -19,8 +19,7 @@ import (
 // is no longer a user-selectable mode: it survives as the graphRuntime's
 // reliability fallback (graph_runtime.searchFileFallback) and as the
 // __builtin_default__ provider when no database-backed wiki store is available
-// (e.g. during bootstrap). Its lexical scorer fileRuntimeScore is also reused
-// by the graph cache.
+// (e.g. during bootstrap).
 type fileRuntime struct {
 	store memoryStore
 }
@@ -73,11 +72,12 @@ func (r *fileRuntime) Search(ctx context.Context, req adapters.SearchRequest) (a
 	if err != nil {
 		return adapters.SearchResponse{}, err
 	}
-	query := strings.ToLower(strings.TrimSpace(req.Query))
+	query := memseg.NewQuery(req.Query)
+	emptyQuery := strings.TrimSpace(req.Query) == ""
 	results := make([]adapters.MemoryItem, 0, len(items))
 	for _, item := range items {
-		score := fileRuntimeScore(query, item.Memory)
-		if query != "" && score <= 0 {
+		score := query.ScoreLower(strings.ToLower(item.Memory))
+		if !emptyQuery && score <= 0 {
 			continue
 		}
 		item.BotID = botID
@@ -260,13 +260,4 @@ func (r *fileRuntime) Rebuild(ctx context.Context, botID string) (adapters.Rebui
 		FsCount:      len(items),
 		StorageCount: len(items),
 	}, nil
-}
-
-// fileRuntimeScore scores a candidate memory body against a query. It delegates
-// to segment.LexicalScore so CJK text is segmented via gse (Chinese has no
-// inter-word spaces, so whitespace-only splitting collapsed a whole sentence
-// into one token that never matched). The graph cache reuses this scorer via
-// graphLexicalScore; both now share the same CJK-aware implementation.
-func fileRuntimeScore(query, memory string) float64 {
-	return memseg.LexicalScore(query, memory)
 }
