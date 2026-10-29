@@ -69,14 +69,17 @@ type Service struct {
 
 	inflightMu sync.Mutex
 	inflight   map[string]*inflightRun
+
+	rejections *rejections
 }
 
 // NewService creates a new compaction Service.
 func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 	return &Service{
-		queries:  queries,
-		logger:   log,
-		inflight: make(map[string]*inflightRun),
+		queries:    queries,
+		logger:     log,
+		inflight:   make(map[string]*inflightRun),
+		rejections: newRejections(),
 	}
 }
 
@@ -139,8 +142,18 @@ func (s *Service) publishActivity(botID string) {
 // could not read. It returns the passes it committed: none when there was
 // nothing to fold or the session's compaction was already in flight. A
 // failed pass ends the event with an *EventError and leaves the passes before
-// it committed.
+// it committed. While the provider still refuses the session's summarizer,
+// the event fails with that refusal before it starts.
 func (s *Service) Compact(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
+	if err := s.rejections.active(cfg); err != nil {
+		return nil, err
+	}
+	passes, err := s.runEvent(ctx, cfg)
+	s.rejections.observe(cfg, len(passes), err)
+	return passes, err
+}
+
+func (s *Service) runEvent(ctx context.Context, cfg TriggerConfig) ([]Pass, error) {
 	run, ok := s.beginSessionCompaction(cfg.SessionID)
 	if !ok {
 		s.logger.InfoContext(ctx, "compaction: already in flight for session",
