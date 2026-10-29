@@ -1,7 +1,9 @@
 package contextfrag
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -57,9 +59,9 @@ func ProviderBudgetTokensFromBytes(n int) int {
 }
 
 // EstimateSDKMessageTokens estimates tokens for one SDK message additively
-// across all parts: text and reasoning count their raw bytes, tool calls and
-// tool results count their serialized payload, and each image counts the
-// flat EstimateImageTokens instead of its base64 payload.
+// across all parts: text and reasoning count their raw bytes, tool calls,
+// tool results and files count their serialized size, and each image counts
+// the flat EstimateImageTokens instead of its base64 payload.
 func EstimateSDKMessageTokens(msg sdk.Message) int {
 	bytes, images := sdkMessageEstimate(msg)
 	return TokensFromBytes(bytes) + images*EstimateImageTokens
@@ -74,6 +76,23 @@ func sdkMessageEstimate(msg sdk.Message) (bytes, images int) {
 			bytes += len(p.Text)
 		case sdk.ImagePart:
 			images++
+		case sdk.ToolCallPart:
+			bytes += len(`{"toolCallId":,"toolName":,"input":{}}`) + jsonStringBytes(p.ToolCallID) +
+				jsonStringBytes(p.ToolName) + jsonPayloadBytes(p.Input.Text, p.Input.JSON)
+		case sdk.ToolResultPart:
+			bytes += len(`{"toolCallId":,"toolName":,"result":{}}`) + jsonStringBytes(p.ToolCallID) +
+				jsonStringBytes(p.ToolName) + jsonPayloadBytes(p.Result.Text, p.Result.JSON)
+			if p.IsError {
+				bytes += len(`,"isError":true`)
+			}
+		case sdk.FilePart:
+			bytes += len(`{"data":}`) + jsonStringBytes(p.Data)
+			if p.MediaType != "" {
+				bytes += len(`,"mediaType":`) + jsonStringBytes(p.MediaType)
+			}
+			if p.Filename != "" {
+				bytes += len(`,"filename":`) + jsonStringBytes(p.Filename)
+			}
 		default:
 			if data, err := json.Marshal(part); err == nil {
 				bytes += len(data)
@@ -81,6 +100,62 @@ func sdkMessageEstimate(msg sdk.Message) (bytes, images int) {
 		}
 	}
 	return bytes, images
+}
+
+// The sizes below approximate what json.Marshal writes for a tool exchange or
+// file without encoding it: the estimate prices those parts on every pass, and
+// they carry most of a context's bytes. The escapes encoding/json adds are
+// counted, so markup keeps its price; invalid UTF-8 and whitespace in
+// non-canonical raw JSON are not. Cache controls and provider metadata are not
+// content the model reads and are left out.
+
+// jsonPayloadBytes sizes the "text" and "json" members of tool arguments or
+// output, each omitted when empty.
+func jsonPayloadBytes(text string, raw []byte) int {
+	n := 0
+	if text != "" {
+		n += len(`"text":`) + jsonStringBytes(text)
+	}
+	if len(raw) > 0 {
+		if n > 0 {
+			n++
+		}
+		n += len(`"json":`) + jsonRawBytes(raw)
+	}
+	return n
+}
+
+// jsonStringBytes approximates the length of s encoded as a JSON string.
+func jsonStringBytes(s string) int {
+	n := len(s) + 2
+	for i := 0; i < len(s); i++ {
+		n += int(jsonEscapeGrowth[s[i]])
+	}
+	// U+2028 and U+2029 grow from three bytes to a six-byte escape.
+	return n + 3*(strings.Count(s, "\u2028")+strings.Count(s, "\u2029"))
+}
+
+// jsonEscapeGrowth is how many bytes encoding/json adds when it escapes a
+// byte inside a string.
+var jsonEscapeGrowth = func() (growth [256]uint8) {
+	for c := range 0x20 {
+		growth[c] = uint8(len(`\u0000`) - 1)
+	}
+	for _, c := range []byte{'"', '\\', '\n', '\r', '\t', '\b', '\f'} {
+		growth[c] = 1
+	}
+	for _, c := range []byte{'<', '>', '&'} {
+		growth[c] = uint8(len(`\u0000`) - 1)
+	}
+	return growth
+}()
+
+// jsonRawBytes approximates the length of an embedded JSON document. Tool
+// arguments and outputs keep theirs canonical, so only the HTML escapes
+// encoding/json adds on the way out grow it.
+func jsonRawBytes(raw []byte) int {
+	escaped := bytes.Count(raw, []byte{'<'}) + bytes.Count(raw, []byte{'>'}) + bytes.Count(raw, []byte{'&'})
+	return len(raw) + escaped*(len(`\u0000`)-1)
 }
 
 // EstimateFragTokens computes the token estimate from the fragment's parts,

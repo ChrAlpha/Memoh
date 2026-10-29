@@ -156,6 +156,39 @@ func TestEstimateSDKMessageTokensCountsToolResult(t *testing.T) {
 	}
 }
 
+// Tool parts are priced at the size json.Marshal writes for them, escapes
+// included, without encoding them; provider metadata is not model content.
+func TestEstimateSDKMessageTokensSizesToolPartsAsEncoded(t *testing.T) {
+	t.Parallel()
+
+	html := strings.Repeat(`<div class="row"><a href="/x?a=1&b=2">link</a></div>`+"\n", 40)
+	parts := []sdk.MessagePart{
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "fetch", Result: sdk.TextOutput(html)},
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "fetch", Result: toolexec.OutputFromValue(map[string]any{"content": html})},
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "exec", Result: sdk.TextOutput("denied: \"/root\"\t\x01"), IsError: true},
+		sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: toolexec.ArgumentsFromValue(map[string]any{"command": "a > b && c < d"})},
+		sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: sdk.ParseToolArguments(`{"command":`)},
+		sdk.FilePart{Data: "JVBERi0xLjQK", MediaType: "application/pdf", Filename: "a.pdf"},
+	}
+	for _, part := range parts {
+		encoded, err := json.Marshal(part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := sdkMessageEstimate(sdk.Message{Content: []sdk.MessagePart{part}}); got != len(encoded) {
+			t.Errorf("sdkMessageEstimate(%T) = %d bytes, json.Marshal writes %d: %s", part, got, len(encoded), encoded)
+		}
+	}
+
+	call := sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: toolexec.ArgumentsFromValue(map[string]any{"command": "ls"})}
+	annotated := call
+	annotated.ProviderMetadata = sdk.NewProviderMetadata("memoh", map[string]string{"pending_approval": "true"})
+	plain, _ := sdkMessageEstimate(sdk.Message{Content: []sdk.MessagePart{call}})
+	if got, _ := sdkMessageEstimate(sdk.Message{Content: []sdk.MessagePart{annotated}}); got != plain {
+		t.Fatalf("annotated call = %d bytes, want provider metadata left out (%d)", got, plain)
+	}
+}
+
 func TestEstimateSDKMessageTokensCountsReasoning(t *testing.T) {
 	t.Parallel()
 
