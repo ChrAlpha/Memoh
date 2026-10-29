@@ -414,9 +414,7 @@ func TestChatBudgetRecoveryUpdatesExistingForkSnapshotSources(t *testing.T) {
 	if got.ForkContext != snapshot {
 		t.Fatal("recovery replaced the snapshot captured by tool closures")
 	}
-	if err := snapshot.Store(got.Messages); err != nil {
-		t.Fatal(err)
-	}
+	snapshot.Store(got.Messages)
 	entries, err := snapshot.Entries()
 	if err != nil {
 		t.Fatal(err)

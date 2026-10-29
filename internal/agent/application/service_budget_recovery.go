@@ -190,11 +190,7 @@ func (l chatHistoryLayout) replaceHistory(ctx context.Context, cfg native.RunCon
 	}
 	cfg.ContextTrimmableMessages = newHistoryCount
 	cfg.ContextSourceFrags = l.replaceSourceFrags(ctx, old, cfg, newHistoryCount)
-	if cfg.ForkContext != nil {
-		if err := cfg.ForkContext.StoreWithSources(cfg.Messages, cfg.ForkContextSourceMessageIDs); err != nil {
-			return old, err
-		}
-	}
+	cfg.ForkContext.StoreWithSources(cfg.Messages, cfg.ForkContextSourceMessageIDs)
 	return cfg.RefreshContextFrag(), nil
 }
 
