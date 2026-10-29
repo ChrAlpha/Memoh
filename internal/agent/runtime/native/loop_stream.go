@@ -48,7 +48,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	if cfg.PendingSteer != nil && cfg.OnSteer != nil {
 		steerGate = &modelSteerGate{ready: make(chan struct{}, 1)}
 	}
-	cfg.Model = modelWithProviderCallObserver(cfg.Model, cfg.OnProviderStreamEventObserved, steerGate)
+	cfg.Model = modelWithProviderCallObserver(cfg.Model, cfg.CurrentModelUUID, cfg.OnProviderStreamEventObserved, steerGate)
 	if cfg.ContextLifecycle == nil {
 		cfg.ContextLifecycle = contextfrag.NewLifecycleHolder()
 	}

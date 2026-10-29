@@ -151,10 +151,11 @@ func (t *stepThread) resetRefused() {
 // does not commit, emit, or retry. textMeta is the provider metadata of the
 // step text (the stream loop accumulates it beside the result).
 func settleStep(ctx context.Context, dispatch generateDispatch, result sdk.ModelResult, textMeta sdk.ProviderMetadata, onPart func(sdk.StreamPart)) (step.Record, stepKind, error) {
+	reasoning := stampReasoningOrigin(result.ReasoningParts, dispatch.reasoningOrigin)
 	if result.FinishReason != sdk.FinishReasonToolCalls || len(result.ToolCalls) == 0 {
 		// The step's model result is the call's result verbatim: this path
 		// executes no tools and defers nothing.
-		messages := toolexec.BuildStepMessages(result.Text, textMeta, result.ReasoningParts, result.ToolCalls, nil, &result.Usage)
+		messages := toolexec.BuildStepMessages(result.Text, textMeta, reasoning, result.ToolCalls, nil, &result.Usage)
 		return step.Record{Result: result, Messages: messages}, stepFinal, nil
 	}
 	// Deferral is a normal outcome; handler failures are errors.
@@ -166,7 +167,7 @@ func settleStep(ctx context.Context, dispatch generateDispatch, result sdk.Model
 	if err != nil {
 		return step.Record{}, stepFinal, err
 	}
-	messages := toolexec.BuildStepMessages(result.Text, textMeta, result.ReasoningParts, result.ToolCalls, outcome.Results, &result.Usage)
+	messages := toolexec.BuildStepMessages(result.Text, textMeta, reasoning, result.ToolCalls, outcome.Results, &result.Usage)
 	record := step.Record{
 		Result:      result,
 		ToolResults: toolexec.ToolCallResults(result.ToolCalls, outcome.Results),

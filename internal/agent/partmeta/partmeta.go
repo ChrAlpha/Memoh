@@ -1,9 +1,9 @@
 // Package partmeta is Memoh's own namespace on sdk.ProviderMetadata. The SDK
 // types provider metadata as namespace → name → string so that a provider's
-// opaque tokens survive every wire format; Memoh annotates tool-call parts
-// with its own records (a pending approval, a user-input request, the
-// execution location) and keeps them in the "memoh" namespace, one JSON
-// document per key.
+// opaque tokens survive every wire format; Memoh annotates parts with its own
+// records (on a tool call: a pending approval, a user-input request, the
+// execution location; on reasoning: the model that issued it) and keeps them
+// in the "memoh" namespace, one JSON document per key.
 //
 // bot_history_messages has always stored these annotations as nested objects
 // at the top level of providerMetadata, beside the provider namespaces. Fold
@@ -27,12 +27,35 @@ const (
 	KeyApproval          = "approval"
 	KeyUserInput         = "user_input"
 	KeyExecutionLocation = "execution_location"
+	KeyReasoningOrigin   = "reasoning_origin"
 )
 
 var ownKeys = map[string]bool{
 	KeyApproval:          true,
 	KeyUserInput:         true,
 	KeyExecutionLocation: true,
+	KeyReasoningOrigin:   true,
+}
+
+// reasoningOriginModel names the model UUID inside a reasoning origin.
+const reasoningOriginModel = "model_uuid"
+
+// WithReasoningOrigin returns meta recording modelUUID as the model
+// configuration (models row UUID) that issued a reasoning part. meta is not
+// modified.
+func WithReasoningOrigin(meta sdk.ProviderMetadata, modelUUID string) sdk.ProviderMetadata {
+	return Set(meta, KeyReasoningOrigin, map[string]string{reasoningOriginModel: modelUUID})
+}
+
+// ReasoningOrigin returns the model UUID WithReasoningOrigin recorded, empty
+// when none is.
+func ReasoningOrigin(meta sdk.ProviderMetadata) string {
+	origin, ok := Object(meta, KeyReasoningOrigin)
+	if !ok {
+		return ""
+	}
+	modelUUID, _ := origin[reasoningOriginModel].(string)
+	return modelUUID
 }
 
 // Set returns meta with value recorded under key. meta is not modified; a

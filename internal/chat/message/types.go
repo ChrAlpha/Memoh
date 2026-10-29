@@ -90,6 +90,9 @@ type Message struct {
 	// Summarized marks a row loaded to place the compaction summary that
 	// replaced it; the window left out the rest of its compact group.
 	Summarized bool `json:"-"`
+	// ModelID is the model (models row UUID) that produced the row. It is
+	// loaded where history is replayed to a model.
+	ModelID string `json:"-"`
 }
 
 type HistoryTurn struct {

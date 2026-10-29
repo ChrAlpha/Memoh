@@ -2277,6 +2277,7 @@ func toMessagesFromActiveSinceBySessionWithinBytes(rows []sqlc.ListActiveMessage
 			SenderDisplayName: row.SenderDisplayName, SenderAvatarUrl: row.SenderAvatarUrl, Platform: row.Platform,
 		})
 		message.Summarized = row.Summarized
+		message.ModelID = uuidString(row.ModelID)
 		messages = append(messages, message)
 	}
 	return messages

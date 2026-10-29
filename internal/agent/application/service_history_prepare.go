@@ -74,6 +74,7 @@ func (s *Service) prepareHistoryWindow(
 		return preparedHistoryContext{}, err
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
+	loaded = attributeHistoryReasoning(loaded)
 	messages, records := historyMessagesFromRecords(loaded)
 	return preparedHistoryContext{
 		messages:       messages,
@@ -146,4 +147,28 @@ func projectInterruptedHistoryReasoning(records []historyfrag.HistoryRecord) []h
 		return records
 	}
 	return projected
+}
+
+// attributeHistoryReasoning attributes the reasoning of rows committed before
+// reasoning recorded its origin to the model each row records, so a model
+// switch withholds it like any other reasoning another model issued.
+func attributeHistoryReasoning(records []historyfrag.HistoryRecord) []historyfrag.HistoryRecord {
+	var attributed []historyfrag.HistoryRecord
+	for i, record := range records {
+		if !strings.EqualFold(strings.TrimSpace(record.ModelMessage.Role), "assistant") {
+			continue
+		}
+		message, ok := historyfrag.AttributeReasoningOrigin(record.ModelMessage, record.ModelID)
+		if !ok {
+			continue
+		}
+		if attributed == nil {
+			attributed = append([]historyfrag.HistoryRecord(nil), records...)
+		}
+		attributed[i].ModelMessage = message
+	}
+	if attributed == nil {
+		return records
+	}
+	return attributed
 }

@@ -80,6 +80,7 @@ func (s *Service) prepareContinuationRunConfig(
 		return native.RunConfig{}, err
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
+	loaded = attributeHistoryReasoning(loaded)
 	messages, retained := historyMessagesFromRecords(loaded)
 	if req.continuationToolCallID != "" && req.RunHandle.RunID != "" {
 		start := slices.IndexFunc(retained, func(record historyfrag.HistoryRecord) bool {

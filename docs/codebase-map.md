@@ -39,7 +39,7 @@ Memoh/
 │   │   │   ├── session/        #       Per-thread runtime state and control
 │   │   │   └── toolmount/      #       Memoh tool gateway mounts for direct runtimes
 │   │   ├── sessionmode/        #     Session mode resolution
-│   │   ├── partmeta/           #     Memoh annotations (approval, user input, execution location) on sdk.ProviderMetadata, plus the stored-shape fold/unfold
+│   │   ├── partmeta/           #     Memoh annotations (approval, user input, execution location, reasoning origin) on sdk.ProviderMetadata, plus the stored-shape fold/unfold
 │   │   ├── step/               #     Runtime-neutral step record (model result, tool results, messages, deferred approval)
 │   │   ├── tool/               #     Native tool providers (package name remains tools)
 │   │       ├── message.go      #       Send message tool

@@ -17,12 +17,16 @@ import (
 )
 
 // providerCallObserver wraps the provider for both loop entry points: it
-// times every model call as its own span, forwards part timings to the live
-// event stream, and gives the steer gate its view of the raw part stream.
+// withholds the reasoning other model configurations issued, times every
+// model call as its own span, forwards part timings to the live event stream,
+// and gives the steer gate its view of the raw part stream.
 type providerCallObserver struct {
 	sdk.Provider
 	observe func(StreamEvent)
 	steer   *modelSteerGate
+	// reasoningOrigin is the model UUID the call runs under; reasoning
+	// recorded under another is not sent (see reasoning_origin.go).
+	reasoningOrigin string
 	// model names the call for the span. It is captured here rather than read
 	// from the request because the provider is handed a request, not the model
 	// record the rest of the runtime knows the call by.
@@ -38,7 +42,7 @@ type modelIdentity struct {
 	provider string
 }
 
-func modelWithProviderCallObserver(model *sdk.Model, observe func(StreamEvent), steer *modelSteerGate) *sdk.Model {
+func modelWithProviderCallObserver(model *sdk.Model, reasoningOrigin string, observe func(StreamEvent), steer *modelSteerGate) *sdk.Model {
 	if model == nil || model.Provider == nil {
 		return model
 	}
@@ -58,11 +62,12 @@ func modelWithProviderCallObserver(model *sdk.Model, observe func(StreamEvent), 
 		identity.provider = provider.Name()
 	}
 	observed.Provider = providerCallObserver{
-		Provider: provider,
-		observe:  observe,
-		steer:    steer,
-		model:    identity,
-		calls:    &atomic.Int64{},
+		Provider:        provider,
+		observe:         observe,
+		steer:           steer,
+		reasoningOrigin: reasoningOrigin,
+		model:           identity,
+		calls:           &atomic.Int64{},
 	}
 	return &observed
 }
@@ -126,6 +131,7 @@ func spanFailure(ctx context.Context, err error) error {
 
 //nolint:gocritic // hugeParam: DoGenerate implements the sdk.Provider seam, which passes Request by value.
 func (p providerCallObserver) DoGenerate(ctx context.Context, req sdk.Request) (sdk.ModelResult, error) {
+	req.Messages = withholdForeignReasoning(req.Messages, p.reasoningOrigin)
 	ctx, span := p.startCallSpan(ctx, spanModelGenerate)
 	result, err := p.Provider.DoGenerate(ctx, req)
 	endCallSpan(ctx, span, err)
@@ -134,6 +140,7 @@ func (p providerCallObserver) DoGenerate(ctx context.Context, req sdk.Request) (
 
 //nolint:gocritic // hugeParam: DoStream implements the sdk.Provider seam, which passes Request by value.
 func (p providerCallObserver) DoStream(ctx context.Context, req sdk.Request) (<-chan sdk.StreamPart, error) {
+	req.Messages = withholdForeignReasoning(req.Messages, p.reasoningOrigin)
 	// Every provider call begins a fresh attempt. For ordinary multi-step runs
 	// the previous step has already consumed or checkpointed its timings; for a
 	// retry this discards the failed attempt before replacement parts arrive.

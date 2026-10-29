@@ -3005,7 +3005,7 @@ SELECT
   m.source_message_id AS external_message_id,
   m.source_reply_to_message_id, m.role, m.content, m.metadata, m.usage,
   m.session_mode, m.runtime_type, m.event_id, m.display_text, m.compact_id,
-  m.created_at, ci.display_name AS sender_display_name,
+  m.model_id, m.created_at, ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url, s.channel_type AS platform, admitted.summarized
 FROM admitted
 JOIN bot_history_messages m ON m.id = admitted.id
@@ -3040,6 +3040,7 @@ type ListActiveMessagesSinceBySessionWithinBytesRow struct {
 	EventID                 pgtype.UUID        `json:"event_id"`
 	DisplayText             pgtype.Text        `json:"display_text"`
 	CompactID               pgtype.UUID        `json:"compact_id"`
+	ModelID                 pgtype.UUID        `json:"model_id"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
 	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
@@ -3082,6 +3083,7 @@ func (q *Queries) ListActiveMessagesSinceBySessionWithinBytes(ctx context.Contex
 			&i.EventID,
 			&i.DisplayText,
 			&i.CompactID,
+			&i.ModelID,
 			&i.CreatedAt,
 			&i.SenderDisplayName,
 			&i.SenderAvatarUrl,

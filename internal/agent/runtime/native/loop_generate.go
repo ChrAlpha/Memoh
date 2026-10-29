@@ -34,9 +34,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	genCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	// The non-streaming path runs the same loop as the streaming one and needs
-	// the same per-call timing. It has no stream to observe and nothing to
-	// steer, so the observer here exists for the spans alone.
-	cfg.Model = modelWithProviderCallObserver(cfg.Model, nil, nil)
+	// the same per-call timing and reasoning withholding. It has no stream to
+	// observe and nothing to steer.
+	cfg.Model = modelWithProviderCallObserver(cfg.Model, cfg.CurrentModelUUID, nil, nil)
 	defer func() {
 		if errors.Is(retErr, ErrContextRecompose) {
 			return
@@ -364,6 +364,9 @@ type generateDispatch struct {
 	// prompt into the message prefix, where a capability refresh cannot
 	// replace it.
 	systemPrepended bool
+	// reasoningOrigin is the model UUID committed reasoning is recorded
+	// under (see reasoning_origin.go).
+	reasoningOrigin string
 }
 
 // buildGenerateDispatch assembles the single-call input for the Memoh-owned
@@ -482,6 +485,7 @@ func (a *Agent) buildGenerateDispatch(ctx context.Context, cfg RunConfig, sdkToo
 		prepareStep:         stepPrepare,
 		handoff:             handoff,
 		approve:             approvalHandler,
+		reasoningOrigin:     cfg.CurrentModelUUID,
 		initialMessageCount: initialProviderMessageCount,
 		systemPrepended:     systemPrepended,
 	}, nil
