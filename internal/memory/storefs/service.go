@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"path"
 	"sort"
@@ -23,7 +22,6 @@ import (
 	memslug "github.com/felinics/memoh/internal/memory/slug"
 	"github.com/felinics/memoh/internal/textutil"
 	"github.com/felinics/memoh/internal/workspace/bridge"
-	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
 const (
@@ -42,13 +40,16 @@ type scanEntry struct {
 }
 
 type Service struct {
-	provider bridge.Provider
-	logger   *slog.Logger
+	files  func(ctx context.Context, botID string) (workspaceFiles, error)
+	logger *slog.Logger
 
 	// overview tracks, per bot, whether MEMORY.md has caught up with the
 	// conversation writes it deferred (see RefreshOverview).
 	overviewMu sync.Mutex
 	overview   map[string]overviewState
+
+	scans   fileScans
+	renders conceptRenders
 }
 
 type MemoryItem struct {
@@ -111,88 +112,73 @@ func New(log *slog.Logger, provider bridge.Provider) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{provider: provider, logger: log.With(slog.String("component", "storefs"))}
+	s := &Service{logger: log.With(slog.String("component", "storefs"))}
+	if provider != nil {
+		s.files = func(ctx context.Context, botID string) (workspaceFiles, error) {
+			client, err := provider.MCPClient(ctx, botID)
+			if err != nil {
+				return nil, err
+			}
+			return client, nil
+		}
+	}
+	return s
 }
 
-func (s *Service) client(ctx context.Context, botID string) (*bridge.Client, error) {
-	if s.provider == nil {
+func (s *Service) configured() bool { return s.files != nil }
+
+func (s *Service) workspace(ctx context.Context, botID string) (workspaceFiles, error) {
+	if s.files == nil {
 		return nil, ErrNotConfigured
 	}
-	return s.provider.MCPClient(ctx, botID)
+	return s.files(ctx, botID)
 }
 
 func (s *Service) readFile(ctx context.Context, botID, filePath string) (string, error) {
-	c, err := s.client(ctx, botID)
+	files, err := s.workspace(ctx, botID)
 	if err != nil {
 		return "", err
 	}
-	reader, err := c.ReadRaw(ctx, filePath)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = reader.Close() }()
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
+	return readWorkspaceFile(ctx, files, filePath)
 }
 
 func (s *Service) writeFile(ctx context.Context, botID, filePath, content string) error {
-	c, err := s.client(ctx, botID)
+	files, err := s.workspace(ctx, botID)
 	if err != nil {
 		return err
 	}
-	return c.WriteFile(ctx, filePath, []byte(content))
+	defer s.scans.forget(botID, filePath)
+	return files.WriteFile(ctx, filePath, []byte(content))
 }
 
 func (s *Service) deleteFile(ctx context.Context, botID, filePath string, recursive bool) error {
-	c, err := s.client(ctx, botID)
+	files, err := s.workspace(ctx, botID)
 	if err != nil {
 		return err
 	}
-	return c.DeleteFile(ctx, filePath, recursive)
+	if recursive {
+		defer s.scans.forget(botID)
+	} else {
+		defer s.scans.forget(botID, filePath)
+	}
+	return files.DeleteFile(ctx, filePath, recursive)
 }
 
-// buildScanIndex scans all memory markdown files and builds a map of id -> file path.
+// buildScanIndex maps each memory ID to the file that contains it.
 func (s *Service) buildScanIndex(ctx context.Context, botID string) (map[string]scanEntry, error) {
-	c, err := s.client(ctx, botID)
+	files, err := s.scanMemoryFiles(ctx, botID)
 	if err != nil {
-		return nil, err
-	}
-	entries, err := c.ListDirAll(ctx, memoryDirPath(), true)
-	if err != nil {
-		if isNotFound(err) {
-			return map[string]scanEntry{}, nil
-		}
 		return nil, err
 	}
 	index := make(map[string]scanEntry)
-	for _, entry := range entries {
-		if entry.GetIsDir() || !strings.HasSuffix(entry.GetPath(), ".md") {
-			continue
-		}
-		entryPath := memoryEntryPath(entry.GetPath())
-		content, readErr := s.readFile(ctx, botID, entryPath)
-		if readErr != nil {
-			s.logger.WarnContext(ctx, "buildScanIndex: failed to read memory file",
-				slog.String("bot_id", botID), slog.String("path", entryPath), slog.Any("error", readErr))
-			continue
-		}
-		parsed, parseErr := parseMemoryFile(content)
-		if parseErr != nil {
-			s.logger.WarnContext(ctx, "buildScanIndex: failed to parse memory file",
-				slog.String("bot_id", botID), slog.String("path", entryPath), slog.Any("error", parseErr))
-			continue
-		}
-		for _, item := range parsed {
+	for _, f := range files {
+		for _, item := range f.items {
 			id := strings.TrimSpace(item.ID)
 			if id == "" {
 				continue
 			}
-			item = normalizeMemoryItem(item)
 			if _, ok := index[id]; !ok {
-				index[id] = scanEntry{FilePath: entryPath, Item: item}
+				index[id] = scanEntry{FilePath: f.path, Item: normalizeMemoryItem(cloneMemoryItem(item))}
 			}
 		}
 	}
@@ -200,7 +186,7 @@ func (s *Service) buildScanIndex(ctx context.Context, botID string) (map[string]
 }
 
 func (s *Service) PersistMemories(ctx context.Context, botID string, items []MemoryItem, _ map[string]any) error {
-	if s.provider == nil {
+	if !s.configured() {
 		return ErrNotConfigured
 	}
 	if len(items) == 0 {
@@ -251,60 +237,61 @@ func (s *Service) PersistMemories(ctx context.Context, botID string, items []Mem
 	return nil
 }
 
-// RebuildFiles rewrites the memory projection from items and finishes with
-// SyncOverview, so callers need not sync the overview again. A conversation
-// write defers the MEMORY.md rewrite as SyncOverview does.
+// RebuildFiles brings the memory projection in line with items and finishes
+// with SyncOverview, so callers need not sync the overview again. A
+// conversation write defers the MEMORY.md rewrite as SyncOverview does.
+//
+// The projection is derived from the authoritative node set (items) without
+// wiping the tree: files whose rendering is unchanged are left alone, changed
+// and new ones are written, and only files recognizably DB projections —
+// every parsed entry carries the "<botID>:" id prefix minted by the wiki
+// store — are removed when the node set no longer produces them. Agent-authored
+// files that have not been ingested yet (unprefixed or missing frontmatter ids,
+// or free-form markdown that does not parse) survive every sync until
+// POST /bots/:bot_id/memory/ingest or /rebuild imports them as DB nodes.
 func (s *Service) RebuildFiles(ctx context.Context, botID string, items []MemoryItem, _ map[string]any) error {
-	if s.provider == nil {
+	if !s.configured() {
 		return ErrNotConfigured
-	}
-	// RebuildFiles regenerates the derived /data/memory projection from the
-	// authoritative node set (`items`) without wiping the whole tree. Only
-	// files that are recognizably DB projections — every parsed entry carries
-	// the "<botID>:" id prefix minted by the wiki store — are removed before
-	// re-rendering, so stale projections of deleted nodes go away while
-	// agent-authored files that have not been ingested yet (unprefixed or
-	// missing frontmatter ids, or free-form markdown that does not parse)
-	// survive every sync until POST /bots/:bot_id/memory/ingest or /rebuild
-	// imports them as DB nodes.
-	if err := s.removeProjectionFiles(ctx, botID); err != nil {
-		return err
 	}
 	plans := planConceptFiles(items)
 	linkIndex := conceptLinkIndex(plans)
+	previous := s.renders.get(botID)
+	renders := make(map[string]conceptRender, len(plans))
 	for _, plan := range plans {
+		if r, ok := previous[plan.FilePath]; ok && r.renders(plan, linkIndex) {
+			renders[plan.FilePath] = r
+			continue
+		}
+		renders[plan.FilePath] = newConceptRender(plan, linkIndex)
+	}
+	s.renders.set(botID, renders)
+
+	files, err := s.scanMemoryFiles(ctx, botID)
+	if err != nil {
+		return err
+	}
+	current := make(map[string][sha256.Size]byte, len(files))
+	for _, f := range files {
+		if _, kept := renders[f.path]; kept {
+			current[f.path] = f.digest
+			continue
+		}
+		if !f.parsed || !isProjectionItems(botID, f.items) {
+			continue
+		}
+		if err := s.deleteFile(ctx, botID, f.path, false); err != nil && !isNotFound(err) {
+			return err
+		}
+	}
+	for _, plan := range plans {
+		if digest, ok := current[plan.FilePath]; ok && digest == renders[plan.FilePath].digest {
+			continue
+		}
 		if err := s.writeConceptFile(ctx, botID, plan, linkIndex); err != nil {
 			return err
 		}
 	}
 	return s.SyncOverview(ctx, botID)
-}
-
-// removeProjectionFiles deletes the markdown files under /data/memory that are
-// projections of DB nodes (see isProjectionItems), leaving agent-authored
-// un-ingested files untouched.
-func (s *Service) removeProjectionFiles(ctx context.Context, botID string) error {
-	entries, err := s.listMemoryMarkdownEntries(ctx, botID)
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		entryPath := memoryEntryPath(entry.GetPath())
-		content, readErr := s.readFile(ctx, botID, entryPath)
-		if readErr != nil {
-			s.logger.WarnContext(ctx, "rebuild: failed to read memory file; preserving it",
-				slog.String("bot_id", botID), slog.String("path", entryPath), slog.Any("error", readErr))
-			continue
-		}
-		parsed, parseErr := parseMemoryFile(content)
-		if parseErr != nil || !isProjectionItems(botID, parsed) {
-			continue
-		}
-		if err := s.deleteFile(ctx, botID, entryPath, false); err != nil && !isNotFound(err) {
-			return err
-		}
-	}
-	return nil
 }
 
 // isProjectionItems reports whether a parsed memory file is a projection of DB
@@ -326,7 +313,7 @@ func isProjectionItems(botID string, items []MemoryItem) bool {
 }
 
 func (s *Service) RemoveMemories(ctx context.Context, botID string, ids []string) error {
-	if s.provider == nil {
+	if !s.configured() {
 		return ErrNotConfigured
 	}
 	if len(ids) == 0 {
@@ -360,9 +347,10 @@ func (s *Service) RemoveMemories(ctx context.Context, botID string, ids []string
 }
 
 func (s *Service) RemoveAllMemories(ctx context.Context, botID string) error {
-	if s.provider == nil {
+	if !s.configured() {
 		return ErrNotConfigured
 	}
+	s.renders.set(botID, nil)
 	if err := s.deleteFile(ctx, botID, memoryDirPath(), true); err != nil && !isNotFound(err) {
 		return err
 	}
@@ -370,50 +358,14 @@ func (s *Service) RemoveAllMemories(ctx context.Context, botID string) error {
 }
 
 func (s *Service) ReadAllMemoryFiles(ctx context.Context, botID string) ([]MemoryItem, error) {
-	if s.provider == nil {
+	if !s.configured() {
 		return nil, ErrNotConfigured
 	}
-	c, err := s.client(ctx, botID)
+	files, err := s.scanMemoryFiles(ctx, botID)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := c.ListDirAll(ctx, memoryDirPath(), true)
-	if err != nil {
-		if isNotFound(err) {
-			return []MemoryItem{}, nil
-		}
-		return nil, err
-	}
-	items := make([]MemoryItem, 0, len(entries))
-	seen := map[string]struct{}{}
-	for _, entry := range entries {
-		if entry.GetIsDir() || !strings.HasSuffix(entry.GetPath(), ".md") {
-			continue
-		}
-		entryPath := memoryEntryPath(entry.GetPath())
-		content, readErr := s.readFile(ctx, botID, entryPath)
-		if readErr != nil {
-			continue
-		}
-		parsed, parseErr := parseMemoryFile(content)
-		if parseErr != nil {
-			continue
-		}
-		for _, item := range parsed {
-			if strings.TrimSpace(item.ID) == "" {
-				continue
-			}
-			if _, ok := seen[item.ID]; ok {
-				continue
-			}
-			seen[item.ID] = struct{}{}
-			items = append(items, item)
-		}
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return memoryTime(items[i]).Before(memoryTime(items[j]))
-	})
-	return items, nil
+	return collectMemoryItems(files, false), nil
 }
 
 // ReadAllMemoryFilesForIngest is like ReadAllMemoryFiles but does not drop items
@@ -427,71 +379,55 @@ func (s *Service) ReadAllMemoryFiles(ctx context.Context, botID string) ([]Memor
 // agent-authored files, but without this ingest the agent's directly-written
 // /data/memory/*.md would stay invisible to search_memory.
 func (s *Service) ReadAllMemoryFilesForIngest(ctx context.Context, botID string) ([]MemoryItem, error) {
-	items, err := s.ReadAllMemoryFiles(ctx, botID)
+	if !s.configured() {
+		return nil, ErrNotConfigured
+	}
+	files, err := s.scanMemoryFiles(ctx, botID)
 	if err != nil {
 		return nil, err
 	}
-	// ReadAllMemoryFiles already dropped empty-ID items; re-scan the raw files
-	// to recover them with a synthesised deterministic id.
-	entries, err := s.listMemoryMarkdownEntries(ctx, botID)
-	if err != nil {
-		return nil, err
-	}
-	existing := make(map[string]struct{}, len(items))
-	for _, it := range items {
-		existing[it.ID] = struct{}{}
-	}
-	for _, entry := range entries {
-		content, readErr := s.readFile(ctx, botID, memoryEntryPath(entry.GetPath()))
-		if readErr != nil {
-			continue
-		}
-		parsed, parseErr := parseMemoryFile(content)
-		if parseErr != nil {
-			continue
-		}
-		for _, item := range parsed {
-			if strings.TrimSpace(item.ID) != "" {
-				continue // ReadAllMemoryFiles already returned it.
-			}
-			item.ID = synthIngestID(entry.GetPath(), item.Memory)
-			if _, ok := existing[item.ID]; ok {
+	return collectMemoryItems(files, true), nil
+}
+
+// collectMemoryItems gathers the entries of scanned files, first occurrence of
+// an id winning, ordered by memory time. Entries without an id are dropped,
+// or, with synthesizeIDs, kept under a deterministic id derived from their
+// file and body.
+func collectMemoryItems(files []scannedFile, synthesizeIDs bool) []MemoryItem {
+	items := make([]MemoryItem, 0, len(files))
+	seen := map[string]struct{}{}
+	for _, f := range files {
+		for _, item := range f.items {
+			if strings.TrimSpace(item.ID) == "" {
 				continue
 			}
-			existing[item.ID] = struct{}{}
-			items = append(items, item)
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			items = append(items, cloneMemoryItem(item))
+		}
+	}
+	if synthesizeIDs {
+		for _, f := range files {
+			for _, item := range f.items {
+				if strings.TrimSpace(item.ID) != "" {
+					continue
+				}
+				item = cloneMemoryItem(item)
+				item.ID = synthIngestID(f.listedPath, item.Memory)
+				if _, ok := seen[item.ID]; ok {
+					continue
+				}
+				seen[item.ID] = struct{}{}
+				items = append(items, item)
+			}
 		}
 	}
 	sort.Slice(items, func(i, j int) bool {
 		return memoryTime(items[i]).Before(memoryTime(items[j]))
 	})
-	return items, nil
-}
-
-// listMemoryMarkdownEntries lists .md files under /data/memory for a bot.
-func (s *Service) listMemoryMarkdownEntries(ctx context.Context, botID string) ([]*pb.FileEntry, error) {
-	if s.provider == nil {
-		return nil, ErrNotConfigured
-	}
-	c, err := s.client(ctx, botID)
-	if err != nil {
-		return nil, err
-	}
-	entries, err := c.ListDirAll(ctx, memoryDirPath(), true)
-	if err != nil {
-		if isNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	out := make([]*pb.FileEntry, 0, len(entries))
-	for _, e := range entries {
-		if e.GetIsDir() || !strings.HasSuffix(e.GetPath(), ".md") {
-			continue
-		}
-		out = append(out, e)
-	}
-	return out, nil
+	return items
 }
 
 // synthIngestID derives a deterministic node id for an agent-authored memory
@@ -505,14 +441,14 @@ func synthIngestID(relPath, body string) string {
 }
 
 func (s *Service) CountMemoryFiles(ctx context.Context, botID string) (int, error) {
-	if s.provider == nil {
+	if !s.configured() {
 		return 0, ErrNotConfigured
 	}
-	c, err := s.client(ctx, botID)
+	files, err := s.workspace(ctx, botID)
 	if err != nil {
 		return 0, err
 	}
-	entries, err := c.ListDirAll(ctx, memoryDirPath(), true)
+	entries, err := files.ListDirAll(ctx, memoryDirPath(), true)
 	if err != nil {
 		if isNotFound(err) {
 			return 0, nil
@@ -532,7 +468,7 @@ func (s *Service) CountMemoryFiles(ctx context.Context, botID string) (int, erro
 // SyncOverview rewrites MEMORY.md from the memory files, unless ctx carries a
 // conversation write, whose rewrite waits for RefreshOverview.
 func (s *Service) SyncOverview(ctx context.Context, botID string) error {
-	if s.provider == nil {
+	if !s.configured() {
 		return ErrNotConfigured
 	}
 	if s.deferOverview(ctx, botID) {
@@ -693,18 +629,23 @@ func isConceptFilePath(filePath string) bool {
 // --- format / parse helpers ---
 
 func formatConceptMD(plan conceptFilePlan, links map[string]conceptLinkTarget) string {
+	content, _ := renderConceptMD(plan, links)
+	return content
+}
+
+// renderConceptMD renders a concept file and reports the wiki links its body
+// resolved, which with the plan decide the rendering (see conceptRenders).
+func renderConceptMD(plan conceptFilePlan, links map[string]conceptLinkTarget) (string, []conceptLinkUse) {
 	item := normalizeMemoryItem(plan.Item)
-	body := strings.TrimSpace(item.Memory)
-	if len(links) > 0 {
-		body = memslug.RenderWikiLinks(body, func(_ string, normalized string) (string, bool) {
-			target, ok := links[normalized]
-			if !ok {
-				return "", false
-			}
-			targetRelPath := firstNonEmpty(target.RelPath, memoryConceptRelPath(target.Layer, target.Slug))
-			return relativeMemoryLink(plan.RelPath, targetRelPath), true
-		})
-	}
+	var uses []conceptLinkUse
+	body := memslug.RenderWikiLinks(strings.TrimSpace(item.Memory), func(_ string, normalized string) (string, bool) {
+		targetRelPath := resolveConceptLink(links, normalized)
+		uses = append(uses, conceptLinkUse{slug: normalized, relPath: targetRelPath})
+		if targetRelPath == "" {
+			return "", false
+		}
+		return relativeMemoryLink(plan.RelPath, targetRelPath), true
+	})
 
 	fm := conceptFrontmatter{
 		Type:       firstNonEmpty(metadataStringVal(item.Metadata, "fact_type"), metadataStringVal(item.Metadata, "type"), "memory"),
@@ -731,7 +672,17 @@ func formatConceptMD(plan conceptFilePlan, links map[string]conceptLinkTarget) s
 	b.WriteString("\n---\n\n")
 	b.WriteString(body)
 	b.WriteString("\n")
-	return b.String()
+	return b.String(), uses
+}
+
+// resolveConceptLink returns the path a [[slug]] link points to, or "" when no
+// concept has that slug.
+func resolveConceptLink(links map[string]conceptLinkTarget, slug string) string {
+	target, ok := links[slug]
+	if !ok {
+		return ""
+	}
+	return firstNonEmpty(target.RelPath, memoryConceptRelPath(target.Layer, target.Slug))
 }
 
 func parseConceptMD(content string) (MemoryItem, error) {
