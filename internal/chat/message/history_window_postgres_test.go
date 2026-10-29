@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
+	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
 
 // Compare the bounded index walk to the cumulative-window definition of the
@@ -201,4 +202,48 @@ func (p historyWindowPlan) visitedRows() (float64, bool) {
 		indexed = indexed || i
 	}
 	return rows, indexed
+}
+
+// History is replayed to a model, so the window carries the model each row
+// was produced by.
+func TestPostgresHistoryWindowLoadsTheRowsModel(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	const providerID, modelID = "0193a1b2-0000-7000-8000-0000000002a6", "0193a1b2-0000-7000-8000-0000000002a7"
+	if _, err := tx.Exec(ctx, `INSERT INTO providers (id, name) VALUES ($1, 'history-window-model-provider')`, providerID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO models (id, model_id, provider_id) VALUES ($1, 'history-window-model', $2)`, modelID, providerID); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	for _, row := range []PersistInput{
+		{BotID: postgresMessageTestBotID, SessionID: postgresMessageTestSessionID, Role: "user", Content: []byte(`{"role":"user","content":"question"}`)},
+		{BotID: postgresMessageTestBotID, SessionID: postgresMessageTestSessionID, Role: "assistant", Content: []byte(`{"role":"assistant","content":"answer"}`), ModelID: modelID},
+	} {
+		if _, err := svc.Persist(ctx, row); err != nil {
+			t.Fatalf("persist %s: %v", row.Role, err)
+		}
+	}
+
+	load, err := svc.ListHistoryWithinBytes(ctx, postgresMessageTestSessionID, HistoryWindow{MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := load.Messages
+	if len(messages) != 2 || messages[0].ModelID != "" || messages[1].ModelID != modelID {
+		got := make([]string, 0, len(messages))
+		for _, m := range messages {
+			got = append(got, m.Role+":"+m.ModelID)
+		}
+		t.Fatalf("loaded rows = %v, want [user: assistant:%s]", got, modelID)
+	}
+	kept, err := svc.ListHistoryByIDs(ctx, postgresMessageTestSessionID, []string{messages[1].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kept) != 1 || kept[0].ModelID != modelID {
+		t.Fatalf("rows a checkpoint keeps = %+v, want the assistant row with model %s", kept, modelID)
+	}
 }

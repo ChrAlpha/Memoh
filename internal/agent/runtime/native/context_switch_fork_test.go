@@ -22,7 +22,7 @@ func TestForkSummarizerStreamsPastTheRunsObserver(t *testing.T) {
 		return sdk.ModelResult{Text: "the summary", FinishReason: sdk.FinishReasonStop}, nil
 	}}
 	var observed []StreamEvent
-	model := modelWithProviderCallObserver(&sdk.Model{ID: "mock-model", Provider: provider}, func(event StreamEvent) {
+	model := modelWithProviderCallObserver(&sdk.Model{ID: "mock-model", Provider: provider}, "", func(event StreamEvent) {
 		observed = append(observed, event)
 	}, nil)
 

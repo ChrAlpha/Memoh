@@ -1118,7 +1118,7 @@ func (s *DBService) ListHistoryWithinBytes(ctx context.Context, sessionID string
 	load := HistoryLoad{Messages: make([]Message, 0, len(rows))}
 	for _, row := range rows {
 		load.Truncated = row.Truncated
-		load.Messages = append(load.Messages, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow{
+		message := toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow{
 			ID:                      row.ID,
 			BotID:                   row.BotID,
 			SessionID:               row.SessionID,
@@ -1138,7 +1138,9 @@ func (s *DBService) ListHistoryWithinBytes(ctx context.Context, sessionID string
 			SenderDisplayName:       row.SenderDisplayName,
 			SenderAvatarUrl:         row.SenderAvatarUrl,
 			Platform:                row.Platform,
-		}))
+		})
+		message.ModelID = uuidString(row.ModelID)
+		load.Messages = append(load.Messages, message)
 	}
 	s.enrichAssets(ctx, load.Messages)
 	return load, nil
@@ -1164,7 +1166,29 @@ func (s *DBService) ListHistoryByIDs(ctx context.Context, sessionID string, ids 
 	}
 	msgs := make([]Message, 0, len(rows))
 	for _, row := range rows {
-		msgs = append(msgs, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
+		message := toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow{
+			ID:                      row.ID,
+			BotID:                   row.BotID,
+			SessionID:               row.SessionID,
+			SenderChannelIdentityID: row.SenderChannelIdentityID,
+			SenderUserID:            row.SenderUserID,
+			ExternalMessageID:       row.ExternalMessageID,
+			SourceReplyToMessageID:  row.SourceReplyToMessageID,
+			Role:                    row.Role,
+			Content:                 row.Content,
+			Metadata:                row.Metadata,
+			Usage:                   row.Usage,
+			SessionMode:             row.SessionMode,
+			RuntimeType:             row.RuntimeType,
+			EventID:                 row.EventID,
+			DisplayText:             row.DisplayText,
+			CreatedAt:               row.CreatedAt,
+			SenderDisplayName:       row.SenderDisplayName,
+			SenderAvatarUrl:         row.SenderAvatarUrl,
+			Platform:                row.Platform,
+		})
+		message.ModelID = uuidString(row.ModelID)
+		msgs = append(msgs, message)
 	}
 	s.enrichAssets(ctx, msgs)
 	return msgs, nil

@@ -14,7 +14,7 @@ import (
 // history trimming path writes them again, keep their bytes. Every shape the
 // codec rewrites is covered: arguments object, invalid-argument text, text and
 // document outputs, a null output, provider namespaces and Memoh's own
-// annotations.
+// annotations, on tool calls and on reasoning.
 // A legacy row reads back into SDK types and writes back in the stored shape.
 // Its argument and output documents come back in RFC 8785 canonical form
 // (members sorted), so the first round trip may reorder members but never
@@ -29,6 +29,7 @@ func TestStoredPartsRoundTripKeepsLegacyShape(t *testing.T) {
 		`[{"result":null,"toolCallId":"c3","toolName":"exec","type":"tool-result"}]`,
 		`[{"providerMetadata":{"google":{"thoughtSignature":"SIG"}},"text":"answer","type":"text"}]`,
 		`[{"format":"anthropic","providerMetadata":{"anthropic":{"redactedData":"BLOB"}},"text":"","type":"reasoning"}]`,
+		`[{"format":"openai-responses-v1","id":"rs_1","providerMetadata":{"openai":{"itemId":"rs_1","reasoningEncryptedContent":"EC"},"reasoning_origin":{"model_uuid":"0193a1b2-0000-7000-8000-000000000001"}},"text":"thought","type":"reasoning"}]`,
 	} {
 		first := roundTripStored(t, content)
 		if !jsonEqual(t, first, content) {

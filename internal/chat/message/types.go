@@ -91,6 +91,9 @@ type Message struct {
 	EventID        string          `json:"event_id,omitempty"`
 	DisplayContent string          `json:"display_content,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
+	// ModelID is the model (models row UUID) that produced the row. It is
+	// loaded where history is replayed to a model.
+	ModelID string `json:"-"`
 }
 
 type HistoryTurn struct {

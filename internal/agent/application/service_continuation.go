@@ -96,7 +96,7 @@ func (s *Service) prepareContinuationRunConfig(
 		if err != nil {
 			return nil, nil, false, err
 		}
-		messages, retained := historyMessagesFromRecords(projectInterruptedHistoryReasoning(pruneHistoryForGateway(loaded)))
+		messages, retained := historyMessagesFromRecords(attributeHistoryReasoning(projectInterruptedHistoryReasoning(pruneHistoryForGateway(loaded))))
 		return messages, retained, truncated, nil
 	}
 	messages, retained, truncated, err := read()

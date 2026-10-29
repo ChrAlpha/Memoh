@@ -631,6 +631,7 @@ SELECT
   m.runtime_type,
   m.event_id,
   m.display_text,
+  m.model_id,
   m.created_at,
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
@@ -671,6 +672,7 @@ type ListHistoryMessagesAfterWithinBytesRow struct {
 	RuntimeType             string             `json:"runtime_type"`
 	EventID                 pgtype.UUID        `json:"event_id"`
 	DisplayText             pgtype.Text        `json:"display_text"`
+	ModelID                 pgtype.UUID        `json:"model_id"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
 	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
@@ -720,6 +722,7 @@ func (q *Queries) ListHistoryMessagesAfterWithinBytes(ctx context.Context, arg L
 			&i.RuntimeType,
 			&i.EventID,
 			&i.DisplayText,
+			&i.ModelID,
 			&i.CreatedAt,
 			&i.SenderDisplayName,
 			&i.SenderAvatarUrl,
@@ -753,6 +756,7 @@ SELECT
   m.runtime_type,
   m.event_id,
   m.display_text,
+  m.model_id,
   m.created_at,
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
@@ -788,6 +792,7 @@ type ListHistoryMessagesByIDsRow struct {
 	RuntimeType             string             `json:"runtime_type"`
 	EventID                 pgtype.UUID        `json:"event_id"`
 	DisplayText             pgtype.Text        `json:"display_text"`
+	ModelID                 pgtype.UUID        `json:"model_id"`
 	CreatedAt               pgtype.Timestamptz `json:"created_at"`
 	SenderDisplayName       pgtype.Text        `json:"sender_display_name"`
 	SenderAvatarUrl         pgtype.Text        `json:"sender_avatar_url"`
@@ -820,6 +825,7 @@ func (q *Queries) ListHistoryMessagesByIDs(ctx context.Context, arg ListHistoryM
 			&i.RuntimeType,
 			&i.EventID,
 			&i.DisplayText,
+			&i.ModelID,
 			&i.CreatedAt,
 			&i.SenderDisplayName,
 			&i.SenderAvatarUrl,

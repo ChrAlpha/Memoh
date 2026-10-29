@@ -60,6 +60,8 @@ type HistoryRecord struct {
 	Platform                string
 	SourceReplyToMessageID  string
 
+	// ModelID is the model (models row UUID) that produced the row.
+	ModelID   string
 	CreatedAt time.Time
 
 	UsageInputTokens  *int
