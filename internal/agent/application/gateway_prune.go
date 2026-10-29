@@ -1,8 +1,10 @@
 package application
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
+	"unicode/utf8"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
@@ -85,6 +87,9 @@ func pruneToolCalls(calls []ToolCall) ([]ToolCall, bool) {
 }
 
 func pruneToolMessage(msg ModelMessage) (ModelMessage, bool) {
+	if !toolPayloadMayExceedBudget(msg.Content) {
+		return msg, false
+	}
 	// Vercel AI SDK schema requires tool messages to carry an array of tool-result parts.
 	// Prune outputs inside those parts (preserving shape) so the gateway prompt remains valid.
 	if pruned, ok := pruneToolResultParts(msg.Content); ok {
@@ -255,6 +260,37 @@ func pruneToolOutput(raw json.RawMessage) (json.RawMessage, bool) {
 
 	default:
 		return nil, false
+	}
+}
+
+// toolPayloadMayExceedBudget reports whether a text pruning measures in
+// content can exceed the budget; content where none can skips decoding. Each
+// such text is decoded from content or is a raw value inside it: valid UTF-8
+// decodes to no more bytes than it encodes, a decoded newline is an escape
+// in content, a raw value keeps its own newlines, and joining text parts
+// adds one newline per text field at most. The decoder matches field names
+// case-insensitively, and a name spelled with escapes holds a backslash.
+func toolPayloadMayExceedBudget(content []byte) bool {
+	if len(content) > gatewayToolPayloadMaxBytes || !utf8.Valid(content) {
+		return true
+	}
+	newlines := bytes.Count(content, []byte("\n")) + bytes.Count(content, []byte(`\`)) + countFieldNameFold(content, "text")
+	return newlines >= gatewayToolPayloadMaxLines
+}
+
+// countFieldNameFold counts the places content holds name, in any ASCII
+// case, between two quotes.
+func countFieldNameFold(content []byte, name string) int {
+	count := 0
+	for rest := content; ; {
+		i := bytes.IndexByte(rest, '"')
+		if i < 0 {
+			return count
+		}
+		rest = rest[i+1:]
+		if len(rest) > len(name) && rest[len(name)] == '"' && bytes.EqualFold(rest[:len(name)], []byte(name)) {
+			count++
+		}
 	}
 }
 

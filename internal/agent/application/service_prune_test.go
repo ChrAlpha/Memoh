@@ -203,3 +203,38 @@ func minLen(a, b int) int {
 	}
 	return b
 }
+
+// A tool payload far below the byte budget still crosses the line budget
+// when its newlines are escapes, a raw value's own, or the joints between
+// text parts, whatever the case of their field name.
+func TestPruneMessagesForGateway_PrunesPayloadsOverTheLineBudget(t *testing.T) {
+	t.Parallel()
+	textParts := func(field string) string {
+		parts := make([]string, gatewayToolPayloadMaxLines+1)
+		for i := range parts {
+			parts[i] = `{"type":"note","` + field + `":"x"}`
+		}
+		return "[" + strings.Join(parts, ",") + "]"
+	}
+	lines := strings.Repeat("l\n", gatewayToolPayloadMaxLines)
+	for _, tc := range []struct {
+		name    string
+		content string
+	}{
+		{name: "escaped newlines", content: string(newTextContent(lines))},
+		{name: "raw json value", content: `[{"type":"tool-result","toolCallId":"c","toolName":"read","output":{"type":"json","value":{` + strings.Repeat("\n", gatewayToolPayloadMaxLines) + `"k":1}}}]`},
+		{name: "joined text parts", content: textParts("text")},
+		{name: "joined text parts with a capitalized field", content: textParts("Text")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if len(tc.content) > gatewayToolPayloadMaxBytes {
+				t.Fatalf("fixture is %d bytes; it must stay under the byte budget", len(tc.content))
+			}
+			out := pruneMessagesForGateway([]ModelMessage{{Role: "tool", Content: json.RawMessage(tc.content)}})
+			if !strings.Contains(string(out[0].Content), gatewayToolPayloadPrunedMarker) {
+				t.Fatalf("expected the payload to be pruned, got %d bytes unchanged", len(out[0].Content))
+			}
+		})
+	}
+}
