@@ -53,3 +53,11 @@ SELECT EXISTS (
   WHERE team_id = sqlc.arg(team_id)
   LIMIT 1
 );
+
+-- name: ListMemoryNodeEmbeddingHashes :many
+SELECT node_id, body_hash, dimensions
+FROM public.memory_node_embeddings
+WHERE team_id = sqlc.arg(team_id)
+  AND bot_id = sqlc.arg(bot_id)
+  AND model_id = sqlc.arg(model_id)
+  AND node_id = ANY(sqlc.arg(node_ids)::text[]);

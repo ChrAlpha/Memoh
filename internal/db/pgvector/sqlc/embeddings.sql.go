@@ -67,6 +67,53 @@ func (q *Queries) DeleteMemoryNodeEmbeddings(ctx context.Context, arg DeleteMemo
 	return err
 }
 
+const listMemoryNodeEmbeddingHashes = `-- name: ListMemoryNodeEmbeddingHashes :many
+SELECT node_id, body_hash, dimensions
+FROM public.memory_node_embeddings
+WHERE team_id = $1
+  AND bot_id = $2
+  AND model_id = $3
+  AND node_id = ANY($4::text[])
+`
+
+type ListMemoryNodeEmbeddingHashesParams struct {
+	TeamID  pgtype.UUID `json:"team_id"`
+	BotID   pgtype.UUID `json:"bot_id"`
+	ModelID pgtype.UUID `json:"model_id"`
+	NodeIds []string    `json:"node_ids"`
+}
+
+type ListMemoryNodeEmbeddingHashesRow struct {
+	NodeID     string `json:"node_id"`
+	BodyHash   string `json:"body_hash"`
+	Dimensions int32  `json:"dimensions"`
+}
+
+func (q *Queries) ListMemoryNodeEmbeddingHashes(ctx context.Context, arg ListMemoryNodeEmbeddingHashesParams) ([]ListMemoryNodeEmbeddingHashesRow, error) {
+	rows, err := q.db.Query(ctx, listMemoryNodeEmbeddingHashes,
+		arg.TeamID,
+		arg.BotID,
+		arg.ModelID,
+		arg.NodeIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMemoryNodeEmbeddingHashesRow
+	for rows.Next() {
+		var i ListMemoryNodeEmbeddingHashesRow
+		if err := rows.Scan(&i.NodeID, &i.BodyHash, &i.Dimensions); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const memoryNodeEmbeddingsExist = `-- name: MemoryNodeEmbeddingsExist :one
 SELECT EXISTS (
   SELECT 1

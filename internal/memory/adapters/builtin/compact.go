@@ -159,7 +159,7 @@ func (r *graphRuntime) normalizeCompactNodeIDs(ctx context.Context, botID string
 				return nil, false, fmt.Errorf("graph runtime: compact canonicalize node: %w", err)
 			}
 			best = saved
-			r.semanticUpsertBestEffort(botID, saved) //nolint:contextcheck // async semantic upsert uses its own bounded context
+			r.semanticIndexBestEffort(botID, saved) //nolint:contextcheck // semantic indexing bounds its own requests
 		}
 		normalized = append(normalized, best)
 	}
@@ -226,7 +226,7 @@ func (r *graphRuntime) mergeCompactConcept(ctx context.Context, botID string, no
 	if err != nil {
 		return migrate.NodeSpec{}, nil, fmt.Errorf("graph runtime: compact upsert merged concept: %w", err)
 	}
-	r.semanticUpsertBestEffort(botID, saved) //nolint:contextcheck // async semantic upsert uses its own bounded context
+	r.semanticIndexBestEffort(botID, saved) //nolint:contextcheck // semantic indexing bounds its own requests
 	return saved, uniqueCompactStrings(superseded), nil
 }
 
