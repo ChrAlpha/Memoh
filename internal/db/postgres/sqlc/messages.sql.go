@@ -5192,6 +5192,94 @@ func (q *Queries) ListObservedConversationsByChannelType(ctx context.Context, ar
 	return items, nil
 }
 
+const listRecentUserMessagesBySession = `-- name: ListRecentUserMessagesBySession :many
+SELECT recent.id, recent.content, recent.external_message_id,
+  recent.sender_channel_identity_id, recent.platform
+FROM (
+  SELECT
+    m.id,
+    m.content,
+    m.source_message_id AS external_message_id,
+    m.sender_channel_identity_id,
+    s.channel_type AS platform,
+    m.turn_position,
+    m.turn_message_seq,
+    m.created_at
+  FROM bot_history_messages m
+  LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
+  WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = $1
+    AND m.role = 'user'
+    AND m.turn_visible = true
+    AND m.turn_id IS NOT NULL
+    AND m.turn_position IS NOT NULL
+    AND m.turn_message_seq IS NOT NULL
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    AND (
+      $2::uuid IS NULL
+      OR (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+        < (
+          SELECT c.turn_position, c.turn_message_seq, c.created_at, c.id
+          FROM bot_history_messages c
+          WHERE c.team_id = public.memoh_current_team_id() AND c.session_id = $1
+            AND c.turn_visible = true
+            AND c.turn_id IS NOT NULL
+            AND c.turn_position IS NOT NULL
+            AND c.turn_message_seq IS NOT NULL
+            AND c.id = $2::uuid
+          LIMIT 1
+        )
+    )
+  ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+  LIMIT $3
+) recent
+ORDER BY recent.turn_position ASC, recent.turn_message_seq ASC, recent.created_at ASC, recent.id ASC
+`
+
+type ListRecentUserMessagesBySessionParams struct {
+	SessionID       pgtype.UUID `json:"session_id"`
+	BeforeMessageID pgtype.UUID `json:"before_message_id"`
+	MaxCount        int32       `json:"max_count"`
+}
+
+type ListRecentUserMessagesBySessionRow struct {
+	ID                      pgtype.UUID `json:"id"`
+	Content                 []byte      `json:"content"`
+	ExternalMessageID       pgtype.Text `json:"external_message_id"`
+	SenderChannelIdentityID pgtype.UUID `json:"sender_channel_identity_id"`
+	Platform                pgtype.Text `json:"platform"`
+}
+
+// The newest visible user rows of a session, returned oldest first, for
+// callers that read what the user said rather than the context the model is
+// shown: compaction does not apply, and passively synced group messages are
+// not user requests. With a cutoff, only rows ordered before that visible row
+// qualify; a cutoff that is not a visible row of the session matches nothing.
+func (q *Queries) ListRecentUserMessagesBySession(ctx context.Context, arg ListRecentUserMessagesBySessionParams) ([]ListRecentUserMessagesBySessionRow, error) {
+	rows, err := q.db.Query(ctx, listRecentUserMessagesBySession, arg.SessionID, arg.BeforeMessageID, arg.MaxCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentUserMessagesBySessionRow
+	for rows.Next() {
+		var i ListRecentUserMessagesBySessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Content,
+			&i.ExternalMessageID,
+			&i.SenderChannelIdentityID,
+			&i.Platform,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRunHistoryTurnRequestMessageIDs = `-- name: ListRunHistoryTurnRequestMessageIDs :many
 SELECT request.id
 FROM bot_history_messages request

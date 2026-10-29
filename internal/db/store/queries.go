@@ -378,6 +378,7 @@ type Queries interface {
 	ListMessagesByCompactIDWithinBytes(ctx context.Context, arg dbsqlc.ListMessagesByCompactIDWithinBytesParams) ([]dbsqlc.ListMessagesByCompactIDWithinBytesRow, error)
 	ListRunHistoryTurnRequestMessageIDs(ctx context.Context, arg dbsqlc.ListRunHistoryTurnRequestMessageIDsParams) ([]pgtype.UUID, error)
 	ListMessagesBySession(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListMessagesBySessionRow, error)
+	ListRecentUserMessagesBySession(ctx context.Context, arg dbsqlc.ListRecentUserMessagesBySessionParams) ([]dbsqlc.ListRecentUserMessagesBySessionRow, error)
 	ListSubagentForkContext(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListSubagentForkContextRow, error)
 	ListMessagesLatest(ctx context.Context, arg dbsqlc.ListMessagesLatestParams) ([]dbsqlc.ListMessagesLatestRow, error)
 	ListMessagesLatestBySession(ctx context.Context, arg dbsqlc.ListMessagesLatestBySessionParams) ([]dbsqlc.ListMessagesLatestBySessionRow, error)

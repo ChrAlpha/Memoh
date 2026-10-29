@@ -266,6 +266,13 @@ type Service interface {
 	// the database side (CM-ADM-001): admission sizes a session's history
 	// without shipping any payload into the process.
 	MeasureActiveBySession(ctx context.Context, sessionID string, since time.Time) (ActiveMessagesMeasure, error)
+	// ListRecentUserBySession returns up to limit of the session's newest
+	// visible user rows, oldest first, ignoring compaction and passively
+	// synced group messages. With beforeMessageID, only rows ordered before
+	// that visible row qualify; an unknown cutoff matches nothing. Only ID,
+	// role, content, external message ID, sender channel identity and platform
+	// are loaded.
+	ListRecentUserBySession(ctx context.Context, sessionID string, beforeMessageID string, limit int32) ([]Message, error)
 	ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]Message, error)
 	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error)
 	ListBeforeMessageBySession(ctx context.Context, sessionID string, beforeMessageID string, limit int32) ([]Message, error)

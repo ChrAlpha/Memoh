@@ -223,6 +223,10 @@ func (*recordingMessageService) MeasureActiveBySession(context.Context, string, 
 	return messagepkg.ActiveMessagesMeasure{}, nil
 }
 
+func (*recordingMessageService) ListRecentUserBySession(context.Context, string, string, int32) ([]messagepkg.Message, error) {
+	return nil, nil
+}
+
 func (*recordingMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }

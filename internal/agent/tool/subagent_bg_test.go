@@ -308,6 +308,10 @@ func (*fakeAgentMessageService) MeasureActiveBySession(context.Context, string, 
 	return messagepkg.ActiveMessagesMeasure{}, nil
 }
 
+func (*fakeAgentMessageService) ListRecentUserBySession(context.Context, string, string, int32) ([]messagepkg.Message, error) {
+	return nil, nil
+}
+
 func (*fakeAgentMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
