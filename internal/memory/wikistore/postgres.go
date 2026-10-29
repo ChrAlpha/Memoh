@@ -101,9 +101,6 @@ func (s *PostgresStore) DeleteNode(ctx context.Context, botID, nodeID string) er
 	if s.q == nil {
 		return errors.New("wikistore(postgres): queries not configured")
 	}
-	if err := s.q.DeleteMemoryEdgesForNode(ctx, dbsqlc.DeleteMemoryEdgesForNodeParams{BotID: pgUUID(botID), SrcNode: nodeID}); err != nil {
-		return fmt.Errorf("wikistore(postgres): delete node edges: %w", err)
-	}
 	if err := s.q.DeleteMemoryNode(ctx, dbsqlc.DeleteMemoryNodeParams{BotID: pgUUID(botID), ID: nodeID}); err != nil {
 		return fmt.Errorf("wikistore(postgres): delete node: %w", err)
 	}
@@ -113,9 +110,6 @@ func (s *PostgresStore) DeleteNode(ctx context.Context, botID, nodeID string) er
 func (s *PostgresStore) DeleteAllNodes(ctx context.Context, botID string) error {
 	if s.q == nil {
 		return errors.New("wikistore(postgres): queries not configured")
-	}
-	if err := s.q.DeleteAllMemoryEdgesByBot(ctx, pgUUID(botID)); err != nil {
-		return fmt.Errorf("wikistore(postgres): delete all edges: %w", err)
 	}
 	if err := s.q.DeleteAllMemoryNodesByBot(ctx, pgUUID(botID)); err != nil {
 		return fmt.Errorf("wikistore(postgres): delete all nodes: %w", err)
@@ -132,95 +126,6 @@ func (s *PostgresStore) CountNodes(ctx context.Context, botID string) (int, erro
 		return 0, fmt.Errorf("wikistore(postgres): count nodes: %w", err)
 	}
 	return int(n), nil
-}
-
-func (s *PostgresStore) UpsertEdges(ctx context.Context, edges []migrate.EdgeSpec) error {
-	if s.q == nil {
-		return errors.New("wikistore(postgres): queries not configured")
-	}
-	for _, e := range edges {
-		if err := s.q.InsertMemoryEdge(ctx, dbsqlc.InsertMemoryEdgeParams{
-			BotID:    pgUUID(e.BotID),
-			SrcNode:  e.SrcNode,
-			DstNode:  e.DstNode,
-			Rel:      string(e.Rel),
-			Weight:   e.Weight,
-			Metadata: marshalJSON(e.Metadata),
-		}); err != nil {
-			return fmt.Errorf("wikistore(postgres): upsert edge: %w", err)
-		}
-	}
-	return nil
-}
-
-func (s *PostgresStore) ListEdges(ctx context.Context, botID string) ([]migrate.EdgeSpec, error) {
-	if s.q == nil {
-		return nil, errors.New("wikistore(postgres): queries not configured")
-	}
-	rows, err := s.q.ListMemoryEdgesByBot(ctx, pgUUID(botID))
-	if err != nil {
-		return nil, fmt.Errorf("wikistore(postgres): list edges: %w", err)
-	}
-	out := make([]migrate.EdgeSpec, 0, len(rows))
-	for _, r := range rows {
-		out = append(out, pgMemoryEdgeToSpec(r))
-	}
-	return out, nil
-}
-
-func (s *PostgresStore) DeleteEdgesForNode(ctx context.Context, botID, nodeID string) error {
-	if s.q == nil {
-		return errors.New("wikistore(postgres): queries not configured")
-	}
-	if err := s.q.DeleteMemoryEdgesForNode(ctx, dbsqlc.DeleteMemoryEdgesForNodeParams{BotID: pgUUID(botID), SrcNode: nodeID}); err != nil {
-		return fmt.Errorf("wikistore(postgres): delete edges for node: %w", err)
-	}
-	return nil
-}
-
-func (s *PostgresStore) DeleteAllEdges(ctx context.Context, botID string) error {
-	if s.q == nil {
-		return errors.New("wikistore(postgres): queries not configured")
-	}
-	if err := s.q.DeleteAllMemoryEdgesByBot(ctx, pgUUID(botID)); err != nil {
-		return fmt.Errorf("wikistore(postgres): delete all edges: %w", err)
-	}
-	return nil
-}
-
-func (s *PostgresStore) CountEdges(ctx context.Context, botID string) (int, error) {
-	if s.q == nil {
-		return 0, errors.New("wikistore(postgres): queries not configured")
-	}
-	n, err := s.q.CountMemoryEdgesByBot(ctx, pgUUID(botID))
-	if err != nil {
-		return 0, fmt.Errorf("wikistore(postgres): count edges: %w", err)
-	}
-	return int(n), nil
-}
-
-func (s *PostgresStore) RebuildDerivedEdges(ctx context.Context, botID string) (int, error) {
-	if s.q == nil {
-		return 0, errors.New("wikistore(postgres): queries not configured")
-	}
-	for _, rel := range migrate.DerivedEdgeRels {
-		if err := s.q.DeleteMemoryEdgesByRelForBot(ctx, dbsqlc.DeleteMemoryEdgesByRelForBotParams{
-			BotID: pgUUID(botID),
-			Rel:   string(rel),
-		}); err != nil {
-			return 0, fmt.Errorf("wikistore(postgres): clear derived edges: %w", err)
-		}
-	}
-	nodes, err := s.ListNodes(ctx, botID)
-	if err != nil {
-		return 0, err
-	}
-	edges := migrate.PlanFromNodes(nodes)
-	derived := filterImplicitEdges(edges, migrate.DerivedEdgeRels)
-	if err := s.UpsertEdges(ctx, derived); err != nil {
-		return 0, err
-	}
-	return len(derived), nil
 }
 
 // ---- Postgres row -> record/spec helpers ----
@@ -243,17 +148,6 @@ func pgMemoryNodeToRecord(r dbsqlc.MemoryNode) record {
 		ExpiresAt:        pgTimeValue(r.ExpiresAt),
 	}
 	return rec
-}
-
-func pgMemoryEdgeToSpec(r dbsqlc.MemoryEdge) migrate.EdgeSpec {
-	return migrate.EdgeSpec{
-		BotID:    pgUUIDString(r.BotID),
-		SrcNode:  r.SrcNode,
-		DstNode:  r.DstNode,
-		Rel:      migrate.EdgeRel(r.Rel),
-		Weight:   r.Weight,
-		Metadata: unmarshalMetadata(r.Metadata),
-	}
 }
 
 // pgUUID parses a string into a pgtype.UUID.

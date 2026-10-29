@@ -329,7 +329,6 @@ export type AdaptersRebuildResult = {
 
 export type AdaptersSearchResponse = {
     fallback_reason?: string;
-    relations?: Array<unknown>;
     results?: Array<AdaptersMemoryItem>;
     retrieval_mode?: string;
 };

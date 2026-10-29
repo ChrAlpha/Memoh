@@ -43,8 +43,7 @@ type IngestResult struct {
 // graphRuntime.Add / runtimeMemoryID, whose nanosecond+sequence ids would
 // create a duplicate node on every run.
 //
-// After upserting nodes the derived edges (same_profile/same_topic/same_day/
-// refs) are rebuilt and the Markdown view is regenerated from the now-
+// After upserting nodes the Markdown view is regenerated from the now-
 // authoritative node set, so files and DB converge to a single source of truth.
 func (r *graphRuntime) IngestMarkdownFiles(ctx context.Context, botID string) (IngestResult, error) {
 	botID = strings.TrimSpace(botID)
@@ -81,8 +80,8 @@ func (r *graphRuntime) IngestMarkdownFiles(ctx context.Context, botID string) (I
 		}
 		result.Ingested++
 	}
-	// Rebuild derived edges + regenerate the derived Markdown view from the
-	// authoritative node set, so the file tree and DB converge.
+	// Regenerate the derived Markdown view from the authoritative node set, so
+	// the file tree and DB converge.
 	r.syncAndInvalidate(ctx, botID)
 	return result, nil
 }

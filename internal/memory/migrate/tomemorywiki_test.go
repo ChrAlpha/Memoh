@@ -216,3 +216,23 @@ func expectDirectedEdge(t *testing.T, set map[string]struct{}, src, dst string, 
 		t.Fatalf("expected directed edge %s -> %s (%s) not found", src, dst, rel)
 	}
 }
+
+func TestRelationsEdgeCountMatchesExpandedEdges(t *testing.T) {
+	day := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	nodes := []NodeSpec{
+		{ID: "b:1", Body: "see [[tea]]", ProfileRef: "user:1", Topic: "drinks", CapturedAt: day},
+		{ID: "b:2", Body: "plain", ProfileRef: "user:1", Topic: "drinks", Subject: "tea", CapturedAt: day},
+		{ID: "b:3", Body: "see [[tea]] twice [[tea]]", ProfileRef: "user:1", CapturedAt: day.Add(48 * time.Hour)},
+		{ID: "b:4", Body: "alone", ProfileRef: "user:2", Topic: "work", CapturedAt: day.Add(96 * time.Hour)},
+	}
+	rel := DeriveRelations(nodes)
+	edges := rel.Edges(nodes)
+	if got, want := rel.EdgeCount(), len(edges); got != want {
+		t.Fatalf("EdgeCount = %d, want %d (expanded edges %#v)", got, want, edges)
+	}
+	// user:1 relates 3 nodes (3 pairs), drinks 2 (1 pair), the first day 2
+	// (1 pair), and two bodies link the tea concept (2 refs).
+	if got := rel.EdgeCount(); got != 7 {
+		t.Fatalf("EdgeCount = %d, want 7", got)
+	}
+}

@@ -47,11 +47,11 @@ func TestGraphCacheDoesNotInstallBuildInvalidatedDuringStoreRead(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("graph build did not finish")
 	}
-	if _, ok := graph.nodes["new"]; !ok {
-		t.Fatalf("graph nodes = %#v, want post-invalidation snapshot", graph.nodes)
+	if _, ok := graph.index["new"]; !ok {
+		t.Fatalf("graph nodes = %#v, want post-invalidation snapshot", graph.index)
 	}
-	if _, ok := graph.nodes["old"]; ok {
-		t.Fatalf("stale node was installed after invalidation: %#v", graph.nodes)
+	if _, ok := graph.index["old"]; ok {
+		t.Fatalf("stale node was installed after invalidation: %#v", graph.index)
 	}
 	if got := store.callCount(); got != 2 {
 		t.Fatalf("ListNodes calls = %d, want rebuild after invalidation", got)
@@ -86,10 +86,6 @@ func (s *blockingGraphStore) ListNodes(ctx context.Context, _ string) ([]migrate
 		}
 	}
 	return nodes, nil
-}
-
-func (*blockingGraphStore) ListEdges(context.Context, string) ([]migrate.EdgeSpec, error) {
-	return nil, nil
 }
 
 func (s *blockingGraphStore) setNodes(nodes []migrate.NodeSpec) {

@@ -13,7 +13,6 @@ END
 $drop_team_members_guard$;
 DROP FUNCTION IF EXISTS public.memoh_guard_last_active_team_admin();
 
-DROP TABLE IF EXISTS memory_edges CASCADE;
 DROP TABLE IF EXISTS memory_nodes CASCADE;
 DROP TABLE IF EXISTS bot_user_grants CASCADE;
 DROP TABLE IF EXISTS user_provider_oauth_tokens CASCADE;

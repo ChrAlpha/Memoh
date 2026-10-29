@@ -653,18 +653,6 @@ type MediaAsset struct {
 	TeamID            pgtype.UUID        `json:"team_id"`
 }
 
-type MemoryEdge struct {
-	ID        int64              `json:"id"`
-	BotID     pgtype.UUID        `json:"bot_id"`
-	SrcNode   string             `json:"src_node"`
-	DstNode   string             `json:"dst_node"`
-	Rel       string             `json:"rel"`
-	Weight    float32            `json:"weight"`
-	Metadata  []byte             `json:"metadata"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	TeamID    pgtype.UUID        `json:"team_id"`
-}
-
 type MemoryNode struct {
 	ID               string             `json:"id"`
 	BotID            pgtype.UUID        `json:"bot_id"`

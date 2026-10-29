@@ -114,23 +114,3 @@ func unmarshalStringList(b []byte) []string {
 	}
 	return s
 }
-
-// filterImplicitEdges keeps only edges whose Rel is in the allowed set. Used
-// when rebuilding derived edges so only same_profile / same_topic / same_day /
-// refs edges are written back.
-func filterImplicitEdges(edges []migrate.EdgeSpec, allowed []migrate.EdgeRel) []migrate.EdgeSpec {
-	if len(edges) == 0 {
-		return nil
-	}
-	set := make(map[migrate.EdgeRel]struct{}, len(allowed))
-	for _, r := range allowed {
-		set[r] = struct{}{}
-	}
-	out := make([]migrate.EdgeSpec, 0, len(edges))
-	for _, e := range edges {
-		if _, ok := set[e.Rel]; ok {
-			out = append(out, e)
-		}
-	}
-	return out
-}

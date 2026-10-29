@@ -1122,22 +1122,6 @@ CREATE INDEX IF NOT EXISTS idx_memory_nodes_bot_topic  ON memory_nodes (bot_id, 
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_bot_prof   ON memory_nodes (bot_id, profile_ref);
 CREATE INDEX IF NOT EXISTS idx_memory_nodes_updated    ON memory_nodes (bot_id, updated_at DESC);
 
-CREATE TABLE IF NOT EXISTS memory_edges (
-    id          BIGSERIAL    PRIMARY KEY,
-    bot_id      UUID         NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
-    src_node    TEXT         NOT NULL,
-    dst_node    TEXT         NOT NULL,
-    rel         TEXT         NOT NULL,
-    weight      REAL         NOT NULL DEFAULT 1.0,
-    metadata    JSONB        NOT NULL DEFAULT '{}'::jsonb,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    CONSTRAINT memory_edges_unique UNIQUE (bot_id, src_node, dst_node, rel)
-);
-
-CREATE INDEX IF NOT EXISTS idx_memory_edges_src  ON memory_edges (bot_id, src_node);
-CREATE INDEX IF NOT EXISTS idx_memory_edges_dst  ON memory_edges (bot_id, dst_node);
-CREATE INDEX IF NOT EXISTS idx_memory_edges_rel  ON memory_edges (bot_id, rel);
-
 -- ---------------------------------------------------------------------------
 -- Canonical team and membership schema
 -- ---------------------------------------------------------------------------
@@ -1285,7 +1269,6 @@ ALTER TABLE IF EXISTS public.lifecycle_events ADD COLUMN IF NOT EXISTS team_id u
 ALTER TABLE IF EXISTS public.mcp_connections ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.mcp_oauth_tokens ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.media_assets ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.memory_edges ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.memory_nodes ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.memory_providers ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.model_variants ADD COLUMN IF NOT EXISTS team_id uuid;
@@ -1344,7 +1327,6 @@ ALTER TABLE IF EXISTS public.lifecycle_events ALTER COLUMN team_id SET DEFAULT p
 ALTER TABLE IF EXISTS public.mcp_connections ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.mcp_oauth_tokens ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.media_assets ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.memory_edges ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.memory_nodes ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.memory_providers ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.model_variants ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();

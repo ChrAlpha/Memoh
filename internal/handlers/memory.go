@@ -353,8 +353,8 @@ type graphResponse struct {
 }
 
 // ChatGraph returns the memory graph (nodes + derived edges) for the wiki
-// visualization. The edge derivation uses the same migrate.PlanFromNodes path as
-// the graph runtime/store, so the API view and recall graph do not drift.
+// visualization. The edges expand the same migrate.DeriveRelations that recall
+// expands from, so the API view and recall graph do not drift.
 //
 // @Summary Get memory graph
 // @Description Get derived memory graph nodes and edges for a bot.
