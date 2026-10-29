@@ -155,6 +155,85 @@ func runRedisLeaseIndexContract(t *testing.T, redisURL string) {
 		}
 	})
 
+	t.Run("renewal never touches the snapshot the owner is writing", func(t *testing.T) {
+		ref := RunRef{
+			BotID: testBotID, SessionID: "session-lease-contended", RunID: "run-lease-contended",
+			OwnerID: "owner-lease-contended", Generation: "gen-contended", FencingToken: 14,
+		}
+		key := Key{BotID: ref.BotID, SessionID: ref.SessionID}
+		reserveRuntimeRun(ctx, t, backend, ref, time.Now().Add(time.Second))
+		before, err := backend.client.Get(ctx, backend.stateKey(key)).Result()
+		if err != nil {
+			t.Fatalf("read snapshot: %v", err)
+		}
+
+		// The owner streams output the whole time it renews. Each renewal must
+		// win on its first attempt rather than race the output writes.
+		writes, stopWrites := make(chan error, 1), make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-stopWrites:
+					writes <- nil
+					return
+				default:
+				}
+				if _, _, err := backend.UpdateActiveRun(ctx, key, ref.RunID, ref.Generation, func(snapshot Snapshot, now time.Time) (Snapshot, bool, error) {
+					snapshot.Seq++
+					snapshot.UpdatedAt = now
+					return snapshot, true, nil
+				}); err != nil {
+					writes <- err
+					return
+				}
+			}
+		}()
+		var renewedTo time.Time
+		for range 20 {
+			renewedAt, err := backend.Now(ctx)
+			if err != nil {
+				t.Fatalf("backend time: %v", err)
+			}
+			renewedTo = renewedAt.Add(time.Minute)
+			if err := backend.RenewLease(ctx, key, ref.RunID, ref.OwnerID, ref.Generation, renewedAt, renewedTo); err != nil {
+				t.Fatalf("renew lease under output writes: %v", err)
+			}
+		}
+		close(stopWrites)
+		if err := <-writes; err != nil {
+			t.Fatalf("output write during renewal: %v", err)
+		}
+
+		snapshot, ok, err := backend.Load(ctx, key)
+		if err != nil || !ok || snapshot.CurrentRunView == nil || snapshot.CurrentRunView.OwnerLeaseExpiresAt == nil {
+			t.Fatalf("load renewed snapshot = %#v, ok:%v err:%v", snapshot.CurrentRunView, ok, err)
+		}
+		if got := snapshot.CurrentRunView.OwnerLeaseExpiresAt.UnixMilli(); got != renewedTo.UnixMilli() {
+			t.Fatalf("loaded lease = %d, want the renewed deadline %d", got, renewedTo.UnixMilli())
+		}
+
+		// With no output written, a renewal leaves the stored snapshot byte for
+		// byte as it was.
+		idle, err := backend.client.Get(ctx, backend.stateKey(key)).Result()
+		if err != nil {
+			t.Fatalf("read snapshot: %v", err)
+		}
+		renewedAt, err := backend.Now(ctx)
+		if err != nil {
+			t.Fatalf("backend time: %v", err)
+		}
+		if err := backend.RenewLease(ctx, key, ref.RunID, ref.OwnerID, ref.Generation, renewedAt, renewedAt.Add(time.Minute)); err != nil {
+			t.Fatalf("renew idle lease: %v", err)
+		}
+		after, err := backend.client.Get(ctx, backend.stateKey(key)).Result()
+		if err != nil {
+			t.Fatalf("read snapshot: %v", err)
+		}
+		if after != idle || idle == before {
+			t.Fatalf("renewal rewrote the snapshot (changed by output writes: %v, by renewal: %v)", idle != before, after != idle)
+		}
+	})
+
 	t.Run("finishing remains renewable until durable finalization", func(t *testing.T) {
 		ref := RunRef{
 			BotID: testBotID, SessionID: "session-lease-finishing", RunID: "run-lease-finishing",

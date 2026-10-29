@@ -2417,6 +2417,8 @@ func runRuntimeManagerCancelsExecutionAfterOwnershipLossContract(t *testing.T, s
 		t.Fatalf("start run: %v", err)
 	}
 
+	// A successor can only claim the run once the old owner's ref is gone; the
+	// ref is the lease, so its removal is what the old owner's renewal sees.
 	if _, changed, err := backend.Update(context.Background(), Key{BotID: testBotID, SessionID: testSessionID}, func(snapshot Snapshot, ok bool) (Snapshot, bool, error) {
 		if !ok || snapshot.CurrentRunView == nil {
 			return snapshot, false, errors.New("active run is missing")
@@ -2425,6 +2427,11 @@ func runRuntimeManagerCancelsExecutionAfterOwnershipLossContract(t *testing.T, s
 		return snapshot, true, nil
 	}); err != nil || !changed {
 		t.Fatalf("replace runtime owner = changed:%v err:%v", changed, err)
+	}
+	if deleted, err := backend.DeleteRunRef(context.Background(), RunRef{
+		BotID: testBotID, SessionID: testSessionID, RunID: testRunID, OwnerID: "owner-before-takeover", Generation: handle.Generation,
+	}); err != nil || !deleted {
+		t.Fatalf("remove superseded run ref = deleted:%v err:%v", deleted, err)
 	}
 
 	select {
