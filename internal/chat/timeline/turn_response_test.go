@@ -200,8 +200,8 @@ func TestDecodeTurnResponseEntryRendersTextAndToolCall(t *testing.T) {
 	if !ok {
 		t.Fatal("expected entry")
 	}
-	if !strings.Contains(entry.Content, "Let me check.") {
-		t.Fatalf("missing text portion: %q", entry.Content)
+	if want := "Let me check.\n[tool call: web_search]"; entry.Content != want {
+		t.Fatalf("content = %q, want %q", entry.Content, want)
 	}
 	assertRawPart(t, entry.RawContent, "text", "Let me check.", "")
 	assertRawPart(t, entry.RawContent, "tool-call", "web_search", "call-42")
