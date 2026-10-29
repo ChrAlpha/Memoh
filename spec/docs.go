@@ -17968,10 +17968,6 @@ const docTemplate = `{
                 "fallback_reason": {
                     "type": "string"
                 },
-                "relations": {
-                    "type": "array",
-                    "items": {}
-                },
                 "results": {
                     "type": "array",
                     "items": {

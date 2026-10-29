@@ -2,16 +2,13 @@ package builtin
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
-	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/felinics/memoh/internal/memory/migrate"
-	memseg "github.com/felinics/memoh/internal/memory/segment"
 	"github.com/felinics/memoh/internal/memory/wikistore"
 )
 
@@ -21,36 +18,31 @@ import (
 // (e.g. a long-idle bot).
 const graphCacheTTL = 5 * time.Minute
 
-// neighbor is one graph edge endpoint reached during BFS expansion.
-type neighbor struct {
-	node   migrate.NodeSpec
-	rel    migrate.EdgeRel
+// graphNode is a cached node with its body lower-cased for lexical scoring.
+type graphNode struct {
+	spec      migrate.NodeSpec
+	lowerBody string
+}
+
+// graphLink is one end of a cross-reference, seen from the other end.
+type graphLink struct {
+	to     int
 	weight float32
 }
 
-// botGraph is the cached graph for a single bot: its nodes plus undirected
-// adjacency derived from the stored edges.
+// botGraph is the cached graph for a single bot: its nodes and the relations
+// derived from them (migrate.DeriveRelations). Relations are kept as groups,
+// so a profile shared by every node costs one group, not a pair per node.
 type botGraph struct {
-	nodes   map[string]migrate.NodeSpec
-	adj     map[string][]neighbor // undirected: each edge added in both directions
-	hash    string                // content hash over nodes+edges, for cache-busting
-	builtAt time.Time
-}
-
-func (g *botGraph) neighbors(nodeID string) []neighbor {
-	if g == nil {
-		return nil
-	}
-	return g.adj[nodeID]
-}
-
-// nodeSlice returns the cached nodes as a slice (unsorted).
-func (g *botGraph) nodeSlice() []migrate.NodeSpec {
-	out := make([]migrate.NodeSpec, 0, len(g.nodes))
-	for _, n := range g.nodes {
-		out = append(out, n)
-	}
-	return out
+	nodes  []graphNode
+	index  map[string]int
+	groups []migrate.RelationGroup
+	// memberOf lists the groups each node belongs to.
+	memberOf [][]int
+	// refs lists each node's cross-references in both directions.
+	refs      [][]graphLink
+	edgeCount int
+	builtAt   time.Time
 }
 
 // graphCache caches per-bot in-memory graphs, rebuilt lazily from the
@@ -70,8 +62,7 @@ func newGraphCache() *graphCache {
 }
 
 // getOrBuild returns the cached graph for botID, rebuilding it from store if
-// missing, stale (older than graphCacheTTL), or if the store's content hash
-// changed since the last build.
+// missing or stale (older than graphCacheTTL).
 func (c *graphCache) getOrBuild(ctx context.Context, botID string, store wikistore.Store) (*botGraph, error) {
 	for {
 		c.mu.RLock()
@@ -86,11 +77,7 @@ func (c *graphCache) getOrBuild(ctx context.Context, botID string, store wikisto
 		if err != nil {
 			return nil, fmt.Errorf("graph cache: list nodes: %w", err)
 		}
-		edges, err := store.ListEdges(ctx, botID)
-		if err != nil {
-			return nil, fmt.Errorf("graph cache: list edges: %w", err)
-		}
-		built := buildBotGraph(nodes, edges)
+		built := buildBotGraph(nodes)
 
 		c.mu.Lock()
 		if c.versions[botID] != version {
@@ -128,63 +115,36 @@ func (c *graphCache) version(botID string) string {
 	return strconv.FormatUint(version, 10)
 }
 
-// buildBotGraph constructs a botGraph from node + edge specs. Edges are added
-// in both directions so BFS expansion is undirected.
-func buildBotGraph(nodes []migrate.NodeSpec, edges []migrate.EdgeSpec) *botGraph {
+// buildBotGraph indexes nodes and derives their relations. A repeated node ID
+// keeps its first occurrence.
+func buildBotGraph(nodes []migrate.NodeSpec) *botGraph {
 	g := &botGraph{
-		nodes: make(map[string]migrate.NodeSpec, len(nodes)),
-		adj:   make(map[string][]neighbor, len(nodes)),
+		nodes: make([]graphNode, 0, len(nodes)),
+		index: make(map[string]int, len(nodes)),
 	}
+	specs := make([]migrate.NodeSpec, 0, len(nodes))
 	for _, n := range nodes {
-		g.nodes[n.ID] = n
-	}
-	for _, e := range edges {
-		if _, ok := g.nodes[e.SrcNode]; !ok {
+		if _, dup := g.index[n.ID]; dup {
 			continue
 		}
-		if _, ok := g.nodes[e.DstNode]; !ok {
-			continue
-		}
-		g.adj[e.SrcNode] = append(g.adj[e.SrcNode], neighbor{node: g.nodes[e.DstNode], rel: e.Rel, weight: e.Weight})
-		g.adj[e.DstNode] = append(g.adj[e.DstNode], neighbor{node: g.nodes[e.SrcNode], rel: e.Rel, weight: e.Weight})
+		g.index[n.ID] = len(g.nodes)
+		g.nodes = append(g.nodes, graphNode{spec: n, lowerBody: strings.ToLower(n.Body)})
+		specs = append(specs, n)
 	}
-	g.hash = graphContentHash(nodes, edges)
+	rel := migrate.DeriveRelations(specs)
+	g.groups = rel.Groups
+	g.memberOf = make([][]int, len(g.nodes))
+	for gi, group := range rel.Groups {
+		for _, member := range group.Members {
+			g.memberOf[member] = append(g.memberOf[member], gi)
+		}
+	}
+	g.refs = make([][]graphLink, len(g.nodes))
+	for _, ref := range rel.Refs {
+		g.refs[ref.Src] = append(g.refs[ref.Src], graphLink{to: ref.Dst, weight: ref.Weight})
+		g.refs[ref.Dst] = append(g.refs[ref.Dst], graphLink{to: ref.Src, weight: ref.Weight})
+	}
+	g.edgeCount = rel.EdgeCount()
 	g.builtAt = time.Now()
 	return g
-}
-
-// graphContentHash produces a stable digest over the node bodies and edge
-// endpoints so the cache can detect content drift cheaply.
-func graphContentHash(nodes []migrate.NodeSpec, edges []migrate.EdgeSpec) string {
-	h := sha256.New()
-	ids := make([]string, 0, len(nodes))
-	byID := make(map[string]migrate.NodeSpec, len(nodes))
-	for _, n := range nodes {
-		ids = append(ids, n.ID)
-		byID[n.ID] = n
-	}
-	sort.Strings(ids)
-	for _, id := range ids {
-		n := byID[id]
-		_, _ = fmt.Fprintln(h, id, n.Hash, n.Body)
-	}
-	type edgeKey struct{ src, dst, rel string }
-	es := make([]edgeKey, 0, len(edges))
-	for _, e := range edges {
-		es = append(es, edgeKey{e.SrcNode, e.DstNode, string(e.Rel)})
-	}
-	sort.Slice(es, func(i, j int) bool { return fmt.Sprintf("%v", es[i]) < fmt.Sprintf("%v", es[j]) })
-	for _, e := range es {
-		_, _ = fmt.Fprintln(h, e.src, e.dst, e.rel)
-	}
-	return hex.EncodeToString(h.Sum(nil))[:16]
-}
-
-// graphLexicalScore scores body against query for the graph seed/expand phase.
-// It delegates to segment.LexicalScore, which splits CJK text via gse (Chinese
-// has no inter-word spaces, so whitespace-only splitting collapsed a whole
-// sentence into a single token that never matched) while keeping Latin/numeric
-// runs on the whitespace-split path.
-func graphLexicalScore(query, body string) float64 {
-	return memseg.LexicalScore(query, body)
 }

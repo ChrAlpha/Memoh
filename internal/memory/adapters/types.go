@@ -119,7 +119,6 @@ type MemoryItem struct {
 
 type SearchResponse struct {
 	Results        []MemoryItem `json:"results"`
-	Relations      []any        `json:"relations,omitempty"`
 	RetrievalMode  string       `json:"retrieval_mode,omitempty"`
 	FallbackReason string       `json:"fallback_reason,omitempty"`
 }

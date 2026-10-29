@@ -527,9 +527,6 @@ definitions:
     properties:
       fallback_reason:
         type: string
-      relations:
-        items: {}
-        type: array
       results:
         items:
           $ref: '#/definitions/adapters.MemoryItem'

@@ -18,11 +18,10 @@ var errForced = errors.New("forced store error for test")
 // fakeWikiStore is an in-memory wikistore.Store for graphRuntime tests.
 type fakeWikiStore struct {
 	nodes map[string]migrate.NodeSpec // keyed by node ID
-	edges map[string]migrate.EdgeSpec // keyed by src\0dst\0rel
 }
 
 func newFakeWikiStore() *fakeWikiStore {
-	return &fakeWikiStore{nodes: map[string]migrate.NodeSpec{}, edges: map[string]migrate.EdgeSpec{}}
+	return &fakeWikiStore{nodes: map[string]migrate.NodeSpec{}}
 }
 
 func (s *fakeWikiStore) UpsertNode(_ context.Context, node migrate.NodeSpec) (migrate.NodeSpec, error) {
@@ -62,56 +61,11 @@ func (s *fakeWikiStore) DeleteNode(_ context.Context, _, nodeID string) error {
 
 func (s *fakeWikiStore) DeleteAllNodes(_ context.Context, _ string) error {
 	s.nodes = map[string]migrate.NodeSpec{}
-	s.edges = map[string]migrate.EdgeSpec{}
 	return nil
 }
 
 func (s *fakeWikiStore) CountNodes(_ context.Context, _ string) (int, error) {
 	return len(s.nodes), nil
-}
-
-func (s *fakeWikiStore) UpsertEdges(_ context.Context, edges []migrate.EdgeSpec) error {
-	for _, e := range edges {
-		s.edges[e.SrcNode+"\x00"+e.DstNode+"\x00"+string(e.Rel)] = e
-	}
-	return nil
-}
-
-func (s *fakeWikiStore) ListEdges(_ context.Context, _ string) ([]migrate.EdgeSpec, error) {
-	out := make([]migrate.EdgeSpec, 0, len(s.edges))
-	for _, e := range s.edges {
-		out = append(out, e)
-	}
-	return out, nil
-}
-func (*fakeWikiStore) DeleteEdgesForNode(_ context.Context, _, _ string) error { return nil }
-func (s *fakeWikiStore) DeleteAllEdges(_ context.Context, _ string) error {
-	s.edges = map[string]migrate.EdgeSpec{}
-	return nil
-}
-
-func (s *fakeWikiStore) CountEdges(_ context.Context, _ string) (int, error) {
-	return len(s.edges), nil
-}
-
-func (s *fakeWikiStore) RebuildDerivedEdges(_ context.Context, _ string) (int, error) {
-	nodes := []migrate.NodeSpec{}
-	for _, n := range s.nodes {
-		nodes = append(nodes, n)
-	}
-	for key, edge := range s.edges {
-		for _, rel := range migrate.DerivedEdgeRels {
-			if edge.Rel == rel {
-				delete(s.edges, key)
-				break
-			}
-		}
-	}
-	derived := migrate.PlanFromNodes(nodes)
-	for _, e := range derived {
-		s.edges[e.SrcNode+"\x00"+e.DstNode+"\x00"+string(e.Rel)] = e
-	}
-	return len(derived), nil
 }
 
 func TestGraphRuntimeAddSearchDelete(t *testing.T) {
@@ -147,26 +101,21 @@ func TestGraphRuntimeAddSearchDelete(t *testing.T) {
 		t.Fatalf("GetAll = %d, want 2", len(all.Results))
 	}
 
-	// Search "tea" seeds the oolong node; expansion reaches the Berlin node via
-	// the shared-profile edge, so both surface and Relations is non-empty.
+	// Search "tea" seeds the oolong node; expansion reaches the Berlin node
+	// through the shared profile, one hop at full relation weight.
 	resp, err := rt.Search(ctx, adapters.SearchRequest{BotID: botID, Query: "tea", Limit: 5})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(resp.Results) == 0 {
-		t.Fatal("Search returned no results")
-	}
-	if len(resp.Relations) == 0 {
-		t.Fatal("Search Relations empty; expected the same_profile edge")
-	}
-	foundOolong := false
+	scores := map[string]float64{}
 	for _, r := range resp.Results {
-		if strings.Contains(r.Memory, "oolong") {
-			foundOolong = true
-		}
+		scores[r.Memory] = r.Score
 	}
-	if !foundOolong {
-		t.Fatal("Search did not surface the oolong memory")
+	if got := scores["I prefer oolong tea"]; got != 1 {
+		t.Fatalf("oolong score = %v, want 1 (seed); results %#v", got, scores)
+	}
+	if got, want := scores["I live in Berlin"], 1*1.0*recallDecay; got != want {
+		t.Fatalf("Berlin score = %v, want %v (same_profile hop); results %#v", got, want, scores)
 	}
 
 	// Status reports mode graph + node count.
@@ -227,23 +176,19 @@ func TestGraphRuntimeSearchExpandsRefs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search refs: %v", err)
 	}
-	foundBerlin := false
-	foundRefs := false
-	for _, r := range resp.Results {
-		if strings.Contains(r.Memory, "Berlin home") {
-			foundBerlin = true
+	// Both memories were captured today, so they also share a day; the ref is
+	// the stronger relation and sets the Berlin score.
+	var berlin *adapters.MemoryItem
+	for i := range resp.Results {
+		if strings.Contains(resp.Results[i].Memory, "Berlin home") {
+			berlin = &resp.Results[i]
 		}
 	}
-	for _, rel := range resp.Relations {
-		if relation, ok := rel.(map[string]any); ok && relation["rel"] == string(migrate.EdgeRefs) {
-			foundRefs = true
-		}
+	if berlin == nil {
+		t.Fatal("Search did not expand across the ref to the Berlin memory")
 	}
-	if !foundBerlin {
-		t.Fatal("Search did not expand across refs edge to the Berlin memory")
-	}
-	if !foundRefs {
-		t.Fatal("Search did not report the refs relation")
+	if want := 1 * 1.0 * recallDecay; berlin.Score != want {
+		t.Fatalf("Berlin score = %v, want %v (refs hop)", berlin.Score, want)
 	}
 }
 
@@ -581,19 +526,9 @@ func (errWikiStore) ListNodes(context.Context, string) ([]migrate.NodeSpec, erro
 func (errWikiStore) ListNodesByLayer(context.Context, string, migrate.MemoryLayer) ([]migrate.NodeSpec, error) {
 	return nil, errForced
 }
-func (errWikiStore) DeleteNode(context.Context, string, string) error      { return nil }
-func (errWikiStore) DeleteAllNodes(context.Context, string) error          { return nil }
-func (errWikiStore) CountNodes(context.Context, string) (int, error)       { return 0, errForced }
-func (errWikiStore) UpsertEdges(context.Context, []migrate.EdgeSpec) error { return nil }
-func (errWikiStore) ListEdges(context.Context, string) ([]migrate.EdgeSpec, error) {
-	return nil, errForced
-}
-func (errWikiStore) DeleteEdgesForNode(context.Context, string, string) error { return nil }
-func (errWikiStore) DeleteAllEdges(context.Context, string) error             { return nil }
-func (errWikiStore) CountEdges(context.Context, string) (int, error)          { return 0, errForced }
-func (errWikiStore) RebuildDerivedEdges(context.Context, string) (int, error) {
-	return 0, errForced
-}
+func (errWikiStore) DeleteNode(context.Context, string, string) error { return nil }
+func (errWikiStore) DeleteAllNodes(context.Context, string) error     { return nil }
+func (errWikiStore) CountNodes(context.Context, string) (int, error)  { return 0, errForced }
 
 // TestGraphRuntimeSearchCJKSentence is the end-to-end regression for the
 // Chinese-word-segmentation bug: a whole Chinese sentence used to collapse into

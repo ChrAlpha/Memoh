@@ -1,6 +1,6 @@
 // Package migrate contains utilities that convert existing markdown-backed
-// memory content into the PostgreSQL wiki/graph schema
-// (memory_nodes + memory_edges). The conversion logic is backend-agnostic: it
+// memory content into PostgreSQL wiki nodes (memory_nodes) and derive the
+// relations between them. The conversion logic is backend-agnostic: it
 // produces plain NodeSpec/EdgeSpec values so it can be exercised by unit tests
 // without a live database, and persisted by any concrete store implementation.
 package migrate
@@ -59,14 +59,14 @@ type NodeSpec struct {
 	ExpiresAt        time.Time // zero value means "no expiry".
 }
 
-// EdgeSpec is a backend-agnostic description of a memory_edges row.
+// EdgeSpec is one related pair of memory nodes, as expanded by
+// Relations.Edges.
 type EdgeSpec struct {
-	BotID    string
-	SrcNode  string
-	DstNode  string
-	Rel      EdgeRel
-	Weight   float32
-	Metadata map[string]any
+	BotID   string
+	SrcNode string
+	DstNode string
+	Rel     EdgeRel
+	Weight  float32
 }
 
 // Result summarises a wiki backfill pass for one bot.
@@ -90,23 +90,16 @@ func Plan(botID string, items []storefs.MemoryItem) ([]NodeSpec, []EdgeSpec) {
 	for _, item := range items {
 		nodes = append(nodes, nodeFromItem(botID, item))
 	}
-	edges := buildDerivedEdges(nodes)
-	return nodes, edges
+	return nodes, PlanFromNodes(nodes)
 }
 
-// PlanFromNodes derives graph edges from an existing set of nodes (e.g. already
-// persisted in the wiki store) without re-classifying them. It is the
-// edge-derivation half of Plan, used by RebuildDerivedEdges.
+// PlanFromNodes expands the relations of an existing node set into one edge per
+// related pair, for views that draw every edge. Recall works on DeriveRelations
+// directly: a shared profile, topic, or day relates every pair of its nodes, so
+// the pairwise form grows quadratically with the group.
 func PlanFromNodes(nodes []NodeSpec) []EdgeSpec {
-	return buildDerivedEdges(nodes)
+	return DeriveRelations(nodes).Edges(nodes)
 }
-
-// ImplicitEdgeRels is the canonical set of edges derived automatically from
-// node attributes (as opposed to explicit refs/supersedes/... authored later).
-var ImplicitEdgeRels = []EdgeRel{EdgeSameProfile, EdgeSameTopic, EdgeSameDay}
-
-// DerivedEdgeRels is the canonical set of edges rebuilt from node state.
-var DerivedEdgeRels = []EdgeRel{EdgeSameProfile, EdgeSameTopic, EdgeSameDay, EdgeRefs}
 
 // Summarise returns a Result for a planned node/edge set, suitable for CLI
 // dry-run reporting.
@@ -167,112 +160,156 @@ func classifyLayer(item storefs.MemoryItem) MemoryLayer {
 	return LayerNote
 }
 
-// buildImplicitEdges derives same_profile / same_topic / same_day edges between
-// nodes. Edges are undirected in intent but stored as directed src->dst pairs
-// where src < dst (lexicographically by node ID) to avoid duplicates. A node
-// never edges to itself.
-func buildImplicitEdges(nodes []NodeSpec) []EdgeSpec {
-	if len(nodes) < 2 {
-		return nil
-	}
-	byProfile := indexBy(nodes, func(n NodeSpec) string { return n.ProfileRef })
-	byTopic := indexBy(nodes, func(n NodeSpec) string { return n.Topic })
-	byDay := indexBy(nodes, func(n NodeSpec) string { return n.CapturedAt.UTC().Format("2006-01-02") })
+// Relation weights. A shared profile or an explicit reference relates two
+// memories most strongly, a shared day least.
+const (
+	sameProfileWeight float32 = 1.0
+	sameTopicWeight   float32 = 0.8
+	sameDayWeight     float32 = 0.5
+	refsWeight        float32 = 1.0
+)
 
-	seen := map[string]struct{}{}
-	edges := make([]EdgeSpec, 0)
-	add := func(a, b NodeSpec, rel EdgeRel, weight float32) {
-		if a.ID == b.ID {
-			return
-		}
-		src, dst := a.ID, b.ID
-		if dst < src {
-			src, dst = dst, src
-		}
-		key := src + "\x00" + dst + "\x00" + string(rel)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		edges = append(edges, EdgeSpec{BotID: a.BotID, SrcNode: src, DstNode: dst, Rel: rel, Weight: weight})
-	}
-
-	emit := func(groups [][]NodeSpec, rel EdgeRel, weight float32) {
-		for _, group := range groups {
-			if len(group) < 2 {
-				continue
-			}
-			for i := 0; i < len(group); i++ {
-				for j := i + 1; j < len(group); j++ {
-					add(group[i], group[j], rel, weight)
-				}
-			}
-		}
-	}
-	emit(byProfile, EdgeSameProfile, 1.0)
-	emit(byTopic, EdgeSameTopic, 0.8)
-	emit(byDay, EdgeSameDay, 0.5)
-
-	// Deterministic ordering keeps dry-run output stable.
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Rel != edges[j].Rel {
-			return edges[i].Rel < edges[j].Rel
-		}
-		if edges[i].SrcNode != edges[j].SrcNode {
-			return edges[i].SrcNode < edges[j].SrcNode
-		}
-		return edges[i].DstNode < edges[j].DstNode
-	})
-	return edges
+// Relations is the relation structure derived from a node set. Nodes are
+// referred to by their index in that set.
+type Relations struct {
+	// Groups relate every pair of their members: the nodes sharing one
+	// profile_ref, one topic, or one capture day. Each node belongs to at most
+	// one group per relation.
+	Groups []RelationGroup
+	// Refs are the [[slug]] cross-references from one node body to another
+	// node, one per (src, dst) pair.
+	Refs []RelationRef
 }
 
-func buildDerivedEdges(nodes []NodeSpec) []EdgeSpec {
-	edges := buildImplicitEdges(nodes)
-	edges = append(edges, buildRefEdges(nodes)...)
-	sort.Slice(edges, func(i, j int) bool {
-		if edges[i].Rel != edges[j].Rel {
-			return edges[i].Rel < edges[j].Rel
-		}
-		if edges[i].SrcNode != edges[j].SrcNode {
-			return edges[i].SrcNode < edges[j].SrcNode
-		}
-		return edges[i].DstNode < edges[j].DstNode
-	})
-	return edges
+// RelationGroup is a set of at least two nodes that are pairwise related.
+type RelationGroup struct {
+	Rel     EdgeRel
+	Weight  float32
+	Members []int
 }
 
-func buildRefEdges(nodes []NodeSpec) []EdgeSpec {
+// RelationRef is a reference from the node at Src to the node at Dst.
+type RelationRef struct {
+	Src, Dst int
+	Weight   float32
+}
+
+// DeriveRelations derives the relations of nodes from their profile_ref,
+// topic, capture day, and body links. It runs in time linear in the node
+// count and body size.
+func DeriveRelations(nodes []NodeSpec) Relations {
 	if len(nodes) < 2 {
-		return nil
+		return Relations{}
 	}
-	slugToID := make(map[string]string, len(nodes))
-	for _, node := range nodes {
+	var rel Relations
+	rel.Groups = appendGroups(rel.Groups, nodes, EdgeSameProfile, sameProfileWeight, func(n NodeSpec) string { return n.ProfileRef })
+	rel.Groups = appendGroups(rel.Groups, nodes, EdgeSameTopic, sameTopicWeight, func(n NodeSpec) string { return n.Topic })
+	rel.Groups = appendGroups(rel.Groups, nodes, EdgeSameDay, sameDayWeight, func(n NodeSpec) string { return n.CapturedAt.UTC().Format("2006-01-02") })
+
+	slugToIndex := make(map[string]int, len(nodes))
+	for i, node := range nodes {
 		if slug := NodeSlug(node.ID, node.Subject, node.Topic); slug != "" {
-			slugToID[slug] = node.ID
+			slugToIndex[slug] = i
 		}
 	}
-	seen := map[string]struct{}{}
-	edges := make([]EdgeSpec, 0)
-	for _, src := range nodes {
-		for _, raw := range ParseMemoryLinks(src.Body) {
-			dstID, ok := slugToID[Slugify(raw)]
-			if !ok || dstID == src.ID {
+	seen := map[[2]int]struct{}{}
+	for src, node := range nodes {
+		for _, raw := range ParseMemoryLinks(node.Body) {
+			dst, ok := slugToIndex[Slugify(raw)]
+			if !ok || nodes[dst].ID == node.ID {
 				continue
 			}
-			key := src.ID + "\x00" + dstID + "\x00" + string(EdgeRefs)
-			if _, exists := seen[key]; exists {
+			key := [2]int{src, dst}
+			if _, dup := seen[key]; dup {
 				continue
 			}
 			seen[key] = struct{}{}
-			edges = append(edges, EdgeSpec{
-				BotID:   src.BotID,
-				SrcNode: src.ID,
-				DstNode: dstID,
-				Rel:     EdgeRefs,
-				Weight:  1.0,
-			})
+			rel.Refs = append(rel.Refs, RelationRef{Src: src, Dst: dst, Weight: refsWeight})
 		}
 	}
+	return rel
+}
+
+// appendGroups appends one group per non-empty key shared by at least two
+// nodes, in the order the keys first appear.
+func appendGroups(groups []RelationGroup, nodes []NodeSpec, rel EdgeRel, weight float32, key func(NodeSpec) string) []RelationGroup {
+	byKey := map[string]int{}
+	start := len(groups)
+	for i, n := range nodes {
+		k := strings.TrimSpace(key(n))
+		if k == "" {
+			continue
+		}
+		if at, ok := byKey[k]; ok {
+			groups[at].Members = append(groups[at].Members, i)
+			continue
+		}
+		byKey[k] = len(groups)
+		groups = append(groups, RelationGroup{Rel: rel, Weight: weight, Members: []int{i}})
+	}
+	kept := groups[:start]
+	for _, g := range groups[start:] {
+		if len(g.Members) >= 2 {
+			kept = append(kept, g)
+		}
+	}
+	return kept
+}
+
+// EdgeCount is the number of edges Edges returns for node sets with unique
+// IDs, computed without expanding the groups.
+func (r Relations) EdgeCount() int {
+	count := len(r.Refs)
+	for _, g := range r.Groups {
+		count += len(g.Members) * (len(g.Members) - 1) / 2
+	}
+	return count
+}
+
+// Edges expands the relations into one edge per related pair and relation, in
+// a deterministic order. Group edges are stored undirected as src < dst by node
+// ID; refs keep their direction.
+func (r Relations) Edges(nodes []NodeSpec) []EdgeSpec {
+	edges := make([]EdgeSpec, 0, r.EdgeCount())
+	seen := map[string]struct{}{}
+	for _, g := range r.Groups {
+		for i := 0; i < len(g.Members); i++ {
+			for j := i + 1; j < len(g.Members); j++ {
+				a, b := nodes[g.Members[i]], nodes[g.Members[j]]
+				if a.ID == b.ID {
+					continue
+				}
+				src, dst := a.ID, b.ID
+				if dst < src {
+					src, dst = dst, src
+				}
+				key := src + "\x00" + dst + "\x00" + string(g.Rel)
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				edges = append(edges, EdgeSpec{BotID: a.BotID, SrcNode: src, DstNode: dst, Rel: g.Rel, Weight: g.Weight})
+			}
+		}
+	}
+	for _, ref := range r.Refs {
+		src, dst := nodes[ref.Src], nodes[ref.Dst]
+		key := src.ID + "\x00" + dst.ID + "\x00" + string(EdgeRefs)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		edges = append(edges, EdgeSpec{BotID: src.BotID, SrcNode: src.ID, DstNode: dst.ID, Rel: EdgeRefs, Weight: ref.Weight})
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].Rel != edges[j].Rel {
+			return edges[i].Rel < edges[j].Rel
+		}
+		if edges[i].SrcNode != edges[j].SrcNode {
+			return edges[i].SrcNode < edges[j].SrcNode
+		}
+		return edges[i].DstNode < edges[j].DstNode
+	})
 	return edges
 }
 
@@ -290,27 +327,6 @@ func Slugify(s string) string {
 // [[slug]] and markdown links. HTTP(S) links are ignored.
 func ParseMemoryLinks(body string) []string {
 	return memslug.ParseMemoryLinks(body)
-}
-
-// indexBy groups nodes sharing the same non-empty key.
-func indexBy(nodes []NodeSpec, key func(NodeSpec) string) [][]NodeSpec {
-	buckets := map[string][]NodeSpec{}
-	order := []string{}
-	for _, n := range nodes {
-		k := strings.TrimSpace(key(n))
-		if k == "" {
-			continue
-		}
-		if _, ok := buckets[k]; !ok {
-			order = append(order, k)
-		}
-		buckets[k] = append(buckets[k], n)
-	}
-	out := make([][]NodeSpec, 0, len(buckets))
-	for _, k := range order {
-		out = append(out, buckets[k])
-	}
-	return out
 }
 
 func metadataString(m map[string]any, key string) string {

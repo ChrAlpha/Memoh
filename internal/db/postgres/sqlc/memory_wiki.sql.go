@@ -11,18 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const countMemoryEdgesByBot = `-- name: CountMemoryEdgesByBot :one
-SELECT COUNT(*) FROM memory_edges
-WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
-`
-
-func (q *Queries) CountMemoryEdgesByBot(ctx context.Context, botID pgtype.UUID) (int64, error) {
-	row := q.db.QueryRow(ctx, countMemoryEdgesByBot, botID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const countMemoryNodesByBot = `-- name: CountMemoryNodesByBot :one
 SELECT COUNT(*) FROM memory_nodes
 WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
@@ -35,16 +23,6 @@ func (q *Queries) CountMemoryNodesByBot(ctx context.Context, botID pgtype.UUID) 
 	return count, err
 }
 
-const deleteAllMemoryEdgesByBot = `-- name: DeleteAllMemoryEdgesByBot :exec
-DELETE FROM memory_edges
-WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
-`
-
-func (q *Queries) DeleteAllMemoryEdgesByBot(ctx context.Context, botID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteAllMemoryEdgesByBot, botID)
-	return err
-}
-
 const deleteAllMemoryNodesByBot = `-- name: DeleteAllMemoryNodesByBot :exec
 DELETE FROM memory_nodes
 WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
@@ -52,36 +30,6 @@ WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
 
 func (q *Queries) DeleteAllMemoryNodesByBot(ctx context.Context, botID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteAllMemoryNodesByBot, botID)
-	return err
-}
-
-const deleteMemoryEdgesByRelForBot = `-- name: DeleteMemoryEdgesByRelForBot :exec
-DELETE FROM memory_edges
-WHERE team_id = public.memoh_current_team_id() AND bot_id = $1 AND rel = $2
-`
-
-type DeleteMemoryEdgesByRelForBotParams struct {
-	BotID pgtype.UUID `json:"bot_id"`
-	Rel   string      `json:"rel"`
-}
-
-func (q *Queries) DeleteMemoryEdgesByRelForBot(ctx context.Context, arg DeleteMemoryEdgesByRelForBotParams) error {
-	_, err := q.db.Exec(ctx, deleteMemoryEdgesByRelForBot, arg.BotID, arg.Rel)
-	return err
-}
-
-const deleteMemoryEdgesForNode = `-- name: DeleteMemoryEdgesForNode :exec
-DELETE FROM memory_edges
-WHERE team_id = public.memoh_current_team_id() AND bot_id = $1 AND (src_node = $2 OR dst_node = $2)
-`
-
-type DeleteMemoryEdgesForNodeParams struct {
-	BotID   pgtype.UUID `json:"bot_id"`
-	SrcNode string      `json:"src_node"`
-}
-
-func (q *Queries) DeleteMemoryEdgesForNode(ctx context.Context, arg DeleteMemoryEdgesForNodeParams) error {
-	_, err := q.db.Exec(ctx, deleteMemoryEdgesForNode, arg.BotID, arg.SrcNode)
 	return err
 }
 
@@ -133,151 +81,6 @@ func (q *Queries) GetMemoryNode(ctx context.Context, arg GetMemoryNodeParams) (M
 		&i.TeamID,
 	)
 	return i, err
-}
-
-const insertMemoryEdge = `-- name: InsertMemoryEdge :exec
-INSERT INTO memory_edges (bot_id, src_node, dst_node, rel, weight, metadata)
-VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (team_id, bot_id, src_node, dst_node, rel) DO UPDATE SET
-  weight = EXCLUDED.weight,
-  metadata = EXCLUDED.metadata
-`
-
-type InsertMemoryEdgeParams struct {
-	BotID    pgtype.UUID `json:"bot_id"`
-	SrcNode  string      `json:"src_node"`
-	DstNode  string      `json:"dst_node"`
-	Rel      string      `json:"rel"`
-	Weight   float32     `json:"weight"`
-	Metadata []byte      `json:"metadata"`
-}
-
-func (q *Queries) InsertMemoryEdge(ctx context.Context, arg InsertMemoryEdgeParams) error {
-	_, err := q.db.Exec(ctx, insertMemoryEdge,
-		arg.BotID,
-		arg.SrcNode,
-		arg.DstNode,
-		arg.Rel,
-		arg.Weight,
-		arg.Metadata,
-	)
-	return err
-}
-
-const listMemoryEdgesByBot = `-- name: ListMemoryEdgesByBot :many
-SELECT id, bot_id, src_node, dst_node, rel, weight, metadata, created_at, team_id FROM memory_edges
-WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
-`
-
-func (q *Queries) ListMemoryEdgesByBot(ctx context.Context, botID pgtype.UUID) ([]MemoryEdge, error) {
-	rows, err := q.db.Query(ctx, listMemoryEdgesByBot, botID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []MemoryEdge
-	for rows.Next() {
-		var i MemoryEdge
-		if err := rows.Scan(
-			&i.ID,
-			&i.BotID,
-			&i.SrcNode,
-			&i.DstNode,
-			&i.Rel,
-			&i.Weight,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.TeamID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listMemoryEdgesByRel = `-- name: ListMemoryEdgesByRel :many
-SELECT id, bot_id, src_node, dst_node, rel, weight, metadata, created_at, team_id FROM memory_edges
-WHERE team_id = public.memoh_current_team_id() AND bot_id = $1 AND rel = $2
-`
-
-type ListMemoryEdgesByRelParams struct {
-	BotID pgtype.UUID `json:"bot_id"`
-	Rel   string      `json:"rel"`
-}
-
-func (q *Queries) ListMemoryEdgesByRel(ctx context.Context, arg ListMemoryEdgesByRelParams) ([]MemoryEdge, error) {
-	rows, err := q.db.Query(ctx, listMemoryEdgesByRel, arg.BotID, arg.Rel)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []MemoryEdge
-	for rows.Next() {
-		var i MemoryEdge
-		if err := rows.Scan(
-			&i.ID,
-			&i.BotID,
-			&i.SrcNode,
-			&i.DstNode,
-			&i.Rel,
-			&i.Weight,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.TeamID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listMemoryEdgesFromNode = `-- name: ListMemoryEdgesFromNode :many
-SELECT id, bot_id, src_node, dst_node, rel, weight, metadata, created_at, team_id FROM memory_edges
-WHERE team_id = public.memoh_current_team_id() AND bot_id = $1 AND src_node = $2
-ORDER BY weight DESC
-`
-
-type ListMemoryEdgesFromNodeParams struct {
-	BotID   pgtype.UUID `json:"bot_id"`
-	SrcNode string      `json:"src_node"`
-}
-
-func (q *Queries) ListMemoryEdgesFromNode(ctx context.Context, arg ListMemoryEdgesFromNodeParams) ([]MemoryEdge, error) {
-	rows, err := q.db.Query(ctx, listMemoryEdgesFromNode, arg.BotID, arg.SrcNode)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []MemoryEdge
-	for rows.Next() {
-		var i MemoryEdge
-		if err := rows.Scan(
-			&i.ID,
-			&i.BotID,
-			&i.SrcNode,
-			&i.DstNode,
-			&i.Rel,
-			&i.Weight,
-			&i.Metadata,
-			&i.CreatedAt,
-			&i.TeamID,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listMemoryNodesByBot = `-- name: ListMemoryNodesByBot :many

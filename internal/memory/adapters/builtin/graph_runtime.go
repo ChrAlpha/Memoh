@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/config"
 	adapters "github.com/felinics/memoh/internal/memory/adapters"
 	"github.com/felinics/memoh/internal/memory/migrate"
+	memseg "github.com/felinics/memoh/internal/memory/segment"
 	"github.com/felinics/memoh/internal/memory/wikistore"
 )
 
@@ -116,9 +117,6 @@ func (r *graphRuntime) syncAndInvalidate(ctx context.Context, botID string) {
 	} else if err := r.syncer.syncMarkdownFromNodes(ctx, botID, nodes); err != nil {
 		r.logger.WarnContext(ctx, "graph: markdown sync failed", "bot_id", botID, "err", err)
 	}
-	if _, err := r.store.RebuildDerivedEdges(ctx, botID); err != nil {
-		r.logger.DebugContext(ctx, "graph: rebuild derived edges failed", "bot_id", botID, "err", err)
-	}
 	r.cache.invalidate(botID)
 }
 
@@ -199,115 +197,40 @@ func (r *graphRuntime) Search(ctx context.Context, req adapters.SearchRequest) (
 	return fallback, err
 }
 
-// searchGraph runs seed-then-expand: lexical-score nodes -> top-K seeds ->
-// BFS expand along edges -> merge -> populate Relations.
+// searchGraph runs seed-then-expand: score nodes against the query, keep the
+// best as seeds, and expand two relation hops from them (botGraph.expand).
 func (r *graphRuntime) searchGraph(ctx context.Context, botID, query string, limit int) (adapters.SearchResponse, error) {
 	graph, err := r.cache.getOrBuild(ctx, botID, r.store)
 	if err != nil {
 		return adapters.SearchResponse{}, err
 	}
-	nodes := graph.nodeSlice()
 
-	overfetch := limit * 3
-	if overfetch < 10 {
-		overfetch = 10
-	}
-
-	// 1. Seed: pgvector semantic seeds when configured, plus lexical seeds.
-	type seed struct {
-		id    string
-		score float64
-	}
-	seedScores := map[string]float64{}
+	overfetch := max(limit*3, 10)
+	var semanticSeeds map[string]float64
 	if r.semantic != nil {
-		if semanticSeeds, semanticErr := r.semantic.SearchSeeds(ctx, botID, query, overfetch); semanticErr != nil {
+		seeds, semanticErr := r.semantic.SearchSeeds(ctx, botID, query, overfetch)
+		if semanticErr != nil {
 			r.logger.DebugContext(ctx, "graph: pgvector seed search failed, using lexical seeds", "bot_id", botID, "err", semanticErr)
 		} else {
-			for id, score := range semanticSeeds {
-				if _, ok := graph.nodes[id]; ok {
-					seedScores[id] = max64(seedScores[id], score)
-				}
-			}
+			semanticSeeds = seeds
 		}
 	}
-	for _, n := range nodes {
-		s := graphLexicalScore(query, n.Body)
-		if s <= 0 && strings.TrimSpace(query) != "" {
-			continue
-		}
-		seedScores[n.ID] = max64(seedScores[n.ID], s)
+	seeds, err := graph.seeds(ctx, memseg.NewQuery(query), strings.TrimSpace(query) == "", semanticSeeds, overfetch)
+	if err != nil {
+		return adapters.SearchResponse{}, err
 	}
-	seeds := make([]seed, 0, len(seedScores))
-	for id, score := range seedScores {
-		seeds = append(seeds, seed{id: id, score: score})
+	hits, err := graph.expand(ctx, seeds)
+	if err != nil {
+		return adapters.SearchResponse{}, err
 	}
-	sort.Slice(seeds, func(i, j int) bool { return seeds[i].score > seeds[j].score })
-	if len(seeds) > overfetch {
-		seeds = seeds[:overfetch]
-	}
-
-	// 2. Expand: BFS depth 2 from seeds, weighting neighbors.
-	const decay = 0.6
-	type hit struct {
-		score float64
-	}
-	scores := map[string]hit{}
-	hitEdges := map[string]bool{}
-	addEdge := func(a, b, rel string) {
-		src, dst := a, b
-		if dst < src {
-			src, dst = dst, src
-		}
-		hitEdges[src+"\x00"+dst+"\x00"+rel] = true
-	}
-	for _, s := range seeds {
-		scores[s.id] = hit{score: max64(scores[s.id].score, s.score)}
-		// depth 1
-		for _, nb := range graph.neighbors(s.id) {
-			ns := float64(s.score) * float64(nb.weight) * decay
-			scores[nb.node.ID] = hit{score: max64(scores[nb.node.ID].score, ns)}
-			addEdge(s.id, nb.node.ID, string(nb.rel))
-			// depth 2
-			for _, nb2 := range graph.neighbors(nb.node.ID) {
-				if nb2.node.ID == s.id {
-					continue
-				}
-				ns2 := ns * decay
-				scores[nb2.node.ID] = hit{score: max64(scores[nb2.node.ID].score, ns2)}
-				addEdge(nb.node.ID, nb2.node.ID, string(nb2.rel))
-			}
-		}
-	}
-
-	// 3. Merge + sort + truncate.
-	ids := make([]string, 0, len(scores))
-	for id := range scores {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return scores[ids[i]].score > scores[ids[j]].score })
-	if len(ids) > limit {
-		ids = ids[:limit]
-	}
-	results := make([]adapters.MemoryItem, 0, len(ids))
-	for _, id := range ids {
-		n, ok := graph.nodes[id]
-		if !ok {
-			continue
-		}
-		item := nodeSpecToMemoryItem(n)
-		item.Score = scores[id].score
+	hits = graph.top(hits, limit)
+	results := make([]adapters.MemoryItem, 0, len(hits))
+	for _, hit := range hits {
+		item := nodeSpecToMemoryItem(graph.nodes[hit.node].spec)
+		item.Score = hit.score
 		results = append(results, item)
 	}
-
-	// 4. Relations (hit edges) for explain.
-	relations := make([]any, 0, len(hitEdges))
-	for k := range hitEdges {
-		parts := strings.SplitN(k, "\x00", 3)
-		if len(parts) == 3 {
-			relations = append(relations, map[string]any{"from": parts[0], "to": parts[1], "rel": parts[2]})
-		}
-	}
-	return adapters.SearchResponse{Results: results, Relations: relations, RetrievalMode: "graph"}, nil
+	return adapters.SearchResponse{Results: results, RetrievalMode: "graph"}, nil
 }
 
 // searchFileFallback is the reliability fallback: read the derived Markdown via
@@ -321,11 +244,12 @@ func (r *graphRuntime) searchFileFallback(ctx context.Context, botID, query stri
 	if err != nil {
 		return adapters.SearchResponse{}, fmt.Errorf("graph runtime: file fallback read: %w", err)
 	}
-	q := strings.ToLower(strings.TrimSpace(query))
+	q := memseg.NewQuery(query)
+	emptyQuery := strings.TrimSpace(query) == ""
 	results := make([]adapters.MemoryItem, 0, len(items))
 	for _, it := range items {
-		score := graphLexicalScore(q, it.Memory)
-		if q != "" && score <= 0 {
+		score := q.ScoreLower(strings.ToLower(it.Memory))
+		if !emptyQuery && score <= 0 {
 			continue
 		}
 		m := memoryItemFromStore(it)
@@ -428,8 +352,11 @@ func (r *graphRuntime) DeleteBatch(ctx context.Context, botID string, memoryIDs 
 	if r.store == nil {
 		return adapters.DeleteResponse{}, errors.New("graph runtime: wiki store not configured")
 	}
+	// The projection and the semantic index follow the nodes this call
+	// removed, including those removed before a later deletion failed.
 	seen := map[string]bool{}
-	deletedByBot := map[string][]string{}
+	var deleted []string
+	var deleteErr error
 	for _, rawID := range memoryIDs {
 		memoryID := strings.TrimSpace(rawID)
 		if memoryID == "" || seen[memoryID] {
@@ -439,30 +366,27 @@ func (r *graphRuntime) DeleteBatch(ctx context.Context, botID string, memoryIDs 
 		_, storedID, err := r.resolveNodeByMemoryID(ctx, botID, memoryID)
 		if err != nil {
 			if !errors.Is(err, wikistore.ErrNodeNotFound) {
-				return adapters.DeleteResponse{}, fmt.Errorf("graph runtime: get node for delete: %w", err)
+				deleteErr = fmt.Errorf("graph runtime: get node for delete: %w", err)
+				break
 			}
 			storedID = memoryID
 		}
 		if err := r.store.DeleteNode(ctx, botID, storedID); err != nil {
-			return adapters.DeleteResponse{}, fmt.Errorf("graph runtime: delete node: %w", err)
+			deleteErr = fmt.Errorf("graph runtime: delete node: %w", err)
+			break
 		}
-		deletedByBot[botID] = append(deletedByBot[botID], storedID)
+		deleted = append(deleted, storedID)
 		if storedID != memoryID {
-			deletedByBot[botID] = append(deletedByBot[botID], memoryID)
+			deleted = append(deleted, memoryID)
 		}
+	}
+	if len(deleted) > 0 {
 		r.syncAndInvalidate(ctx, botID)
+		r.retry.discard(botID, deleted)
+		r.discardSemanticNodes(ctx, botID, deleted)
 	}
-	for botID, ids := range deletedByBot {
-		r.retry.discard(botID, ids)
-	}
-	if r.semantic != nil {
-		semanticCtx, cancel := context.WithTimeout(ctx, semanticEmbedTimeout)
-		defer cancel()
-		for botID, ids := range deletedByBot {
-			if err := r.semantic.DeleteNodes(semanticCtx, botID, ids); err != nil {
-				r.logger.DebugContext(ctx, "graph: pgvector delete failed", "bot_id", botID, "err", err)
-			}
-		}
+	if deleteErr != nil {
+		return adapters.DeleteResponse{}, deleteErr
 	}
 	return adapters.DeleteResponse{Message: "Memories deleted successfully!"}, nil
 }
@@ -560,7 +484,10 @@ func (r *graphRuntime) Status(ctx context.Context, botID string) (adapters.Memor
 		return adapters.MemoryStatusResponse{}, errors.New("graph runtime: wiki store not configured")
 	}
 	nodeCount, _ := r.store.CountNodes(ctx, botID)
-	edgeCount, _ := r.store.CountEdges(ctx, botID)
+	edgeCount := 0
+	if graph, err := r.cache.getOrBuild(ctx, botID, r.store); err == nil {
+		edgeCount = graph.edgeCount
+	}
 	resp := adapters.MemoryStatusResponse{
 		ProviderType:  BuiltinType,
 		MemoryMode:    string(ModeGraph),
@@ -710,11 +637,4 @@ func parseGraphTime(s string) time.Time {
 		}
 	}
 	return time.Now().UTC()
-}
-
-func max64(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
 }
