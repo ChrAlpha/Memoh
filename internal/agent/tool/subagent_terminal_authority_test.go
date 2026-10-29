@@ -35,8 +35,9 @@ func TestRunSubagentTaskRejectsCleanEndAfterOwningAbort(t *testing.T) {
 		},
 	}
 	p := &SpawnProvider{
-		agent:  agent,
-		logger: slog.New(slog.DiscardHandler),
+		agent:       agent,
+		transcripts: &fakeTranscriptLoader{},
+		logger:      slog.New(slog.DiscardHandler),
 		modelResolver: func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 			return resolvedSubagentModel{}, nil
 		},
@@ -117,7 +118,9 @@ func TestSpawnedResolvedTerminalSurvivesLateBackgroundStop(t *testing.T) {
 			p := NewSpawnProvider(nil, nil, nil, nil, nil, mgr)
 			p.sessionService = &fakeAgentSessionService{}
 			p.SetAgent(agent)
-			p.SetMessageService(newFakeAgentMessageService())
+			messageSvc := newFakeAgentMessageService()
+			p.SetMessageService(messageSvc)
+			p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 			p.SetSubagentAdmitter(&fakeSubagentAdmitter{})
 			p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 				return resolvedSubagentModel{

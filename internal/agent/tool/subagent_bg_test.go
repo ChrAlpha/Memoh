@@ -266,6 +266,47 @@ func TestPersistSubagentMessagesKeepsUnencodableInputAsText(t *testing.T) {
 	}
 }
 
+// fakeTranscriptLoader stands in for the application's history window: it
+// replays every stored row of the agent's thread except the run's request.
+type fakeTranscriptLoader struct {
+	messages *fakeAgentMessageService
+
+	mu       sync.Mutex
+	requests []SubagentTranscriptRequest
+}
+
+func (l *fakeTranscriptLoader) LoadSubagentTranscript(ctx context.Context, req SubagentTranscriptRequest) ([]sdk.Message, error) {
+	l.mu.Lock()
+	l.requests = append(l.requests, req)
+	l.mu.Unlock()
+	if l.messages == nil {
+		return nil, nil
+	}
+	rows, err := l.messages.ListBySession(ctx, req.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]sdk.Message, 0, len(rows))
+	for _, row := range rows {
+		if row.ID == req.RequestMessageID {
+			continue
+		}
+		if converted, ok := sdkMessageFromPersisted(row); ok {
+			out = append(out, converted)
+		}
+	}
+	return out, nil
+}
+
+func (l *fakeTranscriptLoader) requestAt(index int) (SubagentTranscriptRequest, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if index < 0 || index >= len(l.requests) {
+		return SubagentTranscriptRequest{}, false
+	}
+	return l.requests[index], true
+}
+
 func (s *fakeAgentMessageService) ListBySession(_ context.Context, sessionID string) ([]messagepkg.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -389,6 +430,7 @@ func newAgentControlProviderWithAdmitter(t *testing.T, agent *fakeSpawnAgent, ad
 	p.sessionService = sessionSvc
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
+	p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 	p.SetSubagentAdmitter(admitter)
 	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{
@@ -989,7 +1031,7 @@ func TestQueuedAgentMessageDoesNotPersistBeforeItRuns(t *testing.T) {
 	if got := len(secondCall.Messages); got != 2 {
 		t.Fatalf("expected second run history to exclude current repeated query, got %d messages", got)
 	}
-	if secondCall.Messages[0].Role != sdk.MessageRoleUser || strings.TrimSpace(messageTextContent(secondCall.Messages[0])) != "repeat" {
+	if secondCall.Messages[0].Role != sdk.MessageRoleUser || strings.TrimSpace(messageContentTextForTest(secondCall.Messages[0])) != "repeat" {
 		t.Fatalf("expected previous user turn first in history, got %+v", secondCall.Messages[0])
 	}
 	if secondCall.Messages[1].Role != sdk.MessageRoleAssistant {

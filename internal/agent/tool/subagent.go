@@ -285,6 +285,7 @@ type SpawnProvider struct {
 	bgManager      *background.Manager
 	hookService    *hooks.Service
 	admitter       SubagentAdmitter
+	transcripts    SubagentTranscriptLoader
 	modelResolver  subagentModelResolver
 	coord          *agentCoordinator
 	logger         *slog.Logger
@@ -946,25 +947,18 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 			)
 		}
 	}()
-	history := p.loadAgentMessages(context.WithoutCancel(ctx), req.agentSessionID)
-	if req.messagePersisted {
-		history = dropLatestMatchingUserMessage(history, req.message)
-	}
-	if req.config.Forked {
-		parentMessages, loadErr := p.loadAgentForkContext(context.WithoutCancel(ctx), req.agentSessionID)
-		if loadErr != nil {
-			res.fail(loadErr)
-			res.Status = string(background.TaskFailed)
-			return res
-		}
-		combined := make([]sdk.Message, 0, len(parentMessages)+len(history))
-		combined = append(combined, parentMessages...)
-		combined = append(combined, history...)
-		history = combined
-	}
 	contextBudgetMaxTokens := req.runtime.ContextBudgetMaxTokens
 	if contextBudgetMaxTokens <= 0 {
 		contextBudgetMaxTokens = req.parentSession.ContextBudgetMaxTokens
+	}
+	history, err := p.loadAgentContext(ctx, req, contextBudgetMaxTokens)
+	if err != nil {
+		if ctx.Err() != nil {
+			return res.cancelledBeforeAttempt(ctx)
+		}
+		res.fail(err)
+		res.Status = string(background.TaskFailed)
+		return res
 	}
 	cfg := SpawnRunConfig{
 		RunID:                    strings.TrimSpace(req.admission.RunID),
@@ -1032,14 +1026,7 @@ func (p *SpawnProvider) runSubagentTask(ctx context.Context, req *agentRequest) 
 			case <-timer.C:
 			case <-ctx.Done():
 				timer.Stop()
-				res.Error = "parent cancelled"
-				res.Cause = context.Cause(ctx)
-				res.AttemptResolved = true
-				res.AttemptOutcome = SpawnAttemptFailure
-				if errors.Is(context.Cause(ctx), context.Canceled) {
-					res.AttemptOutcome = SpawnAttemptAbort
-				}
-				return res
+				return res.cancelledBeforeAttempt(ctx)
 			}
 		}
 
@@ -1173,6 +1160,19 @@ func (r *agentRunResult) fail(err error) {
 	r.Code = string(code)
 	r.Error = definition.Detail
 	r.Cause = err
+}
+
+// cancelledBeforeAttempt is r for a run whose context ended while no attempt
+// was in flight: a stop aborts it, any other end fails it.
+func (r agentRunResult) cancelledBeforeAttempt(ctx context.Context) agentRunResult {
+	r.Error = "parent cancelled"
+	r.Cause = context.Cause(ctx)
+	r.AttemptResolved = true
+	r.AttemptOutcome = SpawnAttemptFailure
+	if errors.Is(r.Cause, context.Canceled) {
+		r.AttemptOutcome = SpawnAttemptAbort
+	}
+	return r
 }
 
 // failed is r with err recorded as its failure.
@@ -1419,24 +1419,6 @@ func (p *SpawnProvider) loadAgentForkContext(ctx context.Context, sessionID stri
 	return messages, nil
 }
 
-func (p *SpawnProvider) loadAgentMessages(ctx context.Context, sessionID string) []sdk.Message {
-	if p.messageService == nil || strings.TrimSpace(sessionID) == "" {
-		return nil
-	}
-	msgs, err := p.messageService.ListBySession(ctx, sessionID)
-	if err != nil {
-		p.logger.WarnContext(ctx, "load subagent messages failed", slog.String("session_id", sessionID), slog.Any("error", err))
-		return nil
-	}
-	out := make([]sdk.Message, 0, len(msgs))
-	for _, msg := range msgs {
-		if converted, ok := sdkMessageFromPersisted(msg); ok {
-			out = append(out, converted)
-		}
-	}
-	return out
-}
-
 // sdkMessageFromPersisted types one history row for the SDK. Rows hold the
 // stored shape (arguments object, output value, nested annotations), so they
 // go through the history codec rather than being decoded as SDK JSON.
@@ -1450,37 +1432,6 @@ func sdkMessageFromPersisted(msg messagepkg.Message) (sdk.Message, bool) {
 		return sdk.Message{}, false
 	}
 	return converted, true
-}
-
-func dropLatestMatchingUserMessage(messages []sdk.Message, query string) []sdk.Message {
-	needle := strings.TrimSpace(query)
-	if needle == "" || len(messages) == 0 {
-		return messages
-	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		msg := messages[i]
-		if msg.Role != sdk.MessageRoleUser {
-			continue
-		}
-		if strings.TrimSpace(messageTextContent(msg)) != needle {
-			continue
-		}
-		out := make([]sdk.Message, 0, len(messages)-1)
-		out = append(out, messages[:i]...)
-		out = append(out, messages[i+1:]...)
-		return out
-	}
-	return messages
-}
-
-func messageTextContent(msg sdk.Message) string {
-	var b strings.Builder
-	for _, part := range msg.Content {
-		if text, ok := part.(sdk.TextPart); ok {
-			b.WriteString(text.Text)
-		}
-	}
-	return b.String()
 }
 
 func validateParentSession(session SessionContext) error {
