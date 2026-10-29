@@ -160,9 +160,10 @@ func retain(ev Event, unfoldable map[int]bool) retention {
 	}
 	budget -= used
 	latest := true
+	boundaries := foldBoundaries(messages, sources)
 	for at := r.cut; at > 0; {
 		start := at - 1
-		for start > 0 && !foldBoundary(messages, start) {
+		for start > 0 && !boundaries[start] {
 			start--
 		}
 		group, stop := false, false
@@ -311,8 +312,9 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 		}
 	}
 	var ends []int
+	boundaries := foldBoundaries(messages, sources)
 	for end := max(first+1, summariesEnd); end <= ev.cut; end++ {
-		if foldBoundary(messages, end) {
+		if boundaries[end] {
 			ends = append(ends, end)
 		}
 	}
@@ -358,9 +360,34 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	return pass, nil
 }
 
-// foldBoundary reports whether a pass may end its read before message end: a
-// tool result never starts what a pass leaves, so a call and its results
-// stay on one side.
+// foldBoundaries reports, for each end from 0 to len(messages), whether a
+// pass may end its read before message end: a tool result never starts what
+// a pass leaves, so a call and its results stay on one side, and no source
+// renders on both sides, so a stored row folds or stays whole. The read path
+// can render one row at two places, a decision result it moves behind its
+// projection and the rest of the row.
+func foldBoundaries(messages []sdk.Message, sources []Source) []bool {
+	last := map[turn.ContextMessageSource]int{}
+	for i, source := range sources {
+		for _, s := range source.Sources {
+			last[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}] = i
+		}
+	}
+	boundaries := make([]bool, len(messages)+1)
+	reach := -1
+	for end := 1; end <= len(messages); end++ {
+		if end-1 < len(sources) {
+			for _, s := range sources[end-1].Sources {
+				reach = max(reach, last[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}])
+			}
+		}
+		boundaries[end] = end == len(messages) || reach < end && foldBoundary(messages, end)
+	}
+	return boundaries
+}
+
+// foldBoundary reports whether a tool result does not start message end, so
+// a pass ending its read there keeps a call and its results on one side.
 func foldBoundary(messages []sdk.Message, end int) bool {
 	if end <= 0 || end > len(messages) {
 		return false
