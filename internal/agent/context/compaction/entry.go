@@ -139,7 +139,7 @@ func (r entryRender) content(mm turn.ModelMessage) string {
 
 	// Legacy OpenAI-style tool-result envelope: ToolCallID lives on the
 	// ModelMessage itself and Content IS the result payload directly, not a
-	// content-part array (see timeline.nativeToolRoleContent). A content-part
+	// content-part array (see timeline.nativeToolRoleParts). A content-part
 	// tool-result, when present, still takes precedence below.
 	if strings.TrimSpace(mm.ToolCallID) != "" && !hasToolResultPart(parts) {
 		return refToolResult(mm.Name, refs, 0, mm.Content)

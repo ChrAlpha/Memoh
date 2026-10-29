@@ -1,6 +1,7 @@
 package timeline
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -53,17 +54,18 @@ func decodeTurnResponseEntry(msg messagepkg.Message, liveCheckpoint bool) (TurnR
 		return TurnResponseEntry{}, false
 	}
 
-	var rawContent json.RawMessage
+	var parts []map[string]any
 	switch role {
 	case "tool":
-		rawContent = nativeToolRoleContent(modelMsg)
+		parts = nativeToolRoleParts(modelMsg)
 	default:
 		if liveCheckpoint {
 			modelMsg = ProjectInterruptedReasoning(modelMsg)
 		}
-		rawContent = nativeAssistantContent(modelMsg, liveCheckpoint)
+		parts = nativeAssistantParts(modelMsg, liveCheckpoint)
 	}
 
+	rawContent := marshalParts(parts)
 	if len(rawContent) == 0 || strings.TrimSpace(string(rawContent)) == "" {
 		return TurnResponseEntry{}, false
 	}
@@ -71,7 +73,7 @@ func decodeTurnResponseEntry(msg messagepkg.Message, liveCheckpoint bool) (TurnR
 	return TurnResponseEntry{
 		RequestedAtMs:   msg.CreatedAt.UnixMilli(),
 		Role:            role,
-		Content:         debugContent(rawContent),
+		Content:         partsDebugText(parts),
 		RawContent:      rawContent,
 		SourceMessageID: msg.ID,
 		DiscussStep:     msg.Metadata[messagepkg.DiscussStepMetadataKey] == true,
@@ -144,11 +146,13 @@ type turnResponsePart struct {
 	ProviderMetadata json.RawMessage `json:"providerMetadata,omitempty"`
 }
 
-func nativeAssistantContent(msg turn.ModelMessage, liveCheckpoint bool) json.RawMessage {
+func nativeAssistantParts(msg turn.ModelMessage, liveCheckpoint bool) []map[string]any {
 	var out []map[string]any
 	modernToolCallIDs := make(map[string]struct{})
-	// 1) Plain-string content (legacy format).
-	if len(msg.Content) > 0 {
+	var parts []turnResponsePart
+	switch contentKind(msg.Content) {
+	case '"':
+		// 1) Plain-string content (legacy format).
 		var plain string
 		if err := json.Unmarshal(msg.Content, &plain); err == nil {
 			plain = strings.TrimSpace(plain)
@@ -159,11 +163,8 @@ func nativeAssistantContent(msg turn.ModelMessage, liveCheckpoint bool) json.Raw
 				})
 			}
 		}
-	}
-
-	// 2) Array-of-parts content (Vercel AI SDK uiMessage format).
-	var parts []turnResponsePart
-	if len(msg.Content) > 0 {
+	case '[':
+		// 2) Array-of-parts content (Vercel AI SDK uiMessage format).
 		_ = json.Unmarshal(msg.Content, &parts)
 	}
 
@@ -244,7 +245,7 @@ func nativeAssistantContent(msg turn.ModelMessage, liveCheckpoint bool) json.Raw
 		out = append(out, nativeToolCallPart(id, name, input, nil))
 	}
 
-	return marshalParts(out)
+	return out
 }
 
 func hasReplayableReasoningPayload(part turnResponsePart) bool {
@@ -260,7 +261,7 @@ func hasJSONPayload(raw json.RawMessage) bool {
 	}
 }
 
-func nativeToolRoleContent(msg turn.ModelMessage) json.RawMessage {
+func nativeToolRoleParts(msg turn.ModelMessage) []map[string]any {
 	// Two possible persistence shapes:
 	//   a) Content is a JSON array of parts with type="tool-result".
 	//   b) Content is the tool result itself, and ToolCallID is set on the
@@ -268,7 +269,7 @@ func nativeToolRoleContent(msg turn.ModelMessage) json.RawMessage {
 	var out []map[string]any
 
 	var parts []turnResponsePart
-	if len(msg.Content) > 0 {
+	if contentKind(msg.Content) == '[' {
 		_ = json.Unmarshal(msg.Content, &parts)
 	}
 	for _, p := range parts {
@@ -283,12 +284,12 @@ func nativeToolRoleContent(msg turn.ModelMessage) json.RawMessage {
 	}
 
 	if len(out) > 0 {
-		return marshalParts(out)
+		return out
 	}
 	if strings.TrimSpace(msg.ToolCallID) != "" {
 		out = append(out, nativeToolResultPart(msg.ToolCallID, msg.Name, msg.Content))
 	}
-	return marshalParts(out)
+	return out
 }
 
 func nativeToolCallPart(id, name string, input, providerMetadata json.RawMessage) map[string]any {
@@ -333,26 +334,33 @@ func marshalParts(parts []map[string]any) json.RawMessage {
 	return raw
 }
 
-func debugContent(raw json.RawMessage) string {
-	var plain string
-	if err := json.Unmarshal(raw, &plain); err == nil {
-		return plain
+// contentKind is the first byte of the JSON value content holds: '"' for
+// plain text, '[' for parts. A decode into the other shape fails only after
+// scanning all of content, so readers branch on it instead.
+func contentKind(content json.RawMessage) byte {
+	trimmed := bytes.TrimLeft(content, " \t\r\n")
+	if len(trimmed) == 0 {
+		return 0
 	}
-	var parts []turnResponsePart
-	if err := json.Unmarshal(raw, &parts); err != nil {
-		return string(raw)
-	}
+	return trimmed[0]
+}
+
+// partsDebugText is the plain-text view of an entry's parts, for readers
+// that cannot take structured content.
+func partsDebugText(parts []map[string]any) string {
 	var texts []string
-	for _, p := range parts {
-		switch strings.ToLower(strings.TrimSpace(p.Type)) {
+	for _, part := range parts {
+		text, _ := part["text"].(string)
+		toolName, _ := part["toolName"].(string)
+		switch part["type"] {
 		case "text":
-			if text := strings.TrimSpace(p.Text); text != "" {
+			if text = strings.TrimSpace(text); text != "" {
 				texts = append(texts, text)
 			}
 		case "tool-call":
-			texts = append(texts, "[tool call: "+strings.TrimSpace(p.ToolName)+"]")
+			texts = append(texts, "[tool call: "+toolName+"]")
 		case "tool-result":
-			texts = append(texts, "[tool result: "+strings.TrimSpace(p.ToolName)+"]")
+			texts = append(texts, "[tool result: "+toolName+"]")
 		}
 	}
 	return strings.Join(texts, "\n")
