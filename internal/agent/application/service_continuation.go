@@ -82,11 +82,7 @@ func (s *Service) prepareContinuationRunConfig(
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	messages, retained := historyMessagesFromRecords(loaded)
 	if req.continuationToolCallID != "" && req.RunHandle.RunID != "" {
-		start := slices.IndexFunc(retained, func(record historyfrag.HistoryRecord) bool {
-			return slices.ContainsFunc(extractAssistantToolCallParts(record.ModelMessage), func(call sdk.ToolCallPart) bool {
-				return call.ToolCallID == req.continuationToolCallID
-			})
-		})
+		start := deferredToolCallIndex(retained, req.continuationToolCallID)
 		if start < 0 {
 			return native.RunConfig{}, fmt.Errorf("%w: deferred call missing from continuation", contextfrag.ErrBudgetUnsatisfied)
 		}
@@ -133,4 +129,19 @@ func (s *Service) prepareContinuationRunConfig(
 	base.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)
 	base.RecoverContextBudget = s.chatBudgetRecovery(req, chatHistoryLayout{historyCount: len(messages), pressureTokens: pressure})
 	return s.prepareRunConfig(ctx, base), nil
+}
+
+// deferredToolCallIndex finds the record that made the deferred call. The
+// call is the run's latest, so the search starts from the newest record and
+// converts only the few after it; a provider that reuses call IDs across
+// turns cannot match an older call first.
+func deferredToolCallIndex(records []historyfrag.HistoryRecord, toolCallID string) int {
+	for i := len(records) - 1; i >= 0; i-- {
+		if slices.ContainsFunc(extractAssistantToolCallParts(records[i].ModelMessage), func(call sdk.ToolCallPart) bool {
+			return call.ToolCallID == toolCallID
+		}) {
+			return i
+		}
+	}
+	return -1
 }

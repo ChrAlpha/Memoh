@@ -175,3 +175,21 @@ func TestContinuationRecoversBudgetKeepingTheResumedTurn(t *testing.T) {
 		t.Fatalf("continuation did not run on the recovered history: %d messages", len(got.Messages))
 	}
 }
+
+// A provider that reuses call IDs across turns names an earlier call the
+// same; the continuation resumes after the latest one.
+func TestDeferredToolCallIndexFindsTheLatestCall(t *testing.T) {
+	t.Parallel()
+	call := func(id string) historyfrag.HistoryRecord {
+		return historyfrag.HistoryRecord{ModelMessage: historyfrag.ToStoredModelMessages([]sdk.Message{{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{
+			sdk.ToolCallPart{ToolCallID: id, ToolName: "ask_user"},
+		}}})[0]}
+	}
+	records := []historyfrag.HistoryRecord{call("call_0"), call("call_1"), call("call_0"), call("call_2")}
+	if got := deferredToolCallIndex(records, "call_0"); got != 2 {
+		t.Fatalf("index = %d, want the latest call at 2", got)
+	}
+	if got := deferredToolCallIndex(records, "call_9"); got != -1 {
+		t.Fatalf("index = %d, want -1 for a missing call", got)
+	}
+}
