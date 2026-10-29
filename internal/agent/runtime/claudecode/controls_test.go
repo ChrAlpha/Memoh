@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/runtime/claudecode/claudecfg"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -400,13 +402,15 @@ func TestClaudeResultUsageAndMetadataAreStable(t *testing.T) {
 	// Keep the run open across two native results.
 	feed(t, r, `{"type":"result","uuid":"first","subtype":"success","queued_turn_count":1,"usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":20}}`)
 	feed(t, r, `{"type":"result","uuid":"first","subtype":"success","queued_turn_count":1,"usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":20}}`)
-	feed(t, r, `{"type":"result","uuid":"second","subtype":"success","usage":{"input_tokens":200,"output_tokens":30,"cache_read_input_tokens":40}}`)
+	feed(t, r, `{"type":"result","uuid":"second","subtype":"success","usage":{"input_tokens":200,"output_tokens":30,"cache_read_input_tokens":40,"cache_creation_input_tokens":15}}`)
 	r.runtimeMetadata["model"] = "first"
 	result, err := r.buildResult("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Usage.InputTokens != 300 || result.Usage.OutputTokens != 40 || result.Usage.CachedInputTokens != 60 {
+	// sdk.Usage counts the cache reads and writes in InputTokens.
+	if result.Usage.InputTokens != 375 || result.Usage.TotalTokens != 415 || result.Usage.OutputTokens != 40 || result.Usage.CachedInputTokens != 60 ||
+		result.Usage.InputTokenDetails != (sdk.InputTokenDetail{NoCacheTokens: 300, CacheReadTokens: 60, CacheWriteTokens: 15}) {
 		t.Fatalf("usage: %+v", result.Usage)
 	}
 	r.runtimeMetadata["model"] = "later"

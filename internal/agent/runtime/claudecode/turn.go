@@ -890,12 +890,20 @@ func (t *turnRunner) buildResult(storedSessionID string) (external.PromptResult,
 	}
 	out := external.PromptResult{Output: withoutNoResponseSentinel(recorder.Messages(finalText)), Text: finalText, SteerInputIDs: steerIDs}
 	if t.hasUsage {
+		// Anthropic's input_tokens excludes the cache counters; sdk.Usage
+		// counts them in InputTokens, as the native providers do.
 		usage := t.usage
+		input := usage.InputTokens + usage.CacheReadInputTokens + usage.CacheCreationInputTokens
 		out.Usage = &sdk.Usage{
-			InputTokens:       usage.InputTokens,
+			InputTokens:       input,
 			OutputTokens:      usage.OutputTokens,
-			TotalTokens:       usage.InputTokens + usage.OutputTokens,
+			TotalTokens:       input + usage.OutputTokens,
 			CachedInputTokens: usage.CacheReadInputTokens,
+			InputTokenDetails: sdk.InputTokenDetail{
+				NoCacheTokens:    usage.InputTokens,
+				CacheReadTokens:  usage.CacheReadInputTokens,
+				CacheWriteTokens: usage.CacheCreationInputTokens,
+			},
 		}
 	}
 	if t.sessionID != "" && t.sessionID != storedSessionID {

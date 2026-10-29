@@ -155,7 +155,8 @@ func TestClaudeTurnMapping(t *testing.T) {
 	if result.Text != "Done. Tests pass." {
 		t.Fatalf("text = %q", result.Text)
 	}
-	if result.Usage == nil || result.Usage.InputTokens != 1200 || result.Usage.CachedInputTokens != 800 {
+	if result.Usage == nil || result.Usage.InputTokens != 2000 || result.Usage.CachedInputTokens != 800 ||
+		result.Usage.InputTokenDetails != (sdk.InputTokenDetail{NoCacheTokens: 1200, CacheReadTokens: 800}) {
 		t.Fatalf("usage: %+v", result.Usage)
 	}
 	if result.RuntimeMetadata[metadataSessionIDKey] != "sess-abc" {

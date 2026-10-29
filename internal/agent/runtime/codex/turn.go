@@ -253,12 +253,21 @@ func (t *turnState) handleNotification(decoded any) {
 		if t.usage == nil {
 			t.usage = &sdk.Usage{}
 		}
+		// Codex's inputTokens already counts the cached and cache-write tokens.
 		last := params.TokenUsage.Last
+		read, write := int(last.CachedInputTokens), 0
+		if last.CacheWriteInputTokens != nil {
+			write = int(*last.CacheWriteInputTokens)
+		}
 		t.usage.InputTokens += int(last.InputTokens)
 		t.usage.OutputTokens += int(last.OutputTokens)
 		t.usage.TotalTokens += int(last.TotalTokens)
 		t.usage.ReasoningTokens += int(last.ReasoningOutputTokens)
-		t.usage.CachedInputTokens += int(last.CachedInputTokens)
+		t.usage.OutputTokenDetails.ReasoningTokens += int(last.ReasoningOutputTokens)
+		t.usage.CachedInputTokens += read
+		t.usage.InputTokenDetails.NoCacheTokens += int(last.InputTokens) - read - write
+		t.usage.InputTokenDetails.CacheReadTokens += read
+		t.usage.InputTokenDetails.CacheWriteTokens += write
 		totals := params.TokenUsage.Total
 		t.threadTotals = &totals
 		t.contextWindow = params.TokenUsage.ModelContextWindow
