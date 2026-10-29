@@ -32,8 +32,9 @@ func planFoldByEveryRead(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 		return foldPlan{}, err
 	}
 	var smaller error
+	boundaries := foldBoundaries(ev.Request.Messages, ev.Sources)
 	for end := ev.cut; end > 0; end-- {
-		if end < summariesEnd || !foldBoundary(ev.Request.Messages, end) {
+		if end < summariesEnd || !boundaries[end] {
 			continue
 		}
 		plan := spanPlan(ev, kept, end)
@@ -86,7 +87,16 @@ func randomEvent(rng *rand.Rand) Event {
 		add(SummaryMessage(text(2000)), Source{Sources: []turn.ContextMessageSource{{Kind: "summary", ID: uuid.NewString()}}})
 	}
 	for i := range rng.IntN(40) + 2 {
-		switch rng.IntN(5) {
+		switch rng.IntN(6) {
+		case 5:
+			// A decision result moved behind its projection renders the same
+			// row as the rest of that row, after another call.
+			result := row()
+			projection, call := fmt.Sprintf("decision_%d", i), fmt.Sprintf("call_%d", i)
+			add(callMessage(projection), Source{Sources: row()})
+			add(resultMessage(projection, text(3000)), Source{Sources: result})
+			add(callMessage(call), Source{Sources: row()})
+			add(resultMessage(call, text(3000)), Source{Sources: result})
 		case 0:
 			add(sdk.UserMessage("INPUT "+text(800)), Source{Sources: row(), Anchor: rng.IntN(2) == 0})
 		case 1:
@@ -122,10 +132,69 @@ func TestPlanFoldFindsThePassEveryReadFinds(t *testing.T) {
 		ev := randomEvent(rng)
 		got, gotErr := planFold(ev, nil)
 		want, wantErr := planFoldByEveryRead(ev, nil)
+		assertRowsFoldWhole(t, ev, got)
 		if got.end != want.end || got.maxTokens != want.maxTokens || ReasonOf(gotErr) != ReasonOf(wantErr) || (gotErr == nil) != (wantErr == nil) {
 			t.Fatalf("event %d (%d messages, cut %d, window %d, fixed %v): planned end=%d max_tokens=%d err=%v, want end=%d max_tokens=%d err=%v",
 				i, len(ev.Request.Messages), ev.cut, ev.Window, ev.FixedOutput, got.end, got.maxTokens, gotErr, want.end, want.maxTokens, wantErr)
 		}
+	}
+}
+
+// assertRowsFoldWhole fails when plan folds a row it also leaves rendered:
+// committing it would drop the part the request keeps.
+func assertRowsFoldWhole(t *testing.T, ev Event, plan foldPlan) {
+	t.Helper()
+	folded := map[turn.ContextMessageSource]bool{}
+	for _, source := range plan.folded {
+		folded[source] = true
+	}
+	for i, source := range ev.Sources {
+		for _, s := range source.Sources {
+			if folded[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}] && (i >= plan.end || plan.keep[i]) {
+				t.Fatalf("plan folds %s:%s but keeps message %d that renders it (end %d)", s.Kind, s.ID, i, plan.end)
+			}
+		}
+	}
+}
+
+// A row the read path renders at two places, a moved decision result and
+// the rest of the row after another call, folds whole or not at all: a pass
+// that ended between them would commit the row as folded while the request
+// keeps its second part, and a reload would lose that result.
+func TestPlanFoldKeepsARowRenderedTwiceWhole(t *testing.T) {
+	t.Parallel()
+	source := func(id string) Source {
+		return Source{Sources: []turn.ContextMessageSource{{Kind: "history", ID: id}}}
+	}
+	messages := []sdk.Message{
+		callMessage("decision"), resultMessage("decision", strings.Repeat("approved output ", 600)),
+		callMessage("call"), resultMessage("call", strings.Repeat("later output ", 600)),
+		sdk.UserMessage("continue"),
+	}
+	sources := []Source{source("projection-row"), source("result-row"), source("call-row"), source("result-row"), {Sources: source("input-row").Sources, Anchor: true}}
+	boundaries := foldBoundaries(messages, sources)
+	for end, want := range []bool{false, false, false, false, true, true} {
+		if boundaries[end] != want {
+			t.Fatalf("boundary before message %d = %v, want %v", end, boundaries[end], want)
+		}
+	}
+	ev := Event{
+		Request:   sdk.Request{System: "You are the bot.", Messages: messages},
+		Sources:   sources,
+		Window:    8000,
+		Allowance: 2500,
+
+		MaxOutputTokens: 1000,
+		AnchorPolicy:    AnchorsCapped,
+	}
+	ev.retention = retain(ev, nil)
+	plan, err := planFold(ev, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertRowsFoldWhole(t, ev, plan)
+	if plan.end != 4 {
+		t.Fatalf("pass ends before message %d, want 4: the moved result's row reaches the second call group", plan.end)
 	}
 }
 
