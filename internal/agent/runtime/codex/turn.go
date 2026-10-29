@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -45,15 +46,18 @@ type turnState struct {
 
 	done chan struct{}
 
-	mu            sync.Mutex
-	turnID        string
-	followsGoal   bool
-	goalStarting  bool
-	goalActive    bool
-	steers        map[string]*pendingSteer
-	events        []event.StreamEvent
-	finalText     string
-	usage         *sdk.Usage
+	mu           sync.Mutex
+	turnID       string
+	followsGoal  bool
+	goalStarting bool
+	goalActive   bool
+	steers       map[string]*pendingSteer
+	events       []event.StreamEvent
+	finalText    string
+	usage        *sdk.Usage
+	// lastUsage is the thread's previous usage snapshot, seeded from the app
+	// server when the turn registers.
+	lastUsage     *protocol.ThreadTokenUsage
 	threadTotals  *protocol.TokenUsageBreakdown
 	contextWindow *int64
 	turn          *protocol.Turn
@@ -244,30 +248,39 @@ func (t *turnState) handleNotification(decoded any) {
 		}
 		t.emit(event.StreamEvent{Type: event.ToolCallProgress, ToolCallID: params.ItemID, ToolName: t.toolName(params.ItemID), Progress: params.Delta})
 	case *protocol.ThreadTokenUsageUpdatedNotification:
-		if !t.acceptsTurn(params.TurnID) {
-			return
-		}
 		// `last` is the most recent model request's usage and the turn spans
 		// several requests, so the turn total is the running sum of `last`.
+		// Every snapshot on the thread is the baseline for the next one, even
+		// one this turn does not own: resuming replays earlier turns' usage
+		// before turn/started. Only this turn's requests are counted, and they
+		// come after its id is known.
+		turnID := strings.TrimSpace(params.TurnID)
 		t.mu.Lock()
-		if t.usage == nil {
-			t.usage = &sdk.Usage{}
+		request := t.countsRequest(params.TokenUsage)
+		if t.turnID != "" && turnID != "" && turnID != t.turnID {
+			t.mu.Unlock()
+			return
 		}
-		// Codex's inputTokens already counts the cached and cache-write tokens.
-		last := params.TokenUsage.Last
-		read, write := int(last.CachedInputTokens), 0
-		if last.CacheWriteInputTokens != nil {
-			write = int(*last.CacheWriteInputTokens)
+		if request && t.turnID != "" {
+			if t.usage == nil {
+				t.usage = &sdk.Usage{}
+			}
+			// Codex's inputTokens already counts the cached and cache-write tokens.
+			last := params.TokenUsage.Last
+			read, write := int(last.CachedInputTokens), 0
+			if last.CacheWriteInputTokens != nil {
+				write = int(*last.CacheWriteInputTokens)
+			}
+			t.usage.InputTokens += int(last.InputTokens)
+			t.usage.OutputTokens += int(last.OutputTokens)
+			t.usage.TotalTokens += int(last.TotalTokens)
+			t.usage.ReasoningTokens += int(last.ReasoningOutputTokens)
+			t.usage.OutputTokenDetails.ReasoningTokens += int(last.ReasoningOutputTokens)
+			t.usage.CachedInputTokens += read
+			t.usage.InputTokenDetails.NoCacheTokens += int(last.InputTokens) - read - write
+			t.usage.InputTokenDetails.CacheReadTokens += read
+			t.usage.InputTokenDetails.CacheWriteTokens += write
 		}
-		t.usage.InputTokens += int(last.InputTokens)
-		t.usage.OutputTokens += int(last.OutputTokens)
-		t.usage.TotalTokens += int(last.TotalTokens)
-		t.usage.ReasoningTokens += int(last.ReasoningOutputTokens)
-		t.usage.OutputTokenDetails.ReasoningTokens += int(last.ReasoningOutputTokens)
-		t.usage.CachedInputTokens += read
-		t.usage.InputTokenDetails.NoCacheTokens += int(last.InputTokens) - read - write
-		t.usage.InputTokenDetails.CacheReadTokens += read
-		t.usage.InputTokenDetails.CacheWriteTokens += write
 		totals := params.TokenUsage.Total
 		t.threadTotals = &totals
 		t.contextWindow = params.TokenUsage.ModelContextWindow
@@ -660,6 +673,18 @@ func (t *turnState) emitApprovalRequest(req approval.Request) bool {
 }
 
 // result assembles the durable outcome after the turn settled.
+// countsRequest reports whether a usage notification reports a model request,
+// and records it as the thread's latest snapshot. Codex also sends the
+// snapshot again unchanged when only rate limits move, and sends a last with
+// no input or output, only an estimated total, after recomputing the context
+// or filling it on overflow. A request always has input and changes the
+// snapshot. The caller holds t.mu.
+func (t *turnState) countsRequest(usage protocol.ThreadTokenUsage) bool {
+	repeated := t.lastUsage != nil && reflect.DeepEqual(*t.lastUsage, usage)
+	t.lastUsage = &usage
+	return !repeated && (usage.Last.InputTokens > 0 || usage.Last.OutputTokens > 0)
+}
+
 func (t *turnState) result() (external.PromptResult, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -214,6 +214,11 @@ func (s *appServer) ensureAuth(ctx context.Context, cfg Config) error {
 // registerTurn claims the thread's turn slot for routing inbound traffic.
 func (s *appServer) registerTurn(threadID string, turn *turnState) {
 	s.mu.Lock()
+	// Seeded before the turn is reachable: the read loop updates the cache
+	// and dispatches under the same lock, so no snapshot falls in between.
+	if usage, seen := s.threadUsage[threadID]; seen {
+		turn.lastUsage = &usage
+	}
 	s.turns[threadID] = turn
 	s.mu.Unlock()
 }
