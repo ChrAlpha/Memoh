@@ -53,19 +53,6 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 	createdFrom := pgtype.Timestamptz{Time: cfg.CandidatesFrom, Valid: !cfg.CandidatesFrom.IsZero()}
 	createdBefore := pgtype.Timestamptz{Time: cfg.CandidatesBefore, Valid: !cfg.CandidatesBefore.IsZero()}
 	viewIDs, viewExternalIDs := viewFilter(cfg)
-	measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{
-		SessionID:          sessionUUID,
-		CreatedFrom:        createdFrom,
-		CreatedBefore:      createdBefore,
-		MessageIds:         viewIDs,
-		ExternalMessageIds: viewExternalIDs,
-	})
-	if err != nil {
-		return Pass{}, false, err
-	}
-	if measure.CandidateCount == 0 && len(parents) == 0 {
-		return Pass{}, false, nil
-	}
 	boundedRows, err := s.queries.ListUncompactedMessagesBySessionWithinBytes(ctx, sqlc.ListUncompactedMessagesBySessionWithinBytesParams{
 		SessionID:          sessionUUID,
 		CreatedFrom:        createdFrom,
@@ -91,8 +78,25 @@ func (s *Service) doCompaction(ctx context.Context, botUUID pgtype.UUID, session
 			slog.Int64("loaded_bytes", boundedRows[len(boundedRows)-1].CumulativeBytes),
 			slog.Int64("read_max_bytes", readMaxBytes),
 			slog.Bool("truncated", truncatedRead))
-	} else if measure.CandidateCount > 0 {
-		return Pass{}, false, failed(ReasonInputOverflow, fmt.Errorf("%w: largest_candidate_bytes=%d read_max_bytes=%d", errCompactionInputOverflow, measure.LargestCandidateBytes, readMaxBytes))
+	} else {
+		// The read admits no row either when there is none or when the oldest
+		// does not fit on its own; only the measure tells the two apart.
+		measure, err := s.queries.MeasureUncompactedMessagesBySession(ctx, sqlc.MeasureUncompactedMessagesBySessionParams{
+			SessionID:          sessionUUID,
+			CreatedFrom:        createdFrom,
+			CreatedBefore:      createdBefore,
+			MessageIds:         viewIDs,
+			ExternalMessageIds: viewExternalIDs,
+		})
+		if err != nil {
+			return Pass{}, false, err
+		}
+		if measure.CandidateCount > 0 {
+			return Pass{}, false, failed(ReasonInputOverflow, fmt.Errorf("%w: largest_candidate_bytes=%d read_max_bytes=%d", errCompactionInputOverflow, measure.LargestCandidateBytes, readMaxBytes))
+		}
+		if len(parents) == 0 {
+			return Pass{}, false, nil
+		}
 	}
 
 	messages, barrierCount := candidatesFromRows(rows)

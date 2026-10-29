@@ -106,6 +106,7 @@ type fakeQueries struct {
 	listPanic        bool
 	listStarted      chan struct{}
 	listRelease      <-chan struct{}
+	oversizedHead    bool // the bounded read admits no row: the oldest exceeds its budget
 	onComplete       func()
 	markedRowCount   *int64
 	createdLogID     pgtype.UUID
@@ -165,20 +166,20 @@ func (f *fakeQueries) ListUncompactedMessagesBySession(_ context.Context, _ pgty
 }
 
 func (f *fakeQueries) MeasureUncompactedMessagesBySession(_ context.Context, _ sqlc.MeasureUncompactedMessagesBySessionParams) (sqlc.MeasureUncompactedMessagesBySessionRow, error) {
-	var bytes int64
+	f.queryCalls = append(f.queryCalls, "measure")
+	var measure sqlc.MeasureUncompactedMessagesBySessionRow
 	for _, row := range f.uncompacted {
-		bytes += int64(len(row.Content) + len(row.Metadata) + len(row.Usage) + len(row.DisplayText.String))
+		bytes := payloadBytesForTest(row.Content, row.Metadata, row.Usage, row.DisplayText.String)
+		measure.CandidateCount++
+		measure.CandidateBytes += bytes
+		measure.LargestCandidateBytes = max(measure.LargestCandidateBytes, bytes)
 	}
-	count := int64(len(f.uncompacted))
-	if count == 0 && f.listStarted != nil {
-		count = 1
-	}
-	return sqlc.MeasureUncompactedMessagesBySessionRow{CandidateCount: count, CandidateBytes: bytes}, nil
+	return measure, nil
 }
 
 func (f *fakeQueries) ListUncompactedMessagesBySessionWithinBytes(ctx context.Context, _ sqlc.ListUncompactedMessagesBySessionWithinBytesParams) ([]sqlc.ListUncompactedMessagesBySessionWithinBytesRow, error) {
 	legacy, err := f.ListUncompactedMessagesBySession(ctx, pgtype.UUID{})
-	if err != nil {
+	if err != nil || f.oversizedHead {
 		return nil, err
 	}
 	return boundedRowsForTest(legacy), nil
@@ -613,6 +614,42 @@ func TestDoCompactionEmptyHistoryNoOp(t *testing.T) {
 	}
 	if q.created {
 		t.Fatal("empty history must not create a log row")
+	}
+}
+
+// The backlog is sized from the bounded read itself; the full measure runs
+// only to tell an empty backlog from an oversized oldest row.
+func TestDoCompactionMeasuresOnlyWhenTheReadAdmitsNothing(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	if _, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(&stubModel{summary: "S"}, 450)); err != nil {
+		t.Fatalf("compact: %v", err)
+	}
+	if slices.Contains(q.queryCalls, "measure") {
+		t.Fatalf("calls = %v, want no measure beside a read that admitted rows", q.queryCalls)
+	}
+
+	empty := &fakeQueries{}
+	if _, err := newMachineryService(empty).compactOnce(context.Background(), machineryConfig(&stubModel{}, 450)); err != nil {
+		t.Fatalf("compact empty: %v", err)
+	}
+	if !slices.Equal(empty.queryCalls, []string{"measure"}) {
+		t.Fatalf("calls = %v, want one measure for an empty read", empty.queryCalls)
+	}
+}
+
+func TestDoCompactionOversizedOldestRowFailsBeforeClaiming(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQueries{uncompacted: machineryCorpus(t), oversizedHead: true}
+	stub := &stubModel{summary: "unused"}
+	_, err := newMachineryService(q).compactOnce(context.Background(), machineryConfig(stub, 450))
+	if ReasonOf(err) != ReasonInputOverflow || !errors.Is(err, errCompactionInputOverflow) {
+		t.Fatalf("err = %v, want input overflow", err)
+	}
+	if stub.calls != 0 || q.created || len(q.markedIDs) != 0 {
+		t.Fatalf("an oversized oldest row must fail before claiming (calls=%d created=%v marked=%d)", stub.calls, q.created, len(q.markedIDs))
 	}
 }
 

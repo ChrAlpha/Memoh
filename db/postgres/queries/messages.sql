@@ -3225,8 +3225,9 @@ WHERE m.team_id = public.memoh_current_team_id()
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
 -- name: MeasureUncompactedMessagesBySession :one
--- Metadata-only companion for the bounded compaction read. It never returns
--- message payloads and exposes the oversized-head degradation explicitly.
+-- Metadata-only companion for the bounded compaction read, asked only when
+-- that read admits no row. It never returns message payloads and tells an
+-- empty backlog from one whose oldest row is oversized.
 SELECT
   COUNT(*)::BIGINT AS candidate_count,
   COALESCE(SUM(

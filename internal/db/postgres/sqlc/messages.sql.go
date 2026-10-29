@@ -6251,8 +6251,9 @@ type MeasureUncompactedMessagesBySessionRow struct {
 	LargestCandidateBytes int64 `json:"largest_candidate_bytes"`
 }
 
-// Metadata-only companion for the bounded compaction read. It never returns
-// message payloads and exposes the oversized-head degradation explicitly.
+// Metadata-only companion for the bounded compaction read, asked only when
+// that read admits no row. It never returns message payloads and tells an
+// empty backlog from one whose oldest row is oversized.
 func (q *Queries) MeasureUncompactedMessagesBySession(ctx context.Context, arg MeasureUncompactedMessagesBySessionParams) (MeasureUncompactedMessagesBySessionRow, error) {
 	row := q.db.QueryRow(ctx, measureUncompactedMessagesBySession,
 		arg.SessionID,
