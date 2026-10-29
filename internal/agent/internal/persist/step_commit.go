@@ -51,6 +51,9 @@ type StepCommitter struct {
 	// checkpointed means an interrupted step was written: the run already has
 	// a history row for the model call it stopped in.
 	checkpointed bool
+	// contextRecorded means the run's request row records the runtime context
+	// its request carried.
+	contextRecorded bool
 	// failure is the first error a step's write ended with, other than losing
 	// the run's ownership.
 	failure error
@@ -308,8 +311,10 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 	}
 	c.stampSteerTurn(inputs)
 	agentStep := messagepkg.AgentStep{RunID: c.req.RunID, Messages: inputs, Interrupted: interrupted}
+	recordsContext := false
 	if firstWrite && len(inputs) > 0 {
 		agentStep.RequestMetadata = c.runtimeContextMetadata(ctx)
+		recordsContext = len(c.rc.RunConfig.ContextTurn) > 0 && agentStep.RequestMetadata != nil
 	}
 	if !c.replacementStarted && len(inputs) > 0 {
 		agentStep.Replacement = c.req.TurnReplacement
@@ -352,6 +357,9 @@ func (c *StepCommitter) persist(ctx context.Context, stepIndex int, record *step
 	}
 	if agentStep.Replacement != nil {
 		c.replacementStarted = true
+	}
+	if recordsContext {
+		c.contextRecorded = true
 	}
 	if len(persisted) > 0 {
 		c.rc.RunConfig.ContextLifecycle.SetAssistantMessageID(runreq.LastPersistedAssistantMessageID(persisted))
@@ -657,6 +665,16 @@ func (c *StepCommitter) RequestMessageID() string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.turnRequestMessageID
+}
+
+// RuntimeContextRecorded reports whether the run's request row records the
+// runtime context its request carried, so the row is read back with it. A
+// steer moves RequestMessageID on; the context stays recorded on the request
+// it was carried by.
+func (c *StepCommitter) RuntimeContextRecorded() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.contextRecorded
 }
 
 // Pressure is the run's running estimate of what its context holds.

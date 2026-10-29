@@ -44,6 +44,7 @@ func (c *Compactor) BindStep(cfg *native.RunConfig, req runreq.ChatRequest, comm
 		extras:           ephemeralRunMessages(*cfg),
 		request:          unstoredRequestMessage(*cfg, req),
 		turnContext:      turnContextMessages(*cfg),
+		contextRecorded:  committer.RuntimeContextRecorded,
 		inlineParts:      inlineRunParts(*cfg),
 		pressure:         committer.Pressure(),
 	}
@@ -99,9 +100,10 @@ type stepRun struct {
 	// no row holds it yet.
 	request []sdk.Message
 	// turnContext is the runtime context the run's request carries right
-	// after the user's message (recalled memory, requested skills). The run
-	// supplies it itself, whether or not its request row records it yet.
-	turnContext []sdk.Message
+	// after the user's message (recalled memory, requested skills), as Prepare
+	// placed it. contextRecorded reports whether the request row records it.
+	turnContext     []sdk.Message
+	contextRecorded func() bool
 	// inlineParts are the images and attachments the run's user message
 	// carried inline; the stored row holds only the text.
 	inlineParts []sdk.MessagePart
@@ -132,6 +134,17 @@ func turnContextMessages(cfg native.RunConfig) []sdk.Message {
 		messages = append(messages, item.Message)
 	}
 	return messages
+}
+
+// suppliedContext is the runtime context the run puts after its request
+// itself: what Prepare placed there, until the request row records it. From
+// then on the row holds it like any request in the history, and the history
+// replays it, summarizes it and prices it with the row.
+func (c *stepRun) suppliedContext() []sdk.Message {
+	if c.contextRecorded != nil && c.contextRecorded() {
+		return nil
+	}
+	return c.turnContext
 }
 
 // unstoredRequestMessage is the user's message a run sends from its query,
@@ -210,11 +223,12 @@ type rebuiltConversation struct {
 }
 
 // fixedTokens is the part of the run's current request that no compaction can
-// shrink: the system prompt and tools, plus the messages the compaction never
-// claims. Those are a replacement's own messages from tailStart on, or
-// otherwise the run's notice and runtime context, and the user's message
-// while no step of it is stored. Everything else in the request is a row the
-// compaction may claim.
+// shrink: the system prompt and tools, plus the messages no row the
+// compaction reads holds. Those are a replacement's own messages from
+// tailStart on, or otherwise the run's notice, the runtime context it
+// supplies, and the user's message while no step of it is stored. Everything
+// else in the request is a row the compaction may claim, with the runtime
+// context the row records.
 func (c *stepRun) fixedTokens(input native.StepContextInput) int {
 	if c.replacement {
 		if c.tailStart < 0 || c.tailStart > len(input.Messages) {
@@ -222,7 +236,7 @@ func (c *stepRun) fixedTokens(input native.StepContextInput) int {
 		}
 		return input.FixedTokens + runreq.RequestInputTokens(0, input.Messages[c.tailStart:])
 	}
-	own := append(append([]sdk.Message(nil), c.extras...), c.turnContext...)
+	own := append(append([]sdk.Message(nil), c.extras...), c.suppliedContext()...)
 	if c.requestMessageID() == "" {
 		own = append(own, c.request...)
 	}
@@ -250,7 +264,10 @@ func (c *stepRun) rebuild(ctx context.Context, input native.StepContextInput) (r
 		req.RequiredHistoryMessageID = ""
 	}
 	read := transcript.ForChat(transcript.PurposeContinuation, req, c.budget)
-	if !c.replacement {
+	supplied := c.suppliedContext()
+	if !c.replacement && len(supplied) > 0 {
+		// The run's request row does not record what the run supplies yet;
+		// whatever it holds is not what the run sends.
 		read.OwnRequestMessageID = c.requestMessageID()
 	}
 	assembled, err := c.compactor.transcript.Assemble(ctx, read)
@@ -287,7 +304,7 @@ func (c *stepRun) rebuild(ctx context.Context, input native.StepContextInput) (r
 		// The user's message and every step after it are rows once the
 		// first step is stored. Before the run's first call none are, and
 		// the message is the one the run sends from its query. The runtime
-		// context follows the message either way, as the run sends it.
+		// context follows the message, from its row once that records it.
 		history, request, steps := assembled.Records, append([]sdk.Message(nil), c.request...), []historyfrag.HistoryRecord(nil)
 		split, found := recordIndex(assembled.Records, c.requestMessageID())
 		if found {
@@ -298,7 +315,7 @@ func (c *stepRun) rebuild(ctx context.Context, input native.StepContextInput) (r
 		messages = append(messages, c.extras...)
 		attachInlineParts(request, c.inlineParts, found)
 		messages = append(messages, request...)
-		messages = append(messages, c.turnContext...)
+		messages = append(messages, supplied...)
 		messages = append(messages, stepMessages(steps)...)
 		rebuilt.messages = messages
 	}

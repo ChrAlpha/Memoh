@@ -58,20 +58,23 @@ func TestRunEndCompactionCarriesTheRunsFixedPart(t *testing.T) {
 }
 
 // Inside a run the fixed part is the loop's own fixed cost plus the messages
-// the compaction never claims: the run's notice, its runtime context, and its
-// user message while no row holds it.
+// no row the compaction reads holds: the run's notice, the runtime context it
+// supplies, and its user message while no row holds it. Once the request row
+// records the runtime context, the compaction prices it with that row, so it
+// is no longer fixed.
 func TestStepCompactionFixedPartCountsTheRunsOwnMessages(t *testing.T) {
 	t.Parallel()
 
 	extra := sdk.UserMessage("workspace notice: " + string(make([]byte, 400)))
 	recall := sdk.UserMessage("recalled memory: " + string(make([]byte, 400)))
 	request := sdk.UserMessage("the user's message, not yet a row")
-	requestID := ""
+	requestID, recorded := "", false
 	run := &stepRun{
 		requestMessageID: func() string { return requestID },
 		extras:           []sdk.Message{extra},
 		request:          []sdk.Message{request},
 		turnContext:      []sdk.Message{recall},
+		contextRecorded:  func() bool { return recorded },
 	}
 	input := native.StepContextInput{FixedTokens: 1000}
 	want := 1000 + runreq.RequestInputTokens(0, []sdk.Message{extra, recall, request})
@@ -79,12 +82,18 @@ func TestStepCompactionFixedPartCountsTheRunsOwnMessages(t *testing.T) {
 		t.Fatalf("fixedTokens = %d, want %d (fixed 1000 plus the notice, runtime context and request)", got, want)
 	}
 
-	// Once the request is a row the compaction may read it, but never its
-	// runtime context, which the run supplies.
+	// An admitted request is a row before the run steps, which records the
+	// runtime context on it only with its first step.
 	requestID = "request"
 	want = 1000 + runreq.RequestInputTokens(0, []sdk.Message{extra, recall})
 	if got := run.fixedTokens(input); got != want {
 		t.Fatalf("fixedTokens = %d, want %d (fixed 1000 plus the notice and runtime context)", got, want)
+	}
+
+	recorded = true
+	want = 1000 + runreq.RequestInputTokens(0, []sdk.Message{extra})
+	if got := run.fixedTokens(input); got != want {
+		t.Fatalf("fixedTokens = %d, want %d (fixed 1000 plus the notice; the row prices its runtime context)", got, want)
 	}
 }
 

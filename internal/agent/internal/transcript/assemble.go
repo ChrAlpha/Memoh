@@ -37,8 +37,8 @@ type Request struct {
 	// materialize; zero uses the absolute cap.
 	Budget int
 	// OwnRequestMessageID is the request row of the run the context is for,
-	// when the history holds it. The run supplies that request's runtime
-	// context itself, so the row is not followed by what it recorded.
+	// when the run supplies that request's runtime context itself. The row
+	// is then not followed by what it recorded.
 	OwnRequestMessageID string
 }
 

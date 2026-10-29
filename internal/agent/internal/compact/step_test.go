@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -18,10 +19,12 @@ import (
 	"github.com/felinics/memoh/internal/agent/internal/persist"
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/step"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/runtimefence"
 )
 
 // overHardShare is a request past the hard share of syncTestBudget; the
@@ -131,27 +134,173 @@ func TestStepCompactionAtTheFirstCallKeepsTheRequestsRuntimeContext(t *testing.T
 	assertSDKTexts(t, got, "<summary>short</summary>", req.Query, "recalled memory", "requested skill")
 }
 
-// Once the run's first step records the runtime context on its request row,
-// the rebuild still sends it once, right after the request and before the
-// run's steps: the run supplies it and the row is read back bare.
-func TestStepCompactionSendsTheRecordedRuntimeContextOnce(t *testing.T) {
-	t.Parallel()
-
-	run, runner, history := newStepCompactionFixture(t, compaction.StatusOK)
-	runner.onRun = history.markCompacted
-	recall := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.UserMessage("recalled memory")})[0]
-	metadata, err := historyfrag.RuntimeContextMetadata([]historyfrag.RuntimeContext{{Kind: messagepkg.RuntimeContextMemoryRecall, Message: recall}})
+// recordedContext is request-row metadata recording the runtime context the
+// request carried, as the run's first step writes it.
+func recordedContext(t *testing.T, kind string, texts ...string) map[string]any {
+	t.Helper()
+	items := make([]historyfrag.RuntimeContext, 0, len(texts))
+	for _, message := range runreq.SDKMessagesToModelMessages(userMessages(texts...)) {
+		items = append(items, historyfrag.RuntimeContext{Kind: kind, Message: message})
+	}
+	metadata, err := historyfrag.RuntimeContextMetadata(items)
 	if err != nil {
 		t.Fatal(err)
 	}
-	history.small = []messagepkg.Message{
-		agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase),
-		agenttest.AssembleRow(t, "request", sdk.UserMessage("the request"), agenttest.AssembleBase.Add(time.Second), metadata),
-		agenttest.AssembleText(t, "step", "assistant", "the first step", agenttest.AssembleBase.Add(2*time.Second)),
+	return metadata
+}
+
+func userMessages(texts ...string) []sdk.Message {
+	messages := make([]sdk.Message, 0, len(texts))
+	for _, text := range texts {
+		messages = append(messages, sdk.UserMessage(text))
+	}
+	return messages
+}
+
+// renamingStepPersister stores each row a step writes under the next of ids,
+// so a run's request can move on to the row of a steer.
+type renamingStepPersister struct {
+	*agenttest.RecordingStepPersister
+	ids []string
+}
+
+func (s *renamingStepPersister) PersistAgentStep(ctx context.Context, step messagepkg.AgentStep) ([]messagepkg.Message, error) {
+	rows, err := s.RecordingStepPersister.PersistAgentStep(ctx, step)
+	for i := range rows {
+		rows[i].ID, s.ids = s.ids[0], s.ids[1:]
+	}
+	return rows, err
+}
+
+// newRunCommitter is the step committer of the run req, prepared as cfg, whose
+// rows are named ids in the order its steps write them.
+func newRunCommitter(t *testing.T, req runreq.ChatRequest, cfg native.RunConfig, ids ...string) (context.Context, *persist.StepCommitter, *renamingStepPersister) {
+	t.Helper()
+	ctx := runtimefence.WithContext(context.Background(), runtimefence.Fence{BotID: req.BotID, SessionID: req.ThreadID, Token: 1})
+	store := &renamingStepPersister{RecordingStepPersister: &agenttest.RecordingStepPersister{RecordingMessages: &agenttest.RecordingMessages{}}, ids: ids}
+	logger := slog.New(slog.DiscardHandler)
+	writer := persist.New(persist.Deps{Logger: logger, Messages: store, Sessions: agenttest.NewChatSessions(), Bot: agenttest.BotEnv(logger)})
+	committer := writer.NewStepCommitter(ctx, req, runreq.ResolvedContext{RunConfig: cfg})
+	if committer == nil {
+		t.Fatal("the run has no step committer")
+	}
+	return ctx, committer, store
+}
+
+// Once the run's first step records the runtime context on its request row,
+// the row holds it like any request in the history, and the rebuild replays
+// it from there: once, right after the request and before the run's steps.
+// Until then the run supplies its own, and what the row holds is not what the
+// run sends.
+func TestStepCompactionSendsTheRequestsRuntimeContextOnce(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		recorded bool
+		stored   string
+		steps    []string
+	}{
+		{"recorded on the request row", true, "recalled memory", []string{"the first step"}},
+		{"not recorded yet", false, "an earlier run's recall", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			run, runner, history := newStepCompactionFixture(t, compaction.StatusOK)
+			runner.onRun = history.markCompacted
+			run.contextRecorded = func() bool { return tc.recorded }
+			history.small = []messagepkg.Message{
+				agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase),
+				agenttest.AssembleRow(t, "request", sdk.UserMessage("the request"), agenttest.AssembleBase.Add(time.Second),
+					recordedContext(t, messagepkg.RuntimeContextMemoryRecall, tc.stored)),
+			}
+			for i, text := range tc.steps {
+				history.small = append(history.small, agenttest.AssembleText(t, "step", "assistant", text, agenttest.AssembleBase.Add(time.Duration(i+2)*time.Second)))
+			}
+
+			got := run.compact(context.Background(), overHardShare)
+			assertSDKTexts(t, got, append([]string{"<summary>short</summary>", "workspace notice", "the request", "recalled memory"}, tc.steps...)...)
+		})
+	}
+}
+
+// A run resumed after a decision is rebuilt from the stored rows and carries
+// no runtime context of its own: its request row recorded it when the run
+// first stepped, and a rebuild replays it from there.
+func TestStepCompactionOfADecisionContinuationKeepsTheRecordedRuntimeContext(t *testing.T) {
+	t.Parallel()
+
+	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
+	runner.onRun = history.markCompacted
+	req.UserMessagePersisted = true
+	req.PersistedUserMessageID = "request"
+	rows := []messagepkg.Message{
+		agenttest.AssembleRow(t, "request", sdk.UserMessage("the request"), agenttest.AssembleBase.Add(time.Second),
+			recordedContext(t, messagepkg.RuntimeContextMemoryRecall, "recalled memory")),
+		agenttest.AssembleText(t, "answer", "assistant", "the step after the answer", agenttest.AssembleBase.Add(2*time.Second)),
+	}
+	history.big = append(history.big, rows...)
+	history.small = append(history.small, rows...)
+	resumed := runreq.ModelMessagesToSDKMessages(assembleForSyncTest(t, service, runreq.ChatRequest{BotID: req.BotID, ThreadID: req.ThreadID}).Messages)
+	cfg := native.RunConfig{Messages: resumed, ContextTrimmableMessages: len(resumed), ContextBudgetMaxTokens: syncTestBudget}
+	_, committer, _ := newRunCommitter(t, req, cfg)
+	service.BindStep(&cfg, req, committer)
+
+	got := cfg.StepContextCompactor(context.Background(), native.StepContextInput{FixedTokens: 100, Messages: resumed})
+	if runner.callCount() != 1 {
+		t.Fatalf("compaction ran %d times, want once", runner.callCount())
+	}
+	assertSDKTexts(t, got, "<summary>short</summary>", "the request", "recalled memory", "the step after the answer")
+}
+
+// A steer moves the run's request on to the steer's row. The runtime context
+// stays with the request that carried it, recorded by the run's first step,
+// and the rebuild sends it once, after that request.
+func TestStepCompactionAfterASteerSendsTheRuntimeContextOnce(t *testing.T) {
+	t.Parallel()
+
+	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
+	runner.onRun = history.markCompacted
+	req.UserMessagePersisted = true
+	req.PersistedUserMessageID = "request"
+	rows := []messagepkg.Message{
+		agenttest.AssembleRow(t, "request", sdk.UserMessage("the request"), agenttest.AssembleBase.Add(time.Second),
+			recordedContext(t, messagepkg.RuntimeContextMemoryRecall, "recalled memory")),
+		agenttest.AssembleText(t, "first", "assistant", "the first step", agenttest.AssembleBase.Add(2*time.Second)),
+		agenttest.AssembleText(t, "steer", "user", "the steer", agenttest.AssembleBase.Add(3*time.Second)),
+		agenttest.AssembleText(t, "second", "assistant", "the step after the steer", agenttest.AssembleBase.Add(4*time.Second)),
+	}
+	history.big = append(history.big, rows...)
+	history.small = append(history.small, rows...)
+	index := 1
+	cfg := native.RunConfig{
+		Messages:                       []sdk.Message{sdk.UserMessage("history"), sdk.UserMessage("the request"), sdk.UserMessage("recalled memory")},
+		ContextTrimmableMessages:       1,
+		ContextCurrentUserMessageIndex: &index,
+		ContextBudgetMaxTokens:         syncTestBudget,
+		ContextTurn:                    []native.TurnContext{{Kind: messagepkg.RuntimeContextMemoryRecall, Message: sdk.UserMessage("recalled memory")}},
+	}
+	ctx, committer, store := newRunCommitter(t, req, cfg, "first", "steer", "second")
+	service.BindStep(&cfg, req, committer)
+	commit, _ := committer.Hooks()
+	if err := commit(ctx, 0, &step.Record{Messages: []sdk.Message{sdk.AssistantMessage("the first step")}}); err != nil {
+		t.Fatalf("commit the first step: %v", err)
+	}
+	if !committer.RuntimeContextRecorded() || len(store.Steps[0].RequestMetadata) == 0 {
+		t.Fatal("the run's first step did not record its runtime context on the request")
+	}
+	if err := commit(ctx, 1, &step.Record{Messages: []sdk.Message{sdk.UserMessage("the steer"), sdk.AssistantMessage("the step after the steer")}}); err != nil {
+		t.Fatalf("commit the steered step: %v", err)
+	}
+	if got := committer.RequestMessageID(); got != "steer" {
+		t.Fatalf("request = %q after the steer, want its row", got)
 	}
 
-	got := run.compact(context.Background(), overHardShare)
-	assertSDKTexts(t, got, "<summary>short</summary>", "workspace notice", "the request", "recalled memory", "the first step")
+	sent := runreq.ModelMessagesToSDKMessages(assembleForSyncTest(t, service, runreq.ChatRequest{BotID: req.BotID, ThreadID: req.ThreadID}).Messages)
+	got := cfg.StepContextCompactor(context.Background(), native.StepContextInput{FixedTokens: 100, Messages: sent})
+	assertSDKTexts(t, got, "<summary>short</summary>", "the request", "recalled memory", "the first step", "the steer", "the step after the steer")
 }
 
 // Only a pass that produced a summary changes what the next call sends.
