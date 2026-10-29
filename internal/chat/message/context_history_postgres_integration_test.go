@@ -506,3 +506,52 @@ func TestPostgresUnknownAdmissionIsRefusedAtWrite(t *testing.T) {
 		t.Fatalf("persist with unknown admission = %v, want the admission CHECK violation", err)
 	}
 }
+
+// A row costs the load what history puts in front of the model for it: its
+// content and the runtime context its request recorded. The process counts
+// the same bytes from what the load hands over.
+func TestPostgresListActiveAfterCompactionChargesRuntimeContext(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	svc := NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	sid := postgresMessageTestSessionID
+
+	var ids []string
+	for _, text := range []string{"oldest", "request", "newest"} {
+		ids = append(ids, persistContextHistoryRow(t, ctx, svc, sid, "user", text))
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE bot_history_messages
+		SET metadata = metadata || jsonb_build_object('runtime_context', jsonb_build_array(jsonb_build_object(
+			'kind', 'memory_recall',
+			'message', jsonb_build_object('role', 'user', 'content', repeat('recalled ', 200)))))
+		WHERE id = $1`, ids[1]); err != nil {
+		t.Fatalf("record runtime context: %v", err)
+	}
+	var contentBytes, chargedBytes int64
+	if err := tx.QueryRow(ctx, `
+		SELECT sum(octet_length(content::text)),
+		       sum(octet_length(content::text) + COALESCE(octet_length((metadata -> 'runtime_context')::text), 0))
+		FROM bot_history_messages WHERE id = ANY($1::uuid[])`, ids[1:]).Scan(&contentBytes, &chargedBytes); err != nil {
+		t.Fatalf("measure rows: %v", err)
+	}
+	if chargedBytes <= contentBytes {
+		t.Fatalf("charged %d bytes, content %d: the fixture records no runtime context", chargedBytes, contentBytes)
+	}
+
+	// The two newest rows use up the budget once the runtime context counts;
+	// by their content alone the oldest row would still fit.
+	history, err := svc.ListActiveAfterCompactionBySessionWithinBytes(ctx, sid, chargedBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContextHistoryIDs(t, contextHistoryIDs(history), ids[1], ids[2])
+	var counted int64
+	for _, message := range history.Messages {
+		counted += message.ContextBytes()
+	}
+	if counted != chargedBytes {
+		t.Fatalf("process counted %d bytes, the load charged %d", counted, chargedBytes)
+	}
+}

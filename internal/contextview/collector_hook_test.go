@@ -2,6 +2,7 @@ package contextview
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -72,6 +73,36 @@ func TestApplyProviderRunConfigRendersHookContextBeforeCurrent(t *testing.T) {
 	}
 	if !hasContextFragKind(got.ContextFrags, contextfrag.KindHookContext) {
 		t.Fatalf("context fragments = %#v, want hook_context", got.ContextFrags)
+	}
+}
+
+// Hook context goes right before the current input; the runtime context the
+// request carries after the input stays there, where the turn persists it.
+func TestHookContextLeavesTheRuntimeContextAfterTheInput(t *testing.T) {
+	t.Parallel()
+
+	current, memory := 1, 2
+	cfg := agentpkg.RunConfig{
+		Messages: []sdk.Message{
+			sdk.UserMessage("history"), sdk.UserMessage("current input"),
+			sdk.UserMessage("recalled memory"), sdk.UserMessage("requested skill"),
+		},
+		ContextCurrentUserMessageIndex: &current,
+		ContextMemoryMessageIndex:      &memory,
+		ContextQueryMaterialized:       true,
+		ContextTrimmableMessages:       1,
+		ContextHookText:                "hook context",
+	}
+	cfg.ContextSourceFrags = CollectNonSystemProviderSourceFrags(context.Background(), cfg)
+	got := ApplyProviderRunConfig(context.Background(), nil, cfg)
+
+	texts := make([]string, 0, len(got.Messages))
+	for _, message := range got.Messages {
+		texts = append(texts, messageText(t, message))
+	}
+	want := []string{"history", "hook context", "current input", "recalled memory", "requested skill"}
+	if !slices.Equal(texts, want) {
+		t.Fatalf("messages = %q, want %q", texts, want)
 	}
 }
 

@@ -1924,7 +1924,9 @@ ORDER BY ranked.turn_position ASC, ranked.turn_message_seq ASC, ranked.created_a
 -- when its compact_id points at an ok artifact of the session's current
 -- epoch; rows claimed by a pending or failed artifact are still returned
 -- because no summary stands in for them yet. Byte admission is newest-first:
--- the crossing row is kept, rows are returned in ascending order. Rows refused
+-- the crossing row is kept, rows are returned in ascending order. A row costs
+-- what history puts in front of the model for it: its content and the runtime
+-- context its request carried (metadata runtime_context). Rows refused
 -- at admission are excluded before the byte window is measured, so they cannot
 -- use up budget meant for readable history;
 -- message.ContextIncludesUnadmittedPassive is passed as include_unadmitted.
@@ -1973,10 +1975,13 @@ FROM (
     ci.display_name AS sender_display_name,
     ci.avatar_url AS sender_avatar_url,
     s.channel_type AS platform,
-    (SUM(octet_length(m.content::text)) OVER (
+    (SUM(cost.bytes) OVER (
       ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-    ) - octet_length(m.content::text))::BIGINT AS preceding_bytes
+    ) - cost.bytes)::BIGINT AS preceding_bytes
   FROM bot_visible_history_messages m
+  CROSS JOIN LATERAL (
+    SELECT octet_length(m.content::text) + COALESCE(octet_length((m.metadata -> 'runtime_context')::text), 0) AS bytes
+  ) cost
   JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
   LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
   WHERE m.team_id = public.memoh_current_team_id()

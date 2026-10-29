@@ -8,6 +8,7 @@ import (
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/turn"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
@@ -510,5 +511,39 @@ func TestRenderEntryHeaderCarriesExecutionLocation(t *testing.T) {
 		Metadata: map[string]any{"execution_location": map[string]any{"name": "No Target"}},
 	}); strings.Contains(got, "workspace") {
 		t.Fatalf("header rendered a workspace without a target id:\n%s", got)
+	}
+}
+
+// A request row is replayed with the runtime context its request carried, and
+// compacting the row takes that context with it: the summarizer reads it as
+// part of the row, and claiming the row is priced with it.
+func TestCandidateEntryCarriesTheRequestsRuntimeContext(t *testing.T) {
+	t.Parallel()
+
+	const fact = "the user keeps bees on the roof"
+	recall := turn.ModelMessage{Role: "user", Content: turn.NewTextContent("<memory-context>\n- " + fact + "\n</memory-context>")}
+	metadata, err := historyfrag.RuntimeContextMetadata([]historyfrag.RuntimeContext{{Kind: messagepkg.RuntimeContextMemoryRecall, Message: recall}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := historyfrag.MarshalStoredModelMessage(turn.ModelMessage{Role: "user", Content: turn.NewTextContent("continue the task")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := historyfrag.FromDBMessage(messagepkg.Message{ID: "request", Role: "user", Content: content, Metadata: metadata}, historyfrag.ScopeFallback{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare := record
+	bare.Metadata = nil
+
+	if got := renderCandidateEntry(record); !strings.HasPrefix(got, "continue the task\n") || !strings.Contains(got, fact) {
+		t.Fatalf("summarizer input = %q, want the request followed by its recalled memory", got)
+	}
+	with := CompactionCandidate{RawContent: content, Record: record}
+	without := CompactionCandidate{RawContent: content, Record: bare}
+	if messageReplayTokens(with) <= messageReplayTokens(without) || estimateItemTokens(with) <= estimateItemTokens(without) {
+		t.Fatalf("replay %d vs %d, item %d vs %d: the runtime context is not priced with its row",
+			messageReplayTokens(with), messageReplayTokens(without), estimateItemTokens(with), estimateItemTokens(without))
 	}
 }

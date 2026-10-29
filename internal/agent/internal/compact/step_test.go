@@ -13,6 +13,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 
 	"github.com/felinics/memoh/internal/agent/context/compaction"
+	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/internal/agenttest"
 	"github.com/felinics/memoh/internal/agent/internal/persist"
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
@@ -52,7 +53,8 @@ func newStepCompactionFixture(t *testing.T, status string) (stepRun, *scriptedCo
 		req:              req,
 		requestMessageID: func() string { return "request" },
 		budget:           syncTestBudget,
-		extras:           []sdk.Message{sdk.UserMessage("recalled memory")},
+		extras:           []sdk.Message{sdk.UserMessage("workspace notice")},
+		turnContext:      []sdk.Message{sdk.UserMessage("recalled memory")},
 	}, runner, history
 }
 
@@ -84,8 +86,9 @@ func assertSDKTexts(t *testing.T, got []sdk.Message, want ...string) {
 }
 
 // The rebuilt conversation is the stored rows after the summary: the
-// compacted steps are gone, the user's message is still there, and what the
-// run had added in front of it stays in front of it.
+// compacted steps are gone, the user's message is still there, what the run
+// had added in front of it stays in front of it, and its runtime context
+// follows it.
 func TestStepCompactionRebuildsTheConversationFromTheRowsAfterCompacting(t *testing.T) {
 	t.Parallel()
 
@@ -96,7 +99,59 @@ func TestStepCompactionRebuildsTheConversationFromTheRowsAfterCompacting(t *test
 	if runner.callCount() != 1 {
 		t.Fatalf("compaction ran %d times, want once", runner.callCount())
 	}
-	assertSDKTexts(t, got, "<summary>short</summary>", "recalled memory", "the request")
+	assertSDKTexts(t, got, "<summary>short</summary>", "workspace notice", "the request", "recalled memory")
+}
+
+// At the run's first call no row holds its request yet. A rebuild sends the
+// request as the run does, with the runtime context Prepare placed after it.
+func TestStepCompactionAtTheFirstCallKeepsTheRequestsRuntimeContext(t *testing.T) {
+	t.Parallel()
+
+	service, runner, history, req := newSyncCompactionFixture(t, compaction.StatusOK)
+	runner.onRun = history.markCompacted
+	req.Query = "the fresh input"
+	index := 1
+	cfg := native.RunConfig{
+		Query:                          req.Query,
+		Messages:                       append(conversationOf(800), sdk.UserMessage(req.Query), sdk.UserMessage("recalled memory"), sdk.UserMessage("requested skill")),
+		ContextTrimmableMessages:       1,
+		ContextCurrentUserMessageIndex: &index,
+		ContextBudgetMaxTokens:         syncTestBudget,
+		ContextTurn: []native.TurnContext{
+			{Kind: messagepkg.RuntimeContextMemoryRecall, Message: sdk.UserMessage("recalled memory")},
+			{Kind: messagepkg.RuntimeContextRequestedSkills, Message: sdk.UserMessage("requested skill")},
+		},
+	}
+	service.BindStep(&cfg, req, &persist.StepCommitter{})
+
+	got := cfg.StepContextCompactor(context.Background(), native.StepContextInput{FixedTokens: 100, Messages: cfg.Messages})
+	if runner.callCount() != 1 {
+		t.Fatalf("compaction ran %d times, want once", runner.callCount())
+	}
+	assertSDKTexts(t, got, "<summary>short</summary>", req.Query, "recalled memory", "requested skill")
+}
+
+// Once the run's first step records the runtime context on its request row,
+// the rebuild still sends it once, right after the request and before the
+// run's steps: the run supplies it and the row is read back bare.
+func TestStepCompactionSendsTheRecordedRuntimeContextOnce(t *testing.T) {
+	t.Parallel()
+
+	run, runner, history := newStepCompactionFixture(t, compaction.StatusOK)
+	runner.onRun = history.markCompacted
+	recall := runreq.SDKMessagesToModelMessages([]sdk.Message{sdk.UserMessage("recalled memory")})[0]
+	metadata, err := historyfrag.RuntimeContextMetadata([]historyfrag.RuntimeContext{{Kind: messagepkg.RuntimeContextMemoryRecall, Message: recall}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history.small = []messagepkg.Message{
+		agenttest.AssembleText(t, "summary", "assistant", "<summary>short</summary>", agenttest.AssembleBase),
+		agenttest.AssembleRow(t, "request", sdk.UserMessage("the request"), agenttest.AssembleBase.Add(time.Second), metadata),
+		agenttest.AssembleText(t, "step", "assistant", "the first step", agenttest.AssembleBase.Add(2*time.Second)),
+	}
+
+	got := run.compact(context.Background(), overHardShare)
+	assertSDKTexts(t, got, "<summary>short</summary>", "workspace notice", "the request", "recalled memory", "the first step")
 }
 
 // Only a pass that produced a summary changes what the next call sends.
@@ -183,7 +238,7 @@ func TestStepCompactionUsesARunningCompactionsSummary(t *testing.T) {
 
 	select {
 	case got := <-done:
-		assertSDKTexts(t, got, "<summary>short</summary>", "recalled memory", "the request")
+		assertSDKTexts(t, got, "<summary>short</summary>", "workspace notice", "the request", "recalled memory")
 	case <-time.After(2 * time.Second):
 		t.Fatal("the run did not resume after the compaction finished")
 	}
@@ -195,16 +250,16 @@ func TestStepCompactionUsesARunningCompactionsSummary(t *testing.T) {
 func TestEphemeralRunMessagesAreTheOnesBetweenHistoryAndTheUserMessage(t *testing.T) {
 	t.Parallel()
 
-	index := 4
+	index := 3
 	cfg := native.RunConfig{
 		Messages: []sdk.Message{
 			sdk.UserMessage("h1"), sdk.AssistantMessage("h2"),
-			sdk.UserMessage("notice"), sdk.UserMessage("memory"), sdk.UserMessage("the query"),
+			sdk.UserMessage("notice"), sdk.UserMessage("the query"), sdk.UserMessage("memory"),
 		},
 		ContextTrimmableMessages:       2,
 		ContextCurrentUserMessageIndex: &index,
 	}
-	assertSDKTexts(t, ephemeralRunMessages(cfg), "notice", "memory")
+	assertSDKTexts(t, ephemeralRunMessages(cfg), "notice")
 
 	// A continuation holds nothing but rows.
 	cfg.ContextTrimmableMessages = len(cfg.Messages)
@@ -350,7 +405,7 @@ func TestStepCompactionKeepsTheRunsInlineImageOnTheNextRequest(t *testing.T) {
 	if !requestCarriesImage(first, image) {
 		t.Fatalf("the first request lost its image: %#v", first)
 	}
-	if got := sdkTexts(second); len(got) != 3 || got[0] != "<summary>short</summary>" || got[1] != "recalled memory" || got[2] != "the request" {
+	if got := sdkTexts(second); len(got) != 4 || got[0] != "<summary>short</summary>" || got[1] != "workspace notice" || got[2] != "the request" || got[3] != "recalled memory" {
 		t.Fatalf("second request = %q, want the rebuilt conversation", got)
 	}
 	if !requestCarriesImage(second, image) {

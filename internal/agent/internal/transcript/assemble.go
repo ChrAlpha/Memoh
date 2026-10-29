@@ -36,6 +36,10 @@ type Request struct {
 	// Budget is the model's token budget. It bounds what one load may
 	// materialize; zero uses the absolute cap.
 	Budget int
+	// OwnRequestMessageID is the request row of the run the context is for,
+	// when the history holds it. The run supplies that request's runtime
+	// context itself, so the row is not followed by what it recorded.
+	OwnRequestMessageID string
 }
 
 type Assembled struct {
@@ -43,7 +47,8 @@ type Assembled struct {
 	Records  []historyfrag.HistoryRecord
 	// EstimatedTokens is the estimate for Messages, markers included.
 	EstimatedTokens int
-	// CompactableTokens counts raw rows only. Active summaries can never be
+	// CompactableTokens counts raw rows only, with the runtime context they
+	// replay, which goes when they are compacted. Active summaries can never be
 	// compacted away, so counting them would re-fire the trigger on every
 	// request once accumulated summaries alone cross the threshold.
 	CompactableTokens int
@@ -52,13 +57,19 @@ type Assembled struct {
 	Truncated bool
 }
 
+// ForChat is the request for a chat run's context. A retry answers a request
+// the history holds, which is its own.
 func ForChat(purpose Purpose, req runreq.ChatRequest, budget int) Request {
-	return Request{
+	r := Request{
 		Purpose: purpose,
 		Chat:    req,
 		Scope:   SummaryScope(req.BotID, req.ChatID, req.ThreadID, req.ConversationType, req.ConversationName, req.ReplyTarget),
 		Budget:  budget,
 	}
+	if req.ReusePersistedUserMessage {
+		r.OwnRequestMessageID = strings.TrimSpace(req.RequiredHistoryMessageID)
+	}
+	return r
 }
 
 // Assemble is the only way chat context is read. The source is every
@@ -87,12 +98,9 @@ func (t *Reader) Assemble(ctx context.Context, r Request) (Assembled, error) {
 		return Assembled{}, err
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
+	loaded = injectRuntimeContextRecords(loaded, strings.TrimSpace(r.OwnRequestMessageID))
 	compactable := totalCompactableHistoryTokens(loaded)
-	currentRequestID := ""
-	if r.Chat.ReusePersistedUserMessage {
-		currentRequestID = strings.TrimSpace(r.Chat.RequiredHistoryMessageID)
-	}
-	annotated := injectWorkspaceTransitionRecords(injectRuntimeContextRecords(loaded, currentRequestID))
+	annotated := injectWorkspaceTransitionRecords(loaded)
 	messages := make([]runreq.ModelMessage, 0, len(annotated))
 	for _, record := range annotated {
 		messages = append(messages, record.ModelMessage)
@@ -133,7 +141,7 @@ func (t *Reader) loadContextRecords(ctx context.Context, r Request) ([]historyfr
 		msgs = loaded.Messages
 		var total int64
 		for i := range msgs {
-			total += int64(len(msgs[i].Content))
+			total += msgs[i].ContextBytes()
 		}
 		// The load keeps the row that crosses the budget, so a total at or
 		// over it means older rows may have been left behind.
@@ -156,9 +164,10 @@ func (t *Reader) loadContextRecords(ctx context.Context, r Request) ([]historyfr
 // of history goes through it, the initial load and the required-row window
 // re-read alike. Rows refused at admission never reach it: each reader is a
 // message-service ForModel or model-only query that leaves them out in SQL,
-// before any byte budget or row limit is applied. The budget covers content
-// only and metadata arrives undecoded, so each source row is released once
-// converted and at most one row's metadata is decoded at a time.
+// before any byte budget or row limit is applied. The budget covers what each
+// row puts in front of the model and metadata arrives undecoded, so each
+// source row is released once converted and at most one row's metadata is
+// decoded at a time.
 func (t *Reader) recordsFromMessages(msgs []messagepkg.Message) ([]historyfrag.HistoryRecord, error) {
 	result := make([]historyfrag.HistoryRecord, 0, len(msgs))
 	for i := range msgs {

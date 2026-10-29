@@ -139,7 +139,6 @@ func (b *Builder) Prepare(ctx context.Context, cfg native.RunConfig) native.RunC
 			cfg.ContextMemoryMessageIndex = &index
 		}
 	}
-	cfg.ContextTurn = nil
 
 	hookBuild := buildHookSystemSections([]promptHookOutput{
 		{Event: hooks.EventBeforePromptBuild, Result: beforePromptResult},

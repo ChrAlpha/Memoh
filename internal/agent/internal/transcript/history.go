@@ -37,12 +37,12 @@ func injectWorkspaceTransitionRecords(records []historyfrag.HistoryRecord) []his
 // injectRuntimeContextRecords replays, right after each request row, the
 // runtime context its request carried (the memory its turn recalled, the
 // skills its user requested), as the request sent it. The run's own request,
-// when the history holds it, stays bare: the run supplies its context anew.
-func injectRuntimeContextRecords(records []historyfrag.HistoryRecord, currentRequestID string) []historyfrag.HistoryRecord {
+// when the history holds it, stays bare: the run supplies its context itself.
+func injectRuntimeContextRecords(records []historyfrag.HistoryRecord, ownRequestID string) []historyfrag.HistoryRecord {
 	var out []historyfrag.HistoryRecord
 	for i, record := range records {
 		items := historyfrag.RuntimeContextFromMetadata(record.DBMessageID, record.Metadata)
-		if len(items) == 0 || (currentRequestID != "" && record.DBMessageID == currentRequestID) {
+		if len(items) == 0 || (ownRequestID != "" && record.DBMessageID == ownRequestID) {
 			if out != nil {
 				out = append(out, record)
 			}

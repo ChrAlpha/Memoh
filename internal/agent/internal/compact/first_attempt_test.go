@@ -46,8 +46,8 @@ func TestFirstAttemptOverHardShareCompactsBeforeTheProviderCall(t *testing.T) {
 		t.Fatal("the run never reached the provider")
 	}
 	first := sdkTexts(model.requests[0].Messages)
-	if len(first) != 3 || first[0] != "<summary>short</summary>" || first[1] != "recalled memory" {
-		t.Fatalf("first request = %q, want the summary, the run's extras and the request, the raw rows compacted away", first)
+	if len(first) != 4 || first[0] != "<summary>short</summary>" || first[1] != "workspace notice" || first[2] != "the request" || first[3] != "recalled memory" {
+		t.Fatalf("first request = %q, want the summary, the run's notice, the request and its runtime context, the raw rows compacted away", first)
 	}
 	if runner.callCount() == 0 {
 		t.Fatal("no compaction ran before the first call, want one")

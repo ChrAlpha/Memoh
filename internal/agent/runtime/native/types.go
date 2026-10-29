@@ -97,7 +97,6 @@ type InjectMessage struct {
 	ImageParts []sdk.ImagePart
 }
 
-// RunConfig holds everything needed for a single agent invocation.
 // TurnContext is one piece of runtime context a turn observed for its input,
 // such as the memory it recalled. Kind names what it is.
 type TurnContext struct {
@@ -105,6 +104,7 @@ type TurnContext struct {
 	Message sdk.Message
 }
 
+// RunConfig holds everything needed for a single agent invocation.
 type RunConfig struct {
 	capabilityChanges      *atomic.Bool
 	capabilityRefreshCount int
@@ -142,6 +142,8 @@ type RunConfig struct {
 	ContextMemoryMessageIndex      *int
 	// ContextTurn is runtime context the turn observed for its input; the
 	// request carries it right after the input, where the turn persists it.
+	// Preparing the run places it there and keeps it, so what rebuilds the
+	// conversation can place it again.
 	ContextTurn              []TurnContext
 	ContextQueryMaterialized bool
 	ContextToolUsage         string

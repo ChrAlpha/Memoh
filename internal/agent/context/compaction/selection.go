@@ -238,7 +238,13 @@ type usagePayload struct {
 	OutputTokensSnake *int `json:"output_tokens"`
 }
 
+// estimateItemTokens is what claiming the row takes out of the context: the
+// row itself and the runtime context history replays after it.
 func estimateItemTokens(item CompactionCandidate) int {
+	return estimateRowTokens(item) + runtimeContextReplayTokens(item.Record)
+}
+
+func estimateRowTokens(item CompactionCandidate) int {
 	if len(item.RawUsage) > 0 {
 		var u usagePayload
 		if json.Unmarshal(item.RawUsage, &u) == nil {

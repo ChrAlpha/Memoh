@@ -52,8 +52,15 @@ func isToolPartType(value string) bool {
 	return isToolCallPartType(value) || isToolResultPartType(value)
 }
 
+// renderCandidateEntry is what the summarizer reads for one row: the row's
+// message and, for a request row, the runtime context its request carried
+// right after it, which history replays with the row and loses with it.
 func renderCandidateEntry(record historyfrag.HistoryRecord) string {
-	content := strings.TrimSpace(renderEntryContent(record.ModelMessage))
+	segs := []string{renderEntryContent(record.ModelMessage)}
+	for _, item := range historyfrag.RuntimeContextFromMetadata(record.DBMessageID, record.Metadata) {
+		segs = append(segs, renderEntryContent(item.Message))
+	}
+	content := strings.TrimSpace(strings.Join(segs, "\n"))
 	if content == "" {
 		return ""
 	}

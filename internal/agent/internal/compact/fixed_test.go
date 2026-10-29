@@ -58,21 +58,33 @@ func TestRunEndCompactionCarriesTheRunsFixedPart(t *testing.T) {
 }
 
 // Inside a run the fixed part is the loop's own fixed cost plus the messages
-// no stored row holds, here the run's extras and its unstored user message.
+// the compaction never claims: the run's notice, its runtime context, and its
+// user message while no row holds it.
 func TestStepCompactionFixedPartCountsTheRunsOwnMessages(t *testing.T) {
 	t.Parallel()
 
 	extra := sdk.UserMessage("workspace notice: " + string(make([]byte, 400)))
+	recall := sdk.UserMessage("recalled memory: " + string(make([]byte, 400)))
 	request := sdk.UserMessage("the user's message, not yet a row")
+	requestID := ""
 	run := &stepRun{
-		requestMessageID: func() string { return "" },
+		requestMessageID: func() string { return requestID },
 		extras:           []sdk.Message{extra},
 		request:          []sdk.Message{request},
+		turnContext:      []sdk.Message{recall},
 	}
 	input := native.StepContextInput{FixedTokens: 1000}
-	want := 1000 + runreq.RequestInputTokens(0, []sdk.Message{extra, request})
+	want := 1000 + runreq.RequestInputTokens(0, []sdk.Message{extra, recall, request})
 	if got := run.fixedTokens(input); got != want {
-		t.Fatalf("fixedTokens = %d, want %d (fixed 1000 plus the extras and request)", got, want)
+		t.Fatalf("fixedTokens = %d, want %d (fixed 1000 plus the notice, runtime context and request)", got, want)
+	}
+
+	// Once the request is a row the compaction may read it, but never its
+	// runtime context, which the run supplies.
+	requestID = "request"
+	want = 1000 + runreq.RequestInputTokens(0, []sdk.Message{extra, recall})
+	if got := run.fixedTokens(input); got != want {
+		t.Fatalf("fixedTokens = %d, want %d (fixed 1000 plus the notice and runtime context)", got, want)
 	}
 }
 

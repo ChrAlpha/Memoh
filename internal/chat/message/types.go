@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"time"
@@ -334,6 +335,24 @@ const (
 	RuntimeContextMemoryRecall    = "memory_recall"
 	RuntimeContextRequestedSkills = "requested_skills"
 )
+
+var runtimeContextMetadataField = []byte(`"` + RuntimeContextMetadataKey + `"`)
+
+// ContextBytes is what the row puts in front of the model as the byte-budgeted
+// history load counts it: its content and the runtime context its request
+// carried, in their stored serialization. The load hands metadata over
+// undecoded; only a row that records runtime context has it parsed.
+func (m Message) ContextBytes() int64 {
+	total := int64(len(m.Content))
+	if !bytes.Contains(m.RawMetadata, runtimeContextMetadataField) {
+		return total
+	}
+	var metadata map[string]json.RawMessage
+	if err := json.Unmarshal(m.RawMetadata, &metadata); err != nil {
+		return total
+	}
+	return total + int64(len(metadata[RuntimeContextMetadataKey]))
+}
 
 func historyBindingRole(role string, metadata map[string]any) string {
 	if role == "user" && IsInternalFeedback(metadata) {

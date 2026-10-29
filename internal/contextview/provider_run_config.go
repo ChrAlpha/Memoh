@@ -121,23 +121,24 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 	return messages
 }
 
+// insertContextFragsBeforeCurrent puts dynamic right before the current
+// input, or at the end when there is none yet. Everything else keeps its
+// place, the runtime context that follows the input included.
 func insertContextFragsBeforeCurrent(frags, dynamic []contextfrag.ContextFrag) []contextfrag.ContextFrag {
 	if len(dynamic) == 0 {
 		return frags
 	}
-	history := make([]contextfrag.ContextFrag, 0, len(frags))
-	current := make([]contextfrag.ContextFrag, 0, 1)
-	for _, frag := range frags {
+	at := len(frags)
+	for i, frag := range frags {
 		if frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
-			current = append(current, frag)
-			continue
+			at = i
+			break
 		}
-		history = append(history, frag)
 	}
 	out := make([]contextfrag.ContextFrag, 0, len(frags)+len(dynamic))
-	out = append(out, history...)
+	out = append(out, frags[:at]...)
 	out = append(out, dynamic...)
-	out = append(out, current...)
+	out = append(out, frags[at:]...)
 	return out
 }
 

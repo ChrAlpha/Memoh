@@ -1,10 +1,15 @@
 package transcript
 
 import (
+	"context"
 	"reflect"
+	"strings"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/internal/agenttest"
 	"github.com/felinics/memoh/internal/agent/internal/runreq"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -54,5 +59,36 @@ func TestInjectRuntimeContextRecordsReplaysWhatTheRequestCarried(t *testing.T) {
 	}
 	if bare := injectRuntimeContextRecords([]historyfrag.HistoryRecord{answer}, ""); len(bare) != 1 {
 		t.Fatalf("a history without runtime context changed: %+v", bare)
+	}
+}
+
+// The runtime context a request row replays is history like the row: the load
+// counts its bytes against the budget, and it is compactable with the row.
+func TestRuntimeContextCountsAsTheHistoryOfItsRow(t *testing.T) {
+	t.Parallel()
+
+	recall := runreq.ModelMessage{Role: "user", Content: runreq.NewTextContent(strings.Repeat("recalled ", 1000))}
+	metadata, err := historyfrag.RuntimeContextMetadata([]historyfrag.RuntimeContext{{Kind: messagepkg.RuntimeContextMemoryRecall, Message: recall}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assemble := func(metadata map[string]any) Assembled {
+		t.Helper()
+		row := agenttest.AssembleRow(t, "request", sdk.UserMessage("what do I like?"), agenttest.AssembleBase, metadata)
+		request := assembleRequest(PurposeRun, runreq.ChatRequest{})
+		request.Budget = 1000
+		assembled, err := newAssembleService(&agenttest.AssembleMessages{After: []messagepkg.Message{row}}).Assemble(context.Background(), request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return assembled
+	}
+
+	bare, carrying := assemble(nil), assemble(metadata)
+	if bare.Truncated || !carrying.Truncated {
+		t.Fatalf("truncated bare=%t carrying=%t: the 9 KB of runtime context did not count against the 4 KB load", bare.Truncated, carrying.Truncated)
+	}
+	if want := bare.CompactableTokens + EstimateMessageTokens(recall); carrying.CompactableTokens != want {
+		t.Fatalf("compactable tokens = %d, want %d with the runtime context the row replays", carrying.CompactableTokens, want)
 	}
 }
