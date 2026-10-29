@@ -115,6 +115,7 @@ type runControl struct {
 	injectStopped     bool
 	steerWake         chan struct{} // guarded by Manager.mu; never closed
 	converter         *chatview.UIMessageStreamConverter
+	output            runOutput
 	leaseStop         func()
 	leaseDone         chan struct{}
 	leaseLifecycleMu  sync.Mutex
@@ -1908,6 +1909,15 @@ func (m *Manager) handleAgentEvent(ctx context.Context, handle RunHandle, event 
 	if !visibleChange {
 		return messages, nil
 	}
+	if isRunOutputAppend(delta) {
+		if err := m.appendRunOutput(ctx, ctrl, delta, messages); err != nil {
+			if errors.Is(err, ErrRunOwnershipLost) {
+				return nil, err
+			}
+			return messages, err
+		}
+		return messages, nil
+	}
 	terminalProposal, err := m.prepareAgentTerminalEvent(ctx, handle, event)
 	if err != nil {
 		if errors.Is(err, ErrRunOwnershipLost) {
@@ -2469,7 +2479,21 @@ func (m *Manager) updateAndPublish(ctx context.Context, key Key, runID string, u
 	return snapshot, true, nil
 }
 
+// updateActiveAndPublish commits one transition of an active run. On the
+// run's owner it first commits the output the run is holding, so a transition
+// never overtakes output that preceded it.
 func (m *Manager) updateActiveAndPublish(ctx context.Context, handle RunHandle, update ActiveRunUpdate, buildDelta func(Snapshot) RuntimeDelta) (Snapshot, bool, error) {
+	if ctrl := m.localControlForHandle(handle); ctrl != nil {
+		ctrl.output.mu.Lock()
+		defer ctrl.output.mu.Unlock()
+		if err := m.flushRunOutputLocked(ctx, ctrl); err != nil {
+			return Snapshot{}, false, err
+		}
+	}
+	return m.commitActiveUpdate(ctx, handle, update, buildDelta)
+}
+
+func (m *Manager) commitActiveUpdate(ctx context.Context, handle RunHandle, update ActiveRunUpdate, buildDelta func(Snapshot) RuntimeDelta) (Snapshot, bool, error) {
 	handle = handle.normalized()
 	if !handle.valid() {
 		return Snapshot{}, false, ErrRunOwnershipLost
@@ -2513,6 +2537,13 @@ func (m *Manager) releaseActiveAndPublish(ctx context.Context, handle RunHandle,
 	}
 	if !handle.valid() {
 		return Snapshot{}, false, ErrRunOwnershipLost
+	}
+	if ctrl := m.localControlForHandle(handle); ctrl != nil {
+		ctrl.output.mu.Lock()
+		defer ctrl.output.mu.Unlock()
+		if err := m.flushRunOutputLocked(ctx, ctrl); err != nil {
+			return Snapshot{}, false, err
+		}
 	}
 	ref := RunRef{
 		BotID: handle.BotID, SessionID: handle.SessionID, RunID: handle.RunID,

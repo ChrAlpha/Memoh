@@ -1334,6 +1334,7 @@ func TestLocalRuntimeDoesNotUseOwnerLeases(t *testing.T) {
 	if _, err := manager.HandleAgentEvent(context.Background(), handle, native.StreamEvent{Type: native.EventTextDelta, Delta: "still running"}); err != nil {
 		t.Fatalf("handle local event after lease TTL: %v", err)
 	}
+	commitHeldRunOutput(t, manager, handle)
 	snapshot, err := manager.Snapshot(context.Background(), testBotID, "session-local-no-lease")
 	if err != nil {
 		t.Fatalf("load local snapshot: %v", err)
@@ -4125,6 +4126,7 @@ func runRuntimeManagerRetryDiscardsAttemptOutputContract(t *testing.T, suite run
 	}); err != nil {
 		t.Fatalf("handle text event: %v", err)
 	}
+	commitHeldRunOutput(t, manager, handle)
 	if streamed, err := manager.Snapshot(context.Background(), testBotID, testSessionID); err != nil || streamed.CurrentRunView == nil || len(streamed.CurrentRunView.Messages) == 0 {
 		t.Fatalf("run before retry = %#v, %v; want the attempt's partial output", streamed.CurrentRunView, err)
 	}
