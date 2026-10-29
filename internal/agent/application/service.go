@@ -1573,7 +1573,7 @@ func normalizeUserMessageContent(msg ModelMessage) ModelMessage {
 }
 
 func normalizeUserContentParts(content json.RawMessage) (json.RawMessage, bool) {
-	if len(content) == 0 {
+	if !mentionsImage(content) {
 		return nil, false
 	}
 	var parts []map[string]any

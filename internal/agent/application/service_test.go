@@ -581,6 +581,31 @@ func TestSanitizeMessagesKeepsAssistantMultipartMessages(t *testing.T) {
 	}
 }
 
+// A legacy image part is normalized however its name is spelled: through
+// \u escapes, or with the capital letter Go lowercases to 'i'.
+func TestSanitizeMessagesNormalizesLegacyImagesHoweverNamed(t *testing.T) {
+	t.Parallel()
+	attachment := `[{"text":"[User sent an attachment]","type":"text"}]`
+	for _, tc := range []struct {
+		name    string
+		role    string
+		content string
+		want    string
+	}{
+		{name: "escaped user part type", role: "user", content: `[{"type":"i\u006dage"}]`, want: attachment},
+		{name: "dotted capital user part type", role: "user", content: `[{"type":"İMAGE"}]`, want: attachment},
+		{name: "escaped field name", role: "assistant", content: `[{"type":"image","imag\u0065":[1,2]}]`, want: `[{"image":"data:application/octet-stream;base64,AQI=","type":"image"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cleaned := sanitizeMessages([]ModelMessage{{Role: tc.role, Content: json.RawMessage(tc.content)}})
+			if len(cleaned) != 1 || string(cleaned[0].Content) != tc.want {
+				t.Fatalf("sanitized = %+v, want content %s", cleaned, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeImagePartsToDataURL_ConvertsIndexedObject(t *testing.T) {
 	msg := ModelMessage{
 		Role: "user",
