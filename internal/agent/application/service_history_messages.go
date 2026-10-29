@@ -31,13 +31,13 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 		return nil, 0, nil
 	}
 
-	trs, err := s.loadTurnResponses(ctx, sessionID, contextTokenBudget)
-	if err != nil {
-		return nil, 0, fmt.Errorf("load turn history: %w", err)
-	}
 	artifacts, err := s.loadTimelineArtifacts(ctx, req.BotID, sessionID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("load compaction frontier: %w", err)
+	}
+	trs, err := s.loadTurnResponses(ctx, sessionID, contextTokenBudget, timeline.CoveredTurnResponseIDs(artifacts))
+	if err != nil {
+		return nil, 0, fmt.Errorf("load turn history: %w", err)
 	}
 
 	composed := timeline.ComposeContextWithArtifacts(rc, trs, artifacts)
@@ -84,9 +84,11 @@ func (s *Service) loadTimelineArtifacts(ctx context.Context, botID, sessionID st
 
 // loadTurnResponses loads assistant/tool history regardless of age. The
 // database walks the existing session index newest-first until its byte
-// budget is crossed, without measuring the entire old backlog. The TR
-// projection excludes legacy lifecycle audits; final admission still applies.
-func (s *Service) loadTurnResponses(ctx context.Context, sessionID string, contextTokenBudget int) ([]timeline.TurnResponseEntry, error) {
+// budget is crossed, without measuring the entire old backlog. Responses in
+// covered, which a compaction summary replaces, are neither decoded nor
+// hashed. The TR projection excludes legacy lifecycle audits; final
+// admission still applies.
+func (s *Service) loadTurnResponses(ctx context.Context, sessionID string, contextTokenBudget int, covered []string) ([]timeline.TurnResponseEntry, error) {
 	if s.messageService == nil || strings.TrimSpace(sessionID) == "" {
 		return nil, nil
 	}
@@ -95,7 +97,7 @@ func (s *Service) loadTurnResponses(ctx context.Context, sessionID string, conte
 	if err != nil {
 		return nil, err
 	}
-	entries := timeline.DecodeTurnResponseEntries(msgs)
+	entries := timeline.DecodeTurnResponseEntries(msgs, covered)
 	stored := make(map[string]messagepkg.Message, len(msgs))
 	for _, msg := range msgs {
 		stored[msg.ID] = msg

@@ -305,7 +305,7 @@ func TestDecodeTurnResponseEntryKeepsOnlyInterruptedReasoning(t *testing.T) {
 		Role: " Assistant ", Content: modelMessage,
 		Metadata: map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true},
 	}
-	entries := DecodeTurnResponseEntries([]messagepkg.Message{interrupted, interrupted})
+	entries := DecodeTurnResponseEntries([]messagepkg.Message{interrupted, interrupted}, nil)
 	if len(entries) != 1 {
 		t.Fatalf("entries = %d, want only the latest interrupted checkpoint", len(entries))
 	}
@@ -340,7 +340,7 @@ func TestDecodeTurnResponseEntriesKeepsOpaqueInterruptedReasoning(t *testing.T) 
 		},
 	}
 
-	entries := DecodeTurnResponseEntries([]messagepkg.Message{checkpoint})
+	entries := DecodeTurnResponseEntries([]messagepkg.Message{checkpoint}, nil)
 	if len(entries) != 1 {
 		t.Fatalf("entries = %d, want opaque interrupted checkpoint", len(entries))
 	}
@@ -392,7 +392,7 @@ func TestDecodeTurnResponseEntriesDropSupersededCheckpoint(t *testing.T) {
 			Metadata: map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true},
 		},
 		{Role: "assistant", Content: answerMessage},
-	})
+	}, nil)
 	if len(entries) != 1 {
 		t.Fatalf("entries = %d, want only the completed answer", len(entries))
 	}
@@ -467,7 +467,7 @@ func TestDecodeTurnResponseEntriesInterruptedLegacyToolCallIsNotDuplicated(t *te
 		Metadata: map[string]any{
 			messagepkg.AgentStepInterruptedMetadataKey: true,
 		},
-	}})
+	}}, nil)
 	if len(entries) != 1 {
 		t.Fatalf("entries = %d, want one live checkpoint", len(entries))
 	}

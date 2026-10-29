@@ -37,11 +37,14 @@ func TestLoadTurnResponsesReadsProjectedSources(t *testing.T) {
 	t.Parallel()
 
 	source := &turnResponseSourceMessageService{
-		full:      []messagepkg.Message{persistedHistoryMessage(t, "full", "assistant", "full row")},
-		projected: []messagepkg.Message{persistedHistoryMessage(t, "projected", "assistant", "projected row")},
+		full: []messagepkg.Message{persistedHistoryMessage(t, "full", "assistant", "full row")},
+		projected: []messagepkg.Message{
+			persistedHistoryMessage(t, "covered", "assistant", "covered row"),
+			persistedHistoryMessage(t, "projected", "assistant", "projected row"),
+		},
 	}
 	svc := &Service{messageService: source, logger: slog.New(slog.DiscardHandler)}
-	entries, err := svc.loadTurnResponses(context.Background(), "session-1", 1000)
+	entries, err := svc.loadTurnResponses(context.Background(), "session-1", 1000, []string{"covered"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,9 +53,9 @@ func TestLoadTurnResponsesReadsProjectedSources(t *testing.T) {
 		t.Fatalf("projected load got session=%q maxBytes=%d", source.sessionID, source.maxBytes)
 	}
 	if len(entries) != 1 || entries[0].SourceMessageID != "projected" {
-		t.Fatalf("turn responses = %#v, want the projected source only", entries)
+		t.Fatalf("turn responses = %#v, want the uncovered projected source only", entries)
 	}
-	projected := source.projected[0]
+	projected := source.projected[1]
 	if want := historyfrag.MessageContentHash(historyfrag.DecodeStoredModelMessage(nil, projected.ID, projected.Role, projected.Content)); entries[0].ContentHash != want {
 		t.Fatalf("turn response content hash = %q, want the stored version %q", entries[0].ContentHash, want)
 	}

@@ -12,18 +12,29 @@ import (
 )
 
 // DecodeTurnResponseEntries converts a chronological run of persisted bot
-// messages into TR entries for pipeline context composition.
+// messages into TR entries for pipeline context composition. Messages in
+// covered (see CoveredTurnResponseIDs) are not decoded: composition replaces
+// them with a compaction summary.
 //
 // Decoding the run as a whole is what lets an interrupted checkpoint's
 // reasoning be projected only while it is still the unfinished frontier; a
 // single message cannot tell whether a completed answer already followed it.
-func DecodeTurnResponseEntries(msgs []messagepkg.Message) []TurnResponseEntry {
+// Covered messages still take part in that decision, so the entries returned
+// are exactly those a full decode would compose.
+func DecodeTurnResponseEntries(msgs []messagepkg.Message, covered []string) []TurnResponseEntry {
 	checkpoint := messagepkg.LatestInterruptedCheckpoint(len(msgs), func(i int) (bool, bool) {
 		return strings.EqualFold(strings.TrimSpace(msgs[i].Role), "assistant"),
 			msgs[i].Metadata[messagepkg.AgentStepInterruptedMetadataKey] == true
 	})
+	skip := make(map[string]struct{}, len(covered))
+	for _, id := range covered {
+		skip[id] = struct{}{}
+	}
 	entries := make([]TurnResponseEntry, 0, len(msgs))
 	for i, msg := range msgs {
+		if _, ok := skip[msg.ID]; ok {
+			continue
+		}
 		if entry, ok := decodeTurnResponseEntry(msg, i == checkpoint); ok {
 			entries = append(entries, entry)
 		}

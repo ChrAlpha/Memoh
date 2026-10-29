@@ -24,7 +24,7 @@ func TestPostgresDiscussAnswerProvesItsBatchConsumed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	responses := timeline.DecodeTurnResponseEntries(sources)
+	responses := timeline.DecodeTurnResponseEntries(sources, nil)
 	var anchor int64
 	var answers int
 	for _, response := range responses {

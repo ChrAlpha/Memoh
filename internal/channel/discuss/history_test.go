@@ -36,7 +36,7 @@ func TestLightweightHistoryPreservesInterruptedReasoning(t *testing.T) {
 				})
 			}
 			reader := discussHistoryReader{messages: source, maxBytes: 4000000}
-			entries, window, err := reader.Load(context.Background(), "session")
+			entries, window, err := reader.Load(context.Background(), "session", nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -76,12 +76,35 @@ func TestLightweightHistoryWindowReportsBudget(t *testing.T) {
 		{maxBytes: int64(2 * len(content)), reached: true},
 		{maxBytes: int64(2*len(content)) + 1, reached: false},
 	} {
-		_, window, err := discussHistoryReader{messages: source, maxBytes: tc.maxBytes}.Load(context.Background(), "session")
+		_, window, err := discussHistoryReader{messages: source, maxBytes: tc.maxBytes}.Load(context.Background(), "session", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if window.Bytes != int64(2*len(content)) || window.BudgetReached() != tc.reached {
 			t.Fatalf("maxBytes=%d window=%+v, want reached=%v", tc.maxBytes, window, tc.reached)
 		}
+	}
+}
+
+// A response a summary replaces is not decoded, yet still counts as the
+// answer that closes an earlier interrupted checkpoint.
+func TestLightweightHistorySkipsCoveredResponses(t *testing.T) {
+	source := &lightweightHistoryStub{messages: []messagepkg.Message{
+		{
+			ID: "checkpoint", Role: "assistant", CreatedAt: time.Unix(1, 0),
+			Content:  []byte(`{"role":"assistant","content":[{"type":"reasoning","text":"unfinished thought"},{"type":"text","text":"partial"}]}`),
+			Metadata: map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true},
+		},
+		{ID: "covered", Role: "assistant", CreatedAt: time.Unix(2, 0), Content: []byte(`{"role":"assistant","content":"covered answer"}`)},
+	}}
+	entries, window, err := discussHistoryReader{messages: source, maxBytes: 4000000}.Load(context.Background(), "session", []string{"covered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if window.Loaded != 2 || len(entries) != 1 || entries[0].SourceMessageID != "checkpoint" {
+		t.Fatalf("window=%+v entries=%+v, want only the uncovered response decoded", window, entries)
+	}
+	if strings.Contains(string(entries[0].RawContent), "unfinished thought") {
+		t.Fatalf("the covered answer closed the checkpoint, its reasoning must stay hidden: %s", entries[0].RawContent)
 	}
 }

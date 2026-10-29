@@ -3,6 +3,7 @@ package discuss
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -80,24 +81,34 @@ func (d *DiscussDriver) handleReply(ctx context.Context, sess *discussSession, r
 	d.handleReplyWithTurn(ctx, sess, rc, log, d.turnServiceSnapshot())
 }
 
-// loadArtifacts projects the session's active compaction frontier. A load
-// failure fails the trigger: composing without the frontier would either
-// re-materialize the raw history or leave what it covers out (CM-ADM-003).
-func (d *DiscussDriver) loadArtifacts(ctx context.Context, cfg DiscussSessionConfig) ([]timeline.CompactionArtifact, error) {
-	if d.artifacts == nil {
-		return nil, nil
-	}
-	return d.artifacts.ActiveCompactionArtifacts(ctx, cfg.BotID, cfg.ThreadID)
+// discussHistory is what a trigger composes beside its rendered context:
+// the session's active compaction artifacts and the recent turn responses.
+type discussHistory struct {
+	artifacts []timeline.CompactionArtifact
+	trs       []timeline.TurnResponseEntry
 }
 
-// handleReplyWithTurn remains as a narrow seam for parity tests. Production
-// workers obtain the current service through turnServiceSnapshot.
-func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSession, rc timeline.RenderedContext, log *slog.Logger, turnSvc turn.Service) {
-	cfg := d.sessionConfigSnapshot(sess)
-	trs, window, err := d.history.Load(ctx, cfg.ThreadID)
+// loadHistory reads the session's active compaction frontier, then the turn
+// responses in the history window. Responses a summary replaces are decoded
+// only for the cold-start anchor, which reads every response. A load failure
+// fails the trigger: composing without the frontier would either
+// re-materialize the raw history or leave what it covers out (CM-ADM-003).
+func (d *DiscussDriver) loadHistory(ctx context.Context, cfg DiscussSessionConfig, log *slog.Logger, anchoring bool) (discussHistory, error) {
+	var history discussHistory
+	if d.artifacts != nil {
+		artifacts, err := d.artifacts.ActiveCompactionArtifacts(ctx, cfg.BotID, cfg.ThreadID)
+		if err != nil {
+			return discussHistory{}, fmt.Errorf("load compaction frontier: %w", err)
+		}
+		history.artifacts = artifacts
+	}
+	var covered []string
+	if !anchoring {
+		covered = timeline.CoveredTurnResponseIDs(history.artifacts)
+	}
+	trs, window, err := d.history.Load(ctx, cfg.ThreadID, covered)
 	if err != nil {
-		d.failMissingSource(ctx, cfg, log, "history_load_failed", err)
-		return
+		return discussHistory{}, fmt.Errorf("load turn responses: %w", err)
 	}
 	if window.BudgetReached() {
 		log.InfoContext(ctx, "context_admission",
@@ -107,13 +118,26 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 			slog.Int64("history_budget_bytes", window.MaxBytes),
 			slog.Int("budget_tokens", d.admissionMaxTokens()))
 	}
+	history.trs = trs
+	return history, nil
+}
+
+// handleReplyWithTurn remains as a narrow seam for parity tests. Production
+// workers obtain the current service through turnServiceSnapshot.
+func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSession, rc timeline.RenderedContext, log *slog.Logger, turnSvc turn.Service) {
+	cfg := d.sessionConfigSnapshot(sess)
+	history, err := d.loadHistory(ctx, cfg, log, sess.lastProcessed == (timeline.DiscussCursorPosition{}))
+	if err != nil {
+		d.failMissingSource(ctx, cfg, log, "history_load_failed", err)
+		return
+	}
 
 	// Cold-start / post-idle initialisation combines the durable position with
 	// the persisted-reply anchor; each segment is then gated inside its own
 	// cursor or source-time domain.
 	if sess.lastProcessed == (timeline.DiscussCursorPosition{}) {
 		persisted := d.cursor.Load(ctx, cfg, log)
-		sess.lastProcessed = persisted.Merge(timeline.DiscussCursorPosition{SourceCursor: anchorFromTRs(trs)})
+		sess.lastProcessed = persisted.Merge(timeline.DiscussCursorPosition{SourceCursor: anchorFromTRs(history.trs)})
 	}
 	if !timeline.HasUncoveredExternalEvent(rc, sess.lastProcessed) {
 		return
@@ -125,12 +149,15 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 	}
 
 	for recoveries := 0; recoveries <= maxDiscussRecoveries; recoveries++ {
-		artifacts, err := d.loadArtifacts(ctx, cfg)
-		if err != nil {
-			d.failMissingSource(ctx, cfg, log, "artifact_load_failed", err)
-			return
+		// A recompose follows a compaction: the frontier moved, and with it
+		// the turn responses it leaves uncovered.
+		if recoveries > 0 {
+			if history, err = d.loadHistory(ctx, cfg, log, false); err != nil {
+				d.failMissingSource(ctx, cfg, log, "history_load_failed", err)
+				return
+			}
 		}
-		plan, admission, ok := d.trigger.Build(cfg, rc, trs, sess.lastProcessed, artifacts, timeline.ComposeBudget{MaxTokens: d.admissionMaxTokens()})
+		plan, admission, ok := d.trigger.Build(cfg, rc, history.trs, sess.lastProcessed, history.artifacts, timeline.ComposeBudget{MaxTokens: d.admissionMaxTokens()})
 		if !ok {
 			if admission.ProtectedOverflow {
 				log.ErrorContext(ctx, "context_admission_rejected",

@@ -69,6 +69,38 @@ func ActiveRenderedContext(rc RenderedContext, artifacts []CompactionArtifact) R
 	return filterCoveredRenderedContext(rc, coveredExternalMessages(artifacts))
 }
 
+// CoveredTurnResponseIDs lists the persisted turn responses a caller may
+// leave out without changing what ComposeContextWithArtifacts returns: those
+// a usable artifact replaces and that were created before its anchor. The
+// summary takes the slot of the last entry it replaces, and every such entry
+// lies at or before the anchor, so the entries at the anchor time alone decide
+// that slot; they stay loaded.
+func CoveredTurnResponseIDs(artifacts []CompactionArtifact) []string {
+	var ids []string
+	replaced := make(map[string]struct{})
+	for _, artifact := range artifacts {
+		if !artifact.usable() {
+			continue
+		}
+		for _, source := range artifact.Sources {
+			id := strings.TrimSpace(source.HistoryMessageID)
+			if id == "" {
+				continue
+			}
+			// The first usable artifact naming a source is the one that
+			// replaces it.
+			if _, ok := replaced[id]; ok {
+				continue
+			}
+			replaced[id] = struct{}{}
+			if source.CreatedAtMs < artifact.AnchorEndMs {
+				ids = append(ids, id)
+			}
+		}
+	}
+	return ids
+}
+
 const earliestMergeTime int64 = -1 << 63
 
 type mergeEntry struct {

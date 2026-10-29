@@ -100,6 +100,62 @@ func TestHandleReplyWithTurn_RecomposeReloadsArtifactsAndResubmits(t *testing.T)
 	}
 }
 
+type countingHistoryReader struct {
+	lightweightHistoryStub
+	calls int
+}
+
+func (h *countingHistoryReader) ListTurnResponseSourcesSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]messagepkg.Message, error) {
+	h.calls++
+	return h.lightweightHistoryStub.ListTurnResponseSourcesSinceBySessionWithinBytes(ctx, sessionID, since, maxBytes)
+}
+
+// The turn responses a trigger composes are decoded against the frontier it
+// composes with, so a recompose after a compaction reads both again.
+func TestHandleReplyWithTurn_RecomposeReloadsTurnResponsesWithTheFrontier(t *testing.T) {
+	svc := &fakeTurnService{recomposeRuns: 1}
+	artifacts := &countingArtifactProvider{}
+	history := &countingHistoryReader{}
+	driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: artifacts, MessageService: history})
+	sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
+
+	driver.handleReplyWithTurn(context.Background(), sess, recomposeTestRC(), driver.logger, svc)
+
+	if svc.calls != 2 || artifacts.calls.Load() != 2 || history.calls != 2 {
+		t.Fatalf("runs=%d frontier loads=%d history loads=%d, want 2 each", svc.calls, artifacts.calls.Load(), history.calls)
+	}
+}
+
+// The cold-start anchor reads every persisted answer, including one a summary
+// replaces: leaving it out would replay context the bot already answered.
+func TestHandleReplyWithTurn_ColdStartAnchorReadsCoveredAnswers(t *testing.T) {
+	answered := timeline.RenderedSegment{
+		MessageID:    "m1",
+		ReceivedAtMs: 250,
+		Content:      []timeline.RenderedContentPiece{{Type: "text", Text: `<message id="m1">question</message>`}},
+	}
+	frontier := &fakeArtifactProvider{artifacts: []timeline.CompactionArtifact{{
+		ID: "a1", Summary: "folded", AnchorEndMs: 400,
+		Sources: []timeline.CompactionSource{
+			{HistoryMessageID: "answer", CreatedAtMs: 300},
+			{ExternalMessageID: "m0", CreatedAtMs: 400},
+		},
+	}}}
+	history := &lightweightHistoryStub{messages: []messagepkg.Message{{
+		ID: "answer", Role: "assistant", CreatedAt: time.UnixMilli(300),
+		Content: []byte(`{"role":"assistant","content":"answer"}`),
+	}}}
+	svc := &fakeTurnService{}
+	driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: frontier, MessageService: history, CursorStore: &fakeDiscussCursorStore{}})
+	sess := &discussSession{config: DiscussSessionConfig{BotID: "b", ThreadID: "s"}}
+
+	driver.handleReplyWithTurn(context.Background(), sess, timeline.RenderedContext{answered}, driver.logger, svc)
+
+	if svc.calls != 0 || sess.lastProcessed.SourceCursor != 300 {
+		t.Fatalf("calls=%d cursor=%+v, want the covered answer to anchor the cursor", svc.calls, sess.lastProcessed)
+	}
+}
+
 func TestHandleReplyWithTurn_RecomposeLimitDefersToNextTrigger(t *testing.T) {
 	svc := &fakeTurnService{recomposeRuns: 99}
 	driver := NewDiscussDriver(DiscussDriverDeps{})

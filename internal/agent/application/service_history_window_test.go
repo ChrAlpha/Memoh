@@ -59,7 +59,7 @@ func TestSessionHistorySurvivesIdleDays(t *testing.T) {
 	if source.budget != svc.historyLoadMaxBytes(1000) {
 		t.Fatal("record path lost its byte budget")
 	}
-	trs, err := svc.loadTurnResponses(context.Background(), req.ThreadID, 1000)
+	trs, err := svc.loadTurnResponses(context.Background(), req.ThreadID, 1000, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestMissingSessionNeverLoadsHistoryOrSummaries(t *testing.T) {
 		if err != nil || len(got) != 0 {
 			t.Fatalf("inferred history=%v err=%v", got, err)
 		}
-		trs, err := svc.loadTurnResponses(ctx, sessionID, 1000)
+		trs, err := svc.loadTurnResponses(ctx, sessionID, 1000, nil)
 		if err != nil || len(trs) != 0 {
 			t.Fatalf("TR=%v err=%v", trs, err)
 		}

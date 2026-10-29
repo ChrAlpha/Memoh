@@ -37,9 +37,11 @@ func (w discussHistoryWindow) BudgetReached() bool {
 }
 
 // Load reads the byte-budgeted recent window of persisted assistant/tool
-// responses for timeline composition. Older responses beyond the budget stay
-// in the database; compaction artifacts represent them in composition.
-func (r discussHistoryReader) Load(ctx context.Context, sessionID string) ([]timeline.TurnResponseEntry, discussHistoryWindow, error) {
+// responses for timeline composition. Responses in covered, which a
+// compaction summary replaces, are not decoded. Older responses beyond the
+// budget stay in the database; compaction artifacts represent them in
+// composition.
+func (r discussHistoryReader) Load(ctx context.Context, sessionID string, covered []string) ([]timeline.TurnResponseEntry, discussHistoryWindow, error) {
 	window := discussHistoryWindow{MaxBytes: r.maxBytes}
 	if r.messages == nil {
 		return nil, window, nil
@@ -52,5 +54,5 @@ func (r discussHistoryReader) Load(ctx context.Context, sessionID string) ([]tim
 	for _, message := range messages {
 		window.Bytes += int64(len(message.Content))
 	}
-	return timeline.DecodeTurnResponseEntries(messages), window, nil
+	return timeline.DecodeTurnResponseEntries(messages, covered), window, nil
 }
