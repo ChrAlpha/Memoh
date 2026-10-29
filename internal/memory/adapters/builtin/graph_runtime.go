@@ -120,19 +120,34 @@ func (r *graphRuntime) syncAndInvalidate(ctx context.Context, botID string) {
 	r.cache.invalidate(botID)
 }
 
-func (r *graphRuntime) semanticUpsertBestEffort(botID string, n migrate.NodeSpec) {
-	if r.semantic == nil {
+// semanticIndexBestEffort indexes node bodies in the pgvector seed index.
+// Nodes that fail to index are queued for retry; the rest supersede any stale
+// pending retry.
+func (r *graphRuntime) semanticIndexBestEffort(botID string, nodes ...migrate.NodeSpec) {
+	if r.semantic == nil || len(nodes) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), semanticEmbedTimeout)
-	defer cancel()
-	if err := r.semantic.Upsert(ctx, botID, n.ID, n.Body, n.Hash); err != nil {
-		r.logger.Debug("graph: pgvector upsert failed; queued for retry", "bot_id", botID, "node_id", n.ID, "err", err)
-		r.retry.enqueue(semanticRetryEntry{botID: botID, nodeID: n.ID, body: n.Body, hash: n.Hash})
-		return
+	docs := make([]semanticDoc, 0, len(nodes))
+	for _, n := range nodes {
+		docs = append(docs, semanticDoc{nodeID: n.ID, body: n.Body, hash: n.Hash})
 	}
-	// A fresh successful write supersedes any stale pending retry for the node.
-	r.retry.discard(botID, []string{n.ID})
+	// Index bounds each embedding batch with its own timeout.
+	failed, err := r.semantic.Index(context.Background(), botID, docs)
+	if err != nil {
+		r.logger.Debug("graph: pgvector index failed; queued for retry", "bot_id", botID, "failed", len(failed), "err", err)
+	}
+	failedIDs := make(map[string]bool, len(failed))
+	for _, doc := range failed {
+		failedIDs[doc.nodeID] = true
+		r.retry.enqueue(semanticRetryEntry{botID: botID, nodeID: doc.nodeID, body: doc.body, hash: doc.hash})
+	}
+	indexed := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		if !failedIDs[strings.TrimSpace(n.ID)] {
+			indexed = append(indexed, n.ID)
+		}
+	}
+	r.retry.discard(botID, indexed)
 }
 
 // ---- Runtime: CRUD ----
@@ -164,7 +179,7 @@ func (r *graphRuntime) Add(ctx context.Context, req adapters.AddRequest) (adapte
 	if err != nil {
 		return adapters.SearchResponse{}, fmt.Errorf("graph runtime: upsert node: %w", err)
 	}
-	r.semanticUpsertBestEffort(botID, saved) //nolint:contextcheck // async semantic upsert uses its own bounded context
+	r.semanticIndexBestEffort(botID, saved) //nolint:contextcheck // semantic indexing bounds its own requests
 	r.syncAndInvalidate(ctx, botID)
 	return adapters.SearchResponse{Results: []adapters.MemoryItem{nodeSpecToMemoryItem(saved)}}, nil
 }
@@ -334,7 +349,7 @@ func (r *graphRuntime) Update(ctx context.Context, req adapters.UpdateRequest) (
 			r.discardSemanticNodes(ctx, botID, []string{storedID})
 		}
 	}
-	r.semanticUpsertBestEffort(botID, saved) //nolint:contextcheck // async semantic upsert uses its own bounded context
+	r.semanticIndexBestEffort(botID, saved) //nolint:contextcheck // semantic indexing bounds its own requests
 	r.syncAndInvalidate(ctx, botID)
 	return nodeSpecToMemoryItem(saved), nil
 }
@@ -528,7 +543,7 @@ func (r *graphRuntime) Rebuild(ctx context.Context, botID string) (adapters.Rebu
 	// regeneration. Without this, a rebuild would silently drop any file the
 	// agent wrote directly that has not yet been ingested.
 	if r.fs != nil {
-		if _, err := r.IngestMarkdownFiles(ctx, botID); err != nil {
+		if _, _, err := r.ingestMarkdownFiles(ctx, botID); err != nil {
 			r.logger.WarnContext(ctx, "graph: rebuild ingest failed", "bot_id", botID, "err", err)
 		}
 	}
@@ -540,13 +555,13 @@ func (r *graphRuntime) Rebuild(ctx context.Context, botID string) (adapters.Rebu
 	count, _ := r.store.CountNodes(ctx, botID)
 	result := adapters.RebuildResult{FsCount: len(nodes), StorageCount: count}
 	if r.semantic != nil {
+		// Rebuild re-embeds every node, so a changed embedding behind the
+		// same model is picked up; the ingest above embedded nothing.
 		r.retry.discardBot(botID)
 		if err := r.semantic.DeleteBot(ctx, botID); err != nil {
 			r.logger.DebugContext(ctx, "graph: pgvector rebuild clear failed", "bot_id", botID, "err", err)
 		}
-		for _, node := range nodes {
-			r.semanticUpsertBestEffort(botID, node) //nolint:contextcheck // async semantic upsert uses its own bounded context
-		}
+		r.semanticIndexBestEffort(botID, nodes...) //nolint:contextcheck // semantic indexing bounds its own requests
 		if indexed, err := r.semantic.Count(ctx, botID); err == nil {
 			result.StorageCount = indexed
 		}

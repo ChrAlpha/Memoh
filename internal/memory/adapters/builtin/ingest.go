@@ -46,18 +46,33 @@ type IngestResult struct {
 // After upserting nodes the Markdown view is regenerated from the now-
 // authoritative node set, so files and DB converge to a single source of truth.
 func (r *graphRuntime) IngestMarkdownFiles(ctx context.Context, botID string) (IngestResult, error) {
-	botID = strings.TrimSpace(botID)
-	if botID == "" {
-		return IngestResult{}, errGraphBotIDRequired
-	}
-	if r.store == nil {
-		return IngestResult{}, errGraphStoreNotConfigured
-	}
-	items, err := r.fs.ReadAllMemoryFilesForIngest(ctx, botID)
+	result, ingested, err := r.ingestMarkdownFiles(ctx, botID)
 	if err != nil {
 		return IngestResult{}, err
 	}
+	r.semanticIndexBestEffort(strings.TrimSpace(botID), ingested...) //nolint:contextcheck // semantic indexing bounds its own requests
+	// Regenerate the derived Markdown view from the authoritative node set, so
+	// the file tree and DB converge.
+	r.syncAndInvalidate(ctx, strings.TrimSpace(botID))
+	return result, nil
+}
+
+// ingestMarkdownFiles upserts the memory files as nodes and returns the nodes
+// it wrote; the caller indexes them and resyncs the projection.
+func (r *graphRuntime) ingestMarkdownFiles(ctx context.Context, botID string) (IngestResult, []migrate.NodeSpec, error) {
+	botID = strings.TrimSpace(botID)
+	if botID == "" {
+		return IngestResult{}, nil, errGraphBotIDRequired
+	}
+	if r.store == nil {
+		return IngestResult{}, nil, errGraphStoreNotConfigured
+	}
+	items, err := r.fs.ReadAllMemoryFilesForIngest(ctx, botID)
+	if err != nil {
+		return IngestResult{}, nil, err
+	}
 	result := IngestResult{}
+	ingested := make([]migrate.NodeSpec, 0, len(items))
 	now := time.Now().UTC()
 	for _, item := range items {
 		if strings.TrimSpace(item.Memory) == "" {
@@ -75,15 +90,10 @@ func (r *graphRuntime) IngestMarkdownFiles(ctx context.Context, botID string) (I
 			result.Skipped++
 			continue
 		}
-		if r.semantic != nil {
-			r.semanticUpsertBestEffort(botID, spec) //nolint:contextcheck // async semantic upsert uses its own bounded context
-		}
+		ingested = append(ingested, spec)
 		result.Ingested++
 	}
-	// Regenerate the derived Markdown view from the authoritative node set, so
-	// the file tree and DB converge.
-	r.syncAndInvalidate(ctx, botID)
-	return result, nil
+	return result, ingested, nil
 }
 
 // qualifyIngestID normalises an ingested memory id to the canonical

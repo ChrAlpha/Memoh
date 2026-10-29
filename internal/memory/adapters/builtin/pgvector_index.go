@@ -24,8 +24,17 @@ import (
 
 const (
 	semanticEmbedTimeout = models.DefaultProviderRequestTimeout
-	maxPgvectorInt32     = int64(1<<31 - 1)
+	// semanticEmbedBatch bounds how many bodies one embedding request carries.
+	semanticEmbedBatch = 32
+	maxPgvectorInt32   = int64(1<<31 - 1)
 )
+
+// semanticDoc is a node body for the semantic index.
+type semanticDoc struct {
+	nodeID string
+	body   string
+	hash   string
+}
 
 type pgvectorIndex struct {
 	store       *pgvectordb.Store
@@ -160,47 +169,151 @@ func (r *pgvectorIndex) withTeamTx(ctx context.Context, fn func(*pgvectorsqlc.Qu
 }
 
 func (r *pgvectorIndex) embedText(ctx context.Context, text string) ([]float32, error) {
+	vecs, err := r.embedTexts(ctx, []string{text})
+	if err != nil {
+		return nil, err
+	}
+	return vecs[0], nil
+}
+
+// embedTexts embeds texts in one request, returning one vector per text.
+func (r *pgvectorIndex) embedTexts(ctx context.Context, texts []string) ([][]float32, error) {
 	if err := r.ensureEmbeddingEnabled(ctx); err != nil {
 		return nil, err
 	}
-	client := sdk.NewClient()
-	vec, err := client.Embed(ctx, text, sdk.WithEmbeddingModel(r.embedModel))
+	result, err := sdk.NewClient().EmbedMany(ctx, texts, sdk.WithEmbeddingModel(r.embedModel))
 	if err != nil {
 		return nil, fmt.Errorf("pgvector semantic embed: %w", err)
 	}
-	out := float64sToFloat32s(vec)
-	if r.model.dimensions > 0 && len(out) != r.model.dimensions {
-		return nil, fmt.Errorf("pgvector semantic index: embedding dimensions = %d, want %d", len(out), r.model.dimensions)
+	if len(result.Embeddings) != len(texts) {
+		return nil, fmt.Errorf("pgvector semantic embed: %d embeddings for %d texts", len(result.Embeddings), len(texts))
+	}
+	out := make([][]float32, len(texts))
+	for i, vec := range result.Embeddings {
+		out[i] = float64sToFloat32s(vec)
+		if r.model.dimensions > 0 && len(out[i]) != r.model.dimensions {
+			return nil, fmt.Errorf("pgvector semantic index: embedding dimensions = %d, want %d", len(out[i]), r.model.dimensions)
+		}
 	}
 	return out, nil
 }
 
+// Upsert indexes one node body; see Index.
 func (r *pgvectorIndex) Upsert(ctx context.Context, botID, nodeID, body, hash string) error {
-	if r == nil || r.store == nil || strings.TrimSpace(body) == "" {
-		return nil
+	_, err := r.Index(ctx, botID, []semanticDoc{{nodeID: nodeID, body: body, hash: hash}})
+	return err
+}
+
+// Index embeds and stores node bodies for botID. A body whose hash is already
+// indexed under the configured model is not embedded again; the rest are
+// embedded semanticEmbedBatch at a time, each batch bounded by
+// semanticEmbedTimeout. It returns the documents it could not index, with the
+// errors that stopped them.
+func (r *pgvectorIndex) Index(ctx context.Context, botID string, docs []semanticDoc) ([]semanticDoc, error) {
+	if r == nil || r.store == nil {
+		return nil, nil
 	}
 	botUUID, err := db.ParseUUID(botID)
 	if err != nil {
-		return err
+		return docs, err
 	}
-	vec, err := r.embedText(ctx, body)
+	wanted := make([]semanticDoc, 0, len(docs))
+	ids := make([]string, 0, len(docs))
+	for _, doc := range docs {
+		doc.nodeID = strings.TrimSpace(doc.nodeID)
+		doc.hash = strings.TrimSpace(doc.hash)
+		if doc.nodeID == "" || strings.TrimSpace(doc.body) == "" {
+			continue
+		}
+		wanted = append(wanted, doc)
+		ids = append(ids, doc.nodeID)
+	}
+	if len(wanted) == 0 {
+		return nil, nil
+	}
+	indexed, err := r.indexedHashes(ctx, botUUID, ids)
+	if err != nil {
+		return wanted, err
+	}
+	pending := wanted[:0]
+	for _, doc := range wanted {
+		if doc.hash == "" || indexed[doc.nodeID] != doc.hash {
+			pending = append(pending, doc)
+		}
+	}
+
+	var failed []semanticDoc
+	var errs []error
+	for start := 0; start < len(pending); start += semanticEmbedBatch {
+		batch := pending[start:min(start+semanticEmbedBatch, len(pending))]
+		if err := ctx.Err(); err != nil {
+			return append(failed, pending[start:]...), errors.Join(append(errs, err)...)
+		}
+		if err := r.indexBatch(ctx, botUUID, batch); err != nil {
+			failed = append(failed, batch...)
+			errs = append(errs, err)
+		}
+	}
+	return failed, errors.Join(errs...)
+}
+
+// indexedHashes returns the body hash indexed for each of nodeIDs under the
+// configured model and dimensions.
+func (r *pgvectorIndex) indexedHashes(ctx context.Context, botUUID pgtype.UUID, nodeIDs []string) (map[string]string, error) {
+	hashes := make(map[string]string, len(nodeIDs))
+	err := r.withTeamTx(ctx, func(teamQueries *pgvectorsqlc.Queries, teamUUID pgtype.UUID) error {
+		rows, err := teamQueries.ListMemoryNodeEmbeddingHashes(ctx, pgvectorsqlc.ListMemoryNodeEmbeddingHashesParams{
+			TeamID:  teamUUID,
+			BotID:   botUUID,
+			ModelID: r.model.uuid,
+			NodeIds: nodeIDs,
+		})
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if int(row.Dimensions) == r.model.dimensions {
+				hashes[row.NodeID] = row.BodyHash
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pgvector semantic index: list indexed hashes: %w", err)
+	}
+	return hashes, nil
+}
+
+func (r *pgvectorIndex) indexBatch(ctx context.Context, botUUID pgtype.UUID, batch []semanticDoc) error {
+	ctx, cancel := context.WithTimeout(ctx, semanticEmbedTimeout)
+	defer cancel()
+	texts := make([]string, len(batch))
+	for i, doc := range batch {
+		texts[i] = doc.body
+	}
+	vecs, err := r.embedTexts(ctx, texts)
 	if err != nil {
 		return err
 	}
-	dimensions, err := checkedPgvectorInt32("dimensions", len(vec))
+	dimensions, err := checkedPgvectorInt32("dimensions", len(vecs[0]))
 	if err != nil {
 		return err
 	}
 	err = r.withTeamTx(ctx, func(teamQueries *pgvectorsqlc.Queries, teamUUID pgtype.UUID) error {
-		return teamQueries.UpsertMemoryNodeEmbedding(ctx, pgvectorsqlc.UpsertMemoryNodeEmbeddingParams{
-			TeamID:     teamUUID,
-			BotID:      botUUID,
-			NodeID:     strings.TrimSpace(nodeID),
-			ModelID:    r.model.uuid,
-			Dimensions: dimensions,
-			BodyHash:   strings.TrimSpace(hash),
-			Embedding:  pgvector.NewVector(vec),
-		})
+		for i, doc := range batch {
+			if err := teamQueries.UpsertMemoryNodeEmbedding(ctx, pgvectorsqlc.UpsertMemoryNodeEmbeddingParams{
+				TeamID:     teamUUID,
+				BotID:      botUUID,
+				NodeID:     doc.nodeID,
+				ModelID:    r.model.uuid,
+				Dimensions: dimensions,
+				BodyHash:   doc.hash,
+				Embedding:  pgvector.NewVector(vecs[i]),
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return fmt.Errorf("pgvector semantic index: upsert: %w", err)
