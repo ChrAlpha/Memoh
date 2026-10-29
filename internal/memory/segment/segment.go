@@ -151,24 +151,45 @@ func fieldsFiltered(s string) []string {
 // The only behavioural change from the legacy implementation is that Tokens
 // (rather than strings.Fields) defines what a "token" is, so Chinese sentences
 // are split into words and can now match memory bodies.
+//
+// Scoring one query against many bodies should go through NewQuery, which
+// segments the query once.
 func LexicalScore(query, body string) float64 {
-	query = strings.ToLower(strings.TrimSpace(query))
-	if query == "" {
+	return NewQuery(query).ScoreLower(strings.ToLower(body))
+}
+
+// Query is a lexical query prepared for scoring many bodies.
+type Query struct {
+	text   string
+	tokens []string
+}
+
+// NewQuery lower-cases and segments query once.
+func NewQuery(query string) Query {
+	text := strings.ToLower(strings.TrimSpace(query))
+	if text == "" {
+		return Query{}
+	}
+	return Query{text: text, tokens: Tokens(text)}
+}
+
+// ScoreLower is LexicalScore for this query against a body that is already
+// lower-cased with strings.ToLower.
+func (q Query) ScoreLower(body string) float64 {
+	if q.text == "" {
 		return 1
 	}
-	body = strings.ToLower(body)
-	if strings.Contains(body, query) {
+	if strings.Contains(body, q.text) {
 		return 1
 	}
-	tokens := Tokens(query)
-	if len(tokens) == 0 {
+	if len(q.tokens) == 0 {
 		return 0
 	}
 	hits := 0
-	for _, token := range tokens {
+	for _, token := range q.tokens {
 		if strings.Contains(body, token) {
 			hits++
 		}
 	}
-	return float64(hits) / float64(len(tokens))
+	return float64(hits) / float64(len(q.tokens))
 }
