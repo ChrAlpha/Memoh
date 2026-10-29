@@ -304,4 +304,7 @@ func TestProviderEnvelopeTokensSumsSystemMessagesAndTools(t *testing.T) {
 	if got := ProviderEnvelopeTokens("", nil, nil); got != 0 {
 		t.Fatalf("ProviderEnvelopeTokens(empty) = %d, want 0", got)
 	}
+	if fixed, priced := ProviderFixedEnvelopeTokens(system, tools), ProviderMessagesTokens(messages); fixed+priced != want || priced != 250+ResolveProviderBudgetFragTokens(MessageFrag(MessageFragInput{Message: messages[1]})) {
+		t.Fatalf("fixed %d + messages %d, want the envelope %d split into system and tools, then messages", fixed, priced, want)
+	}
 }

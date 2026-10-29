@@ -116,25 +116,22 @@ func (s *contextSwitchState) align(messages []sdk.Message) []*MessageProvenance 
 	return out
 }
 
-// fold runs one compaction event when params does not fit allowance and the
-// run has committed a step, and splices each pass it commits into params.
-// Every message no pass covers stays as it was. It reports whether params
-// changed; an event that leaves the request over its allowance fails as an
+// fold runs one compaction event when params, priced at usage, does not fit
+// allowance and the run has committed a step, and splices each pass it
+// commits into params. Every message no pass covers stays as it was. It
+// reports whether params changed and, when it did, what the request now
+// costs; an event that leaves the request over its allowance fails as an
 // unsatisfied budget, or a protected overflow when the event says so.
-func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, allowance int) (bool, error) {
-	if s == nil || len(s.tail) == 0 || allowance <= 0 {
-		return false, nil
-	}
-	usage := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
-	if usage <= allowance {
-		return false, nil
+func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, allowance, usage int) (bool, int, error) {
+	if s == nil || len(s.tail) == 0 || allowance <= 0 || usage <= allowance {
+		return false, usage, nil
 	}
 	provenance := s.align(params.Messages)
 	tailStart := slices.IndexFunc(provenance, func(p *MessageProvenance) bool {
 		return p != nil && !p.Anchor && sharesSource(p.Sources, s.tail)
 	})
 	if tailStart < 0 {
-		return false, nil
+		return false, usage, nil
 	}
 	previous := *params
 	previous.Messages = slices.Clone(params.Messages[:tailStart])
@@ -151,7 +148,9 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 			kept = append(kept, params.Messages[i])
 		}
 	}
-	sw.HistoryBudgetTokens = allowance - contextfrag.ProviderEnvelopeTokens(params.System, kept, params.Tools)
+	// The system prompt and tools stay as they are; only messages are repriced.
+	fixed := contextfrag.ProviderFixedEnvelopeTokens(params.System, params.Tools)
+	sw.HistoryBudgetTokens = allowance - fixed - contextfrag.ProviderMessagesTokens(kept)
 	splice := requestSplice{messages: params.Messages, provenance: provenance, from: make([]int, len(params.Messages)), tail: sw.Tail}
 	for i := range splice.from {
 		splice.from[i] = i
@@ -159,7 +158,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	tokens := usage
 	sw.Fold = func(fold ContextFold) int {
 		splice.apply(fold)
-		tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
+		tokens = fixed + contextfrag.ProviderMessagesTokens(splice.messages)
 		return tokens
 	}
 	detail, err := cfg.SwitchContext(ctx, sw)
@@ -177,12 +176,12 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return false, usage, ctx.Err()
 		}
 		if errors.Is(err, contextfrag.ErrProtectedContextOverflow) || errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-			return false, err
+			return false, usage, err
 		}
-		return false, fmt.Errorf("%w: context switch: %w", contextfrag.ErrBudgetUnsatisfied, err)
+		return false, usage, fmt.Errorf("%w: context switch: %w", contextfrag.ErrBudgetUnsatisfied, err)
 	}
 	params.Messages = splice.messages
 	s.known = nil
@@ -192,7 +191,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		}
 	}
 	s.moved = splice.from
-	return true, nil
+	return true, tokens, nil
 }
 
 // requestSplice is a request an event rewrites pass by pass: its messages,

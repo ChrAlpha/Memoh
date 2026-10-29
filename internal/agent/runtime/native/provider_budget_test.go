@@ -9,7 +9,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
-func TestProviderAttemptEnvelopeOverflowUsesConservativeProviderEstimator(t *testing.T) {
+func TestProviderAttemptEnvelopeUsesConservativeProviderEstimator(t *testing.T) {
 	t.Parallel()
 
 	params := &sdk.Request{
@@ -22,8 +22,8 @@ func TestProviderAttemptEnvelopeOverflowUsesConservativeProviderEstimator(t *tes
 	}
 
 	const allowance = 1000
-	if got := providerAttemptEnvelopeOverflow(params, allowance); got != -936 {
-		t.Fatalf("providerAttemptEnvelopeOverflow() = %d, want -936 (ceil(101/4)*1.25 + ceil(103/4)*1.25 = 64 used)", got)
+	if got := providerAttemptEnvelope(params, allowance); got != 64 {
+		t.Fatalf("providerAttemptEnvelope() = %d, want 64 (ceil(101/4)*1.25 + ceil(103/4)*1.25)", got)
 	}
 }
 
@@ -43,7 +43,7 @@ func TestProviderAttemptEnvelopePricesImagesFlat(t *testing.T) {
 	if prefixCost != 1_509 {
 		t.Fatalf("photo prefix cost = %d, want 1509 (flat image + 9 text tokens)", prefixCost)
 	}
-	if overflow := providerAttemptEnvelopeOverflow(params, allowance); overflow >= 0 {
-		t.Fatalf("providerAttemptEnvelopeOverflow() = %d, want a photo turn to stay inside the allowance", overflow)
+	if usage := providerAttemptEnvelope(params, allowance); usage > allowance {
+		t.Fatalf("providerAttemptEnvelope() = %d, want a photo turn to stay inside the allowance %d", usage, allowance)
 	}
 }

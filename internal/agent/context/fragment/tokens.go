@@ -135,13 +135,25 @@ func ResolveProviderBudgetFragTokens(frag ContextFrag) int {
 // frozen into a prefix. Tools are the provider-neutral definitions the request
 // actually carries, not the local executable tool set.
 func ProviderEnvelopeTokens(system string, messages []sdk.Message, tools []sdk.ToolDefinition) int {
+	return ProviderFixedEnvelopeTokens(system, tools) + ProviderMessagesTokens(messages)
+}
+
+// ProviderFixedEnvelopeTokens prices the part of a provider payload that a
+// change to its messages leaves alone: the system prompt and the tools.
+func ProviderFixedEnvelopeTokens(system string, tools []sdk.ToolDefinition) int {
 	total := ProviderBudgetTokensFromBytes(len(system))
+	for _, tool := range tools {
+		total += ProviderToolDefTokens(ToolDefinitionAccountingFor("", tool))
+	}
+	return total
+}
+
+// ProviderMessagesTokens prices provider messages for envelope decisions.
+func ProviderMessagesTokens(messages []sdk.Message) int {
+	total := 0
 	for _, message := range messages {
 		bytes, images := sdkMessageEstimate(message)
 		total += ProviderBudgetTokensFromBytes(bytes) + images*EstimateImageTokens
-	}
-	for _, tool := range tools {
-		total += ProviderToolDefTokens(ToolDefinitionAccountingFor("", tool))
 	}
 	return total
 }
