@@ -2,7 +2,6 @@ package discuss
 
 import (
 	"context"
-	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -14,10 +13,6 @@ type lightweightHistoryStub struct {
 	messages  []messagepkg.Message
 	sessionID string
 	maxBytes  int64
-}
-
-func (*lightweightHistoryStub) MeasureActiveBySession(context.Context, string, time.Time) (messagepkg.ActiveMessagesMeasure, error) {
-	return messagepkg.ActiveMessagesMeasure{MessageCount: 100, ContentBytes: 10000}, nil
 }
 
 func (s *lightweightHistoryStub) ListTurnResponseSourcesSinceBySessionWithinBytes(_ context.Context, sessionID string, _ time.Time, maxBytes int64) ([]messagepkg.Message, error) {
@@ -40,16 +35,16 @@ func TestLightweightHistoryPreservesInterruptedReasoning(t *testing.T) {
 					Content: []byte(`{"role":"assistant","content":"completed answer"}`),
 				})
 			}
-			reader := discussHistoryReader{messages: source, maxBytes: 4000000, logger: slog.New(slog.DiscardHandler)}
-			entries, measure, err := reader.Load(context.Background(), "session")
+			reader := discussHistoryReader{messages: source, maxBytes: 4000000}
+			entries, window, err := reader.Load(context.Background(), "session")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if source.sessionID != "session" || source.maxBytes != 4000000 {
 				t.Fatal("history request lost session/budget")
 			}
-			if measure.TotalMessages != 100 || measure.TotalBytes != 10000 || measure.Loaded != len(source.messages) {
-				t.Fatalf("incorrect history measure: %+v", measure)
+			if window.Loaded != len(source.messages) || window.BudgetReached() {
+				t.Fatalf("incorrect history window: %+v", window)
 			}
 			var text strings.Builder
 			for _, entry := range entries {
@@ -62,5 +57,31 @@ func TestLightweightHistoryPreservesInterruptedReasoning(t *testing.T) {
 				t.Fatal("completed answer missing")
 			}
 		})
+	}
+}
+
+// The window reports reaching its budget from what it loaded, the same
+// content bytes the database walk spends, so the admission log no longer
+// needs a whole-session aggregate.
+func TestLightweightHistoryWindowReportsBudget(t *testing.T) {
+	content := []byte(`{"role":"assistant","content":"answer"}`)
+	source := &lightweightHistoryStub{messages: []messagepkg.Message{
+		{ID: "a", Role: "assistant", CreatedAt: time.Unix(1, 0), Content: content},
+		{ID: "b", Role: "assistant", CreatedAt: time.Unix(2, 0), Content: content},
+	}}
+	for _, tc := range []struct {
+		maxBytes int64
+		reached  bool
+	}{
+		{maxBytes: int64(2 * len(content)), reached: true},
+		{maxBytes: int64(2*len(content)) + 1, reached: false},
+	} {
+		_, window, err := discussHistoryReader{messages: source, maxBytes: tc.maxBytes}.Load(context.Background(), "session")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if window.Bytes != int64(2*len(content)) || window.BudgetReached() != tc.reached {
+			t.Fatalf("maxBytes=%d window=%+v, want reached=%v", tc.maxBytes, window, tc.reached)
+		}
 	}
 }

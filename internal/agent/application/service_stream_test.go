@@ -219,10 +219,6 @@ func (*recordingMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes
 	return nil, nil
 }
 
-func (*recordingMessageService) MeasureActiveBySession(context.Context, string, time.Time) (messagepkg.ActiveMessagesMeasure, error) {
-	return messagepkg.ActiveMessagesMeasure{}, nil
-}
-
 func (*recordingMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }

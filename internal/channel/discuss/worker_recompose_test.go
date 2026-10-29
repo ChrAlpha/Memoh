@@ -153,7 +153,7 @@ func (failingArtifactProvider) ActiveCompactionArtifacts(context.Context, string
 	return nil, errors.New("frontier unavailable")
 }
 
-type failingHistoryReader struct{ lightweightHistoryStub }
+type failingHistoryReader struct{}
 
 func (failingHistoryReader) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
 	return nil, errors.New("history unavailable")

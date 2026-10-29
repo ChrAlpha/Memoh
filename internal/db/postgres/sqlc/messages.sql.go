@@ -6165,37 +6165,6 @@ func (q *Queries) MarkMessagesCompacted(ctx context.Context, arg MarkMessagesCom
 	return result.RowsAffected(), nil
 }
 
-const measureActiveMessagesBySession = `-- name: MeasureActiveMessagesBySession :one
-SELECT
-  COUNT(*)::BIGINT AS message_count,
-  COALESCE(SUM(octet_length(m.content::text)), 0)::BIGINT AS content_bytes
-FROM bot_visible_history_messages m
-WHERE m.team_id = public.memoh_current_team_id()
-  AND m.session_id = $1
-  AND m.created_at >= $2
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-`
-
-type MeasureActiveMessagesBySessionParams struct {
-	SessionID pgtype.UUID        `json:"session_id"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-}
-
-type MeasureActiveMessagesBySessionRow struct {
-	MessageCount int64 `json:"message_count"`
-	ContentBytes int64 `json:"content_bytes"`
-}
-
-// Metadata-only context admission measure (CM-ADM-001): counts and content
-// bytes aggregate on the database side, so admission can size a session's
-// history without shipping any payload into the process.
-func (q *Queries) MeasureActiveMessagesBySession(ctx context.Context, arg MeasureActiveMessagesBySessionParams) (MeasureActiveMessagesBySessionRow, error) {
-	row := q.db.QueryRow(ctx, measureActiveMessagesBySession, arg.SessionID, arg.CreatedAt)
-	var i MeasureActiveMessagesBySessionRow
-	err := row.Scan(&i.MessageCount, &i.ContentBytes)
-	return i, err
-}
-
 const measureUncompactedMessagesBySession = `-- name: MeasureUncompactedMessagesBySession :one
 SELECT
   COUNT(*)::BIGINT AS candidate_count,

@@ -215,7 +215,7 @@ func TestHandleReplyWithTurn_ColdStartAnchorCoversCursorBearingSegments(t *testi
 	}
 	svc := &fakeTurnService{}
 	driver := NewDiscussDriver(DiscussDriverDeps{CursorStore: &fakeDiscussCursorStore{}})
-	driver.history = discussHistoryReader{messages: nil, logger: driver.logger}
+	driver.history = discussHistoryReader{}
 	sess := &discussSession{config: DiscussSessionConfig{BotID: "b", ThreadID: "s"}}
 	sess.lastProcessed = timeline.DiscussCursorPosition{SourceCursor: 3000}
 

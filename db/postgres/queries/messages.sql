@@ -1801,19 +1801,6 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
--- name: MeasureActiveMessagesBySession :one
--- Metadata-only context admission measure (CM-ADM-001): counts and content
--- bytes aggregate on the database side, so admission can size a session's
--- history without shipping any payload into the process.
-SELECT
-  COUNT(*)::BIGINT AS message_count,
-  COALESCE(SUM(octet_length(m.content::text)), 0)::BIGINT AS content_bytes
-FROM bot_visible_history_messages m
-WHERE m.team_id = public.memoh_current_team_id()
-  AND m.session_id = sqlc.arg(session_id)
-  AND m.created_at >= sqlc.arg(created_at)
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
-
 -- name: ListTurnResponseSourcesSinceBySessionWithinBytes :many
 -- Walk the existing visible-session-order index, stopping once the content
 -- budget is crossed. Unlike a window SUM over the entire session, old payloads

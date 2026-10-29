@@ -28,10 +28,6 @@ func (s *memoryQueryMessageService) ListTurnResponseSourcesSinceBySessionWithinB
 	return append([]messagepkg.Message(nil), s.messages...), nil
 }
 
-func (*memoryQueryMessageService) MeasureActiveBySession(context.Context, string, time.Time) (messagepkg.ActiveMessagesMeasure, error) {
-	return messagepkg.ActiveMessagesMeasure{}, nil
-}
-
 func TestMemoryQueryBuilderCombinesRecentUserMessages(t *testing.T) {
 	t.Parallel()
 

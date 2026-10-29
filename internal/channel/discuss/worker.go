@@ -94,17 +94,17 @@ func (d *DiscussDriver) loadArtifacts(ctx context.Context, cfg DiscussSessionCon
 // workers obtain the current service through turnServiceSnapshot.
 func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSession, rc timeline.RenderedContext, log *slog.Logger, turnSvc turn.Service) {
 	cfg := d.sessionConfigSnapshot(sess)
-	trs, historyMeasure, err := d.history.Load(ctx, cfg.ThreadID)
+	trs, window, err := d.history.Load(ctx, cfg.ThreadID)
 	if err != nil {
 		d.failMissingSource(ctx, cfg, log, "history_load_failed", err)
 		return
 	}
-	if historyMeasure.TotalMessages > int64(historyMeasure.Loaded) {
+	if window.BudgetReached() {
 		log.InfoContext(ctx, "context_admission",
 			slog.String("path", "discuss_history_load"),
-			slog.Int64("history_total_messages", historyMeasure.TotalMessages),
-			slog.Int64("history_total_bytes", historyMeasure.TotalBytes),
-			slog.Int("history_loaded_messages", historyMeasure.Loaded),
+			slog.Int("history_loaded_messages", window.Loaded),
+			slog.Int64("history_loaded_bytes", window.Bytes),
+			slog.Int64("history_budget_bytes", window.MaxBytes),
 			slog.Int("budget_tokens", d.admissionMaxTokens()))
 	}
 

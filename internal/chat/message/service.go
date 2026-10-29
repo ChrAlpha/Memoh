@@ -1143,23 +1143,6 @@ func (s *DBService) ListActiveSinceBySessionWithinBytes(ctx context.Context, ses
 	return msgs, nil
 }
 
-// MeasureActiveBySession aggregates a session's active message count and
-// content bytes on the database side (CM-ADM-001).
-func (s *DBService) MeasureActiveBySession(ctx context.Context, sessionID string, since time.Time) (ActiveMessagesMeasure, error) {
-	pgSessionID, err := dbpkg.ParseUUID(sessionID)
-	if err != nil {
-		return ActiveMessagesMeasure{}, err
-	}
-	row, err := s.queries.MeasureActiveMessagesBySession(ctx, sqlc.MeasureActiveMessagesBySessionParams{
-		SessionID: pgSessionID,
-		CreatedAt: pgtype.Timestamptz{Time: since, Valid: true},
-	})
-	if err != nil {
-		return ActiveMessagesMeasure{}, err
-	}
-	return ActiveMessagesMeasure{MessageCount: row.MessageCount, ContentBytes: row.ContentBytes}, nil
-}
-
 // ListActiveSinceBySessionWithinBytes returns session messages since a given
 // time, admitted newest-first within the content byte budget (CM-ADM-001).
 func (s *DBService) ListActiveSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error) {

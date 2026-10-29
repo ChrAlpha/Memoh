@@ -118,7 +118,6 @@ func NewDiscussDriver(deps DiscussDriverDeps) *DiscussDriver {
 		history: discussHistoryReader{
 			messages: deps.MessageService,
 			maxBytes: int64(capTokens) * turn.ContextBytesPerToken,
-			logger:   logger,
 		},
 		cursor:             discussCursorTracker{store: deps.CursorStore},
 		runner:             discussTurnRunner{projector: projector},

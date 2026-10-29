@@ -159,14 +159,6 @@ type LocateResult struct {
 	TargetID string
 }
 
-// ActiveMessagesMeasure is a database-side aggregate over a session's active
-// messages (CM-ADM-001): counts and raw content bytes, computed without
-// loading any payload into the process.
-type ActiveMessagesMeasure struct {
-	MessageCount int64
-	ContentBytes int64
-}
-
 // Writer defines write behavior needed by the inbound router.
 type Writer interface {
 	Persist(ctx context.Context, input PersistInput) (Message, error)
@@ -262,10 +254,6 @@ type Service interface {
 	// composition reads: ID, role, content, created_at, and Metadata holding
 	// only AgentStepInterruptedMetadataKey. Nothing else is loaded.
 	ListTurnResponseSourcesSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error)
-	// MeasureActiveBySession aggregates message count and content bytes on
-	// the database side (CM-ADM-001): admission sizes a session's history
-	// without shipping any payload into the process.
-	MeasureActiveBySession(ctx context.Context, sessionID string, since time.Time) (ActiveMessagesMeasure, error)
 	ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]Message, error)
 	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error)
 	ListBeforeMessageBySession(ctx context.Context, sessionID string, beforeMessageID string, limit int32) ([]Message, error)
