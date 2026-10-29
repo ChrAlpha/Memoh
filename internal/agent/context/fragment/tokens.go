@@ -75,8 +75,8 @@ func sdkMessageEstimate(msg sdk.Message) (bytes, images int) {
 		case sdk.ImagePart:
 			images++
 		default:
-			if data, err := json.Marshal(part); err == nil {
-				bytes += len(data)
+			if n, ok := partJSONBytes(part); ok {
+				bytes += n
 			}
 		}
 	}
