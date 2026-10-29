@@ -1,6 +1,7 @@
 package contextfrag
 
 import (
+	"reflect"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -289,5 +290,43 @@ func TestCompilePreservesUnmatchedExplicitMessageFrag(t *testing.T) {
 	}
 	if !assembled.Manifest.Items[0].Ref.EqualIdentity(summaryRef) {
 		t.Fatalf("unmatched explicit message ref was not preserved: %#v", assembled.Manifest.Items[0].Ref)
+	}
+}
+
+// A request is compiled again whenever the fields it compiles from change, on
+// top of the fragments its last compile produced. Recompiling from those must
+// give what compiling once from the explicit fragments they kept gives, so a
+// caller never needs a compile only to prepare the next one.
+func TestCompileOverItsOwnFragsMatchesOneCompile(t *testing.T) {
+	t.Parallel()
+
+	summary := sdk.UserMessage("<summary>\ncondensed\n</summary>")
+	summaryFrag := MessageFrag(MessageFragInput{
+		ID:      "message.001",
+		Message: summary,
+		Kind:    KindConversationSummary,
+		Slot:    SlotHistory,
+		Source:  "compaction_log",
+	})
+	summaryFrag.Ref = ContextRef{Namespace: "compaction_log", ID: "log-1", Schema: SchemaContextRef, Durability: RefDurable}
+	usage := TextFrag(TextFragInput{ID: "tool_usage", Kind: KindToolUsage, Role: sdk.MessageRoleSystem, Slot: SlotSystem, Text: "use tools", Source: SourceAgentToolUsage})
+	history := []sdk.Message{sdk.UserMessage("before"), summary, sdk.AssistantMessage("after")}
+	memory, current := 3, 4
+	final := CompileInput{
+		Source:                  SourceRunConfig,
+		System:                  "system prompt\n\n## Tool usage\n\nuse tools",
+		ToolUsage:               "## Tool usage\n\nuse tools",
+		Messages:                append(append([]sdk.Message(nil), history...), sdk.UserMessage("recall"), sdk.UserMessage("question")),
+		MemoryMessageIndex:      &memory,
+		CurrentUserMessageIndex: &current,
+		InlineImages:            []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+		Existing:                []ContextFrag{usage, summaryFrag},
+	}
+	earlier := CompileInput{Source: SourceRunConfig, Messages: history, Query: "draft", Existing: final.Existing}
+
+	recompiled := final
+	recompiled.Existing = Compile(earlier).Frags
+	if got, want := Compile(recompiled), Compile(final); !reflect.DeepEqual(got, want) {
+		t.Fatalf("recompiling over compiled fragments diverges from one compile:\ngot:  %#v\nwant: %#v", got.Frags, want.Frags)
 	}
 }
