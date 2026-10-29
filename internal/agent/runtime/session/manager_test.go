@@ -1366,6 +1366,10 @@ func runCommonRuntimeManagerContract(t *testing.T, suite runtimeBackendContractS
 		t.Parallel()
 		runRuntimeManagerSignalsSubscriberOverflowContract(t, suite)
 	})
+	t.Run("stores the cursor of every snapshot write", func(t *testing.T) {
+		t.Parallel()
+		runRuntimeBackendCursorContract(t, suite)
+	})
 	t.Run("keeps errored streams errored when abort terminal follows", func(t *testing.T) {
 		t.Parallel()
 		runRuntimeManagerKeepsErroredStreamErroredAfterAbortContract(t, suite)

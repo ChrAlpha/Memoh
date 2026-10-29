@@ -177,3 +177,95 @@ func TestRunOutputKeepsHeldOutputAcrossAFailedWrite(t *testing.T) {
 	}
 	assertRuntimeBlock(t, snapshot.CurrentRunView.Messages, chatview.UIMessageText, "", "kept lost? no")
 }
+
+type loadCountingBackend struct {
+	*MemoryBackend
+	loads atomic.Int32
+}
+
+func (b *loadCountingBackend) Load(ctx context.Context, key Key) (Snapshot, bool, error) {
+	b.loads.Add(1)
+	return b.MemoryBackend.Load(ctx, key)
+}
+
+func TestIdleSubscriptionReconcilesByCursorAlone(t *testing.T) {
+	t.Parallel()
+
+	backend := &loadCountingBackend{MemoryBackend: NewMemoryBackend()}
+	manager := testRuntimeManager(t, backend, "owner-idle-subscription")
+	const sessionID = "session-idle-subscription"
+	ctx := context.Background()
+	if err := manager.StartRun(ctx, testBotID, sessionID, testRunID, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	handle := requireRunHandle(t, manager, testBotID, sessionID, testRunID)
+	if _, err := manager.HandleAgentEvent(ctx, handle, native.StreamEvent{Type: native.EventTextDelta, Delta: "finished answer"}); err != nil {
+		t.Fatalf("handle text: %v", err)
+	}
+	if _, err := manager.FinishRun(ctx, handle, RunStatusCompleted); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+
+	sub, err := manager.Subscribe(ctx, testBotID, sessionID)
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	t.Cleanup(sub.Close)
+	baseline := waitRuntimeEvent(t, sub.C, func(event Event) bool { return event.Type == EventRuntimeSnapshot })
+	if baseline.Snapshot.CurrentRunView == nil || len(baseline.Snapshot.CurrentRunView.Messages) == 0 {
+		t.Fatalf("baseline = %#v, want the finished run's view", baseline.Snapshot.CurrentRunView)
+	}
+	loads := backend.loads.Load()
+	time.Sleep(2*time.Second + 300*time.Millisecond)
+	if got := backend.loads.Load(); got != loads {
+		t.Fatalf("idle reconcile loaded the snapshot %d times, want none while its cursor stood still", got-loads)
+	}
+
+	// A write the subscriber never received a delta for still reaches it.
+	moved, _, err := backend.Update(ctx, Key{BotID: testBotID, SessionID: sessionID}, func(snapshot Snapshot, _ bool) (Snapshot, bool, error) {
+		snapshot.Seq++
+		return snapshot, true, nil
+	})
+	if err != nil {
+		t.Fatalf("move snapshot: %v", err)
+	}
+	recovered := waitRuntimeEvent(t, sub.C, func(event Event) bool { return event.Type == EventRuntimeSnapshot })
+	if recovered.Seq != moved.Seq {
+		t.Fatalf("reconciled snapshot seq = %d, want %d", recovered.Seq, moved.Seq)
+	}
+}
+
+func runRuntimeBackendCursorContract(t *testing.T, suite runtimeBackendContractSuite) {
+	t.Helper()
+
+	backend := suite.newBackend(t)
+	manager := testRuntimeManager(t, backend, "owner-cursor")
+	const sessionID = "session-cursor"
+	key := Key{BotID: testBotID, SessionID: sessionID}
+	ctx := context.Background()
+	requireStoredCursor := func(step string) {
+		t.Helper()
+		snapshot, ok, err := backend.Load(ctx, key)
+		if err != nil || !ok {
+			t.Fatalf("%s: load snapshot = ok:%v err:%v", step, ok, err)
+		}
+		cursor, ok, err := backend.LoadCursor(ctx, key)
+		if err != nil || !ok || cursor != snapshot.cursor() {
+			t.Fatalf("%s: stored cursor = %#v ok:%v err:%v, want %#v", step, cursor, ok, err, snapshot.cursor())
+		}
+	}
+	if err := manager.StartRun(ctx, testBotID, sessionID, testRunID, make(chan struct{}, 1), func() {}, make(chan turn.InjectMessage, 1)); err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	requireStoredCursor("start")
+	handle := requireRunHandle(t, manager, testBotID, sessionID, testRunID)
+	if _, err := manager.HandleAgentEvent(ctx, handle, native.StreamEvent{Type: native.EventTextDelta, Delta: "output"}); err != nil {
+		t.Fatalf("handle text: %v", err)
+	}
+	commitHeldRunOutput(t, manager, handle)
+	requireStoredCursor("output")
+	if _, err := manager.FinishRun(ctx, handle, RunStatusCompleted); err != nil {
+		t.Fatalf("finish run: %v", err)
+	}
+	requireStoredCursor("finish")
+}

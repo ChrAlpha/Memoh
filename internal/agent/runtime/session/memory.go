@@ -270,6 +270,20 @@ func (b *MemoryBackend) Load(ctx context.Context, key Key) (Snapshot, bool, erro
 	return cloned, true, err
 }
 
+func (b *MemoryBackend) LoadCursor(ctx context.Context, key Key) (Cursor, bool, error) {
+	if err := contextError(ctx); err != nil {
+		return Cursor{}, false, err
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.purgeExpiredLocked(time.Now())
+	snapshot, ok := b.snapshots[key.String()]
+	if !ok {
+		return Cursor{}, false, nil
+	}
+	return snapshot.cursor(), true, nil
+}
+
 func (b *MemoryBackend) Update(ctx context.Context, key Key, update SnapshotUpdate) (Snapshot, bool, error) {
 	if update == nil {
 		return Snapshot{}, false, errors.New("snapshot update is required")

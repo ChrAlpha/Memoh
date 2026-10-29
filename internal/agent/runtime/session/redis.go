@@ -240,6 +240,21 @@ func (b *RedisBackend) Load(ctx context.Context, key Key) (Snapshot, bool, error
 	return snapshot, true, nil
 }
 
+func (b *RedisBackend) LoadCursor(ctx context.Context, key Key) (Cursor, bool, error) {
+	data, err := b.client.Get(ctx, b.cursorKey(key)).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return Cursor{}, false, nil
+	}
+	if err != nil {
+		return Cursor{}, false, err
+	}
+	var cursor Cursor
+	if err := json.Unmarshal(data, &cursor); err != nil {
+		return Cursor{}, false, err
+	}
+	return cursor, true, nil
+}
+
 func (b *RedisBackend) Update(ctx context.Context, key Key, update SnapshotUpdate) (Snapshot, bool, error) {
 	if update == nil {
 		return Snapshot{}, false, errors.New("snapshot update is required")
@@ -272,7 +287,7 @@ func (b *RedisBackend) Update(ctx context.Context, key Key, update SnapshotUpdat
 				return err
 			}
 			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				pipe.Set(ctx, stateKey, data, b.stateTTL)
+				b.setSnapshot(ctx, pipe, key, next, data)
 				return nil
 			}); err != nil {
 				return err
@@ -338,7 +353,7 @@ func (b *RedisBackend) UpdateActiveRun(ctx context.Context, key Key, runID, gene
 				return err
 			}
 			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				pipe.Set(ctx, stateKey, data, b.stateTTL)
+				b.setSnapshot(ctx, pipe, key, next, data)
 				return nil
 			}); err != nil {
 				return err
@@ -430,7 +445,7 @@ func (b *RedisBackend) releaseRun(ctx context.Context, key Key, ref RunRef, upda
 				return err
 			}
 			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				pipe.Set(ctx, stateKey, data, b.stateTTL)
+				b.setSnapshot(ctx, pipe, key, next, data)
 				pipe.Del(ctx, runKey)
 				// The stored ref, not the caller's, carries the token this
 				// reservation was indexed under.
@@ -512,7 +527,7 @@ func (b *RedisBackend) StartRun(ctx context.Context, key Key, ref RunRef, update
 			}
 			leaseExpiry := streamLeaseExpiry(next, runID, time.Now().Add(b.stateTTL))
 			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-				pipe.Set(ctx, stateKey, stateData, b.stateTTL)
+				b.setSnapshot(ctx, pipe, key, next, stateData)
 				pipe.Set(ctx, runKey, refData, 0)
 				pipe.PExpireAt(ctx, runKey, leaseExpiry)
 				// The index entry is what makes this reservation reapable. It is
@@ -1144,6 +1159,21 @@ func effectiveRedisHistoryReset(state redisHistoryResetState, botID, sessionID s
 
 func (b *RedisBackend) stateKey(key Key) string {
 	return b.keyPrefix + "state:" + key.String()
+}
+
+// cursorKey holds the stored snapshot's cursor beside it, so a reader that
+// only asks whether the snapshot moved does not fetch and decode a run view.
+func (b *RedisBackend) cursorKey(key Key) string {
+	return b.keyPrefix + "cursor:" + key.String()
+}
+
+// setSnapshot queues the write of a snapshot and its cursor. Every snapshot
+// write goes through it, inside the write's transaction, so the cursor key
+// never names a position the state key does not hold.
+func (b *RedisBackend) setSnapshot(ctx context.Context, pipe redis.Pipeliner, key Key, snapshot Snapshot, data []byte) {
+	cursor, _ := json.Marshal(snapshot.cursor())
+	pipe.Set(ctx, b.stateKey(key), data, b.stateTTL)
+	pipe.Set(ctx, b.cursorKey(key), cursor, b.stateTTL)
 }
 
 func (b *RedisBackend) runKey(key Key, runID string) string {

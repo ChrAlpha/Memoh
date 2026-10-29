@@ -2107,20 +2107,34 @@ func (m *Manager) Snapshot(ctx context.Context, botID, sessionID string) (Snapsh
 // the live cursor stands still, as a history reset does to it. A client
 // discards a snapshot that does not move its cursor, so a snapshot with a run
 // from the ledger carries an epoch of its own that changes with that run.
-func (m *Manager) subscriberSnapshot(ctx context.Context, botID, sessionID string) (Snapshot, error) {
+//
+// live reports that the snapshot is the live projection itself, so its cursor
+// names it: while the stored cursor stays there, so does the snapshot.
+func (m *Manager) subscriberSnapshot(ctx context.Context, botID, sessionID string) (snapshot Snapshot, live bool, err error) {
 	if m == nil || m.backend == nil {
-		return EmptySnapshot(botID, sessionID), nil
+		return EmptySnapshot(botID, sessionID), false, nil
 	}
-	snapshot, err := m.liveSnapshot(ctx, botID, sessionID)
-	if err != nil || snapshot.CurrentRunView != nil {
-		return snapshot, err
+	snapshot, err = m.liveSnapshot(ctx, botID, sessionID)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if snapshot.CurrentRunView != nil {
+		return snapshot, true, nil
 	}
 	snapshot = m.hydrateSnapshotFromLedger(ctx, snapshot)
 	if run := snapshot.CurrentRunView; run != nil && strings.TrimSpace(snapshot.Epoch) != "" {
 		sum := sha256.Sum256([]byte(strings.Join([]string{run.RunID, run.Status, run.ErrorCode, run.ProposedTerminalStatus}, "\x00")))
 		snapshot.Epoch = strings.TrimSpace(snapshot.Epoch) + ":ledger-" + hex.EncodeToString(sum[:8])
 	}
-	return snapshot, nil
+	return snapshot, false, nil
+}
+
+// liveCursorAt reports that the stored live snapshot is still at cursor, read
+// without loading the snapshot. A failed read answers no, which sends the
+// caller to the full read that reports the failure.
+func (m *Manager) liveCursorAt(ctx context.Context, key Key, cursor Cursor) bool {
+	stored, ok, err := m.backend.LoadCursor(ctx, key)
+	return err == nil && ok && stored == cursor
 }
 
 func (m *Manager) liveSnapshot(ctx context.Context, botID, sessionID string) (Snapshot, error) {
@@ -2282,7 +2296,7 @@ func (m *Manager) Subscribe(ctx context.Context, botID, sessionID string) (Subsc
 		cancel()
 		return Subscription{}, err
 	}
-	baseline, err := m.subscriberSnapshot(subCtx, key.BotID, key.SessionID)
+	baseline, baselineLive, err := m.subscriberSnapshot(subCtx, key.BotID, key.SessionID)
 	if err != nil {
 		backendSub.Close()
 		cancel()
@@ -2331,6 +2345,12 @@ func (m *Manager) Subscribe(ctx context.Context, botID, sessionID string) (Subsc
 		defer ticker.Stop()
 		lastEpoch := baseline.Epoch
 		lastSeq := baseline.Seq
+		// lastLive reports that lastEpoch and lastSeq name a live snapshot,
+		// which lets the periodic reconcile ask only whether the stored cursor
+		// moved instead of loading the whole run view, finished runs included.
+		// Read-side lease expiry (a distributed backend without a ledger)
+		// happens on the full read, so it keeps that read.
+		lastLive := baselineLive && (m.distributed == nil || m.runs != nil)
 		terminalDrop := func(message string) {
 			_ = send(Event{
 				Type:      EventRuntimeDropped,
@@ -2343,7 +2363,7 @@ func (m *Manager) Subscribe(ctx context.Context, botID, sessionID string) (Subsc
 		}
 		unreadable := false
 		reconcile := func(observedEpoch string, observedSeq int64, reason string) bool {
-			snapshot, err := m.subscriberSnapshot(subCtx, key.BotID, key.SessionID)
+			snapshot, live, err := m.subscriberSnapshot(subCtx, key.BotID, key.SessionID)
 			if err != nil {
 				if subCtx.Err() != nil {
 					return false
@@ -2360,6 +2380,7 @@ func (m *Manager) Subscribe(ctx context.Context, botID, sessionID string) (Subsc
 				return true
 			}
 			unreadable = false
+			lastLive = live && (m.distributed == nil || m.runs != nil)
 			snapshotEpoch := strings.TrimSpace(snapshot.Epoch)
 			observedEpoch = strings.TrimSpace(observedEpoch)
 			if snapshotEpoch == "" {
@@ -2438,6 +2459,7 @@ func (m *Manager) Subscribe(ctx context.Context, botID, sessionID string) (Subsc
 				}
 				if eventEpoch != "" {
 					lastEpoch = eventEpoch
+					lastLive = m.distributed == nil || m.runs != nil
 				}
 				if event.Seq > 0 {
 					lastSeq = event.Seq
@@ -2446,6 +2468,9 @@ func (m *Manager) Subscribe(ctx context.Context, botID, sessionID string) (Subsc
 					return
 				}
 			case <-ticker.C:
+				if lastLive && m.liveCursorAt(subCtx, key, Cursor{Epoch: lastEpoch, Seq: lastSeq}) {
+					continue
+				}
 				if !reconcile("", 0, "periodic runtime reconciliation") {
 					return
 				}
