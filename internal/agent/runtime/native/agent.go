@@ -303,10 +303,11 @@ func prepareProviderAttempt(
 	dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, dynamicRefs, params.Messages)
 	snapshot := contextfrag.StepSnapshot{StepIndex: stepIndex}
 	allowance := providerInputAllowance(cfg)
+	usage := providerAttemptEnvelope(params, allowance)
 	// A step request only grows between compaction events. A request that
 	// still does not fit after compaction ends the run without pruning.
 	if cfg.contextSwitch != nil {
-		switched, err := cfg.contextSwitch.fold(ctx, cfg, params, allowance)
+		switched, folded, err := cfg.contextSwitch.fold(ctx, cfg, params, allowance, usage)
 		switch {
 		case ctx.Err() != nil:
 			handoff.reject()
@@ -314,14 +315,15 @@ func prepareProviderAttempt(
 		case err != nil:
 			return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, err)
 		case switched:
+			usage = folded
 			dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, cfg.contextSwitch.remap(dynamicRefs), params.Messages)
 		}
 	}
-	if overflow := providerAttemptEnvelopeOverflow(params, allowance); overflow > 0 {
+	if allowance > 0 && usage > allowance {
 		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, fmt.Errorf(
 			"%w: input_overflow=%d allowance=%d",
 			contextfrag.ErrBudgetUnsatisfied,
-			overflow,
+			usage-allowance,
 			allowance,
 		))
 	}
@@ -343,11 +345,13 @@ func stagePreparedProviderAttempt(
 	handoff.stage(snapshot, systemPrepended, dynamicRefs)
 }
 
-func providerAttemptEnvelopeOverflow(params *sdk.Request, allowance int) int {
+// providerAttemptEnvelope prices a step request once for both the compaction
+// trigger and the envelope check; a request without an allowance is not priced.
+func providerAttemptEnvelope(params *sdk.Request, allowance int) int {
 	if params == nil || allowance <= 0 {
 		return 0
 	}
-	return contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools) - allowance
+	return contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
 }
 
 func failPreparedProviderAttempt(
