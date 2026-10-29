@@ -57,14 +57,14 @@ func (s *Service) resolveMemoryProviderWithID(ctx context.Context, botID string)
 }
 
 func (s *Service) loadMemoryContext(ctx context.Context, req ChatRequest) memoryContextLoad {
-	builtQuery := s.buildMemoryQuery(ctx, req)
-	if strings.TrimSpace(builtQuery.Query) == "" {
+	if strings.TrimSpace(req.Query) == "" {
 		return memoryContextLoad{}
 	}
 	providerID, p := s.resolveMemoryProviderWithID(ctx, req.BotID)
 	if p == nil {
 		return memoryContextLoad{}
 	}
+	builtQuery := s.buildMemoryQuery(ctx, req)
 	cacheKey := s.memoryContextCacheKey(ctx, req, providerID, p, builtQuery.Query)
 
 	before, err := s.runChatHook(ctx, req, hooks.EventBeforeMemorySearch, func(hreq *hooks.Request) {

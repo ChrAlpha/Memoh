@@ -15,6 +15,9 @@ const (
 	defaultMemoryQueryMaxBytes       = 1600
 	defaultMemoryQueryMaxLines       = 40
 	defaultMemoryQueryMessageRunes   = 280
+	// defaultMemoryQueryUserRowScan bounds the user rows read for recent
+	// context, leaving room for repeated and empty messages.
+	defaultMemoryQueryUserRowScan = 32
 )
 
 type memoryQuery struct {
@@ -40,39 +43,44 @@ func defaultMemoryQueryBuilder() memoryQueryBuilder {
 	}
 }
 
+// buildMemoryQuery searches with the current request and the user's latest
+// distinct messages before it. It reads what the user said, not the context
+// the model is shown: summaries never stand in for user messages, so only a
+// bounded slice of user rows is loaded.
 func (s *Service) buildMemoryQuery(ctx context.Context, req ChatRequest) memoryQuery {
 	builder := defaultMemoryQueryBuilder()
 	query := strings.TrimSpace(req.Query)
 	if query == "" {
 		return memoryQuery{}
 	}
-	if s == nil || s.messageService == nil {
+	sessionID := strings.TrimSpace(req.ThreadID)
+	if s == nil || s.messageService == nil || sessionID == "" {
 		return builder.Build(req, nil)
 	}
-	loaded, err := s.loadHistoryRecords(ctx, historyScopeFallbackFromChatRequest(req), req.ThreadID, 0, false)
+	rows, err := s.messageService.ListRecentUserBySession(ctx, sessionID, req.HistoryCutoffBeforeMessageID, defaultMemoryQueryUserRowScan)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.WarnContext(ctx, "memory query history load failed",
 				slog.String("bot_id", req.BotID),
 				slog.String("chat_id", req.ChatID),
-				slog.String("session_id", req.ThreadID),
+				slog.String("session_id", sessionID),
 				slog.Any("error", err),
 			)
 		}
 		return builder.Build(req, nil)
 	}
-	loaded = pruneHistoryForGateway(loaded)
-	artifactBoundary := s.loadCompactionArtifactBoundary(ctx, loaded, req.ThreadID, req.HistoryCutoffBeforeMessageID)
-	loaded = filterMessagesBeforeID(loaded, req.HistoryCutoffBeforeMessageID)
-	loaded, err = s.replaceCompactedMessages(ctx, req.ThreadID, compactionSummaryScope(req.BotID, req.ChatID, req.ThreadID, req.ConversationType, req.ConversationName, req.ReplyTarget), loaded, artifactBoundary)
-	if err != nil {
-		if s.logger != nil {
-			s.logger.WarnContext(ctx, "memory query compaction frontier load failed", slog.String("session_id", req.ThreadID), slog.Any("error", err))
-		}
-		return builder.Build(req, nil)
+	history := make([]historyfrag.HistoryRecord, 0, len(rows))
+	for _, row := range rows {
+		history = append(history, historyfrag.HistoryRecord{
+			ModelMessage:            historyfrag.DecodeStoredModelMessage(s.logger, row.ID, row.Role, row.Content),
+			DBMessageID:             row.ID,
+			ExternalMessageID:       strings.TrimSpace(row.ExternalMessageID),
+			SessionID:               strings.TrimSpace(row.SessionID),
+			SenderChannelIdentityID: strings.TrimSpace(row.SenderChannelIdentityID),
+			Platform:                strings.TrimSpace(row.Platform),
+		})
 	}
-	loaded = dedupePersistedCurrentUserMessage(loaded, req)
-	return builder.Build(req, loaded)
+	return builder.Build(req, dedupePersistedCurrentUserMessage(history, req))
 }
 
 func (b memoryQueryBuilder) Build(req ChatRequest, history []historyfrag.HistoryRecord) memoryQuery {

@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +15,46 @@ import (
 type memoryQueryMessageService struct {
 	recordingMessageService
 	messages []messagepkg.Message
+
+	historyReads    int
+	recentUserCalls []memoryQueryRecentUserCall
+}
+
+type memoryQueryRecentUserCall struct {
+	sessionID       string
+	beforeMessageID string
+	limit           int32
+}
+
+// ListRecentUserBySession follows the SQL contract over messages in history
+// order: user rows only, before the cutoff row, the newest limit oldest first.
+func (s *memoryQueryMessageService) ListRecentUserBySession(_ context.Context, sessionID, beforeMessageID string, limit int32) ([]messagepkg.Message, error) {
+	s.historyReads++
+	s.recentUserCalls = append(s.recentUserCalls, memoryQueryRecentUserCall{sessionID: sessionID, beforeMessageID: beforeMessageID, limit: limit})
+	rows := s.messages
+	if beforeMessageID != "" {
+		cutoff := slices.IndexFunc(rows, func(m messagepkg.Message) bool { return m.ID == beforeMessageID })
+		if cutoff < 0 {
+			return nil, nil
+		}
+		rows = rows[:cutoff]
+	}
+	var users []messagepkg.Message
+	for _, row := range rows {
+		if row.Role == "user" {
+			users = append(users, row)
+		}
+	}
+	return users[max(0, len(users)-int(limit)):], nil
 }
 
 func (s *memoryQueryMessageService) ListActiveSinceBySession(context.Context, string, time.Time) ([]messagepkg.Message, error) {
+	s.historyReads++
 	return append([]messagepkg.Message(nil), s.messages...), nil
 }
 
 func (s *memoryQueryMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64, bool) ([]messagepkg.Message, error) {
+	s.historyReads++
 	return append([]messagepkg.Message(nil), s.messages...), nil
 }
 
@@ -86,7 +120,7 @@ func TestMemoryQueryBuilderSkipsEmptyVisibleQuery(t *testing.T) {
 	}
 }
 
-func TestBuildMemoryQueryRespectsRetryCutoffForRawAndCompactedHistory(t *testing.T) {
+func TestBuildMemoryQueryReadsRecentUserMessagesBeforeRetryCutoff(t *testing.T) {
 	t.Parallel()
 
 	botID := "00000000-0000-0000-0000-00000000b715"
@@ -94,24 +128,24 @@ func TestBuildMemoryQueryRespectsRetryCutoffForRawAndCompactedHistory(t *testing
 	compactID := "00000000-0000-0000-0000-00000000c715"
 	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	prior := persistedHistoryMessage(t, "prior-user", "user", "prior visible context")
-	prior.BotID = botID
-	prior.SessionID = sessionID
+	prior.CompactID = compactID
 	prior.CreatedAt = base.Add(10 * time.Minute)
+	reply := persistedHistoryMessage(t, "assistant-reply", "assistant", "assistant reply")
+	reply.CreatedAt = base.Add(15 * time.Minute)
 	cutoff := persistedHistoryMessage(t, "cutoff-user", "user", "edited-away request")
-	cutoff.BotID = botID
-	cutoff.SessionID = sessionID
 	cutoff.CreatedAt = base.Add(20 * time.Minute)
 
+	messages := &memoryQueryMessageService{messages: []messagepkg.Message{prior, reply, cutoff}}
 	resolver := &Service{
-		messageService: &memoryQueryMessageService{messages: []messagepkg.Message{prior, cutoff}},
+		messageService: messages,
 		queries: &recordingCompactionLogQueries{logs: []sqlc.BotHistoryMessageCompact{{
 			ID:            mustPGUUID(t, compactID),
 			BotID:         mustPGUUID(t, botID),
 			SessionID:     mustPGUUID(t, sessionID),
 			Status:        "ok",
-			Summary:       "edited-away compacted context",
-			AnchorStartMs: base.Add(15 * time.Minute).UnixMilli(),
-			AnchorEndMs:   cutoff.CreatedAt.UnixMilli(),
+			Summary:       "compacted summary text",
+			AnchorStartMs: prior.CreatedAt.UnixMilli(),
+			AnchorEndMs:   prior.CreatedAt.UnixMilli(),
 		}}},
 	}
 	query := resolver.buildMemoryQuery(context.Background(), ChatRequest{
@@ -121,12 +155,41 @@ func TestBuildMemoryQueryRespectsRetryCutoffForRawAndCompactedHistory(t *testing
 		HistoryCutoffBeforeMessageID: cutoff.ID,
 	})
 
-	if !strings.Contains(query.Query, "prior visible context") {
-		t.Fatalf("memory query lost pre-cutoff context: %q", query.Query)
+	want := memoryQueryRecentUserCall{sessionID: sessionID, beforeMessageID: cutoff.ID, limit: defaultMemoryQueryUserRowScan}
+	if len(messages.recentUserCalls) != 1 || messages.recentUserCalls[0] != want {
+		t.Fatalf("recent user reads = %+v, want one %+v", messages.recentUserCalls, want)
 	}
-	for _, excluded := range []string{"edited-away request", "edited-away compacted context"} {
+	if !strings.Contains(query.Query, "prior visible context") {
+		t.Fatalf("memory query lost the user's own compacted message: %q", query.Query)
+	}
+	for _, excluded := range []string{"edited-away request", "assistant reply", "compacted summary text"} {
 		if strings.Contains(query.Query, excluded) {
-			t.Fatalf("memory query resurrected %q across retry cutoff: %q", excluded, query.Query)
+			t.Fatalf("memory query carried %q: %q", excluded, query.Query)
 		}
+	}
+}
+
+func TestBuildMemoryQuerySkipsPersistedCurrentUserMessage(t *testing.T) {
+	t.Parallel()
+
+	earlier := persistedHistoryMessage(t, "earlier-user", "user", "earlier request")
+	current := persistedHistoryMessage(t, "current-user", "user", "[header] current request")
+	current.ExternalMessageID = "external-1"
+	current.Platform = "telegram"
+	resolver := &Service{messageService: &memoryQueryMessageService{messages: []messagepkg.Message{earlier, current}}}
+
+	query := resolver.buildMemoryQuery(context.Background(), ChatRequest{
+		ThreadID:             "00000000-0000-0000-0000-00000000e716",
+		Query:                "current request",
+		UserMessagePersisted: true,
+		ExternalMessageID:    "external-1",
+		CurrentChannel:       "telegram",
+	})
+
+	if query.RecentMessages != 1 || !strings.Contains(query.Query, "earlier request") {
+		t.Fatalf("memory query = %+v, want the earlier request as its only recent message", query)
+	}
+	if strings.Contains(query.Query, "[header]") {
+		t.Fatalf("memory query repeated the persisted current message: %q", query.Query)
 	}
 }

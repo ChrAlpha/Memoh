@@ -8,7 +8,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/hooks"
 	memprovider "github.com/felinics/memoh/internal/memory/adapters"
 	"github.com/felinics/memoh/internal/settings"
@@ -26,6 +31,39 @@ func TestLoadMemoryContextMessage_NoProvider(t *testing.T) {
 	if got.Message != nil || got.Trace != nil {
 		t.Fatalf("expected empty memory load when no memory provider is configured: %#v", got)
 	}
+}
+
+func TestLoadMemoryContextReadsNoHistoryWithoutProvider(t *testing.T) {
+	t.Parallel()
+
+	messages := &memoryQueryMessageService{messages: []messagepkg.Message{
+		persistedHistoryMessage(t, "earlier-user", "user", "earlier request"),
+	}}
+	resolver := &Service{
+		messageService:  messages,
+		memoryRegistry:  memprovider.NewRegistry(slog.New(slog.DiscardHandler)),
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &noMemoryProviderSettingsQueries{}, nil, nil),
+		logger:          slog.New(slog.DiscardHandler),
+	}
+	got := resolver.loadMemoryContext(context.Background(), ChatRequest{
+		Query:    "hello",
+		BotID:    storeRoundBotID,
+		ThreadID: "00000000-0000-0000-0000-00000000e717",
+	})
+	if got.Message != nil || got.Trace != nil {
+		t.Fatalf("expected empty memory load without a memory provider: %#v", got)
+	}
+	if messages.historyReads != 0 {
+		t.Fatalf("memory query read history %d times for a bot without a memory provider", messages.historyReads)
+	}
+}
+
+type noMemoryProviderSettingsQueries struct {
+	dbstore.Queries
+}
+
+func (*noMemoryProviderSettingsQueries) GetSettingsByBotID(_ context.Context, botID pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {
+	return sqlc.GetSettingsByBotIDRow{BotID: botID, ReasoningEffort: "medium"}, nil
 }
 
 func TestLoadMemoryContextMessageSkipsEmptyQuery(t *testing.T) {

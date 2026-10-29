@@ -41,6 +41,18 @@ func (h *ageFilteredHistory) ListTurnResponseSourcesSinceBySessionWithinBytes(_ 
 	return h.selectSince(since, budget), nil
 }
 
+// ListRecentUserBySession takes no time bound, so the memory query cannot
+// reintroduce an age cutoff.
+func (h *ageFilteredHistory) ListRecentUserBySession(context.Context, string, string, int32) ([]messagepkg.Message, error) {
+	var rows []messagepkg.Message
+	for _, row := range h.rows {
+		if row.Role == "user" {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
+}
+
 func TestSessionHistorySurvivesIdleDays(t *testing.T) {
 	old := time.Now().Add(-72 * time.Hour)
 	user := persistedHistoryMessage(t, "old-user", "user", "project codeword BLUE_WHALE")
