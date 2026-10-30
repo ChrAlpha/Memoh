@@ -4084,7 +4084,7 @@ export type SearchprovidersProviderMeta = {
     provider?: string;
 };
 
-export type SearchprovidersProviderName = 'brave' | 'bing' | 'google' | 'tavily' | 'sogou' | 'serper' | 'searxng' | 'jina' | 'exa' | 'bocha' | 'duckduckgo' | 'yandex';
+export type SearchprovidersProviderName = 'brave' | 'bing' | 'google' | 'tavily' | 'sogou' | 'serper' | 'searxng' | 'jina' | 'exa' | 'bocha' | 'duckduckgo' | 'yandex' | 'deepseek';
 
 export type SearchprovidersUpdateRequest = {
     config?: {
