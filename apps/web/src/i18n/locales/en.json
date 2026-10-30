@@ -2154,7 +2154,8 @@
       "exa": "Exa",
       "bocha": "Bocha",
       "duckduckgo": "DuckDuckGo",
-      "yandex": "Yandex"
+      "yandex": "Yandex",
+      "deepseek": "DeepSeek"
     },
     "fetchProviderNames": {
       "native": "Native",
