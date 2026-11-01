@@ -12,19 +12,21 @@ import (
 )
 
 // A spawned task reads its own thread's window, sized for the model it runs
-// on, and names its persisted request so that row is not replayed twice.
+// on, and names its persisted request and admitted turn so that row is not
+// replayed twice and a compaction the load needs folds only what precedes it.
 func TestSpawnedTaskReadsItsThreadWindowForItsModel(t *testing.T) {
 	agent := &fakeSpawnAgent{}
 	p, _, _, messages := newAgentControlProvider(t, agent)
 	loader := &fakeTranscriptLoader{messages: messages}
 	p.SetTranscriptLoader(loader)
 	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
-		return resolvedSubagentModel{Model: &sdk.Model{}, ModelID: "model-2", ContextBudgetMaxTokens: 64000}, nil
+		return resolvedSubagentModel{Model: &sdk.Model{}, UUID: "model-uuid-2", ModelID: "model-2", ContextBudgetMaxTokens: 64000}, nil
 	}
 	session := SessionContext{
 		BotID:                  "bot1",
 		ChatID:                 "chat1",
 		SessionID:              "parent1",
+		UserID:                 "user1",
 		ConversationType:       "group",
 		ReplyTarget:            "target1",
 		ContextBudgetMaxTokens: 128000,
@@ -40,13 +42,21 @@ func TestSpawnedTaskReadsItsThreadWindowForItsModel(t *testing.T) {
 	if len(stored) == 0 {
 		t.Fatal("task request was not persisted")
 	}
+	// The fake admitter allocates every task turn 1.
+	if req.TurnPosition == nil || *req.TurnPosition != 1 {
+		t.Fatalf("transcript turn = %v, want the task's admitted turn 1", req.TurnPosition)
+	}
+	req.TurnPosition = nil
 	want := SubagentTranscriptRequest{
 		BotID:              "bot1",
 		ChatID:             "chat1",
 		SessionID:          result["session_id"].(string),
+		UserID:             "user1",
 		ConversationType:   "group",
 		ReplyTarget:        "target1",
+		Query:              "alpha",
 		RequestMessageID:   stored[0].ID,
+		ModelID:            "model-uuid-2",
 		ContextTokenBudget: 64000,
 	}
 	if req != want {
