@@ -66,13 +66,12 @@ HAVING NOT CASE
 -- name: ListSessionEventsBySessionPageBeforeWithinBytes :many
 -- Replay reads newest-first with a stable keyset and a hard page-byte budget.
 -- The events of the messages the checkpoint stands for whole are excluded in
--- SQL before event_data reaches the process.
-WITH candidates AS MATERIALIZED (
-  SELECT
-    event.id,
-    event.received_at_ms,
-    event.created_at,
-    octet_length(event.event_data::text)::BIGINT AS payload_bytes
+-- SQL before event_data reaches the process. The page is cut by the keyset
+-- before any payload is measured: an event's cumulative bytes count only the
+-- events ahead of it, so measuring the page alone admits exactly what
+-- measuring every older event would.
+WITH page AS MATERIALIZED (
+  SELECT event.id
   FROM bot_session_events event
   WHERE event.team_id = public.memoh_current_team_id()
     AND event.session_id = sqlc.arg(session_id)
@@ -89,36 +88,38 @@ WITH candidates AS MATERIALIZED (
       FROM unnest(sqlc.arg(folded_message_ids)::text[]) AS folded(external_message_id)
       WHERE folded.external_message_id = event.external_message_id
     )
-), ranked AS MATERIALIZED (
+  ORDER BY event.received_at_ms DESC, event.created_at DESC, event.id DESC
+  LIMIT sqlc.arg(page_size)
+), measured AS (
   SELECT
-    candidates.*,
+    event.*,
+    octet_length(event.event_data::text)::BIGINT AS payload_bytes
+  FROM page
+  JOIN bot_session_events event ON event.id = page.id
+), ranked AS (
+  SELECT
+    measured.*,
     SUM(payload_bytes) OVER (
       ORDER BY received_at_ms DESC, created_at DESC, id DESC
     )::BIGINT AS cumulative_bytes
-  FROM candidates
-), admitted AS MATERIALIZED (
-  SELECT *
-  FROM ranked
-  WHERE cumulative_bytes <= sqlc.arg(max_bytes)::BIGINT
-  ORDER BY received_at_ms DESC, created_at DESC, id DESC
-  LIMIT sqlc.arg(page_size)
+  FROM measured
 )
 SELECT
-  event.id,
-  event.team_id,
-  event.bot_id,
-  event.session_id,
-  event.event_kind,
-  event.event_data,
-  event.external_message_id,
-  event.sender_channel_identity_id,
-  event.received_at_ms,
-  event.created_at,
-  admitted.payload_bytes,
-  admitted.cumulative_bytes
-FROM admitted
-JOIN bot_session_events event ON event.id = admitted.id
-ORDER BY event.received_at_ms DESC, event.created_at DESC, event.id DESC;
+  id,
+  team_id,
+  bot_id,
+  session_id,
+  event_kind,
+  event_data,
+  external_message_id,
+  sender_channel_identity_id,
+  received_at_ms,
+  created_at,
+  payload_bytes,
+  cumulative_bytes
+FROM ranked
+WHERE cumulative_bytes <= sqlc.arg(max_bytes)::BIGINT
+ORDER BY received_at_ms DESC, created_at DESC, id DESC;
 
 -- name: ListSessionEventsByBot :many
 SELECT * FROM bot_session_events

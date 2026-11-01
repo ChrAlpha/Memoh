@@ -2,6 +2,7 @@ package timeline
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -19,11 +21,17 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
-// Replay and classification read the session's checkpoint the same way: a
-// message whose rows it folds leaves replay unless it changed after its
-// rows were written, a message whose rows it leaves raw replays whole, and
-// chatter without rows replays.
-func TestPostgresReplayAndClassificationFollowTheCheckpoint(t *testing.T) {
+// replayTestSession opens the test database and creates a bot session to
+// replay, removed with its bot when the test ends.
+type replayTestSession struct {
+	pool             *pgxpool.Pool
+	queries          *postgresstore.Queries
+	botID, sessionID string
+	exec             func(sql string, args ...any)
+}
+
+func openReplayTestSession(t *testing.T) (context.Context, replayTestSession) {
+	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
 	if dsn == "" {
 		t.Skip("set TEST_POSTGRES_DSN to run the timeline PostgreSQL integration")
@@ -55,7 +63,22 @@ func TestPostgresReplayAndClassificationFollowTheCheckpoint(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
 	})
 
-	queries := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))
+	return ctx, replayTestSession{
+		pool:      pool,
+		queries:   postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool)),
+		botID:     botID,
+		sessionID: sessionID,
+		exec:      exec,
+	}
+}
+
+// Replay and classification read the session's checkpoint the same way: a
+// message whose rows it folds leaves replay unless it changed after its
+// rows were written, a message whose rows it leaves raw replays whole, and
+// chatter without rows replays.
+func TestPostgresReplayAndClassificationFollowTheCheckpoint(t *testing.T) {
+	ctx, session := openReplayTestSession(t)
+	queries, botID, sessionID, exec := session.queries, session.botID, session.sessionID, session.exec
 	events := NewEventStore(nil, queries)
 	received := time.Now().Add(-time.Hour).UnixMilli()
 	persist := func(event CanonicalEvent) (string, int64) {
@@ -135,5 +158,111 @@ func TestPostgresReplayAndClassificationFollowTheCheckpoint(t *testing.T) {
 	}
 	if !reflect.DeepEqual(held.Messages, want) {
 		t.Fatalf("classified = %+v, want %+v", held.Messages, want)
+	}
+}
+
+// replayPageMeasuringEveryCandidate is the page as it reads when every
+// candidate older than the cursor is measured before the page is cut: the
+// definition the replay page query must keep while it measures only the page.
+const replayPageMeasuringEveryCandidate = `
+WITH candidates AS MATERIALIZED (
+  SELECT event.id, event.received_at_ms, event.created_at,
+    octet_length(event.event_data::text)::BIGINT AS payload_bytes
+  FROM bot_session_events event
+  WHERE event.team_id = public.memoh_current_team_id()
+    AND event.session_id = $1
+    AND (NOT $2::boolean OR (event.received_at_ms, event.created_at, event.id) < ($3::BIGINT, $4::TIMESTAMPTZ, $5::UUID))
+    AND NOT (event.external_message_id IS NOT NULL AND event.external_message_id = ANY($6::text[]))
+), ranked AS MATERIALIZED (
+  SELECT candidates.*, SUM(payload_bytes) OVER (ORDER BY received_at_ms DESC, created_at DESC, id DESC)::BIGINT AS cumulative_bytes
+  FROM candidates
+)
+SELECT id::text, payload_bytes, cumulative_bytes
+FROM ranked
+WHERE cumulative_bytes <= $7::BIGINT
+ORDER BY received_at_ms DESC, created_at DESC, id DESC
+LIMIT $8`
+
+// The replay page is cut by the keyset before payloads are measured. A
+// cumulative byte count includes only the events ahead of it, so every page
+// of every replay admits the same events with the same counts as measuring
+// all older candidates first, across ties on received time, folded messages,
+// and budgets that end inside a page.
+func TestPostgresReplayPageMeasuresOnlyThePage(t *testing.T) {
+	ctx, session := openReplayTestSession(t)
+	tied := time.Now().Add(-time.Hour)
+	for i := range 60 {
+		var externalID any
+		if i%5 != 0 {
+			externalID = fmt.Sprintf("m%02d", i)
+		}
+		// Every third event shares its received time and creation time with
+		// the next, so the id decides their order.
+		receivedAt, createdAt := int64(1000+i), tied.Add(time.Duration(i)*time.Millisecond)
+		if i%3 == 1 {
+			receivedAt, createdAt = int64(1000+i-1), tied.Add(time.Duration(i-1)*time.Millisecond)
+		}
+		session.exec(`INSERT INTO bot_session_events (bot_id, session_id, event_kind, event_data, external_message_id, received_at_ms, created_at)
+			VALUES ($1, $2, 'message', jsonb_build_object('text', repeat('x', $3::int)), $4, $5, $6)`,
+			session.botID, session.sessionID, 10+(i*37)%400, externalID, receivedAt, createdAt)
+	}
+	pgSessionID, err := dbpkg.ParseUUID(session.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	folded := []string{"m03", "m04", "m21", "m58"}
+
+	type admitted struct {
+		id                string
+		payload, cumulate int64
+	}
+	for _, pageSize := range []int32{1, 7, 25, 256} {
+		for _, budget := range []int64{150, 2_000, 9_000, 1 << 20} {
+			t.Run(fmt.Sprintf("page %d budget %d", pageSize, budget), func(t *testing.T) {
+				params := dbsqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams{
+					SessionID: pgSessionID, FoldedMessageIds: folded, MaxBytes: budget, PageSize: pageSize,
+				}
+				for pageNumber := 0; ; pageNumber++ {
+					page, err := session.queries.ListSessionEventsBySessionPageBeforeWithinBytes(ctx, params)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got := make([]admitted, 0, len(page))
+					for _, row := range page {
+						got = append(got, admitted{row.ID.String(), row.PayloadBytes, row.CumulativeBytes})
+					}
+					rows, err := session.pool.Query(ctx, replayPageMeasuringEveryCandidate, pgSessionID, params.HasCursor,
+						params.BeforeReceivedAtMs, params.BeforeCreatedAt, params.BeforeID, folded, params.MaxBytes, params.PageSize)
+					if err != nil {
+						t.Fatal(err)
+					}
+					want := []admitted{}
+					for rows.Next() {
+						var a admitted
+						if err := rows.Scan(&a.id, &a.payload, &a.cumulate); err != nil {
+							t.Fatal(err)
+						}
+						want = append(want, a)
+					}
+					rows.Close()
+					if err := rows.Err(); err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(got, want) {
+						t.Fatalf("page %d = %v, want %v", pageNumber, got, want)
+					}
+					if len(page) == 0 {
+						return
+					}
+					last := page[len(page)-1]
+					params.HasCursor = true
+					params.BeforeReceivedAtMs, params.BeforeCreatedAt, params.BeforeID = last.ReceivedAtMs, last.CreatedAt, last.ID
+					params.MaxBytes -= last.CumulativeBytes
+					if len(page) < int(pageSize) || params.MaxBytes <= 0 {
+						return
+					}
+				}
+			})
+		}
 	}
 }

@@ -189,68 +189,66 @@ func (q *Queries) ListSessionEventsBySessionAfter(ctx context.Context, arg ListS
 }
 
 const listSessionEventsBySessionPageBeforeWithinBytes = `-- name: ListSessionEventsBySessionPageBeforeWithinBytes :many
-WITH candidates AS MATERIALIZED (
-  SELECT
-    event.id,
-    event.received_at_ms,
-    event.created_at,
-    octet_length(event.event_data::text)::BIGINT AS payload_bytes
+WITH page AS MATERIALIZED (
+  SELECT event.id
   FROM bot_session_events event
   WHERE event.team_id = public.memoh_current_team_id()
-    AND event.session_id = $1
+    AND event.session_id = $2
     AND (
-      NOT $2::boolean
+      NOT $3::boolean
       OR (event.received_at_ms, event.created_at, event.id) < (
-        $3::BIGINT,
-        $4::TIMESTAMPTZ,
-        $5::UUID
+        $4::BIGINT,
+        $5::TIMESTAMPTZ,
+        $6::UUID
       )
     )
     AND NOT EXISTS (
       SELECT 1
-      FROM unnest($6::text[]) AS folded(external_message_id)
+      FROM unnest($7::text[]) AS folded(external_message_id)
       WHERE folded.external_message_id = event.external_message_id
     )
-), ranked AS MATERIALIZED (
+  ORDER BY event.received_at_ms DESC, event.created_at DESC, event.id DESC
+  LIMIT $8
+), measured AS (
   SELECT
-    candidates.id, candidates.received_at_ms, candidates.created_at, candidates.payload_bytes,
+    event.id, event.bot_id, event.session_id, event.event_kind, event.event_data, event.external_message_id, event.sender_channel_identity_id, event.received_at_ms, event.created_at, event.team_id,
+    octet_length(event.event_data::text)::BIGINT AS payload_bytes
+  FROM page
+  JOIN bot_session_events event ON event.id = page.id
+), ranked AS (
+  SELECT
+    measured.id, measured.bot_id, measured.session_id, measured.event_kind, measured.event_data, measured.external_message_id, measured.sender_channel_identity_id, measured.received_at_ms, measured.created_at, measured.team_id, measured.payload_bytes,
     SUM(payload_bytes) OVER (
       ORDER BY received_at_ms DESC, created_at DESC, id DESC
     )::BIGINT AS cumulative_bytes
-  FROM candidates
-), admitted AS MATERIALIZED (
-  SELECT id, received_at_ms, created_at, payload_bytes, cumulative_bytes
-  FROM ranked
-  WHERE cumulative_bytes <= $7::BIGINT
-  ORDER BY received_at_ms DESC, created_at DESC, id DESC
-  LIMIT $8
+  FROM measured
 )
 SELECT
-  event.id,
-  event.team_id,
-  event.bot_id,
-  event.session_id,
-  event.event_kind,
-  event.event_data,
-  event.external_message_id,
-  event.sender_channel_identity_id,
-  event.received_at_ms,
-  event.created_at,
-  admitted.payload_bytes,
-  admitted.cumulative_bytes
-FROM admitted
-JOIN bot_session_events event ON event.id = admitted.id
-ORDER BY event.received_at_ms DESC, event.created_at DESC, event.id DESC
+  id,
+  team_id,
+  bot_id,
+  session_id,
+  event_kind,
+  event_data,
+  external_message_id,
+  sender_channel_identity_id,
+  received_at_ms,
+  created_at,
+  payload_bytes,
+  cumulative_bytes
+FROM ranked
+WHERE cumulative_bytes <= $1::BIGINT
+ORDER BY received_at_ms DESC, created_at DESC, id DESC
 `
 
 type ListSessionEventsBySessionPageBeforeWithinBytesParams struct {
+	MaxBytes           int64              `json:"max_bytes"`
 	SessionID          pgtype.UUID        `json:"session_id"`
 	HasCursor          bool               `json:"has_cursor"`
 	BeforeReceivedAtMs int64              `json:"before_received_at_ms"`
 	BeforeCreatedAt    pgtype.Timestamptz `json:"before_created_at"`
 	BeforeID           pgtype.UUID        `json:"before_id"`
 	FoldedMessageIds   []string           `json:"folded_message_ids"`
-	MaxBytes           int64              `json:"max_bytes"`
 	PageSize           int32              `json:"page_size"`
 }
 
@@ -271,16 +269,19 @@ type ListSessionEventsBySessionPageBeforeWithinBytesRow struct {
 
 // Replay reads newest-first with a stable keyset and a hard page-byte budget.
 // The events of the messages the checkpoint stands for whole are excluded in
-// SQL before event_data reaches the process.
+// SQL before event_data reaches the process. The page is cut by the keyset
+// before any payload is measured: an event's cumulative bytes count only the
+// events ahead of it, so measuring the page alone admits exactly what
+// measuring every older event would.
 func (q *Queries) ListSessionEventsBySessionPageBeforeWithinBytes(ctx context.Context, arg ListSessionEventsBySessionPageBeforeWithinBytesParams) ([]ListSessionEventsBySessionPageBeforeWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listSessionEventsBySessionPageBeforeWithinBytes,
+		arg.MaxBytes,
 		arg.SessionID,
 		arg.HasCursor,
 		arg.BeforeReceivedAtMs,
 		arg.BeforeCreatedAt,
 		arg.BeforeID,
 		arg.FoldedMessageIds,
-		arg.MaxBytes,
 		arg.PageSize,
 	)
 	if err != nil {
