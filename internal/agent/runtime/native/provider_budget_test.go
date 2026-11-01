@@ -22,7 +22,7 @@ func TestProviderAttemptEnvelopeUsesConservativeProviderEstimator(t *testing.T) 
 	}
 
 	const allowance = 1000
-	if got := providerAttemptEnvelope(params, allowance); got != 64 {
+	if got := providerAttemptEnvelope(RunConfig{}, params, allowance); got != 64 {
 		t.Fatalf("providerAttemptEnvelope() = %d, want 64 (ceil(101/4)*1.25 + ceil(103/4)*1.25)", got)
 	}
 }
@@ -43,7 +43,7 @@ func TestProviderAttemptEnvelopePricesImagesFlat(t *testing.T) {
 	if prefixCost != 1_509 {
 		t.Fatalf("photo prefix cost = %d, want 1509 (flat image + 9 text tokens)", prefixCost)
 	}
-	if usage := providerAttemptEnvelope(params, allowance); usage > allowance {
+	if usage := providerAttemptEnvelope(RunConfig{}, params, allowance); usage > allowance {
 		t.Fatalf("providerAttemptEnvelope() = %d, want a photo turn to stay inside the allowance %d", usage, allowance)
 	}
 }

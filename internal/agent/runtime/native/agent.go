@@ -302,8 +302,11 @@ func prepareProviderAttempt(
 	prefixCount = clampStableMessageCount(prefixCount, len(params.Messages))
 	dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, dynamicRefs, params.Messages)
 	snapshot := contextfrag.StepSnapshot{StepIndex: stepIndex}
-	allowance := providerInputAllowance(cfg)
-	usage := providerAttemptEnvelope(params, allowance)
+	// The allowance is what the provider counts; an armed run measures the
+	// request by its estimate, calibrated by what the provider counted for
+	// the run's or the session's latest step.
+	allowance := cfg.contextSwitch.calibrated(providerInputAllowance(cfg))
+	usage := providerAttemptEnvelope(cfg, params, allowance)
 	// A step request only grows between compaction events. A request that
 	// still does not fit after compaction ends the run without pruning.
 	if cfg.contextSwitch != nil {
@@ -327,6 +330,7 @@ func prepareProviderAttempt(
 			allowance,
 		))
 	}
+	cfg.contextSwitch.staged(usage)
 	stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, dynamicRefs)
 	return params
 }
@@ -345,10 +349,11 @@ func stagePreparedProviderAttempt(
 	handoff.stage(snapshot, systemPrepended, dynamicRefs)
 }
 
-// providerAttemptEnvelope prices a step request once for both the compaction
-// trigger and the envelope check; a request without an allowance is not priced.
-func providerAttemptEnvelope(params *sdk.Request, allowance int) int {
-	if params == nil || allowance <= 0 {
+// providerAttemptEnvelope prices a step request once for the compaction
+// trigger, the envelope check and an armed run's calibration; a request
+// without an allowance that no calibration reads is not priced.
+func providerAttemptEnvelope(cfg RunConfig, params *sdk.Request, allowance int) int {
+	if params == nil || allowance <= 0 && cfg.contextSwitch == nil {
 		return 0
 	}
 	return contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
@@ -371,16 +376,25 @@ func failPreparedProviderAttempt(
 	return params
 }
 
+// providerWindow is the context window every provider dispatch of the run
+// is sized for and the output it reserves, whether the plan recorded them or
+// the run assembled its context without a plan.
+func providerWindow(cfg RunConfig) (window, reserve int) {
+	window = cfg.ContextBudgetMaxTokens
+	if plan := cfg.ContextManifest.BudgetPlan; plan != nil {
+		return plan.Window, plan.OutputReserve
+	}
+	if window > 0 {
+		reserve = cfg.GenerationLimits().MaxOutputTokens
+	}
+	return window, reserve
+}
+
 // providerInputAllowance is the input allowance every provider dispatch is
 // checked against: the window minus the output reserve, whether the plan
 // recorded it or the run assembled its context without a plan.
 func providerInputAllowance(cfg RunConfig) int {
-	window, reserve := cfg.ContextBudgetMaxTokens, 0
-	if plan := cfg.ContextManifest.BudgetPlan; plan != nil {
-		window, reserve = plan.Window, plan.OutputReserve
-	} else if window > 0 {
-		reserve = cfg.GenerationLimits().MaxOutputTokens
-	}
+	window, reserve := providerWindow(cfg)
 	if window <= 0 {
 		return 0
 	}
