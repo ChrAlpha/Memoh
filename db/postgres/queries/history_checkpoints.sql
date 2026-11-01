@@ -214,8 +214,10 @@ WHERE m.team_id = public.memoh_current_team_id()
 -- older rows are never measured, however much history the checkpoint leaves
 -- raw. truncated reports that the budget, not the window, ended the walk:
 -- context rows of the window remain older than the oldest it admitted. Only
--- content is budgeted: full rows, metadata included, still load, so callers
--- that need content alone use ListTurnResponseSourcesAfterWithinBytes.
+-- content is budgeted: full rows still load, so callers that need content
+-- alone use ListTurnResponseSourcesAfterWithinBytes. Metadata loads without
+-- the per-run context_lifecycle audit: no history record keeps it, and legacy
+-- snapshots can dwarf the content.
 WITH RECURSIVE history_window AS (
   (
     SELECT m.id, m.turn_position, m.turn_message_seq, m.created_at,
@@ -289,7 +291,7 @@ SELECT
   m.source_reply_to_message_id,
   m.role,
   m.content,
-  m.metadata,
+  (m.metadata - 'context_lifecycle'::text)::jsonb AS metadata,
   m.usage,
   m.session_mode,
   m.runtime_type,
@@ -323,7 +325,8 @@ WHERE m.team_id = public.memoh_current_team_id()
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
 -- name: ListHistoryMessagesByIDs :many
--- The rows a checkpoint keeps by reference, as context rows, in turn order.
+-- The rows a checkpoint keeps by reference, as context rows, in turn order,
+-- loaded as ListHistoryMessagesAfterWithinBytes loads them.
 SELECT
   m.id,
   m.bot_id,
@@ -334,7 +337,7 @@ SELECT
   m.source_reply_to_message_id,
   m.role,
   m.content,
-  m.metadata,
+  (m.metadata - 'context_lifecycle'::text)::jsonb AS metadata,
   m.usage,
   m.session_mode,
   m.runtime_type,

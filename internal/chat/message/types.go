@@ -281,9 +281,10 @@ type Service interface {
 	// HistoryWindow (CM-ADM-001): its context rows are admitted newest-first
 	// until their content byte total crosses window.MaxBytes, and the load
 	// reports whether that left older rows of the window out. Only content is
-	// budgeted, so metadata is returned undecoded in RawMetadata (Metadata
-	// stays nil): callers decode one row at a time instead of holding every
-	// row's decoded metadata, which legacy lifecycle audits can inflate.
+	// budgeted, so metadata is returned without the per-run lifecycle audit,
+	// which no history record keeps and legacy snapshots inflate, and
+	// undecoded in RawMetadata (Metadata stays nil): callers decode one row at
+	// a time instead of holding every row's decoded metadata.
 	ListHistoryWithinBytes(ctx context.Context, sessionID string, window HistoryWindow) (HistoryLoad, error)
 	// ListHistoryByIDs loads the named context rows of a session, as
 	// ListHistoryWithinBytes loads them, in history order: the rows a history

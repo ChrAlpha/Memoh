@@ -117,7 +117,8 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 					t.Fatalf("loaded %d rows, want %d active rows", len(got), len(flags))
 				}
 				// Full-row admission keeps the same window but hands metadata
-				// over undecoded, for history records to decode row by row.
+				// over undecoded and without the lifecycle audit, for history
+				// records to decode row by row; rows by ID load the same way.
 				fullLoad, err := svc.ListHistoryWithinBytes(ctx, postgresMessageTestSessionID, HistoryWindow{After: after, MaxBytes: budget})
 				if err != nil {
 					t.Fatal(err)
@@ -126,9 +127,30 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 				if len(full) != len(window) {
 					t.Fatalf("full window length=%d, want %d", len(full), len(window))
 				}
+				ids := make([]string, 0, len(window))
+				for _, row := range window {
+					ids = append(ids, row.ID.String())
+				}
+				byID, err := svc.ListHistoryByIDs(ctx, postgresMessageTestSessionID, ids)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(byID) != len(window) {
+					t.Fatalf("rows by ID length=%d, want %d", len(byID), len(window))
+				}
 				for i, m := range full {
+					var metadata map[string]any
+					if err := json.Unmarshal(m.RawMetadata, &metadata); err != nil {
+						t.Fatal(err)
+					}
+					if _, audited := metadata["context_lifecycle"]; audited || len(metadata) != 2 {
+						t.Fatalf("full row %d loaded %d metadata keys (lifecycle audit: %t), want the two flags alone", i, len(metadata), audited)
+					}
 					if m.ID != window[i].ID.String() || m.Metadata != nil || !bytes.Equal(m.RawMetadata, window[i].Metadata) {
 						t.Fatalf("full row %d decoded or lost its metadata", i)
+					}
+					if byID[i].ID != m.ID || byID[i].Metadata != nil || !bytes.Equal(byID[i].RawMetadata, m.RawMetadata) {
+						t.Fatalf("row %d by ID loads metadata unlike the window", i)
 					}
 				}
 			})
