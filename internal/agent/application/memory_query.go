@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/prune"
 	"github.com/felinics/memoh/internal/textutil"
 )
@@ -45,8 +46,9 @@ func defaultMemoryQueryBuilder() memoryQueryBuilder {
 
 // buildMemoryQuery searches with the current request and the user's latest
 // distinct messages before it. It reads what the user said, not the context
-// the model is shown: summaries never stand in for user messages, so only a
-// bounded slice of user rows is loaded.
+// the model is shown: the history checkpoint does not apply and summaries
+// never stand in for user messages, so only a bounded slice of user rows is
+// loaded, however much of the history a checkpoint folded.
 func (s *Service) buildMemoryQuery(ctx context.Context, req ChatRequest) memoryQuery {
 	builder := defaultMemoryQueryBuilder()
 	query := strings.TrimSpace(req.Query)
@@ -57,7 +59,11 @@ func (s *Service) buildMemoryQuery(ctx context.Context, req ChatRequest) memoryQ
 	if s == nil || s.messageService == nil || sessionID == "" {
 		return builder.Build(req, nil)
 	}
-	rows, err := s.messageService.ListRecentUserBySession(ctx, sessionID, req.HistoryCutoffBeforeMessageID, defaultMemoryQueryUserRowScan)
+	var rows []messagepkg.Message
+	cut, err := s.loadHistoryCut(ctx, req)
+	if err == nil {
+		rows, err = s.messageService.ListRecentUserHistory(ctx, sessionID, cut.before, defaultMemoryQueryUserRowScan)
+	}
 	if err != nil {
 		if s.logger != nil {
 			s.logger.WarnContext(ctx, "memory query history load failed",

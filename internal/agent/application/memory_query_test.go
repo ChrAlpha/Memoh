@@ -20,8 +20,8 @@ type memoryQueryMessageService struct {
 	recordingMessageService
 	messages []messagepkg.Message
 	windows  []messagepkg.HistoryWindow
-	// recentUserReads records the cutoff of each ListRecentUserBySession call.
-	recentUserReads []string
+	// recentUserReads records the cutoff of each ListRecentUserHistory call.
+	recentUserReads []*messagepkg.HistoryPosition
 }
 
 // historyTestPosition is where memoryQueryMessageService files its i-th
@@ -64,22 +64,14 @@ func (s *memoryQueryMessageService) ListHistoryWithinBytes(_ context.Context, _ 
 	return messagepkg.HistoryLoad{Messages: out}, nil
 }
 
-// ListRecentUserBySession follows the SQL contract over messages in history
-// order: user rows only, before the cutoff row, the newest limit oldest first.
-func (s *memoryQueryMessageService) ListRecentUserBySession(_ context.Context, _ string, beforeMessageID string, limit int32) ([]messagepkg.Message, error) {
-	s.recentUserReads = append(s.recentUserReads, beforeMessageID)
-	rows := s.messages
-	if beforeMessageID != "" {
-		cutoff := slices.IndexFunc(rows, func(m messagepkg.Message) bool { return m.ID == beforeMessageID })
-		if cutoff < 0 {
-			return nil, nil
-		}
-		rows = rows[:cutoff]
-	}
+// ListRecentUserHistory follows the SQL contract: user rows before the cutoff,
+// the newest limit of them oldest first, with no checkpoint applied.
+func (s *memoryQueryMessageService) ListRecentUserHistory(_ context.Context, _ string, before *messagepkg.HistoryPosition, limit int32) ([]messagepkg.Message, error) {
+	s.recentUserReads = append(s.recentUserReads, before)
 	var users []messagepkg.Message
-	for _, row := range rows {
-		if row.Role == "user" {
-			users = append(users, row)
+	for i, message := range s.messages {
+		if message.Role == "user" && (before == nil || historyTestPosition(i).Before(*before)) {
+			users = append(users, message)
 		}
 	}
 	return users[max(0, len(users)-int(limit)):], nil
@@ -189,8 +181,8 @@ func TestBuildMemoryQueryReadsUserMessagesBeforeRetryCutoff(t *testing.T) {
 		TurnReplacement:              &messagepkg.TurnReplacement{OldTurnID: "00000000-0000-0000-0000-00000000a715"},
 	})
 
-	if len(messages.recentUserReads) != 1 || messages.recentUserReads[0] != cutoff.ID {
-		t.Fatalf("recent user reads = %+v, want one before %s", messages.recentUserReads, cutoff.ID)
+	if len(messages.recentUserReads) != 1 || messages.recentUserReads[0] == nil || *messages.recentUserReads[0] != historyTestPosition(2) {
+		t.Fatalf("recent user reads = %+v, want one before %+v", messages.recentUserReads, historyTestPosition(2))
 	}
 	if len(messages.windows) != 0 {
 		t.Fatalf("memory query loaded the history window: %+v", messages.windows)

@@ -31,9 +31,9 @@ func (h *idleSessionHistory) ListTurnResponseSourcesWithinBytes(_ context.Contex
 	return messagepkg.HistoryLoad{Messages: append([]messagepkg.Message(nil), h.rows...)}, nil
 }
 
-// ListRecentUserBySession takes no time bound, so the memory query cannot
+// ListRecentUserHistory takes no time bound, so the memory query cannot
 // reintroduce an age cutoff.
-func (h *idleSessionHistory) ListRecentUserBySession(context.Context, string, string, int32) ([]messagepkg.Message, error) {
+func (h *idleSessionHistory) ListRecentUserHistory(context.Context, string, *messagepkg.HistoryPosition, int32) ([]messagepkg.Message, error) {
 	var rows []messagepkg.Message
 	for _, row := range h.rows {
 		if row.Role == "user" {

@@ -320,7 +320,7 @@ func (*fakeAgentMessageService) MeasureHistory(context.Context, string, messagep
 	return messagepkg.ActiveMessagesMeasure{}, nil
 }
 
-func (*fakeAgentMessageService) ListRecentUserBySession(context.Context, string, string, int32) ([]messagepkg.Message, error) {
+func (*fakeAgentMessageService) ListRecentUserHistory(context.Context, string, *messagepkg.HistoryPosition, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 

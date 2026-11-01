@@ -1910,12 +1910,11 @@ WHERE m.team_id = public.memoh_current_team_id() AND m.session_id = sqlc.arg(ses
 ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
 LIMIT sqlc.arg(max_count);
 
--- name: ListRecentUserMessagesBySession :many
--- The newest visible user rows of a session, returned oldest first, for
+-- name: ListRecentUserHistoryMessages :many
+-- The newest user rows of a session's history, returned oldest first, for
 -- callers that read what the user said rather than the context the model is
--- shown: compaction does not apply, and passively synced group messages are
--- not user requests. With a cutoff, only rows ordered before that visible row
--- qualify; a cutoff that is not a visible row of the session matches nothing.
+-- shown: the context rows ListHistoryMessagesAfterWithinBytes reads, before
+-- the cutoff position when set, with no history checkpoint applied.
 SELECT recent.id, recent.content, recent.external_message_id,
   recent.sender_channel_identity_id, recent.platform
 FROM (
@@ -1936,22 +1935,9 @@ FROM (
     AND m.turn_id IS NOT NULL
     AND m.turn_position IS NOT NULL
     AND m.turn_message_seq IS NOT NULL
+    AND (sqlc.narg(before_turn_position)::bigint IS NULL
+      OR (m.turn_position, m.turn_message_seq) < (sqlc.narg(before_turn_position)::bigint, sqlc.narg(before_turn_message_seq)::bigint))
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-    AND (
-      sqlc.narg(before_message_id)::uuid IS NULL
-      OR (m.turn_position, m.turn_message_seq, m.created_at, m.id)
-        < (
-          SELECT c.turn_position, c.turn_message_seq, c.created_at, c.id
-          FROM bot_history_messages c
-          WHERE c.team_id = public.memoh_current_team_id() AND c.session_id = sqlc.arg(session_id)
-            AND c.turn_visible = true
-            AND c.turn_id IS NOT NULL
-            AND c.turn_position IS NOT NULL
-            AND c.turn_message_seq IS NOT NULL
-            AND c.id = sqlc.narg(before_message_id)::uuid
-          LIMIT 1
-        )
-    )
   ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
   LIMIT sqlc.arg(max_count)
 ) recent

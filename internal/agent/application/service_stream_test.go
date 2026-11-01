@@ -236,7 +236,7 @@ func (*recordingMessageService) MeasureHistory(context.Context, string, messagep
 	return messagepkg.ActiveMessagesMeasure{}, nil
 }
 
-func (*recordingMessageService) ListRecentUserBySession(context.Context, string, string, int32) ([]messagepkg.Message, error) {
+func (*recordingMessageService) ListRecentUserHistory(context.Context, string, *messagepkg.HistoryPosition, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }
 

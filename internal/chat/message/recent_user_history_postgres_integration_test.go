@@ -13,7 +13,7 @@ import (
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 )
 
-func TestPostgresRecentUserMessagesReadVisibleUserRowsBeforeCutoff(t *testing.T) {
+func TestPostgresRecentUserHistoryReadsUserContextRowsBeforeCutoff(t *testing.T) {
 	ctx := context.Background()
 	tx := beginPostgresMessageTestTx(t, ctx)
 	setupPostgresMessageTestFixtures(t, ctx, tx)
@@ -36,26 +36,32 @@ func TestPostgresRecentUserMessagesReadVisibleUserRowsBeforeCutoff(t *testing.T)
 	first := insert(1, "user", "first", `{}`, true)
 	insert(2, "assistant", "reply", `{}`, true)
 	insert(3, "user", "passive", `{"trigger_mode":"passive_sync"}`, true)
-	hidden := insert(4, "user", "superseded", `{}`, false)
+	insert(4, "user", "superseded", `{}`, false)
 	insert(5, "tool", "result", `{}`, true)
 	second := insert(6, "user", "second", `{}`, true)
 	third := insert(7, "user", "third", `{}`, true)
 
+	// A checkpoint that folds everything through the second request stands in
+	// for those rows in the model's context, not in what the user said.
+	placeTestCheckpoint(t, ctx, tx, testCheckpoint{
+		position: HistoryPosition{Turn: 6, Seq: 0},
+		items:    []testCheckpointItem{{summary: insertTestSummary(t, ctx, tx, "folded")}},
+	})
+
 	cases := []struct {
 		name   string
-		before string
+		before *HistoryPosition
 		limit  int32
 		want   []string
 	}{
 		{name: "newest within limit", limit: 2, want: []string{second, third}},
-		{name: "all visible user rows", limit: 32, want: []string{first, second, third}},
-		{name: "before cutoff", before: third, limit: 32, want: []string{first, second}},
-		{name: "unknown cutoff", before: uuid.NewString(), limit: 32},
-		{name: "invisible cutoff", before: hidden, limit: 32},
+		{name: "all user context rows", limit: 32, want: []string{first, second, third}},
+		{name: "before cutoff", before: &HistoryPosition{Turn: 7, Seq: 0}, limit: 32, want: []string{first, second}},
+		{name: "before the first row", before: &HistoryPosition{Turn: 1, Seq: 0}, limit: 32},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := svc.ListRecentUserBySession(ctx, postgresMessageTestSessionID, tc.before, tc.limit)
+			got, err := svc.ListRecentUserHistory(ctx, postgresMessageTestSessionID, tc.before, tc.limit)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -75,7 +81,7 @@ func TestPostgresRecentUserMessagesReadVisibleUserRowsBeforeCutoff(t *testing.T)
 		})
 	}
 
-	got, err := svc.ListRecentUserBySession(ctx, postgresMessageTestSessionID, "", 1)
+	got, err := svc.ListRecentUserHistory(ctx, postgresMessageTestSessionID, nil, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +93,7 @@ func TestPostgresRecentUserMessagesReadVisibleUserRowsBeforeCutoff(t *testing.T)
 	if _, err := tx.Exec(ctx, "SELECT set_config('memoh.team_id', $1, true)", uuid.NewString()); err != nil {
 		t.Fatal(err)
 	}
-	got, err = svc.ListRecentUserBySession(ctx, postgresMessageTestSessionID, "", 32)
+	got, err = svc.ListRecentUserHistory(ctx, postgresMessageTestSessionID, nil, 32)
 	if err != nil {
 		t.Fatal(err)
 	}
