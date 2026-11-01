@@ -99,16 +99,16 @@ func (d *DiscussDriver) loadHistory(ctx context.Context, cfg DiscussSessionConfi
 			return discussHistory{}, err
 		}
 	}
-	trs, measure, err := d.history.Load(ctx, cfg.ThreadID, history.checkpoint.Position)
+	trs, window, err := d.history.Load(ctx, cfg.ThreadID, history.checkpoint.Position)
 	if err != nil {
 		return discussHistory{}, err
 	}
-	if measure.TotalMessages > int64(measure.Loaded) {
+	if window.Truncated {
 		log.InfoContext(ctx, "context_admission",
 			slog.String("path", "discuss_history_load"),
-			slog.Int64("history_total_messages", measure.TotalMessages),
-			slog.Int64("history_total_bytes", measure.TotalBytes),
-			slog.Int("history_loaded_messages", measure.Loaded),
+			slog.Int("history_loaded_messages", window.Loaded),
+			slog.Int64("history_loaded_bytes", window.Bytes),
+			slog.Int64("history_budget_bytes", window.MaxBytes),
 			slog.Int("budget_tokens", d.admissionMaxTokens()))
 	}
 	history.trs = trs

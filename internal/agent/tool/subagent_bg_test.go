@@ -316,10 +316,6 @@ func (*fakeAgentMessageService) ListTurnResponseSourcesByIDs(context.Context, st
 	return nil, nil
 }
 
-func (*fakeAgentMessageService) MeasureHistory(context.Context, string, messagepkg.HistoryPosition) (messagepkg.ActiveMessagesMeasure, error) {
-	return messagepkg.ActiveMessagesMeasure{}, nil
-}
-
 func (*fakeAgentMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }

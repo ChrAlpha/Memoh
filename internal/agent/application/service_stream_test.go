@@ -232,10 +232,6 @@ func (*recordingMessageService) ListTurnResponseSourcesByIDs(context.Context, st
 	return nil, nil
 }
 
-func (*recordingMessageService) MeasureHistory(context.Context, string, messagepkg.HistoryPosition) (messagepkg.ActiveMessagesMeasure, error) {
-	return messagepkg.ActiveMessagesMeasure{}, nil
-}
-
 func (*recordingMessageService) ListLatestBySession(context.Context, string, int32) ([]messagepkg.Message, error) {
 	return nil, nil
 }

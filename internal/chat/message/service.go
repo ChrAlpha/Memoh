@@ -1190,24 +1190,6 @@ func (s *DBService) HistoryPositionByID(ctx context.Context, sessionID string, m
 	return HistoryPosition{Turn: cursor.TurnPosition.Int64, Seq: cursor.TurnMessageSeq.Int64}, nil
 }
 
-// MeasureHistory aggregates the message count and content bytes of a
-// session's raw history after a position on the database side (CM-ADM-001).
-func (s *DBService) MeasureHistory(ctx context.Context, sessionID string, after HistoryPosition) (ActiveMessagesMeasure, error) {
-	pgSessionID, err := dbpkg.ParseUUID(sessionID)
-	if err != nil {
-		return ActiveMessagesMeasure{}, err
-	}
-	row, err := s.queries.MeasureHistoryMessagesAfter(ctx, sqlc.MeasureHistoryMessagesAfterParams{
-		SessionID:           pgSessionID,
-		AfterTurnPosition:   after.Turn,
-		AfterTurnMessageSeq: after.Seq,
-	})
-	if err != nil {
-		return ActiveMessagesMeasure{}, err
-	}
-	return ActiveMessagesMeasure{MessageCount: row.MessageCount, ContentBytes: row.ContentBytes}, nil
-}
-
 // ListActiveSinceBySession returns session messages since a given time.
 func (s *DBService) ListActiveSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)

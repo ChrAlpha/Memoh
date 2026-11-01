@@ -468,11 +468,11 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       selection before materialization), `[agent] context_absolute_max_tokens`
       (default 200k, never disabled), and `Service.effectiveContextTokenBudget`
       clamping every provider-bound budget.
-- [x] Metadata-only admission measures and byte-budgeted history loads —
-      CM-ADM-001, CM-REP-002. Landed as `MeasureHistoryMessagesAfter`
-      (SQL-side `COUNT(*)` + `SUM(octet_length(content::text))`) plus the
+- [x] Byte-budgeted history loads — CM-ADM-001, CM-REP-002. Landed as the
       `…WithinBytes` query variants that admit rows newest-first on the
-      database side until the budget's byte equivalent is spent. Every
+      database side until the budget's byte equivalent is spent, and report
+      whether the budget, not the checkpoint, ended the window; nothing
+      measures the history the budget leaves out. Every
       DB-backed history load that feeds composition is bounded by the budget:
       the discuss TR load (previously unbounded since the Unix epoch), the
       pipeline-chat TR load, and the legacy `loadHistoryRecords` (both
@@ -484,7 +484,7 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       row at a time. Remaining resident-state
       bounds — the RC pipeline cache and event replay — are
       CM-CCH-001/CM-RPL-001 and land in PR 3; PR 4's persisted per-fragment
-      costs refine the measures.
+      costs refine the estimates.
 - [x] *(Superseded: over-budget context is now compacted or fails, see the
       compaction policy revision.)* Deterministic over-budget trim (artifact summaries + newest message + recent
       contiguous window, no orphaned tool responses); `context.protected_overflow`

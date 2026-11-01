@@ -1086,38 +1086,6 @@ func (q *Queries) ListTurnResponseSourcesByIDs(ctx context.Context, arg ListTurn
 	return items, nil
 }
 
-const measureHistoryMessagesAfter = `-- name: MeasureHistoryMessagesAfter :one
-SELECT
-  COUNT(*)::BIGINT AS message_count,
-  COALESCE(SUM(octet_length(m.content::text)), 0)::BIGINT AS content_bytes
-FROM bot_visible_history_messages m
-WHERE m.team_id = public.memoh_current_team_id()
-  AND m.session_id = $1
-  AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-`
-
-type MeasureHistoryMessagesAfterParams struct {
-	SessionID           pgtype.UUID `json:"session_id"`
-	AfterTurnPosition   int64       `json:"after_turn_position"`
-	AfterTurnMessageSeq int64       `json:"after_turn_message_seq"`
-}
-
-type MeasureHistoryMessagesAfterRow struct {
-	MessageCount int64 `json:"message_count"`
-	ContentBytes int64 `json:"content_bytes"`
-}
-
-// Metadata-only context admission measure (CM-ADM-001) of the raw history
-// after a checkpoint: counts and content bytes aggregate on the database
-// side, so admission can size it without shipping any payload.
-func (q *Queries) MeasureHistoryMessagesAfter(ctx context.Context, arg MeasureHistoryMessagesAfterParams) (MeasureHistoryMessagesAfterRow, error) {
-	row := q.db.QueryRow(ctx, measureHistoryMessagesAfter, arg.SessionID, arg.AfterTurnPosition, arg.AfterTurnMessageSeq)
-	var i MeasureHistoryMessagesAfterRow
-	err := row.Scan(&i.MessageCount, &i.ContentBytes)
-	return i, err
-}
-
 const rewindHistoryCheckpointBeforeTurn = `-- name: RewindHistoryCheckpointBeforeTurn :one
 WITH owner_session AS MATERIALIZED (
   SELECT session.id

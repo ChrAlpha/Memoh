@@ -193,14 +193,6 @@ type HistoryLoad struct {
 	Truncated bool
 }
 
-// ActiveMessagesMeasure is a database-side aggregate over a session's raw
-// history (CM-ADM-001): counts and raw content bytes, computed without
-// loading any payload into the process.
-type ActiveMessagesMeasure struct {
-	MessageCount int64
-	ContentBytes int64
-}
-
 // Writer defines write behavior needed by the inbound router.
 type Writer interface {
 	Persist(ctx context.Context, input PersistInput) (Message, error)
@@ -301,10 +293,6 @@ type Service interface {
 	// ListTurnResponseSourcesWithinBytes projects its rows, with the
 	// ExternalMessageID of a user row.
 	ListTurnResponseSourcesByIDs(ctx context.Context, sessionID string, ids []string) ([]Message, error)
-	// MeasureHistory aggregates the message count and content bytes of the
-	// raw history after a position on the database side (CM-ADM-001):
-	// admission sizes it without shipping any payload into the process.
-	MeasureHistory(ctx context.Context, sessionID string, after HistoryPosition) (ActiveMessagesMeasure, error)
 	ListLatestBySession(ctx context.Context, sessionID string, limit int32) ([]Message, error)
 	ListBeforeBySession(ctx context.Context, sessionID string, before time.Time, limit int32) ([]Message, error)
 	ListBeforeMessageBySession(ctx context.Context, sessionID string, beforeMessageID string, limit int32) ([]Message, error)

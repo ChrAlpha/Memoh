@@ -151,7 +151,7 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 // before an edit's cutoff, admitted newest first by content bytes: the row
 // that crosses the budget still loads, older ones do not, and the load reports
 // that it left them out. Passive and hidden rows spend nothing and never load,
-// by position or by ID, and the measure counts what the window could read.
+// by position or by ID.
 func TestPostgresHistoryWindowReadsTheContextRowsAfterACheckpoint(t *testing.T) {
 	ctx := context.Background()
 	tx := beginPostgresMessageTestTx(t, ctx)
@@ -227,12 +227,5 @@ func TestPostgresHistoryWindowReadsTheContextRowsAfterACheckpoint(t *testing.T) 
 	}
 	if _, err := svc.HistoryPositionByID(ctx, postgresMessageTestSessionID, ids["hidden"]); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("position of a hidden row: err=%v, want no rows", err)
-	}
-	measure, err := svc.MeasureHistory(ctx, postgresMessageTestSessionID, after)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if measure.MessageCount != 6 || measure.ContentBytes != 6*rowBytes {
-		t.Fatalf("measure = %+v, want the 6 rows after the checkpoint at %d bytes each", measure, rowBytes)
 	}
 }

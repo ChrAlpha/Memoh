@@ -99,7 +99,6 @@ type Queries interface {
 	ListTurnResponseSourcesAfterWithinBytes(ctx context.Context, arg dbsqlc.ListTurnResponseSourcesAfterWithinBytesParams) ([]dbsqlc.ListTurnResponseSourcesAfterWithinBytesRow, error)
 	ListTurnResponseSourcesByIDs(ctx context.Context, arg dbsqlc.ListTurnResponseSourcesByIDsParams) ([]dbsqlc.ListTurnResponseSourcesByIDsRow, error)
 	CountHistoryCheckpointCandidates(ctx context.Context, arg dbsqlc.CountHistoryCheckpointCandidatesParams) (int64, error)
-	MeasureHistoryMessagesAfter(ctx context.Context, arg dbsqlc.MeasureHistoryMessagesAfterParams) (dbsqlc.MeasureHistoryMessagesAfterRow, error)
 	RewindHistoryCheckpointBeforeTurn(ctx context.Context, arg dbsqlc.RewindHistoryCheckpointBeforeTurnParams) (bool, error)
 	SetHistoryCheckpoint(ctx context.Context, arg dbsqlc.SetHistoryCheckpointParams) (int64, error)
 	CountMemoryProvidersByDefault(ctx context.Context) (int64, error)

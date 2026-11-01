@@ -353,19 +353,6 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
--- name: MeasureHistoryMessagesAfter :one
--- Metadata-only context admission measure (CM-ADM-001) of the raw history
--- after a checkpoint: counts and content bytes aggregate on the database
--- side, so admission can size it without shipping any payload.
-SELECT
-  COUNT(*)::BIGINT AS message_count,
-  COALESCE(SUM(octet_length(m.content::text)), 0)::BIGINT AS content_bytes
-FROM bot_visible_history_messages m
-WHERE m.team_id = public.memoh_current_team_id()
-  AND m.session_id = sqlc.arg(session_id)
-  AND (m.turn_position, m.turn_message_seq) > (sqlc.arg(after_turn_position)::bigint, sqlc.arg(after_turn_message_seq)::bigint)
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
-
 -- name: ListTurnResponseSourcesAfterWithinBytes :many
 -- Turn-response (TR) composition, in Discuss and in pipeline chat, only needs
 -- content, the interrupted-checkpoint flag and the Discuss step flag. Never
