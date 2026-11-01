@@ -482,9 +482,14 @@ func TestPostgresHistoryCheckpointBoundsEveryReadPath(t *testing.T) {
 		for _, candidate := range candidates {
 			got.candidates = append(got.candidates, candidate.ID.String())
 		}
-		events, err := q.ListSessionEventsBySessionPageBeforeWithinBytes(ctx, dbsqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams{
+		folded, err := q.ListSessionReplayFoldedMessageIDs(ctx, dbsqlc.ListSessionReplayFoldedMessageIDsParams{
 			AfterTurnPosition: after.Turn, AfterTurnMessageSeq: after.Seq, KeptIds: pgKept, SessionID: sessionID,
-			MaxBytes: 1 << 20, PageSize: 100,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		events, err := q.ListSessionEventsBySessionPageBeforeWithinBytes(ctx, dbsqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams{
+			FoldedMessageIds: folded, SessionID: sessionID, MaxBytes: 1 << 20, PageSize: 100,
 		})
 		if err != nil {
 			t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"reflect"
 	"testing"
@@ -21,7 +22,9 @@ type fakeEventQueries struct {
 	fakeCheckpointQueries
 	nextCursor   int64
 	created      sqlc.CreateSessionEventParams
-	replayRows   []sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow
+	folded       []string
+	foldedParams []sqlc.ListSessionReplayFoldedMessageIDsParams
+	replayPages  [][]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow
 	replayParams []sqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams
 	eventCount   int64
 }
@@ -39,9 +42,17 @@ func (f *fakeEventQueries) CreateSessionEvent(_ context.Context, arg sqlc.Create
 	return id, nil
 }
 
+func (f *fakeEventQueries) ListSessionReplayFoldedMessageIDs(_ context.Context, arg sqlc.ListSessionReplayFoldedMessageIDsParams) ([]string, error) {
+	f.foldedParams = append(f.foldedParams, arg)
+	return f.folded, nil
+}
+
 func (f *fakeEventQueries) ListSessionEventsBySessionPageBeforeWithinBytes(_ context.Context, arg sqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams) ([]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow, error) {
 	f.replayParams = append(f.replayParams, arg)
-	return f.replayRows, nil
+	if len(f.replayParams) > len(f.replayPages) {
+		return nil, nil
+	}
+	return f.replayPages[len(f.replayParams)-1], nil
 }
 
 func (f *fakeEventQueries) CountSessionEvents(context.Context, pgtype.UUID) (int64, error) {
@@ -137,8 +148,26 @@ func TestPersistEventReturnsOriginalEventOnDedup(t *testing.T) {
 	}
 }
 
+func replayTestRow(t *testing.T, id string, receivedAt int64, messageID string) sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow {
+	t.Helper()
+	event := MessageEvent{SessionID: checkpointTestSessionID, MessageID: messageID, ReceivedAtMs: receivedAt, Content: []ContentNode{{Type: "text", Text: messageID}}}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pgID, err := dbpkg.ParseUUID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow{
+		ID: pgID, EventKind: string(EventMessage), EventData: data,
+		ReceivedAtMs: receivedAt, PayloadBytes: int64(len(data)), CumulativeBytes: int64(len(data) * 2),
+	}
+}
+
 // Replay leaves out in SQL what the session's checkpoint stands for: it
-// passes the checkpoint's position and the rows it keeps, and restores the
+// classifies the messages against the checkpoint's position and the rows it
+// keeps, passes the folded ones to the page query, and restores the
 // newest-first pages to chronological order.
 func TestLoadEventsForReplayLeavesOutWhatTheCheckpointStandsFor(t *testing.T) {
 	t.Parallel()
@@ -146,45 +175,35 @@ func TestLoadEventsForReplayLeavesOutWhatTheCheckpointStandsFor(t *testing.T) {
 		summaryID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"
 		keptID    = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1"
 	)
-	makeRow := func(id string, receivedAt int64, messageID string) sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow {
-		event := MessageEvent{SessionID: checkpointTestSessionID, MessageID: messageID, ReceivedAtMs: receivedAt, Content: []ContentNode{{Type: "text", Text: messageID}}}
-		data, err := json.Marshal(event)
-		if err != nil {
-			t.Fatal(err)
-		}
-		pgID, err := dbpkg.ParseUUID(id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow{
-			ID: pgID, EventKind: string(EventMessage), EventData: data,
-			ReceivedAtMs: receivedAt, PayloadBytes: int64(len(data)), CumulativeBytes: int64(len(data) * 2),
-		}
-	}
 	for _, tc := range []struct {
-		name      string
-		active    sqlc.BotHistoryCheckpoint
-		wantAfter messagepkg.HistoryPosition
-		wantKept  []string
+		name         string
+		active       sqlc.BotHistoryCheckpoint
+		folded       []string
+		wantClassify bool
+		wantAfter    messagepkg.HistoryPosition
+		wantKept     []string
 	}{
 		{
 			name: "checkpoint",
 			active: checkpointRow(t, messagepkg.HistoryPosition{Turn: 7, Seq: 2},
 				checkpoint.Item{SummaryID: summaryID}, checkpoint.Item{RowID: keptID}),
-			wantAfter: messagepkg.HistoryPosition{Turn: 7, Seq: 2},
-			wantKept:  []string{keptID},
+			folded:       []string{"folded-1", "folded-2"},
+			wantClassify: true,
+			wantAfter:    messagepkg.HistoryPosition{Turn: 7, Seq: 2},
+			wantKept:     []string{keptID},
 		},
-		{name: "no checkpoint", wantKept: []string{}},
+		{name: "no checkpoint"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			queries := &fakeEventQueries{
 				fakeCheckpointQueries: fakeCheckpointQueries{active: tc.active, summaries: map[string]string{summaryID: "covered"}},
 				eventCount:            3,
-				replayRows: []sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow{
-					makeRow("55555555-5555-5555-5555-555555555552", 20, "new"),
-					makeRow("55555555-5555-5555-5555-555555555551", 10, "old"),
-				},
+				folded:                tc.folded,
+				replayPages: [][]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow{{
+					replayTestRow(t, "55555555-5555-5555-5555-555555555552", 20, "new"),
+					replayTestRow(t, "55555555-5555-5555-5555-555555555551", 10, "old"),
+				}},
 			}
 			store := NewEventStore(slog.New(slog.DiscardHandler), queries)
 			events, err := store.LoadEventsForReplay(context.Background(), "77777777-7777-7777-7777-777777777777", checkpointTestSessionID)
@@ -195,19 +214,74 @@ func TestLoadEventsForReplayLeavesOutWhatTheCheckpointStandsFor(t *testing.T) {
 				t.Fatalf("events not chronological: %#v", events)
 			}
 			if len(queries.replayParams) != 1 {
-				t.Fatalf("query calls = %d, want 1", len(queries.replayParams))
+				t.Fatalf("page calls = %d, want 1", len(queries.replayParams))
 			}
-			params := queries.replayParams[0]
-			if got := (messagepkg.HistoryPosition{Turn: params.AfterTurnPosition, Seq: params.AfterTurnMessageSeq}); got != tc.wantAfter {
-				t.Fatalf("replay after %+v, want %+v", got, tc.wantAfter)
+			if !tc.wantClassify {
+				if len(queries.foldedParams) != 0 {
+					t.Fatalf("classification calls = %d without a checkpoint, want 0", len(queries.foldedParams))
+				}
+			} else {
+				if len(queries.foldedParams) != 1 {
+					t.Fatalf("classification calls = %d, want 1", len(queries.foldedParams))
+				}
+				classify := queries.foldedParams[0]
+				if got := (messagepkg.HistoryPosition{Turn: classify.AfterTurnPosition, Seq: classify.AfterTurnMessageSeq}); got != tc.wantAfter {
+					t.Fatalf("classified after %+v, want %+v", got, tc.wantAfter)
+				}
+				kept := make([]string, 0, len(classify.KeptIds))
+				for _, id := range classify.KeptIds {
+					kept = append(kept, id.String())
+				}
+				if !reflect.DeepEqual(kept, tc.wantKept) {
+					t.Fatalf("classified kept ids = %v, want %v", kept, tc.wantKept)
+				}
 			}
-			kept := make([]string, 0, len(params.KeptIds))
-			for _, id := range params.KeptIds {
-				kept = append(kept, id.String())
-			}
-			if !reflect.DeepEqual(kept, tc.wantKept) {
-				t.Fatalf("replay kept ids = %v, want %v", kept, tc.wantKept)
+			if got := queries.replayParams[0].FoldedMessageIds; !reflect.DeepEqual(got, tc.folded) {
+				t.Fatalf("page folded ids = %v, want %v", got, tc.folded)
 			}
 		})
+	}
+}
+
+// Which messages the checkpoint folds does not depend on the page: a
+// multi-page replay classifies once and every page leaves out the same
+// messages while the keyset advances.
+func TestLoadEventsForReplayClassifiesOncePerReplay(t *testing.T) {
+	t.Parallel()
+	full := make([]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow, 0, defaultReplayPageSize)
+	for i := range int(defaultReplayPageSize) {
+		full = append(full, replayTestRow(t, fmt.Sprintf("55555555-5555-5555-5555-%012d", 1000-i), int64(1000-i), fmt.Sprintf("m%d", 1000-i)))
+	}
+	tail := []sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow{
+		replayTestRow(t, "55555555-5555-5555-5555-000000000001", 1, "m1"),
+	}
+	folded := []string{"folded-1"}
+	const summaryID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"
+	queries := &fakeEventQueries{
+		fakeCheckpointQueries: fakeCheckpointQueries{
+			active:    checkpointRow(t, messagepkg.HistoryPosition{Turn: 3, Seq: 1}, checkpoint.Item{SummaryID: summaryID}),
+			summaries: map[string]string{summaryID: "covered"},
+		},
+		folded:      folded,
+		replayPages: [][]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow{full, tail},
+	}
+	store := NewEventStore(slog.New(slog.DiscardHandler), queries)
+	events, err := store.LoadEventsForReplay(context.Background(), "77777777-7777-7777-7777-777777777777", checkpointTestSessionID)
+	if err != nil {
+		t.Fatalf("LoadEventsForReplay() error = %v", err)
+	}
+	if len(events) != len(full)+len(tail) {
+		t.Fatalf("events = %d, want %d", len(events), len(full)+len(tail))
+	}
+	if len(queries.foldedParams) != 1 || len(queries.replayParams) != 2 {
+		t.Fatalf("classification calls = %d, page calls = %d, want 1 and 2", len(queries.foldedParams), len(queries.replayParams))
+	}
+	for i, params := range queries.replayParams {
+		if !reflect.DeepEqual(params.FoldedMessageIds, folded) {
+			t.Fatalf("page %d folded ids = %v, want %v", i, params.FoldedMessageIds, folded)
+		}
+	}
+	if second := queries.replayParams[1]; !second.HasCursor || second.BeforeID != full[len(full)-1].ID {
+		t.Fatalf("second page cursor = %+v, want the last event of the first page", second)
 	}
 }

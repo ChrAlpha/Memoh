@@ -189,62 +189,27 @@ func (q *Queries) ListSessionEventsBySessionAfter(ctx context.Context, arg ListS
 }
 
 const listSessionEventsBySessionPageBeforeWithinBytes = `-- name: ListSessionEventsBySessionPageBeforeWithinBytes :many
-WITH message_rows AS MATERIALIZED (
-  SELECT
-    m.source_message_id AS external_message_id,
-    bool_or(
-      (m.turn_position, m.turn_message_seq) > ($1::bigint, $2::bigint)
-      OR m.id = ANY($3::uuid[])
-    ) AS kept,
-    COALESCE(MAX((row_event.event_data->>'event_cursor')::bigint), 0)::bigint AS event_cursor
-  FROM bot_visible_history_messages m
-  LEFT JOIN bot_session_events row_event
-    ON row_event.team_id = public.memoh_current_team_id()
-   AND row_event.id = m.event_id
-  WHERE m.team_id = public.memoh_current_team_id()
-    AND m.session_id = $4
-    AND m.source_message_id IS NOT NULL
-    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-  GROUP BY m.source_message_id
-), changed_messages AS MATERIALIZED (
-  SELECT message.external_message_id
-  FROM message_rows message
-  JOIN bot_session_events event
-    ON event.team_id = public.memoh_current_team_id()
-   AND event.session_id = $4
-   AND event.external_message_id = message.external_message_id
-  WHERE NOT message.kept
-  GROUP BY message.external_message_id, message.event_cursor
-  HAVING CASE
-      WHEN message.event_cursor > 0
-        THEN MAX(COALESCE((event.event_data->>'event_cursor')::bigint, 0)) > message.event_cursor
-      ELSE bool_or(event.event_kind = 'edit')
-    END
-), candidates AS MATERIALIZED (
+WITH candidates AS MATERIALIZED (
   SELECT
     event.id,
     event.received_at_ms,
     event.created_at,
     octet_length(event.event_data::text)::BIGINT AS payload_bytes
   FROM bot_session_events event
-  LEFT JOIN message_rows message
-    ON message.external_message_id = event.external_message_id
-  LEFT JOIN changed_messages changed
-    ON changed.external_message_id = event.external_message_id
   WHERE event.team_id = public.memoh_current_team_id()
-    AND event.session_id = $4
+    AND event.session_id = $1
     AND (
-      NOT $5::boolean
+      NOT $2::boolean
       OR (event.received_at_ms, event.created_at, event.id) < (
-        $6::BIGINT,
-        $7::TIMESTAMPTZ,
-        $8::UUID
+        $3::BIGINT,
+        $4::TIMESTAMPTZ,
+        $5::UUID
       )
     )
-    AND (
-      message.kept
-      OR changed.external_message_id IS NOT NULL
-      OR message.external_message_id IS NULL
+    AND NOT EXISTS (
+      SELECT 1
+      FROM unnest($6::text[]) AS folded(external_message_id)
+      WHERE folded.external_message_id = event.external_message_id
     )
 ), ranked AS MATERIALIZED (
   SELECT
@@ -256,9 +221,9 @@ WITH message_rows AS MATERIALIZED (
 ), admitted AS MATERIALIZED (
   SELECT id, received_at_ms, created_at, payload_bytes, cumulative_bytes
   FROM ranked
-  WHERE cumulative_bytes <= $9::BIGINT
+  WHERE cumulative_bytes <= $7::BIGINT
   ORDER BY received_at_ms DESC, created_at DESC, id DESC
-  LIMIT $10
+  LIMIT $8
 )
 SELECT
   event.id,
@@ -279,16 +244,14 @@ ORDER BY event.received_at_ms DESC, event.created_at DESC, event.id DESC
 `
 
 type ListSessionEventsBySessionPageBeforeWithinBytesParams struct {
-	AfterTurnPosition   int64              `json:"after_turn_position"`
-	AfterTurnMessageSeq int64              `json:"after_turn_message_seq"`
-	KeptIds             []pgtype.UUID      `json:"kept_ids"`
-	SessionID           pgtype.UUID        `json:"session_id"`
-	HasCursor           bool               `json:"has_cursor"`
-	BeforeReceivedAtMs  int64              `json:"before_received_at_ms"`
-	BeforeCreatedAt     pgtype.Timestamptz `json:"before_created_at"`
-	BeforeID            pgtype.UUID        `json:"before_id"`
-	MaxBytes            int64              `json:"max_bytes"`
-	PageSize            int32              `json:"page_size"`
+	SessionID          pgtype.UUID        `json:"session_id"`
+	HasCursor          bool               `json:"has_cursor"`
+	BeforeReceivedAtMs int64              `json:"before_received_at_ms"`
+	BeforeCreatedAt    pgtype.Timestamptz `json:"before_created_at"`
+	BeforeID           pgtype.UUID        `json:"before_id"`
+	FoldedMessageIds   []string           `json:"folded_message_ids"`
+	MaxBytes           int64              `json:"max_bytes"`
+	PageSize           int32              `json:"page_size"`
 }
 
 type ListSessionEventsBySessionPageBeforeWithinBytesRow struct {
@@ -307,23 +270,16 @@ type ListSessionEventsBySessionPageBeforeWithinBytesRow struct {
 }
 
 // Replay reads newest-first with a stable keyset and a hard page-byte budget.
-// What the session's checkpoint stands for is excluded in SQL before
-// event_data reaches the process: every event of a message whose context
-// rows all lie at or before the checkpoint's position without being kept by
-// reference. A folded message that changed after its rows were written
-// replays whole: its summary read the rows, never the change. The change is
-// the events after the one its rows were written from or, when that cursor
-// is unknown, an edit.
+// The events of the messages the checkpoint stands for whole are excluded in
+// SQL before event_data reaches the process.
 func (q *Queries) ListSessionEventsBySessionPageBeforeWithinBytes(ctx context.Context, arg ListSessionEventsBySessionPageBeforeWithinBytesParams) ([]ListSessionEventsBySessionPageBeforeWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listSessionEventsBySessionPageBeforeWithinBytes,
-		arg.AfterTurnPosition,
-		arg.AfterTurnMessageSeq,
-		arg.KeptIds,
 		arg.SessionID,
 		arg.HasCursor,
 		arg.BeforeReceivedAtMs,
 		arg.BeforeCreatedAt,
 		arg.BeforeID,
+		arg.FoldedMessageIds,
 		arg.MaxBytes,
 		arg.PageSize,
 	)
@@ -351,6 +307,78 @@ func (q *Queries) ListSessionEventsBySessionPageBeforeWithinBytes(ctx context.Co
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSessionReplayFoldedMessageIDs = `-- name: ListSessionReplayFoldedMessageIDs :many
+WITH folded AS MATERIALIZED (
+  SELECT
+    m.source_message_id AS external_message_id,
+    COALESCE(MAX((row_event.event_data->>'event_cursor')::bigint), 0)::bigint AS event_cursor
+  FROM bot_visible_history_messages m
+  LEFT JOIN bot_session_events row_event
+    ON row_event.team_id = public.memoh_current_team_id()
+   AND row_event.id = m.event_id
+  WHERE m.team_id = public.memoh_current_team_id()
+    AND m.session_id = $1
+    AND m.source_message_id IS NOT NULL
+    AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+  GROUP BY m.source_message_id
+  HAVING NOT bool_or(
+    (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+    OR m.id = ANY($4::uuid[])
+  )
+)
+SELECT folded.external_message_id::text AS external_message_id
+FROM folded
+JOIN bot_session_events event
+  ON event.team_id = public.memoh_current_team_id()
+ AND event.session_id = $1
+ AND event.external_message_id = folded.external_message_id
+GROUP BY folded.external_message_id, folded.event_cursor
+HAVING NOT CASE
+    WHEN folded.event_cursor > 0
+      THEN MAX(COALESCE((event.event_data->>'event_cursor')::bigint, 0)) > folded.event_cursor
+    ELSE bool_or(event.event_kind = 'edit')
+  END
+`
+
+type ListSessionReplayFoldedMessageIDsParams struct {
+	SessionID           pgtype.UUID   `json:"session_id"`
+	AfterTurnPosition   int64         `json:"after_turn_position"`
+	AfterTurnMessageSeq int64         `json:"after_turn_message_seq"`
+	KeptIds             []pgtype.UUID `json:"kept_ids"`
+}
+
+// The inbound messages a session's checkpoint stands for whole: every context
+// row lies at or before the checkpoint's position without being kept by
+// reference, and the message did not change after its rows were written. A
+// folded message that changed replays whole: its summary read the rows, never
+// the change. The change is the events after the one its rows were written
+// from or, when that cursor is unknown, an edit. Replay runs this once and
+// leaves these messages' events out of every page.
+func (q *Queries) ListSessionReplayFoldedMessageIDs(ctx context.Context, arg ListSessionReplayFoldedMessageIDsParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listSessionReplayFoldedMessageIDs,
+		arg.SessionID,
+		arg.AfterTurnPosition,
+		arg.AfterTurnMessageSeq,
+		arg.KeptIds,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var external_message_id string
+		if err := rows.Scan(&external_message_id); err != nil {
+			return nil, err
+		}
+		items = append(items, external_message_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -110,33 +111,47 @@ func (s *EventStore) PersistEvent(ctx context.Context, botID, sessionID string, 
 // LoadEventsForReplay loads the newest event tail of a session within a
 // hard byte budget, leaving out in SQL what the session's history checkpoint
 // stands for: the events of every inbound message whose context rows it
-// folds.
+// folds. Which messages those are does not depend on the page, so it is
+// decided once per replay rather than by every page query, and not at all
+// when the session has no checkpoint.
 func (s *EventStore) LoadEventsForReplay(ctx context.Context, botID, sessionID string) ([]CanonicalEvent, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid session id: %w", err)
 	}
+	start := time.Now()
 	active, err := s.checkpoints.Active(ctx, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("load replay history checkpoint: %w", err)
 	}
-	keptIDs := active.RowUUIDs()
+	var folded []string
+	if active.ID != "" {
+		folded, err = s.queries.ListSessionReplayFoldedMessageIDs(ctx, sqlc.ListSessionReplayFoldedMessageIDsParams{
+			SessionID:           pgSessionID,
+			AfterTurnPosition:   active.Position.Turn,
+			AfterTurnMessageSeq: active.Position.Seq,
+			KeptIds:             active.RowUUIDs(),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list replay folded messages: %w", err)
+		}
+	}
 
 	remaining := int64(defaultReplayMaxBytes)
 	rows := make([]sqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow, 0, defaultReplayPageSize)
 	params := sqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams{
-		SessionID:           pgSessionID,
-		AfterTurnPosition:   active.Position.Turn,
-		AfterTurnMessageSeq: active.Position.Seq,
-		KeptIds:             keptIDs,
-		MaxBytes:            remaining,
-		PageSize:            defaultReplayPageSize,
+		SessionID:        pgSessionID,
+		FoldedMessageIds: folded,
+		MaxBytes:         remaining,
+		PageSize:         defaultReplayPageSize,
 	}
+	pages := 0
 	for remaining > 0 {
 		page, queryErr := s.queries.ListSessionEventsBySessionPageBeforeWithinBytes(ctx, params)
 		if queryErr != nil {
 			return nil, fmt.Errorf("list bounded session events: %w", queryErr)
 		}
+		pages++
 		if len(page) == 0 {
 			break
 		}
@@ -178,7 +193,10 @@ func (s *EventStore) LoadEventsForReplay(ctx context.Context, botID, sessionID s
 		slog.Int64("event_bytes", loadedBytes),
 		slog.Int64("persisted_event_count", totalEvents),
 		slog.String("history_checkpoint_id", active.ID),
-		slog.Int64("replay_max_bytes", defaultReplayMaxBytes))
+		slog.Int("folded_message_count", len(folded)),
+		slog.Int("page_count", pages),
+		slog.Int64("replay_max_bytes", defaultReplayMaxBytes),
+		slog.Duration("latency", time.Since(start)))
 
 	return events, nil
 }

@@ -430,6 +430,7 @@ type Queries interface {
 	ListSpeechProviders(ctx context.Context) ([]dbsqlc.Provider, error)
 	ListStorageProviders(ctx context.Context) ([]dbsqlc.StorageProvider, error)
 	ListSessionEventsBySessionPageBeforeWithinBytes(ctx context.Context, arg dbsqlc.ListSessionEventsBySessionPageBeforeWithinBytesParams) ([]dbsqlc.ListSessionEventsBySessionPageBeforeWithinBytesRow, error)
+	ListSessionReplayFoldedMessageIDs(ctx context.Context, arg dbsqlc.ListSessionReplayFoldedMessageIDsParams) ([]string, error)
 	ListSubagentSessionsByParent(ctx context.Context, parentSessionID pgtype.UUID) ([]dbsqlc.BotSession, error)
 	ListTerminalSessionRunsNeedingContextLifecycle(ctx context.Context, batchSize int32) ([]dbsqlc.ListTerminalSessionRunsNeedingContextLifecycleRow, error)
 	ListTokenUsageRecords(ctx context.Context, arg dbsqlc.ListTokenUsageRecordsParams) ([]dbsqlc.ListTokenUsageRecordsRow, error)
