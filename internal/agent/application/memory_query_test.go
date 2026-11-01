@@ -2,35 +2,72 @@ package application
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/chat/checkpoint"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
-	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 )
 
+// memoryQueryMessageService serves a session's history from memory: each
+// message is a turn of its own, in slice order.
 type memoryQueryMessageService struct {
 	recordingMessageService
 	messages []messagepkg.Message
-
-	historyReads    int
-	recentUserCalls []memoryQueryRecentUserCall
+	windows  []messagepkg.HistoryWindow
+	// recentUserReads records the cutoff of each ListRecentUserBySession call.
+	recentUserReads []string
 }
 
-type memoryQueryRecentUserCall struct {
-	sessionID       string
-	beforeMessageID string
-	limit           int32
+// historyTestPosition is where memoryQueryMessageService files its i-th
+// message.
+func historyTestPosition(i int) messagepkg.HistoryPosition {
+	return messagepkg.HistoryPosition{Turn: int64(i + 1), Seq: 1}
+}
+
+func (s *memoryQueryMessageService) GetByIDBySession(_ context.Context, _ string, messageID string) (messagepkg.Message, error) {
+	for _, message := range s.messages {
+		if message.ID == messageID {
+			return message, nil
+		}
+	}
+	return messagepkg.Message{}, errors.New("message not found")
+}
+
+func (s *memoryQueryMessageService) HistoryPositionByID(_ context.Context, _ string, messageID string) (messagepkg.HistoryPosition, error) {
+	for i, message := range s.messages {
+		if message.ID == messageID {
+			return historyTestPosition(i), nil
+		}
+	}
+	return messagepkg.HistoryPosition{}, errors.New("message not found")
+}
+
+func (s *memoryQueryMessageService) ListActiveSinceBySession(context.Context, string, time.Time) ([]messagepkg.Message, error) {
+	return append([]messagepkg.Message(nil), s.messages...), nil
+}
+
+func (s *memoryQueryMessageService) ListHistoryWithinBytes(_ context.Context, _ string, window messagepkg.HistoryWindow) (messagepkg.HistoryLoad, error) {
+	s.windows = append(s.windows, window)
+	var out []messagepkg.Message
+	for i, message := range s.messages {
+		position := historyTestPosition(i)
+		if window.After.Before(position) && (window.Before == nil || position.Before(*window.Before)) {
+			out = append(out, message)
+		}
+	}
+	return messagepkg.HistoryLoad{Messages: out}, nil
 }
 
 // ListRecentUserBySession follows the SQL contract over messages in history
 // order: user rows only, before the cutoff row, the newest limit oldest first.
-func (s *memoryQueryMessageService) ListRecentUserBySession(_ context.Context, sessionID, beforeMessageID string, limit int32) ([]messagepkg.Message, error) {
-	s.historyReads++
-	s.recentUserCalls = append(s.recentUserCalls, memoryQueryRecentUserCall{sessionID: sessionID, beforeMessageID: beforeMessageID, limit: limit})
+func (s *memoryQueryMessageService) ListRecentUserBySession(_ context.Context, _ string, beforeMessageID string, limit int32) ([]messagepkg.Message, error) {
+	s.recentUserReads = append(s.recentUserReads, beforeMessageID)
 	rows := s.messages
 	if beforeMessageID != "" {
 		cutoff := slices.IndexFunc(rows, func(m messagepkg.Message) bool { return m.ID == beforeMessageID })
@@ -48,22 +85,28 @@ func (s *memoryQueryMessageService) ListRecentUserBySession(_ context.Context, s
 	return users[max(0, len(users)-int(limit)):], nil
 }
 
-func (s *memoryQueryMessageService) ListActiveSinceBySession(context.Context, string, time.Time) ([]messagepkg.Message, error) {
-	s.historyReads++
-	return append([]messagepkg.Message(nil), s.messages...), nil
+func (s *memoryQueryMessageService) ListHistoryByIDs(_ context.Context, _ string, ids []string) ([]messagepkg.Message, error) {
+	var out []messagepkg.Message
+	for _, message := range s.messages {
+		if slices.Contains(ids, message.ID) {
+			out = append(out, message)
+		}
+	}
+	return out, nil
 }
 
-func (s *memoryQueryMessageService) ListActiveSinceBySessionWithinBytes(context.Context, string, time.Time, int64, bool) ([]messagepkg.Message, error) {
-	s.historyReads++
-	return append([]messagepkg.Message(nil), s.messages...), nil
+func (s *memoryQueryMessageService) ListTurnResponseSourcesWithinBytes(_ context.Context, _ string, after messagepkg.HistoryPosition, _ int64) (messagepkg.HistoryLoad, error) {
+	var out []messagepkg.Message
+	for i, message := range s.messages {
+		if after.Before(historyTestPosition(i)) {
+			out = append(out, message)
+		}
+	}
+	return messagepkg.HistoryLoad{Messages: out}, nil
 }
 
-func (s *memoryQueryMessageService) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return append([]messagepkg.Message(nil), s.messages...), nil
-}
-
-func (*memoryQueryMessageService) MeasureActiveBySession(context.Context, string, time.Time) (messagepkg.ActiveMessagesMeasure, error) {
-	return messagepkg.ActiveMessagesMeasure{}, nil
+func (s *memoryQueryMessageService) ListTurnResponseSourcesByIDs(ctx context.Context, sessionID string, ids []string) ([]messagepkg.Message, error) {
+	return s.ListHistoryByIDs(ctx, sessionID, ids)
 }
 
 func TestMemoryQueryBuilderCombinesRecentUserMessages(t *testing.T) {
@@ -120,47 +163,40 @@ func TestMemoryQueryBuilderSkipsEmptyVisibleQuery(t *testing.T) {
 	}
 }
 
-func TestBuildMemoryQueryReadsRecentUserMessagesBeforeRetryCutoff(t *testing.T) {
+// A retry reads the user's messages before its cutoff. A checkpoint folding
+// them stands in for them only in the model's context: the memory query reads
+// the user's own words, never a summary.
+func TestBuildMemoryQueryReadsUserMessagesBeforeRetryCutoff(t *testing.T) {
 	t.Parallel()
 
-	botID := "00000000-0000-0000-0000-00000000b715"
-	sessionID := "00000000-0000-0000-0000-00000000e715"
-	compactID := "00000000-0000-0000-0000-00000000c715"
-	base := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	prior := persistedHistoryMessage(t, "prior-user", "user", "prior visible context")
-	prior.CompactID = compactID
-	prior.CreatedAt = base.Add(10 * time.Minute)
 	reply := persistedHistoryMessage(t, "assistant-reply", "assistant", "assistant reply")
-	reply.CreatedAt = base.Add(15 * time.Minute)
 	cutoff := persistedHistoryMessage(t, "cutoff-user", "user", "edited-away request")
-	cutoff.CreatedAt = base.Add(20 * time.Minute)
-
 	messages := &memoryQueryMessageService{messages: []messagepkg.Message{prior, reply, cutoff}}
+	queries := &historyCheckpointQueries{}
+	queries.activate(historyCheckpointRow(t, "00000000-0000-0000-0000-00000000c716", historyTestPosition(1),
+		checkpoint.Item{SummaryID: queries.summary(t, "00000000-0000-0000-0000-00000000c715", "compacted summary text")}))
 	resolver := &Service{
 		messageService: messages,
-		queries: &recordingCompactionLogQueries{logs: []sqlc.BotHistoryMessageCompact{{
-			ID:            mustPGUUID(t, compactID),
-			BotID:         mustPGUUID(t, botID),
-			SessionID:     mustPGUUID(t, sessionID),
-			Status:        "ok",
-			Summary:       "compacted summary text",
-			AnchorStartMs: prior.CreatedAt.UnixMilli(),
-			AnchorEndMs:   prior.CreatedAt.UnixMilli(),
-		}}},
+		checkpoints:    checkpoint.NewStore(slog.New(slog.DiscardHandler), queries),
 	}
+
 	query := resolver.buildMemoryQuery(context.Background(), ChatRequest{
-		BotID:                        botID,
-		ThreadID:                     sessionID,
+		BotID:                        "00000000-0000-0000-0000-00000000b715",
+		ThreadID:                     "00000000-0000-0000-0000-00000000e715",
 		Query:                        "replacement request",
 		HistoryCutoffBeforeMessageID: cutoff.ID,
+		TurnReplacement:              &messagepkg.TurnReplacement{OldTurnID: "00000000-0000-0000-0000-00000000a715"},
 	})
 
-	want := memoryQueryRecentUserCall{sessionID: sessionID, beforeMessageID: cutoff.ID, limit: defaultMemoryQueryUserRowScan}
-	if len(messages.recentUserCalls) != 1 || messages.recentUserCalls[0] != want {
-		t.Fatalf("recent user reads = %+v, want one %+v", messages.recentUserCalls, want)
+	if len(messages.recentUserReads) != 1 || messages.recentUserReads[0] != cutoff.ID {
+		t.Fatalf("recent user reads = %+v, want one before %s", messages.recentUserReads, cutoff.ID)
+	}
+	if len(messages.windows) != 0 {
+		t.Fatalf("memory query loaded the history window: %+v", messages.windows)
 	}
 	if !strings.Contains(query.Query, "prior visible context") {
-		t.Fatalf("memory query lost the user's own compacted message: %q", query.Query)
+		t.Fatalf("memory query lost the user's folded message: %q", query.Query)
 	}
 	for _, excluded := range []string{"edited-away request", "assistant reply", "compacted summary text"} {
 		if strings.Contains(query.Query, excluded) {

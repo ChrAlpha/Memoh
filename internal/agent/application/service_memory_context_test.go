@@ -53,8 +53,8 @@ func TestLoadMemoryContextReadsNoHistoryWithoutProvider(t *testing.T) {
 	if got.Message != nil || got.Trace != nil {
 		t.Fatalf("expected empty memory load without a memory provider: %#v", got)
 	}
-	if messages.historyReads != 0 {
-		t.Fatalf("memory query read history %d times for a bot without a memory provider", messages.historyReads)
+	if len(messages.recentUserReads) != 0 || len(messages.windows) != 0 {
+		t.Fatalf("memory query read history for a bot without a memory provider: %d recent user reads, %d windows", len(messages.recentUserReads), len(messages.windows))
 	}
 }
 
