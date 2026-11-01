@@ -15,8 +15,10 @@ import (
 )
 
 type preparedHistoryContext struct {
-	messages       []ModelMessage
-	records        []historyfrag.HistoryRecord
+	messages []ModelMessage
+	records  []historyfrag.HistoryRecord
+	// pressureTokens is the token pressure of what loaded, the input of the
+	// fold a truncated load needs; only a truncated load measures it.
 	pressureTokens int
 	// truncated reports that the load's byte budget left rows after the
 	// checkpoint out.
@@ -86,12 +88,11 @@ func (s *Service) prepareHistoryContext(
 	}
 	loaded = projectInterruptedHistoryReasoning(loaded)
 	messages, records := historyMessagesFromRecords(loaded)
-	return preparedHistoryContext{
-		messages:       messages,
-		records:        records,
-		pressureTokens: estimateMessagesTokens(loaded),
-		truncated:      truncated,
-	}, nil
+	prepared := preparedHistoryContext{messages: messages, records: records, truncated: truncated}
+	if truncated {
+		prepared.pressureTokens = estimateMessagesTokens(loaded)
+	}
+	return prepared, nil
 }
 
 // interruptedPreparation reports a request whose context ended while it was

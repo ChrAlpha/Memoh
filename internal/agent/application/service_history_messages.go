@@ -17,10 +17,10 @@ import (
 // bot_history_messages. This gives chat mode the same event-driven context
 // that discuss mode uses, replacing the legacy loadMessages path. Both
 // streams compose under the session's history checkpoint: what it holds,
-// then what came after it. It also returns the token pressure of what
-// composes, and whether the byte budget left turn responses after the
-// checkpoint out. A history or checkpoint load failure fails the request
-// (CM-ADM-003).
+// then what came after it. It also reports whether the byte budget left
+// turn responses after the checkpoint out and, only then, the token pressure
+// of what composes, the input of the fold such a load needs. A history or
+// checkpoint load failure fails the request (CM-ADM-003).
 func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest, contextTokenBudget int) ([]ModelMessage, int, bool, error) {
 	sessionID := strings.TrimSpace(req.ThreadID)
 	if s.pipeline == nil || sessionID == "" {
@@ -67,7 +67,9 @@ func (s *Service) buildMessagesFromPipeline(ctx context.Context, req ChatRequest
 			ContextSource: m.Source,
 			Content:       contentJSON,
 		})
-		pressure += estimateMessageTokens(messages[len(messages)-1])
+		if truncated {
+			pressure += estimateMessageTokens(messages[len(messages)-1])
+		}
 	}
 
 	return messages, pressure, truncated, nil
