@@ -2,6 +2,7 @@ package discuss
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -10,15 +11,43 @@ import (
 )
 
 type lightweightHistoryStub struct {
-	messages  []messagepkg.Message
-	sessionID string
-	maxBytes  int64
+	messages     []messagepkg.Message
+	sessionID    string
+	maxBytes     int64
+	measureAfter []messagepkg.HistoryPosition
+	after        []messagepkg.HistoryPosition
 }
 
-func (s *lightweightHistoryStub) ListTurnResponseSourcesSinceBySessionWithinBytes(_ context.Context, sessionID string, _ time.Time, maxBytes int64) ([]messagepkg.Message, error) {
+func (s *lightweightHistoryStub) MeasureHistory(_ context.Context, _ string, after messagepkg.HistoryPosition) (messagepkg.ActiveMessagesMeasure, error) {
+	s.measureAfter = append(s.measureAfter, after)
+	return messagepkg.ActiveMessagesMeasure{MessageCount: 100, ContentBytes: 10000}, nil
+}
+
+func (s *lightweightHistoryStub) ListTurnResponseSourcesWithinBytes(_ context.Context, sessionID string, after messagepkg.HistoryPosition, maxBytes int64) (messagepkg.HistoryLoad, error) {
 	s.sessionID = sessionID
+	s.after = append(s.after, after)
 	s.maxBytes = maxBytes
-	return s.messages, nil
+	return messagepkg.HistoryLoad{Messages: s.messages}, nil
+}
+
+// A session's turn responses reach Discuss from after its history checkpoint
+// on; a session without one is read from the start.
+func TestLightweightHistoryLoadsAfterTheCheckpoint(t *testing.T) {
+	for name, after := range map[string]messagepkg.HistoryPosition{
+		"checkpoint":    {Turn: 12, Seq: 3},
+		"no checkpoint": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := &lightweightHistoryStub{}
+			reader := discussHistoryReader{messages: source, maxBytes: 4000, logger: slog.New(slog.DiscardHandler)}
+			if _, _, err := reader.Load(context.Background(), "session", after); err != nil {
+				t.Fatal(err)
+			}
+			if len(source.after) != 1 || source.after[0] != after || len(source.measureAfter) != 1 || source.measureAfter[0] != after {
+				t.Fatalf("history read after %v, measured after %v; want %+v", source.after, source.measureAfter, after)
+			}
+		})
+	}
 }
 
 func TestLightweightHistoryPreservesInterruptedReasoning(t *testing.T) {
@@ -35,16 +64,16 @@ func TestLightweightHistoryPreservesInterruptedReasoning(t *testing.T) {
 					Content: []byte(`{"role":"assistant","content":"completed answer"}`),
 				})
 			}
-			reader := discussHistoryReader{messages: source, maxBytes: 4000000}
-			entries, window, err := reader.Load(context.Background(), "session", nil)
+			reader := discussHistoryReader{messages: source, maxBytes: 4000000, logger: slog.New(slog.DiscardHandler)}
+			entries, measure, err := reader.Load(context.Background(), "session", messagepkg.HistoryPosition{})
 			if err != nil {
 				t.Fatal(err)
 			}
 			if source.sessionID != "session" || source.maxBytes != 4000000 {
 				t.Fatal("history request lost session/budget")
 			}
-			if window.Loaded != len(source.messages) || window.BudgetReached() {
-				t.Fatalf("incorrect history window: %+v", window)
+			if measure.TotalMessages != 100 || measure.TotalBytes != 10000 || measure.Loaded != len(source.messages) {
+				t.Fatalf("incorrect history measure: %+v", measure)
 			}
 			var text strings.Builder
 			for _, entry := range entries {
@@ -57,54 +86,5 @@ func TestLightweightHistoryPreservesInterruptedReasoning(t *testing.T) {
 				t.Fatal("completed answer missing")
 			}
 		})
-	}
-}
-
-// The window reports reaching its budget from what it loaded, the same
-// content bytes the database walk spends, so the admission log no longer
-// needs a whole-session aggregate.
-func TestLightweightHistoryWindowReportsBudget(t *testing.T) {
-	content := []byte(`{"role":"assistant","content":"answer"}`)
-	source := &lightweightHistoryStub{messages: []messagepkg.Message{
-		{ID: "a", Role: "assistant", CreatedAt: time.Unix(1, 0), Content: content},
-		{ID: "b", Role: "assistant", CreatedAt: time.Unix(2, 0), Content: content},
-	}}
-	for _, tc := range []struct {
-		maxBytes int64
-		reached  bool
-	}{
-		{maxBytes: int64(2 * len(content)), reached: true},
-		{maxBytes: int64(2*len(content)) + 1, reached: false},
-	} {
-		_, window, err := discussHistoryReader{messages: source, maxBytes: tc.maxBytes}.Load(context.Background(), "session", nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if window.Bytes != int64(2*len(content)) || window.BudgetReached() != tc.reached {
-			t.Fatalf("maxBytes=%d window=%+v, want reached=%v", tc.maxBytes, window, tc.reached)
-		}
-	}
-}
-
-// A response a summary replaces is not decoded, yet still counts as the
-// answer that closes an earlier interrupted checkpoint.
-func TestLightweightHistorySkipsCoveredResponses(t *testing.T) {
-	source := &lightweightHistoryStub{messages: []messagepkg.Message{
-		{
-			ID: "checkpoint", Role: "assistant", CreatedAt: time.Unix(1, 0),
-			Content:  []byte(`{"role":"assistant","content":[{"type":"reasoning","text":"unfinished thought"},{"type":"text","text":"partial"}]}`),
-			Metadata: map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true},
-		},
-		{ID: "covered", Role: "assistant", CreatedAt: time.Unix(2, 0), Content: []byte(`{"role":"assistant","content":"covered answer"}`)},
-	}}
-	entries, window, err := discussHistoryReader{messages: source, maxBytes: 4000000}.Load(context.Background(), "session", []string{"covered"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if window.Loaded != 2 || len(entries) != 1 || entries[0].SourceMessageID != "checkpoint" {
-		t.Fatalf("window=%+v entries=%+v, want only the uncovered response decoded", window, entries)
-	}
-	if strings.Contains(string(entries[0].RawContent), "unfinished thought") {
-		t.Fatalf("the covered answer closed the checkpoint, its reasoning must stay hidden: %s", entries[0].RawContent)
 	}
 }

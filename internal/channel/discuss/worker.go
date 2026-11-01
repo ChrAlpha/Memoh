@@ -3,7 +3,6 @@ package discuss
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -82,40 +81,34 @@ func (d *DiscussDriver) handleReply(ctx context.Context, sess *discussSession, r
 }
 
 // discussHistory is what a trigger composes beside its rendered context:
-// the session's active compaction artifacts and the recent turn responses.
+// the session's history checkpoint and the turn responses after it.
 type discussHistory struct {
-	artifacts []timeline.CompactionArtifact
-	trs       []timeline.TurnResponseEntry
+	checkpoint timeline.HistoryCheckpoint
+	trs        []timeline.TurnResponseEntry
 }
 
-// loadHistory reads the session's active compaction frontier, then the turn
-// responses in the history window. Responses a summary replaces are decoded
-// only for the cold-start anchor, which reads every response. A load failure
-// fails the trigger: composing without the frontier would either
-// re-materialize the raw history or leave what it covers out (CM-ADM-003).
-func (d *DiscussDriver) loadHistory(ctx context.Context, cfg DiscussSessionConfig, log *slog.Logger, anchoring bool) (discussHistory, error) {
+// loadHistory reads the session's history checkpoint for rc and the turn
+// responses after it. A load failure fails the trigger: composing without
+// the checkpoint would either re-materialize the history it folds or leave
+// what it holds out (CM-ADM-003).
+func (d *DiscussDriver) loadHistory(ctx context.Context, cfg DiscussSessionConfig, rc timeline.RenderedContext, log *slog.Logger) (discussHistory, error) {
 	var history discussHistory
-	if d.artifacts != nil {
-		artifacts, err := d.artifacts.ActiveCompactionArtifacts(ctx, cfg.BotID, cfg.ThreadID)
-		if err != nil {
-			return discussHistory{}, fmt.Errorf("load compaction frontier: %w", err)
+	if d.checkpoints != nil {
+		var err error
+		if history.checkpoint, err = d.checkpoints.Load(ctx, cfg.ThreadID, rc); err != nil {
+			return discussHistory{}, err
 		}
-		history.artifacts = artifacts
 	}
-	var covered []string
-	if !anchoring {
-		covered = timeline.CoveredTurnResponseIDs(history.artifacts)
-	}
-	trs, window, err := d.history.Load(ctx, cfg.ThreadID, covered)
+	trs, measure, err := d.history.Load(ctx, cfg.ThreadID, history.checkpoint.Position)
 	if err != nil {
-		return discussHistory{}, fmt.Errorf("load turn responses: %w", err)
+		return discussHistory{}, err
 	}
-	if window.BudgetReached() {
+	if measure.TotalMessages > int64(measure.Loaded) {
 		log.InfoContext(ctx, "context_admission",
 			slog.String("path", "discuss_history_load"),
-			slog.Int("history_loaded_messages", window.Loaded),
-			slog.Int64("history_loaded_bytes", window.Bytes),
-			slog.Int64("history_budget_bytes", window.MaxBytes),
+			slog.Int64("history_total_messages", measure.TotalMessages),
+			slog.Int64("history_total_bytes", measure.TotalBytes),
+			slog.Int("history_loaded_messages", measure.Loaded),
 			slog.Int("budget_tokens", d.admissionMaxTokens()))
 	}
 	history.trs = trs
@@ -126,7 +119,7 @@ func (d *DiscussDriver) loadHistory(ctx context.Context, cfg DiscussSessionConfi
 // workers obtain the current service through turnServiceSnapshot.
 func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSession, rc timeline.RenderedContext, log *slog.Logger, turnSvc turn.Service) {
 	cfg := d.sessionConfigSnapshot(sess)
-	history, err := d.loadHistory(ctx, cfg, log, sess.lastProcessed == (timeline.DiscussCursorPosition{}))
+	history, err := d.loadHistory(ctx, cfg, rc, log)
 	if err != nil {
 		d.failMissingSource(ctx, cfg, log, "history_load_failed", err)
 		return
@@ -149,15 +142,15 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 	}
 
 	for recoveries := 0; recoveries <= maxDiscussRecoveries; recoveries++ {
-		// A recompose follows a compaction: the frontier moved, and with it
-		// the turn responses it leaves uncovered.
+		// A recompose follows a compaction: the checkpoint moved, and with it
+		// the turn responses after it.
 		if recoveries > 0 {
-			if history, err = d.loadHistory(ctx, cfg, log, false); err != nil {
+			if history, err = d.loadHistory(ctx, cfg, rc, log); err != nil {
 				d.failMissingSource(ctx, cfg, log, "history_load_failed", err)
 				return
 			}
 		}
-		plan, admission, ok := d.trigger.Build(cfg, rc, history.trs, sess.lastProcessed, history.artifacts, timeline.ComposeBudget{MaxTokens: d.admissionMaxTokens()})
+		plan, admission, ok := d.trigger.Build(cfg, rc, history.trs, sess.lastProcessed, history.checkpoint, timeline.ComposeBudget{MaxTokens: d.admissionMaxTokens()})
 		if !ok {
 			if admission.ProtectedOverflow {
 				log.ErrorContext(ctx, "context_admission_rejected",

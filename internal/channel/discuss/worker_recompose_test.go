@@ -3,10 +3,9 @@ package discuss
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
-	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
@@ -15,32 +14,35 @@ import (
 	"github.com/felinics/memoh/internal/chat/timeline"
 )
 
-type countingArtifactProvider struct {
-	calls atomic.Int64
+// movingCheckpointSource emulates the compaction a recompose follows: each
+// load returns a checkpoint past the one before. With oversized set, the
+// first one's summary does not fit the admission budget.
+type movingCheckpointSource struct {
+	oversized bool
+	calls     int
 }
 
-type recoveringArtifactProvider struct {
-	calls int
-}
-
-func (p *recoveringArtifactProvider) ActiveCompactionArtifacts(context.Context, string, string) ([]timeline.CompactionArtifact, error) {
-	p.calls++
+func (s *movingCheckpointSource) Load(context.Context, string, timeline.RenderedContext) (timeline.HistoryCheckpoint, error) {
+	s.calls++
 	summary := "small"
-	if p.calls == 1 {
+	if s.oversized && s.calls == 1 {
 		summary = strings.Repeat("s", 8000)
 	}
-	return []timeline.CompactionArtifact{{ID: "summary", Summary: summary}}, nil
+	return timeline.HistoryCheckpoint{
+		Position: messagepkg.HistoryPosition{Turn: int64(s.calls)},
+		Items:    []timeline.CheckpointItem{{SummaryID: "summary", Summary: summary}},
+	}, nil
 }
 
 func TestDiscussChannelOverflowRequestsRecoveryWithoutPayload(t *testing.T) {
-	artifacts := &recoveringArtifactProvider{}
+	checkpoints := &movingCheckpointSource{oversized: true}
 	svc := &fakeTurnService{recomposeRuns: 1}
 	svc.onStart = func(cmd turn.StartTurnCommand) {
 		if svc.calls == 1 && (!cmd.DiscussContextOverflow || len(cmd.DiscussMessages) != 0 || cmd.DiscussContextTokens <= 1000 || cmd.DiscussCurrentTokens <= 0 || cmd.DiscussCurrentTokens >= 1000) {
 			t.Errorf("overflow must carry recovery metadata only: overflow=%v messages=%d pressure=%d", cmd.DiscussContextOverflow, len(cmd.DiscussMessages), cmd.DiscussContextTokens)
 		}
 	}
-	driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: artifacts, AdmissionMaxTokens: 1000})
+	driver := NewDiscussDriver(DiscussDriverDeps{Checkpoints: checkpoints, AdmissionMaxTokens: 1000})
 	sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
 	driver.handleReplyWithTurn(t.Context(), sess, recomposeTestRC(), driver.logger, svc)
 	if svc.calls != 2 || sess.lastProcessed.SourceCursor != 200 || svc.lastCmd.DiscussContextOverflow {
@@ -51,8 +53,10 @@ func TestDiscussChannelOverflowRequestsRecoveryWithoutPayload(t *testing.T) {
 func TestDiscussChannelOverflowRecoveryIsBoundedAndDoesNotConsume(t *testing.T) {
 	for _, retries := range []int{0, 99} {
 		svc := &fakeTurnService{recomposeRuns: retries}
-		artifacts := &fakeArtifactProvider{artifacts: []timeline.CompactionArtifact{{ID: "summary", Summary: strings.Repeat("s", 8000)}}}
-		driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: artifacts, AdmissionMaxTokens: 1000})
+		checkpoints := &fakeCheckpointSource{checkpoint: timeline.HistoryCheckpoint{
+			Items: []timeline.CheckpointItem{{SummaryID: "summary", Summary: strings.Repeat("s", 8000)}},
+		}}
+		driver := NewDiscussDriver(DiscussDriverDeps{Checkpoints: checkpoints, AdmissionMaxTokens: 1000})
 		sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
 		driver.handleReplyWithTurn(t.Context(), sess, recomposeTestRC(), driver.logger, svc)
 		want := 1
@@ -65,11 +69,6 @@ func TestDiscussChannelOverflowRecoveryIsBoundedAndDoesNotConsume(t *testing.T) 
 	}
 }
 
-func (p *countingArtifactProvider) ActiveCompactionArtifacts(context.Context, string, string) ([]timeline.CompactionArtifact, error) {
-	p.calls.Add(1)
-	return nil, nil
-}
-
 func recomposeTestRC() timeline.RenderedContext {
 	return timeline.RenderedContext{
 		{
@@ -79,10 +78,11 @@ func recomposeTestRC() timeline.RenderedContext {
 	}
 }
 
-func TestHandleReplyWithTurn_RecomposeReloadsArtifactsAndResubmits(t *testing.T) {
+func TestHandleReplyWithTurn_RecomposeReloadsHistoryAndResubmits(t *testing.T) {
 	svc := &fakeTurnService{recomposeRuns: 1}
-	artifacts := &countingArtifactProvider{}
-	driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: artifacts})
+	checkpoints := &movingCheckpointSource{}
+	history := &lightweightHistoryStub{}
+	driver := NewDiscussDriver(DiscussDriverDeps{Checkpoints: checkpoints, MessageService: history})
 	sess := &discussSession{
 		config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"},
 	}
@@ -92,67 +92,14 @@ func TestHandleReplyWithTurn_RecomposeReloadsArtifactsAndResubmits(t *testing.T)
 	if svc.calls != 2 {
 		t.Fatalf("StartTurn calls = %d, want 2 (recompose then rerun)", svc.calls)
 	}
-	if got := artifacts.calls.Load(); got != 2 {
-		t.Fatalf("artifact loads = %d, want 2 (frontier reloaded per attempt)", got)
+	if checkpoints.calls != 2 {
+		t.Fatalf("checkpoint loads = %d, want 2 (checkpoint reloaded per attempt)", checkpoints.calls)
+	}
+	if want := []messagepkg.HistoryPosition{{Turn: 1}, {Turn: 2}}; !reflect.DeepEqual(history.after, want) {
+		t.Fatalf("turn responses read after %v, want after each checkpoint loaded (%v)", history.after, want)
 	}
 	if sess.lastProcessed.SourceCursor != 200 {
 		t.Fatalf("cursor must advance after the rerun completes, got %+v", sess.lastProcessed)
-	}
-}
-
-type countingHistoryReader struct {
-	lightweightHistoryStub
-	calls int
-}
-
-func (h *countingHistoryReader) ListTurnResponseSourcesSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]messagepkg.Message, error) {
-	h.calls++
-	return h.lightweightHistoryStub.ListTurnResponseSourcesSinceBySessionWithinBytes(ctx, sessionID, since, maxBytes)
-}
-
-// The turn responses a trigger composes are decoded against the frontier it
-// composes with, so a recompose after a compaction reads both again.
-func TestHandleReplyWithTurn_RecomposeReloadsTurnResponsesWithTheFrontier(t *testing.T) {
-	svc := &fakeTurnService{recomposeRuns: 1}
-	artifacts := &countingArtifactProvider{}
-	history := &countingHistoryReader{}
-	driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: artifacts, MessageService: history})
-	sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
-
-	driver.handleReplyWithTurn(context.Background(), sess, recomposeTestRC(), driver.logger, svc)
-
-	if svc.calls != 2 || artifacts.calls.Load() != 2 || history.calls != 2 {
-		t.Fatalf("runs=%d frontier loads=%d history loads=%d, want 2 each", svc.calls, artifacts.calls.Load(), history.calls)
-	}
-}
-
-// The cold-start anchor reads every persisted answer, including one a summary
-// replaces: leaving it out would replay context the bot already answered.
-func TestHandleReplyWithTurn_ColdStartAnchorReadsCoveredAnswers(t *testing.T) {
-	answered := timeline.RenderedSegment{
-		MessageID:    "m1",
-		ReceivedAtMs: 250,
-		Content:      []timeline.RenderedContentPiece{{Type: "text", Text: `<message id="m1">question</message>`}},
-	}
-	frontier := &fakeArtifactProvider{artifacts: []timeline.CompactionArtifact{{
-		ID: "a1", Summary: "folded", AnchorEndMs: 400,
-		Sources: []timeline.CompactionSource{
-			{HistoryMessageID: "answer", CreatedAtMs: 300},
-			{ExternalMessageID: "m0", CreatedAtMs: 400},
-		},
-	}}}
-	history := &lightweightHistoryStub{messages: []messagepkg.Message{{
-		ID: "answer", Role: "assistant", CreatedAt: time.UnixMilli(300),
-		Content: []byte(`{"role":"assistant","content":"answer"}`),
-	}}}
-	svc := &fakeTurnService{}
-	driver := NewDiscussDriver(DiscussDriverDeps{Artifacts: frontier, MessageService: history, CursorStore: &fakeDiscussCursorStore{}})
-	sess := &discussSession{config: DiscussSessionConfig{BotID: "b", ThreadID: "s"}}
-
-	driver.handleReplyWithTurn(context.Background(), sess, timeline.RenderedContext{answered}, driver.logger, svc)
-
-	if svc.calls != 0 || sess.lastProcessed.SourceCursor != 300 {
-		t.Fatalf("calls=%d cursor=%+v, want the covered answer to anchor the cursor", svc.calls, sess.lastProcessed)
 	}
 }
 
@@ -203,22 +150,30 @@ func TestDiscussSkippedAgentTurnConsumesOverflowingInput(t *testing.T) {
 	}
 }
 
-type failingArtifactProvider struct{}
-
-func (failingArtifactProvider) ActiveCompactionArtifacts(context.Context, string, string) ([]timeline.CompactionArtifact, error) {
-	return nil, errors.New("frontier unavailable")
+// failingCheckpointSource fails every load after the first ok ones.
+type failingCheckpointSource struct {
+	ok    int
+	calls int
 }
 
-type failingHistoryReader struct{}
+func (s *failingCheckpointSource) Load(context.Context, string, timeline.RenderedContext) (timeline.HistoryCheckpoint, error) {
+	s.calls++
+	if s.calls > s.ok {
+		return timeline.HistoryCheckpoint{}, errors.New("checkpoint unavailable")
+	}
+	return timeline.HistoryCheckpoint{}, nil
+}
 
-func (failingHistoryReader) ListTurnResponseSourcesSinceBySessionWithinBytes(context.Context, string, time.Time, int64) ([]messagepkg.Message, error) {
-	return nil, errors.New("history unavailable")
+type failingHistoryReader struct{ lightweightHistoryStub }
+
+func (failingHistoryReader) ListTurnResponseSourcesWithinBytes(context.Context, string, messagepkg.HistoryPosition, int64) (messagepkg.HistoryLoad, error) {
+	return messagepkg.HistoryLoad{}, errors.New("history unavailable")
 }
 
 func TestDiscussMissingSourceFailsWithoutRunningOrConsuming(t *testing.T) {
 	for name, deps := range map[string]DiscussDriverDeps{
-		"artifacts": {Artifacts: failingArtifactProvider{}},
-		"history":   {MessageService: &failingHistoryReader{}},
+		"checkpoint": {Checkpoints: &failingCheckpointSource{}},
+		"history":    {MessageService: &failingHistoryReader{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			broadcaster := &recordingBroadcaster{}
@@ -232,5 +187,22 @@ func TestDiscussMissingSourceFailsWithoutRunningOrConsuming(t *testing.T) {
 				t.Fatalf("calls=%d cursor=%+v failures=%+v, want one internal failure and nothing run or consumed", svc.calls, sess.lastProcessed, failures)
 			}
 		})
+	}
+}
+
+// A recompose composes from history it loads again; when that history cannot
+// be loaded the trigger fails after the first attempt and leaves its input
+// for the next trigger.
+func TestDiscussRecoveryReloadFailureFailsWithoutConsuming(t *testing.T) {
+	broadcaster := &recordingBroadcaster{}
+	svc := &fakeTurnService{recomposeRuns: 1}
+	driver := NewDiscussDriver(DiscussDriverDeps{Checkpoints: &failingCheckpointSource{ok: 1}, Broadcaster: broadcaster})
+	sess := &discussSession{config: DiscussSessionConfig{BotID: "bot-1", ThreadID: "sess-1"}}
+
+	driver.handleReplyWithTurn(t.Context(), sess, recomposeTestRC(), driver.logger, svc)
+
+	failures := broadcaster.errors()
+	if svc.calls != 1 || sess.lastProcessed.SourceCursor != 0 || len(failures) != 1 || failures[0].ErrorCode != string(apperror.CodeInternal) {
+		t.Fatalf("calls=%d cursor=%+v failures=%+v, want the first attempt only, one internal failure and nothing consumed", svc.calls, sess.lastProcessed, failures)
 	}
 }
