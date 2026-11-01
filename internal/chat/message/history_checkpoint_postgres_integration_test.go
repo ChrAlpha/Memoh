@@ -487,16 +487,30 @@ func TestPostgresHistoryCheckpointBoundsEveryReadPath(t *testing.T) {
 			got.replay = append(got.replay, event.ExternalMessageID.String)
 		}
 		slices.Sort(got.replay)
-		classified, err := q.ClassifyHistoryCheckpointMessages(ctx, dbsqlc.ClassifyHistoryCheckpointMessagesParams{
-			AfterTurnPosition: after.Turn, AfterTurnMessageSeq: after.Seq, KeptIds: pgKept, SessionID: sessionID,
-			ExternalMessageIds: []string{"inbound-1", "inbound-2", "inbound-3", "inbound-4", "inbound-5", "inbound-6", "orphan-late"},
+		// A message with rows is kept when one of them is after the
+		// position or kept by reference, folded otherwise.
+		inbound := []string{"inbound-1", "inbound-2", "inbound-3", "inbound-4", "inbound-5", "inbound-6", "orphan-late"}
+		accounted, err := q.ListHistoryCheckpointAccountedMessages(ctx, dbsqlc.ListHistoryCheckpointAccountedMessagesParams{
+			KeptIds: pgKept, SessionID: sessionID, ExternalMessageIds: inbound,
+			ThroughTurnPosition: after.Turn, ThroughTurnMessageSeq: after.Seq,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := q.ListHistoryMessageSourcesAfter(ctx, dbsqlc.ListHistoryMessageSourcesAfterParams{
+			SessionID: sessionID, AfterTurnPosition: after.Turn, AfterTurnMessageSeq: after.Seq,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
 		got.kept = map[string]bool{}
-		for _, row := range classified {
+		for _, row := range accounted {
 			got.kept[row.ExternalMessageID] = row.Kept
+		}
+		for _, id := range raw {
+			if slices.Contains(inbound, id) {
+				got.kept[id] = true
+			}
 		}
 		return got
 	}

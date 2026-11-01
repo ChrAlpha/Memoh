@@ -45,8 +45,8 @@ func TestHandleReplyWithTurn_ComposesUnderTheCheckpoint(t *testing.T) {
 		},
 	}
 	source := &fakeCheckpointSource{checkpoint: timeline.HistoryCheckpoint{
-		Items:    []timeline.CheckpointItem{{MessageID: "m0"}, {SummaryID: "a1", Summary: "compacted window"}},
-		Messages: map[string]timeline.CheckpointMessage{"m0": {Kept: true}, "m1": {}, "m2": {Kept: true}},
+		Items:  []timeline.CheckpointItem{{MessageID: "m0"}, {SummaryID: "a1", Summary: "compacted window"}},
+		Folded: map[string]timeline.FoldedMessage{"m1": {}},
 	}}
 	svc := &fakeTurnService{}
 	driver := NewDiscussDriver(DiscussDriverDeps{Checkpoints: source})
@@ -101,8 +101,8 @@ func TestWasRecentlyMentionedSkipsSelfSent(t *testing.T) {
 // foldingCheckpoint folds the inbound message into its summary.
 func foldingCheckpoint(messageID, summary string) timeline.HistoryCheckpoint {
 	return timeline.HistoryCheckpoint{
-		Items:    []timeline.CheckpointItem{{SummaryID: "a1", Summary: summary}},
-		Messages: map[string]timeline.CheckpointMessage{messageID: {}},
+		Items:  []timeline.CheckpointItem{{SummaryID: "a1", Summary: summary}},
+		Folded: map[string]timeline.FoldedMessage{messageID: {}},
 	}
 }
 

@@ -160,7 +160,7 @@ func pipelineCheckpointService(pipeline *timeline.Pipeline, queries *historyChec
 // message m1 into one summary.
 func foldedSummaryQueries(t *testing.T, summary string) *historyCheckpointQueries {
 	t.Helper()
-	queries := &historyCheckpointQueries{classified: []sqlc.ClassifyHistoryCheckpointMessagesRow{{ExternalMessageID: "m1"}}}
+	queries := &historyCheckpointQueries{accounted: []sqlc.ListHistoryCheckpointAccountedMessagesRow{{ExternalMessageID: "m1"}}}
 	queries.activate(historyCheckpointRow(t, checkpointTestID, historyTestPosition(0),
 		checkpoint.Item{SummaryID: queries.summary(t, checkpointTestSummaryID, summary)}))
 	return queries
@@ -238,9 +238,10 @@ func TestBuildMessagesFromPipelinePinsWhatTheCheckpointHolds(t *testing.T) {
 	answer := persistedHistoryMessage(t, "answer", "assistant", "later answer")
 	answer.CreatedAt = time.UnixMilli(4000)
 	messages := &turnResponseSourceMessageService{kept: []messagepkg.Message{kept}, projected: []messagepkg.Message{answer}}
-	queries := &historyCheckpointQueries{classified: []sqlc.ClassifyHistoryCheckpointMessagesRow{
-		{ExternalMessageID: "m1", Kept: true}, {ExternalMessageID: "m2"}, {ExternalMessageID: "m3", Kept: true},
-	}}
+	queries := &historyCheckpointQueries{
+		after:     []string{"m3"},
+		accounted: []sqlc.ListHistoryCheckpointAccountedMessagesRow{{ExternalMessageID: "m1", Kept: true}, {ExternalMessageID: "m2"}},
+	}
 	position := messagepkg.HistoryPosition{Turn: 2, Seq: 2}
 	queries.activate(historyCheckpointRow(t, checkpointTestID, position,
 		checkpoint.Item{RowID: kept.ID}, checkpoint.Item{SummaryID: queries.summary(t, checkpointTestSummaryID, "folded work")}))

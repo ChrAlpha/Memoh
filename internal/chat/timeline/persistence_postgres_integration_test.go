@@ -128,12 +128,11 @@ func TestPostgresReplayAndClassificationFollowTheCheckpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load checkpoint: %v", err)
 	}
-	want := map[string]CheckpointMessage{
+	want := map[string]FoldedMessage{
 		"m1": {EventCursor: cursors["m1"]},
 		"m2": {EventCursor: cursors["m2"]},
-		"m3": {Kept: true, EventCursor: cursors["m3"]},
 	}
-	if !reflect.DeepEqual(held.Messages, want) {
-		t.Fatalf("classified = %+v, want %+v", held.Messages, want)
+	if !reflect.DeepEqual(held.Folded, want) {
+		t.Fatalf("folded = %+v, want %+v", held.Folded, want)
 	}
 }

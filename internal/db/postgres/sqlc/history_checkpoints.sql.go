@@ -11,71 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const classifyHistoryCheckpointMessages = `-- name: ClassifyHistoryCheckpointMessages :many
-SELECT
-  m.source_message_id::text AS external_message_id,
-  bool_or(
-    (m.turn_position, m.turn_message_seq) > ($1::bigint, $2::bigint)
-    OR m.id = ANY($3::uuid[])
-  )::boolean AS kept,
-  COALESCE(MAX((event.event_data->>'event_cursor')::bigint), 0)::bigint AS event_cursor
-FROM bot_visible_history_messages m
-LEFT JOIN bot_session_events event
-  ON event.team_id = public.memoh_current_team_id()
- AND event.id = m.event_id
-WHERE m.team_id = public.memoh_current_team_id()
-  AND m.session_id = $4
-  AND m.source_message_id = ANY($5::text[])
-  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-GROUP BY m.source_message_id
-`
-
-type ClassifyHistoryCheckpointMessagesParams struct {
-	AfterTurnPosition   int64         `json:"after_turn_position"`
-	AfterTurnMessageSeq int64         `json:"after_turn_message_seq"`
-	KeptIds             []pgtype.UUID `json:"kept_ids"`
-	SessionID           pgtype.UUID   `json:"session_id"`
-	ExternalMessageIds  []string      `json:"external_message_ids"`
-}
-
-type ClassifyHistoryCheckpointMessagesRow struct {
-	ExternalMessageID string `json:"external_message_id"`
-	Kept              bool   `json:"kept"`
-	EventCursor       int64  `json:"event_cursor"`
-}
-
-// How a checkpoint stands for each inbound message that has context rows:
-// kept when one of its rows is after the checkpoint's position or is a row
-// the checkpoint keeps by reference, folded otherwise. event_cursor is the
-// cursor of the event its rows were written from, 0 when unknown: a summary
-// reads rows, so it knows the message as of that event. A message without
-// context rows returns nothing.
-func (q *Queries) ClassifyHistoryCheckpointMessages(ctx context.Context, arg ClassifyHistoryCheckpointMessagesParams) ([]ClassifyHistoryCheckpointMessagesRow, error) {
-	rows, err := q.db.Query(ctx, classifyHistoryCheckpointMessages,
-		arg.AfterTurnPosition,
-		arg.AfterTurnMessageSeq,
-		arg.KeptIds,
-		arg.SessionID,
-		arg.ExternalMessageIds,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ClassifyHistoryCheckpointMessagesRow
-	for rows.Next() {
-		var i ClassifyHistoryCheckpointMessagesRow
-		if err := rows.Scan(&i.ExternalMessageID, &i.Kept, &i.EventCursor); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const countHistoryCheckpointCandidates = `-- name: CountHistoryCheckpointCandidates :one
 SELECT COUNT(*)::BIGINT AS candidate_count
 FROM bot_visible_history_messages m
@@ -329,6 +264,71 @@ func (q *Queries) GetHistoryCheckpointKeptThroughTurn(ctx context.Context, arg G
 	return i, err
 }
 
+const listHistoryCheckpointAccountedMessages = `-- name: ListHistoryCheckpointAccountedMessages :many
+SELECT
+  m.source_message_id::text AS external_message_id,
+  bool_or(m.id = ANY($1::uuid[]))::boolean AS kept,
+  COALESCE(MAX((event.event_data->>'event_cursor')::bigint), 0)::bigint AS event_cursor
+FROM bot_visible_history_messages m
+LEFT JOIN bot_session_events event
+  ON event.team_id = public.memoh_current_team_id()
+ AND event.id = m.event_id
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $2
+  AND m.source_message_id = ANY($3::text[])
+  AND (m.turn_position, m.turn_message_seq) <= ($4::bigint, $5::bigint)
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+GROUP BY m.source_message_id
+`
+
+type ListHistoryCheckpointAccountedMessagesParams struct {
+	KeptIds               []pgtype.UUID `json:"kept_ids"`
+	SessionID             pgtype.UUID   `json:"session_id"`
+	ExternalMessageIds    []string      `json:"external_message_ids"`
+	ThroughTurnPosition   int64         `json:"through_turn_position"`
+	ThroughTurnMessageSeq int64         `json:"through_turn_message_seq"`
+}
+
+type ListHistoryCheckpointAccountedMessagesRow struct {
+	ExternalMessageID string `json:"external_message_id"`
+	Kept              bool   `json:"kept"`
+	EventCursor       int64  `json:"event_cursor"`
+}
+
+// How a checkpoint accounts for each named inbound message that has context
+// rows at or before its position: kept when it keeps one of them by
+// reference, and event_cursor, the cursor of the newest event they were
+// written from, 0 when unknown: a summary reads rows, so it knows the
+// message as of that event. Rows at or before an active checkpoint's
+// position change only by moving the session off it, so what this reads
+// holds while the checkpoint stays active. A message without such rows
+// returns nothing.
+func (q *Queries) ListHistoryCheckpointAccountedMessages(ctx context.Context, arg ListHistoryCheckpointAccountedMessagesParams) ([]ListHistoryCheckpointAccountedMessagesRow, error) {
+	rows, err := q.db.Query(ctx, listHistoryCheckpointAccountedMessages,
+		arg.KeptIds,
+		arg.SessionID,
+		arg.ExternalMessageIds,
+		arg.ThroughTurnPosition,
+		arg.ThroughTurnMessageSeq,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListHistoryCheckpointAccountedMessagesRow
+	for rows.Next() {
+		var i ListHistoryCheckpointAccountedMessagesRow
+		if err := rows.Scan(&i.ExternalMessageID, &i.Kept, &i.EventCursor); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHistoryCheckpointCandidatesWithinBytes = `-- name: ListHistoryCheckpointCandidatesWithinBytes :many
 WITH candidate_rows AS MATERIALIZED (
   SELECT
@@ -551,6 +551,48 @@ func (q *Queries) ListHistoryCheckpointSummaries(ctx context.Context, arg ListHi
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHistoryMessageSourcesAfter = `-- name: ListHistoryMessageSourcesAfter :many
+SELECT DISTINCT m.source_message_id::text AS external_message_id
+FROM bot_visible_history_messages m
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = $1
+  AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+  AND COALESCE(m.source_message_id, '') <> ''
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+`
+
+type ListHistoryMessageSourcesAfterParams struct {
+	SessionID           pgtype.UUID `json:"session_id"`
+	AfterTurnPosition   int64       `json:"after_turn_position"`
+	AfterTurnMessageSeq int64       `json:"after_turn_message_seq"`
+}
+
+// The inbound messages with context rows after a position: a checkpoint
+// there leaves each of them raw. The read walks the visible-session-order
+// index from the position, so it costs the rows after it, never the history
+// before. The source is tested with COALESCE rather than IS NOT NULL so that
+// no plan, generic ones included, can take the source index instead, which
+// would visit every inbound row of the session.
+func (q *Queries) ListHistoryMessageSourcesAfter(ctx context.Context, arg ListHistoryMessageSourcesAfterParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, listHistoryMessageSourcesAfter, arg.SessionID, arg.AfterTurnPosition, arg.AfterTurnMessageSeq)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var external_message_id string
+		if err := rows.Scan(&external_message_id); err != nil {
+			return nil, err
+		}
+		items = append(items, external_message_id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

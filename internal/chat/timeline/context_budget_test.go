@@ -100,7 +100,6 @@ func TestComposeBudgetedKeepsWhatTheCheckpointHolds(t *testing.T) {
 			{Response: &call},
 			{Response: &result},
 		},
-		Messages: map[string]CheckpointMessage{"m-kept": {Kept: true}, "m-new": {Kept: true}},
 	}
 	trs := []TurnResponseEntry{{RequestedAtMs: 200, Role: "assistant", Content: strings.Repeat("a", 4000), SourceMessageID: "h-old"}}
 	rc := RenderedContext{

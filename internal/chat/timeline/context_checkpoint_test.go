@@ -64,7 +64,6 @@ func TestComposeContextWithCheckpointPinsWhatItHolds(t *testing.T) {
 			{Response: &kept},
 			{SummaryID: "s2", Summary: "later work"},
 		},
-		Messages: map[string]CheckpointMessage{"m-input": {Kept: true}, "m-new": {Kept: true}},
 	}
 	rc := RenderedContext{textSegment("m-input", 1000, "kept input"), textSegment("m-new", 3000, "new input")}
 
@@ -114,8 +113,8 @@ func TestComposeContextWithCheckpointComposesWhatItLeavesRaw(t *testing.T) {
 		textSegment("m-raw", 3000, "raw input"),
 	}
 	held := HistoryCheckpoint{
-		Items:    []CheckpointItem{{SummaryID: "s1", Summary: "folded"}},
-		Messages: map[string]CheckpointMessage{"m-folded": {}, "m-raw": {Kept: true}},
+		Items:  []CheckpointItem{{SummaryID: "s1", Summary: "folded"}},
+		Folded: map[string]FoldedMessage{"m-folded": {}},
 	}
 	composed := ComposeContextWithCheckpoint(rc, nil, held)
 	want := []string{
@@ -148,11 +147,10 @@ func TestComposeContextWithCheckpointComposesAFoldedMessageThatChangedSince(t *t
 	}
 	held := HistoryCheckpoint{
 		Items: []CheckpointItem{{SummaryID: "s1", Summary: "folded"}},
-		Messages: map[string]CheckpointMessage{
+		Folded: map[string]FoldedMessage{
 			"m-unchanged":          {EventCursor: 4},
 			"m-edited-unversioned": {},
 			"m-edited":             {EventCursor: 5},
-			"m-new":                {Kept: true, EventCursor: 7},
 		},
 	}
 	composed := ComposeContextWithCheckpoint(rc, nil, held)

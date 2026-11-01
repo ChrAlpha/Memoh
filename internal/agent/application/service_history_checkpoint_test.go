@@ -30,8 +30,8 @@ const (
 
 // historyCheckpointQueries serves a session's history checkpoints from
 // memory, every one of them holding: the active one, the one a replacement
-// of each turn keeps, the usable summaries and how each inbound message
-// stands.
+// of each turn keeps, the usable summaries, the inbound messages with rows
+// after the active one's position and how it accounts for the others.
 type historyCheckpointQueries struct {
 	dbstore.Queries
 	checkpoints map[pgtype.UUID]sqlc.BotHistoryCheckpoint
@@ -39,7 +39,8 @@ type historyCheckpointQueries struct {
 	activeErr   error
 	keptBefore  map[pgtype.UUID]pgtype.UUID
 	summaries   map[pgtype.UUID]string
-	classified  []sqlc.ClassifyHistoryCheckpointMessagesRow
+	after       []string
+	accounted   []sqlc.ListHistoryCheckpointAccountedMessagesRow
 	// replacedTurns are the turns the checkpoint kept before was asked of.
 	replacedTurns []pgtype.UUID
 }
@@ -111,8 +112,12 @@ func (q *historyCheckpointQueries) ListHistoryCheckpointSummaries(_ context.Cont
 	return rows, nil
 }
 
-func (q *historyCheckpointQueries) ClassifyHistoryCheckpointMessages(context.Context, sqlc.ClassifyHistoryCheckpointMessagesParams) ([]sqlc.ClassifyHistoryCheckpointMessagesRow, error) {
-	return q.classified, nil
+func (q *historyCheckpointQueries) ListHistoryMessageSourcesAfter(context.Context, sqlc.ListHistoryMessageSourcesAfterParams) ([]string, error) {
+	return q.after, nil
+}
+
+func (q *historyCheckpointQueries) ListHistoryCheckpointAccountedMessages(context.Context, sqlc.ListHistoryCheckpointAccountedMessagesParams) ([]sqlc.ListHistoryCheckpointAccountedMessagesRow, error) {
+	return q.accounted, nil
 }
 
 // historyCheckpointRow is a checkpoint at a position holding items in order.

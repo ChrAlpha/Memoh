@@ -83,7 +83,8 @@ type Queries interface {
 	CopyCompactionSummary(ctx context.Context, arg dbsqlc.CopyCompactionSummaryParams) (pgtype.UUID, error)
 	ReleasePendingCompactionLogsBySession(ctx context.Context, arg dbsqlc.ReleasePendingCompactionLogsBySessionParams) error
 
-	ClassifyHistoryCheckpointMessages(ctx context.Context, arg dbsqlc.ClassifyHistoryCheckpointMessagesParams) ([]dbsqlc.ClassifyHistoryCheckpointMessagesRow, error)
+	ListHistoryCheckpointAccountedMessages(ctx context.Context, arg dbsqlc.ListHistoryCheckpointAccountedMessagesParams) ([]dbsqlc.ListHistoryCheckpointAccountedMessagesRow, error)
+	ListHistoryMessageSourcesAfter(ctx context.Context, arg dbsqlc.ListHistoryMessageSourcesAfterParams) ([]string, error)
 	CreateHistoryCheckpoint(ctx context.Context, arg dbsqlc.CreateHistoryCheckpointParams) (dbsqlc.BotHistoryCheckpoint, error)
 	GetActiveHistoryCheckpoint(ctx context.Context, sessionID pgtype.UUID) (dbsqlc.BotHistoryCheckpoint, error)
 	GetForkHistoryPosition(ctx context.Context, arg dbsqlc.GetForkHistoryPositionParams) (dbsqlc.GetForkHistoryPositionRow, error)

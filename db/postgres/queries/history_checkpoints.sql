@@ -450,19 +450,18 @@ WHERE m.team_id = public.memoh_current_team_id()
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC;
 
--- name: ClassifyHistoryCheckpointMessages :many
--- How a checkpoint stands for each inbound message that has context rows:
--- kept when one of its rows is after the checkpoint's position or is a row
--- the checkpoint keeps by reference, folded otherwise. event_cursor is the
--- cursor of the event its rows were written from, 0 when unknown: a summary
--- reads rows, so it knows the message as of that event. A message without
--- context rows returns nothing.
+-- name: ListHistoryCheckpointAccountedMessages :many
+-- How a checkpoint accounts for each named inbound message that has context
+-- rows at or before its position: kept when it keeps one of them by
+-- reference, and event_cursor, the cursor of the newest event they were
+-- written from, 0 when unknown: a summary reads rows, so it knows the
+-- message as of that event. Rows at or before an active checkpoint's
+-- position change only by moving the session off it, so what this reads
+-- holds while the checkpoint stays active. A message without such rows
+-- returns nothing.
 SELECT
   m.source_message_id::text AS external_message_id,
-  bool_or(
-    (m.turn_position, m.turn_message_seq) > (sqlc.arg(after_turn_position)::bigint, sqlc.arg(after_turn_message_seq)::bigint)
-    OR m.id = ANY(sqlc.arg(kept_ids)::uuid[])
-  )::boolean AS kept,
+  bool_or(m.id = ANY(sqlc.arg(kept_ids)::uuid[]))::boolean AS kept,
   COALESCE(MAX((event.event_data->>'event_cursor')::bigint), 0)::bigint AS event_cursor
 FROM bot_visible_history_messages m
 LEFT JOIN bot_session_events event
@@ -471,8 +470,24 @@ LEFT JOIN bot_session_events event
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = sqlc.arg(session_id)
   AND m.source_message_id = ANY(sqlc.arg(external_message_ids)::text[])
+  AND (m.turn_position, m.turn_message_seq) <= (sqlc.arg(through_turn_position)::bigint, sqlc.arg(through_turn_message_seq)::bigint)
   AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
 GROUP BY m.source_message_id;
+
+-- name: ListHistoryMessageSourcesAfter :many
+-- The inbound messages with context rows after a position: a checkpoint
+-- there leaves each of them raw. The read walks the visible-session-order
+-- index from the position, so it costs the rows after it, never the history
+-- before. The source is tested with COALESCE rather than IS NOT NULL so that
+-- no plan, generic ones included, can take the source index instead, which
+-- would visit every inbound row of the session.
+SELECT DISTINCT m.source_message_id::text AS external_message_id
+FROM bot_visible_history_messages m
+WHERE m.team_id = public.memoh_current_team_id()
+  AND m.session_id = sqlc.arg(session_id)
+  AND (m.turn_position, m.turn_message_seq) > (sqlc.arg(after_turn_position)::bigint, sqlc.arg(after_turn_message_seq)::bigint)
+  AND COALESCE(m.source_message_id, '') <> ''
+  AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync');
 
 -- name: GetForkHistoryPosition :one
 -- The fork's position of the newest row it copied from at or before a

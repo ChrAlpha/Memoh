@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -22,13 +23,16 @@ import (
 const checkpointTestSessionID = "66666666-6666-6666-6666-666666666666"
 
 // fakeCheckpointQueries serves a session's active checkpoint, which holds,
-// and the texts of its summaries.
+// the texts of its summaries, the inbound messages with rows after its
+// position, and how it accounts for the others, recording what was asked.
 type fakeCheckpointQueries struct {
 	dbstore.Queries
-	active     sqlc.BotHistoryCheckpoint
-	summaries  map[string]string
-	classified []sqlc.ClassifyHistoryCheckpointMessagesRow
-	classify   []sqlc.ClassifyHistoryCheckpointMessagesParams
+	active       sqlc.BotHistoryCheckpoint
+	summaries    map[string]string
+	after        []string
+	accounted    []sqlc.ListHistoryCheckpointAccountedMessagesRow
+	afterReads   []sqlc.ListHistoryMessageSourcesAfterParams
+	accountReads []sqlc.ListHistoryCheckpointAccountedMessagesParams
 }
 
 func (f *fakeCheckpointQueries) GetActiveHistoryCheckpoint(context.Context, pgtype.UUID) (sqlc.BotHistoryCheckpoint, error) {
@@ -48,9 +52,20 @@ func (f *fakeCheckpointQueries) ListHistoryCheckpointSummaries(_ context.Context
 	return rows, nil
 }
 
-func (f *fakeCheckpointQueries) ClassifyHistoryCheckpointMessages(_ context.Context, arg sqlc.ClassifyHistoryCheckpointMessagesParams) ([]sqlc.ClassifyHistoryCheckpointMessagesRow, error) {
-	f.classify = append(f.classify, arg)
-	return f.classified, nil
+func (f *fakeCheckpointQueries) ListHistoryMessageSourcesAfter(_ context.Context, arg sqlc.ListHistoryMessageSourcesAfterParams) ([]string, error) {
+	f.afterReads = append(f.afterReads, arg)
+	return f.after, nil
+}
+
+func (f *fakeCheckpointQueries) ListHistoryCheckpointAccountedMessages(_ context.Context, arg sqlc.ListHistoryCheckpointAccountedMessagesParams) ([]sqlc.ListHistoryCheckpointAccountedMessagesRow, error) {
+	f.accountReads = append(f.accountReads, arg)
+	var rows []sqlc.ListHistoryCheckpointAccountedMessagesRow
+	for _, row := range f.accounted {
+		if slices.Contains(arg.ExternalMessageIds, row.ExternalMessageID) {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
 }
 
 type fakeCheckpointRows struct {
@@ -102,9 +117,9 @@ func storedModelMessage(t *testing.T, role string, content any) []byte {
 
 // Load projects the active checkpoint as composition renders it: a summary
 // with its text, a kept input row as the inbound message it records, a kept
-// response as its turn response, and how the checkpoint stands for each
-// inbound message of the rendered context. A kept user row that records no
-// inbound message renders nothing.
+// response as its turn response, and which inbound messages of the rendered
+// context it folds. A kept user row that records no inbound message renders
+// nothing.
 func TestCheckpointSourceLoadProjectsTheActiveCheckpoint(t *testing.T) {
 	const (
 		summaryID  = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"
@@ -121,8 +136,8 @@ func TestCheckpointSourceLoadProjectsTheActiveCheckpoint(t *testing.T) {
 			checkpoint.Item{RowID: replyID},
 			checkpoint.Item{RowID: resultID},
 		),
-		summaries:  map[string]string{summaryID: "folded work"},
-		classified: []sqlc.ClassifyHistoryCheckpointMessagesRow{{ExternalMessageID: "m-input", Kept: true}, {ExternalMessageID: "m-folded"}},
+		summaries: map[string]string{summaryID: "folded work"},
+		accounted: []sqlc.ListHistoryCheckpointAccountedMessagesRow{{ExternalMessageID: "m-input", Kept: true}, {ExternalMessageID: "m-folded", EventCursor: 7}},
 	}
 	rows := &fakeCheckpointRows{messages: []messagepkg.Message{
 		{ID: inputID, Role: "user", ExternalMessageID: "m-input", Content: storedModelMessage(t, "user", "kept input")},
@@ -161,31 +176,98 @@ func TestCheckpointSourceLoadProjectsTheActiveCheckpoint(t *testing.T) {
 		t.Fatalf("item 3 = %+v, want the kept tool result", item)
 	}
 
-	if len(queries.classify) != 1 {
-		t.Fatalf("classification reads = %d, want 1", len(queries.classify))
+	if len(queries.afterReads) != 1 || len(queries.accountReads) != 1 {
+		t.Fatalf("reads after the position = %d, of what it accounts for = %d, want 1 each", len(queries.afterReads), len(queries.accountReads))
 	}
-	classify := queries.classify[0]
-	if classify.AfterTurnPosition != 4 || classify.AfterTurnMessageSeq != 3 || classify.SessionID.String() != checkpointTestSessionID {
-		t.Fatalf("classification after %d/%d in %s, want the checkpoint's position in the session", classify.AfterTurnPosition, classify.AfterTurnMessageSeq, classify.SessionID)
+	if after := queries.afterReads[0]; after.AfterTurnPosition != 4 || after.AfterTurnMessageSeq != 3 || after.SessionID.String() != checkpointTestSessionID {
+		t.Fatalf("rows read after %d/%d in %s, want after the checkpoint's position in the session", after.AfterTurnPosition, after.AfterTurnMessageSeq, after.SessionID)
 	}
-	kept := make([]string, 0, len(classify.KeptIds))
-	for _, id := range classify.KeptIds {
+	account := queries.accountReads[0]
+	if account.ThroughTurnPosition != 4 || account.ThroughTurnMessageSeq != 3 || account.SessionID.String() != checkpointTestSessionID {
+		t.Fatalf("rows accounted through %d/%d in %s, want through the checkpoint's position in the session", account.ThroughTurnPosition, account.ThroughTurnMessageSeq, account.SessionID)
+	}
+	kept := make([]string, 0, len(account.KeptIds))
+	for _, id := range account.KeptIds {
 		kept = append(kept, id.String())
 	}
 	if !reflect.DeepEqual(kept, rows.ids) {
-		t.Fatalf("classification kept ids = %v, want %v", kept, rows.ids)
+		t.Fatalf("accounted kept ids = %v, want %v", kept, rows.ids)
 	}
-	if want := []string{"m-folded", "m-input"}; !reflect.DeepEqual(classify.ExternalMessageIds, want) {
-		t.Fatalf("classified messages = %v, want %v", classify.ExternalMessageIds, want)
+	if want := []string{"m-folded", "m-input"}; !reflect.DeepEqual(account.ExternalMessageIds, want) {
+		t.Fatalf("accounted messages = %v, want %v", account.ExternalMessageIds, want)
 	}
-	if want := map[string]CheckpointMessage{"m-input": {Kept: true}, "m-folded": {}}; !reflect.DeepEqual(held.Messages, want) {
-		t.Fatalf("messages = %v, want %v", held.Messages, want)
+	if want := map[string]FoldedMessage{"m-folded": {EventCursor: 7}}; !reflect.DeepEqual(held.Folded, want) {
+		t.Fatalf("folded = %v, want %v", held.Folded, want)
 	}
 
-	// A rendered context without inbound messages has nothing to classify.
+	// A rendered context without inbound messages has nothing to account for.
 	held, err = source.Load(context.Background(), checkpointTestSessionID, RenderedContext{textSegment("", 1100, "unnamed")})
-	if err != nil || len(held.Items) != 4 || held.Messages != nil || len(queries.classify) != 1 {
-		t.Fatalf("held=%+v err=%v classification reads=%d, want the items without a classification", held, err, len(queries.classify))
+	if err != nil || len(held.Items) != 4 || held.Folded != nil || len(queries.afterReads) != 1 || len(queries.accountReads) != 1 {
+		t.Fatalf("held=%+v err=%v reads=%d/%d, want the items without reading what it folds", held, err, len(queries.afterReads), len(queries.accountReads))
+	}
+}
+
+// What the checkpoint's rows at or before its position say is read once per
+// message while it stays active; the rows after it are read on every load,
+// so a folded message that gains one turns raw and a raw one that loses its
+// rows there is accounted for. Another checkpoint reads everything again.
+func TestCheckpointSourceReadsWhatItAccountsForOncePerCheckpoint(t *testing.T) {
+	const summaryID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1"
+	queries := &fakeCheckpointQueries{
+		active:    checkpointRow(t, messagepkg.HistoryPosition{Turn: 4, Seq: 3}, checkpoint.Item{SummaryID: summaryID}),
+		summaries: map[string]string{summaryID: "folded work"},
+		after:     []string{"m-raw"},
+		accounted: []sqlc.ListHistoryCheckpointAccountedMessagesRow{
+			{ExternalMessageID: "m1", EventCursor: 1}, {ExternalMessageID: "m2", EventCursor: 2}, {ExternalMessageID: "m-raw", EventCursor: 3},
+		},
+	}
+	source := NewCheckpointSource(slog.New(slog.DiscardHandler), queries, &fakeCheckpointRows{})
+	load := func(ids ...string) map[string]FoldedMessage {
+		t.Helper()
+		rc := make(RenderedContext, 0, len(ids))
+		for i, id := range ids {
+			rc = append(rc, textSegment(id, int64(1000+i), id))
+		}
+		held, err := source.Load(context.Background(), checkpointTestSessionID, rc)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return held.Folded
+	}
+	accountedLast := func() []string {
+		return queries.accountReads[len(queries.accountReads)-1].ExternalMessageIds
+	}
+
+	if got, want := load("m1", "m2", "m-raw", "m-new"), map[string]FoldedMessage{"m1": {EventCursor: 1}, "m2": {EventCursor: 2}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("first load folds %v, want %v", got, want)
+	}
+	if want := []string{"m1", "m2", "m-new"}; !reflect.DeepEqual(accountedLast(), want) {
+		t.Fatalf("first load accounted for %v, want every message without rows after the position %v", accountedLast(), want)
+	}
+
+	queries.after = []string{"m-raw", "m2"}
+	if got, want := load("m1", "m2", "m-raw", "m-new", "m3"), map[string]FoldedMessage{"m1": {EventCursor: 1}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("second load folds %v, want m2 raw once it has a row after the position: %v", got, want)
+	}
+	if want := []string{"m3"}; len(queries.accountReads) != 2 || !reflect.DeepEqual(accountedLast(), want) {
+		t.Fatalf("second load accounted for %v, want only the new message %v", accountedLast(), want)
+	}
+
+	queries.after = nil
+	if got, want := load("m1", "m2", "m-raw"), map[string]FoldedMessage{"m1": {EventCursor: 1}, "m2": {EventCursor: 2}, "m-raw": {EventCursor: 3}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("third load folds %v, want every message without rows after the position %v", got, want)
+	}
+	if want := []string{"m-raw"}; len(queries.accountReads) != 3 || !reflect.DeepEqual(accountedLast(), want) {
+		t.Fatalf("third load accounted for %v, want only the message that lost its rows after the position %v", accountedLast(), want)
+	}
+
+	queries.active.ID = mustCheckpointUUID(t, "dddddddd-dddd-dddd-dddd-dddddddddddd")
+	load("m1", "m2")
+	if want := []string{"m1", "m2"}; len(queries.accountReads) != 4 || !reflect.DeepEqual(accountedLast(), want) {
+		t.Fatalf("another checkpoint accounted for %v, want everything again %v", accountedLast(), want)
+	}
+	if len(queries.afterReads) != 4 {
+		t.Fatalf("rows after the position read %d times, want once per load", len(queries.afterReads))
 	}
 }
 
@@ -197,7 +279,7 @@ func TestCheckpointSourceLoadWithoutCheckpoint(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(held, HistoryCheckpoint{}) {
 		t.Fatalf("held=%+v err=%v, want the zero checkpoint", held, err)
 	}
-	if rows.ids != nil || len(queries.classify) != 0 {
-		t.Fatalf("rows read %v, classification reads %d, want neither", rows.ids, len(queries.classify))
+	if rows.ids != nil || len(queries.afterReads) != 0 || len(queries.accountReads) != 0 {
+		t.Fatalf("rows read %v, reads %d/%d, want none", rows.ids, len(queries.afterReads), len(queries.accountReads))
 	}
 }
