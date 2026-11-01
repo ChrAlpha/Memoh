@@ -233,10 +233,16 @@ func ProviderFixedEnvelopeTokens(system string, tools []sdk.ToolDefinition) int 
 func ProviderMessagesTokens(messages []sdk.Message) int {
 	total := 0
 	for _, message := range messages {
-		bytes, images := sdkMessageEstimate(message)
-		total += ProviderBudgetTokensFromBytes(bytes) + images*EstimateImageTokens
+		total += ProviderMessageTokens(message)
 	}
 	return total
+}
+
+// ProviderMessageTokens prices one provider message for envelope decisions; a
+// payload prices at the sum of its messages.
+func ProviderMessageTokens(message sdk.Message) int {
+	bytes, images := sdkMessageEstimate(message)
+	return ProviderBudgetTokensFromBytes(bytes) + images*EstimateImageTokens
 }
 
 // ProviderToolDefTokens prices one tool definition for envelope decisions.
