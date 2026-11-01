@@ -28,17 +28,25 @@ var errSummarizerRejected = errors.New("compaction: summarizer refused the last 
 // rejection is the provider's last refusal of a session's summarizer.
 type rejection struct {
 	summarizer [sha256.Size]byte
-	err        error
-	refusals   int
-	retryAt    time.Time
+	// cause is the summarizer failure the refused pass reported.
+	cause    error
+	refusals int
+	retryAt  time.Time
 }
 
 // rejections remembers, per session, a summarizer the provider refused in a
 // way waiting a moment does not change: credentials, permission, quota, or a
-// request it will not serve. Until the wait passes, an event for that session
-// fails with the same reason before it reads the backlog, claims rows or
-// writes a log row, as the event it would have run fails. A changed
-// summarizer (model, endpoint, credentials, window) is asked at once.
+// request it will not serve. A pass the provider refuses commits nothing, so
+// the session's checkpoint stays where it was and every later Compact would
+// read the same rows after it again, measuring each one, open a log row and
+// be refused the same way. Until the wait passes, a Compact for that session
+// fails with that refusal before it runs the hooks, reads the history or
+// opens a log row. A changed summarizer (model, endpoint, credentials,
+// window) is asked at once.
+//
+// Fold is not held back: its summarizer is the run's own model, a refusal of
+// which fails the run's own requests as well, and it reads only the rows the
+// run's request renders.
 //
 // The memory is per process. It saves work and decides nothing durable: a
 // restart, or another server, pays at most one more refusal per wait.
@@ -52,8 +60,8 @@ func newRejections() *rejections {
 	return &rejections{now: time.Now, bySession: make(map[string]rejection)}
 }
 
-// active returns an error for an event cfg would run while the session's
-// summarizer is still refused, or nil when the event may run.
+// active returns the refusal an event cfg would run fails with while the
+// session's summarizer is still refused, or nil when the event may run.
 func (r *rejections) active(cfg TriggerConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -62,7 +70,7 @@ func (r *rejections) active(cfg TriggerConfig) error {
 		return nil
 	}
 	return failed(ReasonSummarizerFailed, fmt.Errorf("%w (refusals=%d retry_at=%s): %w",
-		errSummarizerRejected, last.refusals, last.retryAt.UTC().Format(time.RFC3339), last.err))
+		errSummarizerRejected, last.refusals, last.retryAt.UTC().Format(time.RFC3339), last.cause))
 }
 
 // observe records how an event that ran ended. A refusal extends the wait;
@@ -71,7 +79,8 @@ func (r *rejections) active(cfg TriggerConfig) error {
 func (r *rejections) observe(cfg TriggerConfig, passes int, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !refusedByProvider(err) {
+	cause := providerRefusal(err)
+	if cause == nil {
 		if passes > 0 {
 			delete(r.bySession, cfg.SessionID)
 		}
@@ -86,7 +95,7 @@ func (r *rejections) observe(cfg TriggerConfig, passes int, err error) {
 	}
 	r.bySession[cfg.SessionID] = rejection{
 		summarizer: summarizer,
-		err:        err,
+		cause:      cause,
 		refusals:   refusals,
 		retryAt:    now.Add(rejectionWait(refusals)),
 	}
@@ -110,18 +119,22 @@ func rejectionWait(refusals int) time.Duration {
 	return min(wait, rejectionMaxWait)
 }
 
-// refusedByProvider reports a summarizer call the provider answered with a
-// failure that is final: one modelretry does not retry.
-func refusedByProvider(err error) bool {
-	if ReasonOf(err) != ReasonSummarizerFailed {
-		return false
+// providerRefusal is the summarizer failure err reports when the provider
+// answered the call with a failure that is final, one modelretry does not
+// retry, or nil for any other outcome.
+func providerRefusal(err error) error {
+	var event *EventError
+	if !errors.As(err, &event) || event.Reason != ReasonSummarizerFailed {
+		return nil
 	}
 	var apiErr *sdk.APIError
-	if !errors.As(err, &apiErr) {
-		return false
+	if !errors.As(event.Err, &apiErr) {
+		return nil
 	}
-	_, transient := modelretry.Retryable(err)
-	return !transient
+	if _, transient := modelretry.Retryable(event.Err); transient {
+		return nil
+	}
+	return event.Err
 }
 
 // summarizerIdentity digests what the provider's answer depends on besides
