@@ -150,3 +150,29 @@ func TestProjectInboundEventRetriesASessionThatFailedToLoad(t *testing.T) {
 		t.Fatalf("replays = %d, loaded = %v; want 3, true", got, pipeline.HasSession(replayTestSessionID))
 	}
 }
+
+// A history reset that lands while a cold session's events load keeps what
+// they held out of the cache: the session stays cold, and the next message
+// loads it again.
+func TestReplayPipelineSessionOvertakenByAResetLeavesTheSessionCold(t *testing.T) {
+	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		queries := &replayQueries{release: make(chan struct{})}
+		processor, pipeline := newReplayProcessor(queries)
+
+		var loaded bool
+		var wg sync.WaitGroup
+		wg.Go(func() { loaded = processor.replayPipelineSession(context.Background(), "bot-1", replayTestSessionID) })
+		synctest.Wait()
+		pipeline.DropBot("bot-1")
+		close(queries.release)
+		wg.Wait()
+
+		if loaded || pipeline.HasSession(replayTestSessionID) {
+			t.Fatalf("overtaken replay: loaded = %v, resident = %v; want neither", loaded, pipeline.HasSession(replayTestSessionID))
+		}
+		if !processor.replayPipelineSession(context.Background(), "bot-1", replayTestSessionID) || !pipeline.HasSession(replayTestSessionID) {
+			t.Fatal("the next replay after the reset did not load the session")
+		}
+	})
+}

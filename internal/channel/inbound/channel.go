@@ -3042,12 +3042,14 @@ func isLocalChannelType(ct channel.ChannelType) bool {
 
 // projectInboundEvent persists an inbound event and projects it into the
 // pipeline, replaying the session's persisted events first when it is cold.
-// When that replay fails the event still renders for this message, but the
-// session stays cold: made resident without its history, it would keep
-// serving context with that history missing until evicted, and the next
-// message would never retry the replay.
+// When that replay fails, or a history reset overtakes it, the event still
+// renders for this message, but the session stays cold: made resident without
+// its history, it would keep serving context with that history missing until
+// evicted, and the next message would never retry the replay.
 func (p *ChannelInboundProcessor) projectInboundEvent(ctx context.Context, botID, sessionID string, event timeline.CanonicalEvent) (string, timeline.RenderedContext) {
-	project := p.pipeline.PushEvent
+	project := func(id string, event timeline.CanonicalEvent) timeline.RenderedContext {
+		return p.pipeline.PushEvent(botID, id, event)
+	}
 	if !p.pipeline.HasSession(sessionID) && !p.replayPipelineSession(ctx, botID, sessionID) {
 		project = p.pipeline.PushResidentEvent
 	}
@@ -3076,6 +3078,10 @@ func (p *ChannelInboundProcessor) replayPipelineSession(ctx context.Context, bot
 		if p.pipeline.HasSession(sessionID) {
 			return true, nil
 		}
+		// Begun before the read, so a reset that lands while the events
+		// load or rebuild keeps what they held out of the cache.
+		replay := p.pipeline.BeginReplay(botID, sessionID)
+		defer replay.Close()
 		events, err := p.eventStore.LoadEventsForReplay(ctx, botID, sessionID)
 		if err != nil {
 			if p.logger != nil {
@@ -3085,7 +3091,12 @@ func (p *ChannelInboundProcessor) replayPipelineSession(ctx context.Context, bot
 		}
 		// A successful empty replay is warm too; otherwise callers arriving
 		// after this flight would keep loading the same empty history.
-		p.pipeline.ReplaySession(sessionID, events)
+		if _, installed := replay.Install(events); !installed {
+			if p.logger != nil {
+				p.logger.InfoContext(ctx, "pipeline replay overtaken by a history reset", slog.String("session_id", sessionID))
+			}
+			return false, nil
+		}
 		if p.logger != nil {
 			p.logger.InfoContext(ctx, "pipeline session replayed", slog.String("session_id", sessionID), slog.Int("events", len(events)))
 		}

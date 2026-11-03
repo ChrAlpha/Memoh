@@ -51,7 +51,7 @@ func TestAssignEventCursorRejectsInvalid(t *testing.T) {
 
 func TestPushEventThreadsCursorIntoSegments(t *testing.T) {
 	pipeline := NewPipeline(RenderParams{})
-	rc := pipeline.PushEvent("s1", MessageEvent{
+	rc := pipeline.PushEvent("bot", "s1", MessageEvent{
 		SessionID:    "s1",
 		MessageID:    "m1",
 		EventCursor:  7001,
@@ -64,7 +64,7 @@ func TestPushEventThreadsCursorIntoSegments(t *testing.T) {
 		t.Fatalf("expected segment cursor 7001, got %+v", rc)
 	}
 
-	rc = pipeline.PushEvent("s1", EditEvent{
+	rc = pipeline.PushEvent("bot", "s1", EditEvent{
 		SessionID:    "s1",
 		MessageID:    "m1",
 		EventCursor:  7002,
@@ -149,13 +149,13 @@ func TestConsumedDiscussCursorTakesLatestGate(t *testing.T) {
 func TestPushEventClampsOutOfRangeCursorOnEveryEventKind(t *testing.T) {
 	poisoned := MaxTrustedEventCursor + 1
 	pipeline := NewPipeline(RenderParams{})
-	pipeline.PushEvent("s1", MessageEvent{
+	pipeline.PushEvent("bot", "s1", MessageEvent{
 		SessionID: "s1", MessageID: "m1", EventCursor: 7001,
 		ReceivedAtMs: 1000, TimestampSec: 1,
 		Content: []ContentNode{{Type: "text", Text: "hello"}},
 	})
 
-	rc := pipeline.PushEvent("s1", EditEvent{
+	rc := pipeline.PushEvent("bot", "s1", EditEvent{
 		SessionID: "s1", MessageID: "m1", EventCursor: poisoned,
 		ReceivedAtMs: 2000, TimestampSec: 2,
 		Content: []ContentNode{{Type: "text", Text: "edited"}},
@@ -164,7 +164,7 @@ func TestPushEventClampsOutOfRangeCursorOnEveryEventKind(t *testing.T) {
 		t.Fatalf("poisoned edit cursor must not bump the segment, got %+v", rc)
 	}
 
-	rc = pipeline.PushEvent("s1", DeleteEvent{
+	rc = pipeline.PushEvent("bot", "s1", DeleteEvent{
 		SessionID: "s1", MessageIDs: []string{"m1"}, EventCursor: poisoned,
 		ReceivedAtMs: 3000, TimestampSec: 3,
 	})
@@ -172,7 +172,7 @@ func TestPushEventClampsOutOfRangeCursorOnEveryEventKind(t *testing.T) {
 		t.Fatalf("poisoned delete cursor must not bump the segment, got %+v", rc)
 	}
 
-	rc = pipeline.PushEvent("s1", ServiceEvent{
+	rc = pipeline.PushEvent("bot", "s1", ServiceEvent{
 		SessionID: "s1", Action: ServiceMemberLeft, EventCursor: poisoned,
 		ReceivedAtMs: 4000, TimestampSec: 4,
 		Member: &CanonicalUser{ID: "u1", DisplayName: "Someone"},
@@ -185,7 +185,7 @@ func TestPushEventClampsOutOfRangeCursorOnEveryEventKind(t *testing.T) {
 func TestPushEventClampsOutOfRangeCursor(t *testing.T) {
 	for _, poisoned := range []int64{MaxJSONSafeEventCursor + 1, MaxJSONSafeEventCursor, MaxTrustedEventCursor + 1} {
 		pipeline := NewPipeline(RenderParams{})
-		rc := pipeline.PushEvent("s1", MessageEvent{
+		rc := pipeline.PushEvent("bot", "s1", MessageEvent{
 			SessionID:    "s1",
 			MessageID:    "m1",
 			EventCursor:  poisoned,

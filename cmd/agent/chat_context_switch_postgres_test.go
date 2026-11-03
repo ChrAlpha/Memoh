@@ -449,7 +449,7 @@ func (s *effectLoop) push(text string) (string, string) {
 	if err != nil {
 		s.f.t.Fatal(err)
 	}
-	s.pipeline.PushEvent(s.f.sessionID, event)
+	s.pipeline.PushEvent(s.f.botID, s.f.sessionID, event)
 	return id, eventID
 }
 

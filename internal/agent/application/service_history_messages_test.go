@@ -181,8 +181,8 @@ func TestBuildMessagesFromPipelinePinsTheCheckpointSummary(t *testing.T) {
 	t.Parallel()
 
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, "current question"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m2", 2000, "current question"))
 	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), nil)
 
 	messages, pressure, _, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
@@ -230,9 +230,9 @@ func TestBuildMessagesFromPipelinePinsWhatTheCheckpointHolds(t *testing.T) {
 	t.Parallel()
 
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "kept input"))
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, "folded question"))
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m3", 3000, "later question"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m1", 1000, "kept input"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m2", 2000, "folded question"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m3", 3000, "later question"))
 	kept := persistedHistoryMessage(t, "kept-row", "user", "kept input")
 	kept.ExternalMessageID = "m1"
 	answer := persistedHistoryMessage(t, "answer", "assistant", "later answer")
@@ -275,9 +275,9 @@ func TestBuildMessagesFromPipelineKeepsHistoryOverBudget(t *testing.T) {
 	t.Parallel()
 
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, strings.Repeat("x", 4000)))
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m3", 3000, "current question"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m2", 2000, strings.Repeat("x", 4000)))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m3", 3000, "current question"))
 	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), nil)
 
 	messages, pressure, _, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
@@ -299,12 +299,12 @@ func TestBuildMessagesFromPipelineKeepsHistoryOverBudget(t *testing.T) {
 
 func TestPipelineCurrentIdentitySurvivesLaterExternalAndSelfMessages(t *testing.T) {
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("old", 1000, strings.Repeat("h", 8000)))
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("current", 2000, "required input"))
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("later", 3000, "later input"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("old", 1000, strings.Repeat("h", 8000)))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("current", 2000, "required input"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("later", 3000, "later input"))
 	echo := pipelineTextEvent("echo", 4000, "self echo")
 	echo.IsSelfSent = true
-	pipeline.PushEvent(pipelineTestSessionID, echo)
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, echo)
 	svc := pipelineCheckpointService(pipeline, &historyCheckpointQueries{}, &turnResponseSourceMessageService{})
 	messages, _, _, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{ThreadID: pipelineTestSessionID, ExternalMessageID: "current"}, 500)
 	if err != nil {
@@ -330,7 +330,7 @@ func TestBuildMessagesFromPipelineFailsWhenASourceCannotLoad(t *testing.T) {
 				rows.err = loadErr
 			}
 			pipeline := timeline.NewPipeline(timeline.RenderParams{})
-			pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "current question"))
+			pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m1", 1000, "current question"))
 			svc := pipelineCheckpointService(pipeline, queries, rows)
 			messages, _, _, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{BotID: pipelineTestBotID, ThreadID: pipelineTestSessionID}, 1000)
 			if !errors.Is(err, loadErr) || messages != nil {
@@ -346,7 +346,7 @@ func TestBuildMessagesFromPipelineFailsWhenASourceCannotLoad(t *testing.T) {
 func TestBuildMessagesFromPipelineReportsATruncatedLoad(t *testing.T) {
 	t.Parallel()
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
-	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "question"))
+	pipeline.PushEvent(pipelineTestBotID, pipelineTestSessionID, pipelineTextEvent("m1", 1000, "question"))
 	answer := persistedHistoryMessage(t, "answer", "assistant", "newest answer")
 	answer.CreatedAt = time.UnixMilli(2000)
 	for _, truncated := range []bool{false, true} {

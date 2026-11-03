@@ -57,7 +57,7 @@ type MessageHandler struct {
 
 type messageProjectionCache interface {
 	DropSession(sessionID string)
-	DropAll()
+	DropBot(botID string)
 }
 
 // messageRuntimeResetService is the history reset every runtime shares.
@@ -865,7 +865,7 @@ func (h *MessageHandler) DeleteMessages(c echo.Context) error {
 			return apperror.Wrap(apperror.CodeHistoryDeleteFailed, err, nil)
 		}
 		if h.projectionCache != nil {
-			h.projectionCache.DropAll()
+			h.projectionCache.DropBot(botID)
 		}
 	}
 	messageevent.InvalidateSession(h.messagePublisher, botID, sessionID)

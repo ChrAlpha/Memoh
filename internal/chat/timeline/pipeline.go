@@ -35,6 +35,7 @@ type PipelineStats struct {
 }
 
 type pipelineSession struct {
+	botID         string
 	ic            IntermediateContext
 	rc            RenderedContext
 	residentBytes int64
@@ -42,14 +43,24 @@ type pipelineSession struct {
 	lru           *list.Element
 }
 
-// Pipeline manages per-thread IC/RC state. It is goroutine-safe.
+// Pipeline manages per-thread IC/RC state. It is goroutine-safe. Its render
+// params are fixed at construction, so a replay renders without the lock.
 type Pipeline struct {
-	mu           sync.Mutex
 	renderParams RenderParams
-	sessions     map[string]*pipelineSession
-	lru          *list.List
-	options      PipelineOptions
-	stats        PipelineStats
+
+	mu       sync.Mutex
+	sessions map[string]*pipelineSession
+	lru      *list.List
+	options  PipelineOptions
+	stats    PipelineStats
+
+	// drops counts explicit drops. While replays are in flight, the count at
+	// which each session and bot was last dropped is kept, so a replay that
+	// began before a drop does not bring back what the drop removed.
+	drops          uint64
+	replaying      int
+	droppedSession map[string]uint64
+	droppedBot     map[string]uint64
 }
 
 // NewPipeline creates a bounded Pipeline with production defaults.
@@ -75,17 +86,20 @@ func NewPipelineWithOptions(params RenderParams, options PipelineOptions) *Pipel
 		options.Now = time.Now
 	}
 	return &Pipeline{
-		renderParams: params,
-		sessions:     make(map[string]*pipelineSession),
-		lru:          list.New(),
-		options:      options,
+		renderParams:   params,
+		sessions:       make(map[string]*pipelineSession),
+		lru:            list.New(),
+		options:        options,
+		droppedSession: make(map[string]uint64),
+		droppedBot:     make(map[string]uint64),
 	}
 }
 
 // PushEvent applies one event and renders only dirty/new nodes. Existing
 // rendered slices are detached before replacement so snapshots already queued
 // to a discuss worker remain immutable.
-func (p *Pipeline) PushEvent(sessionID string, event CanonicalEvent) RenderedContext {
+// A session it makes resident belongs to botID.
+func (p *Pipeline) PushEvent(botID, sessionID string, event CanonicalEvent) RenderedContext {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -93,7 +107,7 @@ func (p *Pipeline) PushEvent(sessionID string, event CanonicalEvent) RenderedCon
 	p.evictExpired(now)
 	state := p.sessions[sessionID]
 	if state == nil {
-		state = &pipelineSession{ic: NewEmptyIC(sessionID), lastAccess: now}
+		state = &pipelineSession{botID: botID, ic: NewEmptyIC(sessionID), lastAccess: now}
 		state.lru = p.lru.PushFront(sessionID)
 		p.sessions[sessionID] = state
 	}
@@ -139,15 +153,34 @@ func (p *Pipeline) pushLocked(state *pipelineSession, event CanonicalEvent, now 
 	return snapshot
 }
 
-// ReplaySession rebuilds IC in place (no per-event full clone), renders once,
-// and records replay volume for operational sizing.
-func (p *Pipeline) ReplaySession(sessionID string, events []CanonicalEvent) RenderedContext {
+// Replay rebuilds one cold session of a bot from its persisted events. Begin
+// it before reading the events: a drop of the session or its bot after that
+// means what was read is stale, and Install then leaves the session cold.
+// Close it when done; Close after Install does nothing.
+type Replay struct {
+	p         *Pipeline
+	botID     string
+	sessionID string
+	drops     uint64
+	ended     bool
+}
+
+// BeginReplay starts a replay of sessionID, a session of botID.
+func (p *Pipeline) BeginReplay(botID, sessionID string) *Replay {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.replaying++
+	return &Replay{p: p, botID: botID, sessionID: sessionID, drops: p.drops}
+}
 
-	now := p.options.Now()
-	p.evictExpired(now)
-	ic := NewEmptyIC(sessionID)
+// Install rebuilds the session from events and makes it resident in place of
+// what was there, reporting whether it did. It does not when the session or
+// its bot was dropped since the replay began. The rebuild runs without the
+// lock, so a long history does not hold up the other sessions; only the swap
+// takes it. It records replay volume for operational sizing.
+func (r *Replay) Install(events []CanonicalEvent) (RenderedContext, bool) {
+	p := r.p
+	ic := NewEmptyIC(r.sessionID)
 	var replayBytes int64
 	for _, event := range events {
 		reduceInPlace(&ic, event)
@@ -157,23 +190,58 @@ func (p *Pipeline) ReplaySession(sessionID string, events []CanonicalEvent) Rend
 	}
 	rc := Render(ic, p.renderParams)
 	residentBytes := estimateICBytes(ic) + estimateRCBytes(rc)
-	if old := p.sessions[sessionID]; old != nil {
-		p.lru.Remove(old.lru)
+
+	if !p.install(r, &pipelineSession{botID: r.botID, ic: ic, rc: rc, residentBytes: residentBytes}, len(events), replayBytes) {
+		return nil, false
 	}
-	state := &pipelineSession{ic: ic, rc: rc, residentBytes: residentBytes, lastAccess: now}
-	state.lru = p.lru.PushFront(sessionID)
-	p.sessions[sessionID] = state
-	p.stats.ReplayEvents += int64(len(events))
-	p.stats.ReplayBytes += replayBytes
-	p.recountResidentBytes()
 	p.options.Logger.Info("timeline replay completed",
-		slog.String("session_id", sessionID),
+		slog.String("session_id", r.sessionID),
 		slog.Int("event_count", len(events)),
 		slog.Int64("event_bytes", replayBytes),
 		slog.Int64("resident_bytes", residentBytes))
-	snapshot := state.rc
+	return rc, true
+}
+
+// Close ends a replay that did not install, such as one whose events failed
+// to load.
+func (r *Replay) Close() {
+	r.p.mu.Lock()
+	defer r.p.mu.Unlock()
+	r.p.endReplay(r)
+}
+
+func (p *Pipeline) install(r *Replay, state *pipelineSession, replayEvents int, replayBytes int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	defer p.endReplay(r)
+	if r.ended || p.droppedSession[r.sessionID] > r.drops || p.droppedBot[r.botID] > r.drops {
+		return false
+	}
+	now := p.options.Now()
+	p.evictExpired(now)
+	if old := p.sessions[r.sessionID]; old != nil {
+		p.lru.Remove(old.lru)
+	}
+	state.lastAccess = now
+	state.lru = p.lru.PushFront(r.sessionID)
+	p.sessions[r.sessionID] = state
+	p.stats.ReplayEvents += int64(replayEvents)
+	p.stats.ReplayBytes += replayBytes
+	p.recountResidentBytes()
 	p.enforceBounds("capacity")
-	return snapshot
+	return true
+}
+
+func (p *Pipeline) endReplay(r *Replay) {
+	if r.ended {
+		return
+	}
+	r.ended = true
+	p.replaying--
+	if p.replaying == 0 {
+		clear(p.droppedSession)
+		clear(p.droppedBot)
+	}
 }
 
 // GetRC returns an immutable rendered snapshot, or nil if not loaded.
@@ -231,34 +299,31 @@ func (p *Pipeline) SessionIDs() []string {
 }
 
 // DropSession removes a session's state from the pipeline.
+// A replay of it already in flight does not install.
 func (p *Pipeline) DropSession(sessionID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.drops++
+	if p.replaying > 0 {
+		p.droppedSession[sessionID] = p.drops
+	}
 	p.drop(sessionID, "explicit")
 }
 
-// DropAll removes every resident session. Bot-wide history reset uses this
-// conservative invalidation because cache entries intentionally do not retain
-// bot ownership metadata.
-func (p *Pipeline) DropAll() {
+// DropBot removes every resident session of a bot. A replay of one of them
+// already in flight does not install.
+func (p *Pipeline) DropBot(botID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for p.lru.Len() > 0 {
-		p.drop(p.lru.Back().Value.(string), "explicit_all")
+	p.drops++
+	if p.replaying > 0 {
+		p.droppedBot[botID] = p.drops
 	}
-}
-
-// UpdateRenderParams replaces render params and re-renders resident sessions.
-func (p *Pipeline) UpdateRenderParams(params RenderParams) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.renderParams = params
-	for _, state := range p.sessions {
-		state.rc = Render(state.ic, params)
-		state.residentBytes = estimateICBytes(state.ic) + estimateRCBytes(state.rc)
+	for sessionID, state := range p.sessions {
+		if state.botID == botID {
+			p.drop(sessionID, "explicit_bot")
+		}
 	}
-	p.recountResidentBytes()
-	p.enforceBounds("render_params")
 }
 
 // Stats returns replay/cache counters without exposing mutable state.
