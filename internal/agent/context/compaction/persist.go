@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -106,6 +107,19 @@ func staleSource(err error) error {
 		return failed(ReasonStaleSource, err)
 	}
 	return err
+}
+
+// logCloseTimeout bounds closing a failed pass's log. The close outlives the
+// caller's cancellation, so a cancelled request still records why its pass
+// ended, but it must not wait on a saturated pool for as long as the pool
+// stays saturated.
+const logCloseTimeout = 5 * time.Second
+
+// failLog closes a pass's log as failed, after its caller may have given up.
+func (s *Service) failLog(ctx context.Context, logID pgtype.UUID, cause error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), logCloseTimeout)
+	defer cancel()
+	_ = s.completeLog(ctx, s.queries, logID, "error", "", cause.Error(), 0, nil, pgtype.UUID{})
 }
 
 func (s *Service) completeLog(ctx context.Context, q dbstore.Queries, logID pgtype.UUID, status, summary, errMsg string, messageCount int, usage []byte, modelID pgtype.UUID) error {

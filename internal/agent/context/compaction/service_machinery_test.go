@@ -34,10 +34,15 @@ type stubModel struct {
 	statuses []int
 	calls    int
 	prompt   string // decoded text of the captured request messages
+	// onCall runs as each call arrives, before it is answered.
+	onCall func()
 }
 
 func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
 	s.calls++
+	if s.onCall != nil {
+		s.onCall()
+	}
 	if len(s.statuses) > 0 {
 		status := s.statuses[0]
 		s.statuses = s.statuses[1:]
@@ -120,6 +125,10 @@ type fakeQueries struct {
 	// rewinds records each rewind before a replaced turn asked for.
 	rewinds   []sqlc.RewindHistoryCheckpointBeforeTurnParams
 	completed sqlc.CompleteCompactionLogParams
+	// completedErr and completedBy are the last log completion's context
+	// error and deadline as it ran (zero without one).
+	completedErr error
+	completedBy  time.Time
 }
 
 func (*fakeQueries) SupportsTransactions() bool { return true }
@@ -148,11 +157,12 @@ func (f *fakeQueries) CreateCompactionLog(_ context.Context, arg sqlc.CreateComp
 	return log, nil
 }
 
-func (f *fakeQueries) CompleteCompactionLog(_ context.Context, arg sqlc.CompleteCompactionLogParams) (sqlc.BotHistoryMessageCompact, error) {
+func (f *fakeQueries) CompleteCompactionLog(ctx context.Context, arg sqlc.CompleteCompactionLogParams) (sqlc.BotHistoryMessageCompact, error) {
 	if f.onComplete != nil {
 		f.onComplete()
 	}
-	f.completed = arg
+	f.completed, f.completedErr = arg, ctx.Err()
+	f.completedBy, _ = ctx.Deadline()
 	log := f.logs[arg.ID]
 	log.Status, log.Summary, log.MessageCount, log.ErrorMessage, log.ModelID = arg.Status, arg.Summary, arg.MessageCount, arg.ErrorMessage, arg.ModelID
 	f.putLog(log)
