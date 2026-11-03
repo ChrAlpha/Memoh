@@ -250,6 +250,14 @@ var httpServerDurationBounds = []float64{
 	15, 30, 60, 120, 300,
 }
 
+// connectionWaitBounds are the pool acquire-wait buckets, in seconds. An
+// acquire that finds an idle connection takes microseconds, so the low end is
+// fine enough to keep those apart from ones that waited; the high end reaches
+// the waits an exhausted pool imposes, which run into tens of seconds.
+var connectionWaitBounds = []float64{
+	0.0001, 0.0005, 0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
+}
+
 func newMeterProvider(reader sdkmetric.Reader, res *resource.Resource) *sdkmetric.MeterProvider {
 	return sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(reader),
@@ -257,6 +265,10 @@ func newMeterProvider(reader sdkmetric.Reader, res *resource.Resource) *sdkmetri
 		sdkmetric.WithView(sdkmetric.NewView(
 			sdkmetric.Instrument{Name: semconv.HTTPServerRequestDurationName},
 			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{Boundaries: httpServerDurationBounds}},
+		)),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: semconv.DBClientConnectionWaitTimeName},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationExplicitBucketHistogram{Boundaries: connectionWaitBounds}},
 		)),
 	)
 }

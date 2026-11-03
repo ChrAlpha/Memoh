@@ -18,7 +18,7 @@ import (
 // or pool metrics; the pgvector store opens its own and does the same two
 // things directly. With telemetry off both resolve to no-ops.
 func openInstrumented(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
-	cfg.ConnConfig.Tracer = telemetry.PgxTracer{}
+	cfg.ConnConfig.Tracer = telemetry.NewPgxTracer(cfg.ConnConfig)
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, err

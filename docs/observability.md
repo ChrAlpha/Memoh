@@ -72,7 +72,7 @@ than either keeping or dropping them whole.
 | gRPC, internal RPC | Client and server spans, channel process ↔ server process | `otelgrpc` stats handlers in `internal/rpc` |
 | gRPC, workspace bridge | Client spans, host → workspace container | `otelgrpc` client handler in `internal/workspace/bridge` |
 | gRPC, remote runtime | Client spans, server → runtime over the WebSocket tunnel | `otelgrpc` client handler in `internal/userruntime` |
-| PostgreSQL | One span per query, on all three pools | `telemetry.PgxTracer` |
+| PostgreSQL | One span per query, on all three pools; a `postgresql.pool.acquire` span for an acquire that waited 1 ms or more, or failed | `telemetry.PgxTracer` |
 | Channel inbound | One span per queued message, linked to the request that enqueued it | `Manager.runInboundTask` |
 | Agent turn | One span per turn, with its outcome | `startTurnSpan`, on both entry points |
 | Model call | One span per provider call | `providerCallObserver`, in `internal/agent/runtime/native` |
@@ -191,6 +191,17 @@ apart. The pools are told apart by `db.client.connection.pool.name`, written
 as `host:port/database`. Only the pool statistics come from `otelpgx`; query
 spans still come from `telemetry.PgxTracer`, which never records query
 arguments.
+
+The `pgxpool.*` wait figures are totals, so they say a pool made requests
+wait but not how long one request waited. `telemetry.PgxTracer` also records
+every acquire in the `db.client.connection.wait_time` histogram, under the
+same `db.client.connection.pool.name`, with buckets from 0.1 ms to 30 s: an
+acquire that finds an idle connection takes microseconds, and one that meets
+an exhausted pool can wait for tens of seconds. An acquire that waited 1 ms or
+more, or failed, also gets a `postgresql.pool.acquire` span over the wait, so
+a slow request's trace shows the wait apart from the query after it. Faster
+acquires get none: a span for each would double the spans of every traced
+request and say nothing.
 
 `history.checkpoint.unseen_rows_total` counts rows a committed checkpoint keeps
 by reference that its pass never read: rows that joined its span while the

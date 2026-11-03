@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5"
@@ -12,11 +13,13 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
-// PgxTracer records a span per query.
+// PgxTracer records a span per query, and how long each connection acquire
+// waited on its pool.
 //
 // It implements pgx's own QueryTracer hook rather than pulling in a
 // third-party bridge: the interface is two methods, and doing it here settles
@@ -26,14 +29,43 @@ import (
 // forbids putting in a log record. The SQL text is recorded; it is code, not
 // data, and without it a slow query span says only that something was slow.
 //
-// Install it on the pool config: poolCfg.ConnConfig.Tracer = telemetry.PgxTracer{}.
-// With tracing off the global tracer is a no-op, so this costs a call that
-// returns a shared non-recording span.
-type PgxTracer struct{}
+// Install one per pool on its config before opening it:
+// poolCfg.ConnConfig.Tracer = telemetry.NewPgxTracer(poolCfg.ConnConfig).
+// With tracing and metrics off the global tracer and meter are no-ops, so this
+// costs a call that returns a shared non-recording span and a no-op record.
+type PgxTracer struct {
+	pool     attribute.Set
+	waitTime metric.Float64Histogram
+}
 
-var _ pgx.QueryTracer = PgxTracer{}
+var (
+	_ pgx.QueryTracer       = (*PgxTracer)(nil)
+	_ pgxpool.AcquireTracer = (*PgxTracer)(nil)
+)
 
-func (PgxTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+// NewPgxTracer returns the tracer for the pool connCfg configures, named
+// host:port/database as the pgxpool.* metrics name it.
+func NewPgxTracer(connCfg *pgx.ConnConfig) *PgxTracer {
+	waitTime, err := otel.Meter(ScopeName).Float64Histogram(semconv.DBClientConnectionWaitTimeName,
+		metric.WithUnit(semconv.DBClientConnectionWaitTimeUnit),
+		metric.WithDescription(semconv.DBClientConnectionWaitTimeDescription),
+	)
+	if err != nil {
+		// The API still returns a usable no-op instrument alongside the error.
+		otel.Handle(err)
+	}
+	return &PgxTracer{
+		pool: attribute.NewSet(
+			semconv.DBSystemPostgreSQL,
+			// The current name, which the pgxpool.* metrics carry; the
+			// semconv version the spans use still spells it connections.
+			attribute.String("db.client.connection.pool.name", fmt.Sprintf("%s:%d/%s", connCfg.Host, connCfg.Port, connCfg.Database)),
+		),
+		waitTime: waitTime,
+	}
+}
+
+func (*PgxTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	opts := []trace.SpanStartOption{
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
@@ -54,31 +86,74 @@ func (PgxTracer) TraceQueryStart(ctx context.Context, conn *pgx.Conn, data pgx.T
 	return ctx
 }
 
-func (PgxTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+func (*PgxTracer) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
 	span := trace.SpanFromContext(ctx)
 	if data.Err != nil && span.IsRecording() {
-		// The error is classified, not recorded. PostgreSQL puts the offending
-		// values in its message: a unique violation reads "Key (email)=(a@b.com)
-		// already exists". Calling RecordError would put that row's contents in
-		// the trace — the same data the arguments were withheld to protect.
-		// SQLSTATE says what went wrong without saying what the value was.
-		var pgErr *pgconn.PgError
-		switch {
-		case errors.As(data.Err, &pgErr):
-			span.SetAttributes(attribute.String("db.response.status_code", pgErr.Code))
-		case errors.Is(data.Err, context.Canceled):
-			span.SetAttributes(attribute.String("error.type", "context.Canceled"))
-		case errors.Is(data.Err, context.DeadlineExceeded):
-			span.SetAttributes(attribute.String("error.type", "context.DeadlineExceeded"))
-		default:
-			// The type, never the message. A dial failure or a closed pool
-			// still needs to be distinguishable from a rejected query, and a
-			// Go type name cannot contain a row's contents.
-			span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", data.Err)))
-		}
-		span.SetStatus(codes.Error, "")
+		classifyError(span, data.Err)
 	}
 	span.End()
+}
+
+// acquireSpanFloor is how long an acquire waits before it gets a span. One
+// that finds an idle connection takes microseconds, and a span for every one
+// would double the spans a traced request carries while saying nothing; one
+// that waits has met a busy pool, which is what the span is for. Every
+// acquire is in the wait-time histogram either way.
+const acquireSpanFloor = time.Millisecond
+
+type acquireStartKey struct{}
+
+func (*PgxTracer) TraceAcquireStart(ctx context.Context, _ *pgxpool.Pool, _ pgxpool.TraceAcquireStartData) context.Context {
+	return context.WithValue(ctx, acquireStartKey{}, time.Now())
+}
+
+// TraceAcquireEnd records how long the acquire waited, and a
+// postgresql.pool.acquire span over the wait when it was long enough to
+// matter or failed. A request slowed by an exhausted pool then shows the wait
+// apart from the query that followed it.
+func (t *PgxTracer) TraceAcquireEnd(ctx context.Context, _ *pgxpool.Pool, data pgxpool.TraceAcquireEndData) {
+	start, ok := ctx.Value(acquireStartKey{}).(time.Time)
+	if !ok {
+		return
+	}
+	end := time.Now()
+	wait := end.Sub(start)
+	t.waitTime.Record(ctx, wait.Seconds(), metric.WithAttributeSet(t.pool))
+	if wait < acquireSpanFloor && data.Err == nil {
+		return
+	}
+	_, span := otel.Tracer(ScopeName).Start(ctx, "postgresql.pool.acquire",
+		trace.WithTimestamp(start),
+		trace.WithAttributes(t.pool.ToSlice()...),
+	)
+	if data.Err != nil && span.IsRecording() {
+		classifyError(span, data.Err)
+	}
+	span.End(trace.WithTimestamp(end))
+}
+
+// classifyError marks span failed with what kind of error ended it.
+func classifyError(span trace.Span, err error) {
+	// The error is classified, not recorded. PostgreSQL puts the offending
+	// values in its message: a unique violation reads "Key (email)=(a@b.com)
+	// already exists". Calling RecordError would put that row's contents in
+	// the trace — the same data the arguments were withheld to protect.
+	// SQLSTATE says what went wrong without saying what the value was.
+	var pgErr *pgconn.PgError
+	switch {
+	case errors.As(err, &pgErr):
+		span.SetAttributes(attribute.String("db.response.status_code", pgErr.Code))
+	case errors.Is(err, context.Canceled):
+		span.SetAttributes(attribute.String("error.type", "context.Canceled"))
+	case errors.Is(err, context.DeadlineExceeded):
+		span.SetAttributes(attribute.String("error.type", "context.DeadlineExceeded"))
+	default:
+		// The type, never the message. A dial failure or a closed pool
+		// still needs to be distinguishable from a rejected query, and a
+		// Go type name cannot contain a row's contents.
+		span.SetAttributes(attribute.String("error.type", fmt.Sprintf("%T", err)))
+	}
+	span.SetStatus(codes.Error, "")
 }
 
 // RecordPoolStats reports a pool's state as the pgxpool.* metrics:

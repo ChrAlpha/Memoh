@@ -32,7 +32,7 @@ func Open(ctx context.Context, logger *slog.Logger, cfg config.PGVectorConfig) (
 		return nil, fmt.Errorf("pgvector: parse dsn: %w", err)
 	}
 	poolCfg.AfterConnect = pgxvec.RegisterTypes
-	poolCfg.ConnConfig.Tracer = telemetry.PgxTracer{}
+	poolCfg.ConnConfig.Tracer = telemetry.NewPgxTracer(poolCfg.ConnConfig)
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("pgvector: connect: %w", err)
