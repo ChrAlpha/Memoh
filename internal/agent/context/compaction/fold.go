@@ -154,13 +154,12 @@ func (s *Service) foldPass(ctx context.Context, ev Event, rows requestRows) (Pas
 		fork.MaxTokens = &plan.maxTokens
 	}
 
-	persistCtx := context.WithoutCancel(ctx)
-	logID, err := s.openLog(persistCtx, ev.BotID, ev.SessionID)
+	logID, err := s.openLog(ctx, ev.BotID, ev.SessionID)
 	if err != nil {
 		return Pass{}, false, err
 	}
 	fail := func(err error) (Pass, bool, error) {
-		_ = s.completeLog(persistCtx, s.queries, logID, "error", "", err.Error(), 0, nil, pgtype.UUID{})
+		s.failLog(ctx, logID, err)
 		return Pass{}, false, err
 	}
 	result, err := s.summarize(ctx, ev, fork, plan)
@@ -249,10 +248,12 @@ func (s *Service) summarize(ctx context.Context, ev Event, fork sdk.Request, pla
 		fork.Messages = append(slices.Clip(fork.Messages[:len(fork.Messages)-1]), sdk.UserMessage(plan.instruction+noToolsReminder))
 		result, err = ask(fork)
 	}
+	// A cancelled stream can end without an error and with whatever text it
+	// had, so the cancellation is what ended the call either way.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return sdk.ModelResult{}, ctxErr
+	}
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return sdk.ModelResult{}, ctxErr
-		}
 		return sdk.ModelResult{}, failed(ReasonSummarizerFailed, err)
 	}
 	switch {

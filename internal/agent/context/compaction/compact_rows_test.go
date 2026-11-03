@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
@@ -420,6 +421,30 @@ func TestCompactRetriesATransientSummarizerFailureOnce(t *testing.T) {
 	}
 }
 
+// A pass whose caller gives up while the summarizer runs settles its log
+// with the cancellation, even when the cancelled stream ended without an
+// error. That close has a deadline of its own: it outlives the cancellation,
+// not a database that stopped answering.
+func TestCompactSettlesACancelledPassLogWithinADeadline(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQueries{history: machineryCorpus(t)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stub := &stubModel{summary: "Deployment history.", onCall: cancel}
+	svc := newMachineryService(q)
+
+	if _, err := svc.Compact(ctx, machineryConfig(stub, 4000)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want the cancellation", err)
+	}
+	if q.completed.Status != "error" || q.completed.ErrorMessage != context.Canceled.Error() || len(q.held()) != 0 {
+		t.Fatalf("log=%+v held=%+v, want the log settled with the cancellation and no checkpoint", q.completed, q.held())
+	}
+	if q.completedErr != nil || q.completedBy.IsZero() || time.Until(q.completedBy) > logCloseTimeout {
+		t.Fatalf("log closed in a context with err=%v deadline=%v, want a live context bounded by %v", q.completedErr, q.completedBy, logCloseTimeout)
+	}
+}
+
 // A summary that does not finish naturally is not committed.
 func TestCompactRejectsATruncatedSummary(t *testing.T) {
 	t.Parallel()
@@ -548,5 +573,22 @@ func TestWrittenOutTurnsToolsAndMediaIntoText(t *testing.T) {
 		if message.Role != roles[i] || messageText(message) != want[i] {
 			t.Fatalf("message %d = %s %q, want %s %q", i, message.Role, messageText(message), roles[i], want[i])
 		}
+	}
+}
+
+// A summarizer stream cancelled before it sent anything can end with no text
+// and no error. The pass reports the cancellation, not an empty summary, so
+// its log says why it ended.
+func TestSummarizeReportsACancellationOverAnEmptyResult(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ev := Event{SessionID: uuid.NewString(), Summarizer: func(context.Context, sdk.Request) (sdk.ModelResult, error) {
+		cancel()
+		return sdk.ModelResult{}, nil
+	}}
+	if _, err := newMachineryService(&fakeQueries{}).summarize(ctx, ev, sdk.Request{}, foldPlan{}); !errors.Is(err, context.Canceled) || ReasonOf(err) == ReasonEmpty {
+		t.Fatalf("err = %v (reason %q), want the cancellation", err, ReasonOf(err))
 	}
 }
