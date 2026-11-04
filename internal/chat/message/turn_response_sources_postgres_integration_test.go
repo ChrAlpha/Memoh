@@ -112,6 +112,31 @@ func TestPostgresTurnResponseSourcesProjectMetadataAndPreserveWindow(t *testing.
 				if after == (HistoryPosition{}) && budget == 1<<20 && len(got) != len(flags) {
 					t.Fatalf("loaded %d rows, want %d active rows", len(got), len(flags))
 				}
+				// Full rows load without the per-run lifecycle audit, and rows by
+				// ID load as the window does.
+				ids := make([]string, 0, len(window))
+				for _, row := range window {
+					ids = append(ids, row.ID)
+				}
+				byID, err := svc.ListHistoryByIDs(ctx, postgresMessageTestSessionID, ids)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(byID) != len(window) {
+					t.Fatalf("rows by ID length=%d, want %d", len(byID), len(window))
+				}
+				for i, m := range window {
+					var metadata map[string]any
+					if err := json.Unmarshal(m.RawMetadata, &metadata); err != nil {
+						t.Fatal(err)
+					}
+					if _, audited := metadata["context_lifecycle"]; audited || len(metadata) != 2 {
+						t.Fatalf("full row %d loaded %d metadata keys (lifecycle audit: %t), want the two flags alone", i, len(metadata), audited)
+					}
+					if byID[i].ID != m.ID || byID[i].Metadata != nil || !bytes.Equal(byID[i].RawMetadata, m.RawMetadata) {
+						t.Fatalf("row %d by ID loads metadata unlike the window", i)
+					}
+				}
 			})
 		}
 	}

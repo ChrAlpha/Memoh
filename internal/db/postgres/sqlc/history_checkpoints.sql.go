@@ -707,7 +707,7 @@ SELECT
   m.source_reply_to_message_id,
   m.role,
   m.content,
-  m.metadata,
+  (m.metadata - 'context_lifecycle'::text)::jsonb AS metadata,
   m.usage,
   m.session_mode,
   m.runtime_type,
@@ -754,7 +754,10 @@ type ListHistoryMessagesByIDsRow struct {
 	Platform                pgtype.Text        `json:"platform"`
 }
 
-// The rows a checkpoint keeps by reference, as context rows, in turn order.
+// Context rows by id, in turn order: the rows a history window admits and
+// the rows a checkpoint keeps by reference. Metadata loads without the per-run
+// context_lifecycle audit: no history record keeps it, and legacy snapshots
+// can dwarf the content.
 func (q *Queries) ListHistoryMessagesByIDs(ctx context.Context, arg ListHistoryMessagesByIDsParams) ([]ListHistoryMessagesByIDsRow, error) {
 	rows, err := q.db.Query(ctx, listHistoryMessagesByIDs, arg.SessionID, arg.Ids)
 	if err != nil {
