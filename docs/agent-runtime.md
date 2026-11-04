@@ -27,8 +27,8 @@
 
 All durable native entries bind step persistence and continuation through
 `bindNativeRun`. Web, pipeline IM, trigger, follow-up, decision continuations,
-retry, edit and native Discuss can recover context at a committed step boundary
-and continue the same run. An empty initial history does not disable recovery. A retry or edit
+retry, edit, native Discuss and spawned subagent tasks can recover context at a
+committed step boundary and continue the same run. An empty initial history does not disable recovery. A retry or edit
 folds what its request renders: the history before its cutoff and the steps of
 the attempt its first step selected. A retry renders its input from the request
 it replaces, which that step hides; from then on the copy the step wrote is the
@@ -36,8 +36,20 @@ input the event keeps in place. When the session's history checkpoint depends
 on the replaced turn, the same step moves the session back to the newest
 checkpoint that does not, or the attempt's first compaction does when it needs
 one before that step, so the attempt folds onto the checkpoint the replacement
-keeps. Subagent and external runtimes have separate ownership and remain
-outside this capability.
+keeps. External runtimes own their context and remain outside this
+capability.
+
+A spawned subagent task binds through `BindSubagentRun` from the request a
+direct turn on the agent's thread makes. The spawn writes the task as a row
+of the thread before the run starts; the run renders the thread's history
+under its checkpoint, answers that row and keeps it as its anchor, and its
+steps commit through the same committer as any native run's. A fold moves only
+the thread's checkpoint; the parent's history is the parent's. A forked
+agent's thread inherits its parent's context as rows the chat view leaves out
+but its history reads: the fork writes them at the thread's first positions,
+before the thread has a turn of its own, so its loads and folds treat them as
+the oldest part of its history. A task whose row cannot be written fails
+before its run starts.
 
 A native Discuss run writes each step as it commits, under the rows ingress
 already wrote for its input. Each composed message names the inbound message,
@@ -189,7 +201,9 @@ in the session's turn order, `(turn_position, turn_message_seq)`, and what
 represents everything up to it: ordered items, rows kept by reference and
 summaries, always at least one summary. A request renders the items in their
 order and then the session's context rows after the position: the visible rows of complete
-turns, other than legacy `passive_sync` rows. Chat and turn-response loads
+turns, other than legacy `passive_sync` rows, and on a forked subagent's thread
+the rows it inherited, which all come before its own turns
+(`bot_context_history_messages`). Chat and turn-response loads
 read those rows newest first within the byte budget, so a load costs what the
 checkpoint leaves raw, not the thread's length. A chat or continuation load
 the byte budget truncated, the record or the pipeline one, folds the rows it
@@ -427,7 +441,9 @@ continuations use the same phase-aware application watchdog:
   Its decision flow retains the ten-minute response window. Parallel tools
   remain supervised; explicit cancellation and runtime ownership loss still win.
 - Managed subagents have a ten-minute progress watchdog, with no implicit total
-  duration. Detachment preserves an explicit ancestor execution deadline.
+  duration. Detachment preserves an explicit ancestor execution deadline. A
+  subagent's history load and its compactions pause the watchdog, and the
+  summarizer's stream is cut off after the same silence.
 - A compaction inside a native run, a fold before a step or a Discuss run's
   budget recovery, pauses the model watchdog while it runs; the model window
   restarts when it returns. A chat load folded before the request is built

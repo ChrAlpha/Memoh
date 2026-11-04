@@ -54,6 +54,7 @@ The canonical source of truth for the full PostgreSQL schema is `db/postgres/mig
 **Messages & History**
 - `bot_history_messages` — Unified message history under bot scope
 - `bot_history_message_assets` — Message → content_hash asset links (with name and metadata)
+- `bot_context_history_messages` — View of a session's context rows: the rows of its visible turns and, on a forked subagent's thread, the rows it inherited, which the chat view leaves out and which all come before the thread's own turns. History loads, compaction candidates and checkpoint reads use it; the chat view uses `bot_visible_history_messages`
 - `bot_history_message_compacts` — Compaction logs and the summaries they wrote
 - `bot_history_checkpoints` — What stands in a request for a session's history up to a position (`turn_position`, `turn_message_seq`): rows kept by reference and summaries, in order, always at least one summary. Each names its parent; `memoh_rewind_history_checkpoint` moves a session back along that chain when rows its active checkpoint depends on are removed and deletes the checkpoints it moved back past (see `docs/agent-runtime.md`)
 

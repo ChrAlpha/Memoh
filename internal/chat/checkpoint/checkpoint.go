@@ -6,7 +6,8 @@
 // summaries that fold the rest; it always holds a summary. A request renders
 // the items in their order, and then the session's context rows after the
 // checkpoint's position: its visible rows of complete turns, other than
-// legacy passive_sync rows. Compaction folds onto the active checkpoint and
+// legacy passive_sync rows, and on a forked subagent's thread the rows it
+// inherited, which come before its own turns. Compaction folds onto the active checkpoint and
 // makes the result active; a fork takes a copy of its source's. Every
 // checkpoint names its parent: hiding, replacing or deleting rows at or
 // before the active one's position moves the session back, in the same

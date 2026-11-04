@@ -175,11 +175,18 @@ func (f *backlogFixture) appendRound(entry, prefix string) {
 // activeSummaries counts the summaries the session's active checkpoint holds.
 func (f *backlogFixture) activeSummaries() int {
 	f.t.Helper()
+	return f.activeSummariesOf(f.sessionID)
+}
+
+// activeSummariesOf is how many summaries the active checkpoint of session
+// holds.
+func (f *backlogFixture) activeSummariesOf(session string) int {
+	f.t.Helper()
 	var count int
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_sessions s
 		JOIN bot_history_checkpoints c ON c.id = s.history_checkpoint_id
 		CROSS JOIN LATERAL jsonb_array_elements(c.items) item
-		WHERE s.id=$1 AND item ? 'summary'`, f.sessionID).Scan(&count); err != nil {
+		WHERE s.id=$1 AND item ? 'summary'`, session).Scan(&count); err != nil {
 		f.t.Fatal(err)
 	}
 	return count

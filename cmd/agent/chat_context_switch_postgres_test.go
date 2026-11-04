@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
@@ -29,12 +31,16 @@ import (
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
+	threadpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/chat/timeline"
+	"github.com/felinics/memoh/internal/contextview"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
+	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/schedule"
+	"github.com/felinics/memoh/internal/settings"
 )
 
 const (
@@ -71,6 +77,7 @@ var runEntries = []runEntry{
 	{name: "retry", send: (*effectLoop).retry},
 	{name: "edit", send: (*effectLoop).edit},
 	{name: "discuss", send: (*effectLoop).discuss},
+	{name: "subagent", send: (*effectLoop).subagent},
 }
 
 // runEntryNamed is the entry called name.
@@ -133,6 +140,12 @@ type effectLoop struct {
 	// counts for each request either way.
 	density float64
 	counted []int
+	// spawner runs the subagent entry's tasks on the agent worker, whose
+	// thread is child once its first task created it; inherit is the
+	// parent context a spawn forks, nil for none.
+	spawner *tools.SpawnProvider
+	child   string
+	inherit *tools.MessageSnapshot
 }
 
 // providerCount is what a provider that counts density tokens for each token
@@ -169,6 +182,9 @@ func newEffectLoop(t *testing.T, entry runEntry) *effectLoop {
 		}
 	}
 	switch entry.name {
+	case "subagent":
+		s.spawner = newSpawnProvider(f)
+		f.agent.SetToolProviders([]tools.ToolProvider{s, s.spawner})
 	case "im":
 		s.pipeline = timeline.NewPipeline(timeline.RenderParams{})
 		f.service.SetPipeline(s.pipeline)
@@ -211,11 +227,21 @@ func (s *effectLoop) checkRequests(t *testing.T) {
 	}
 }
 
-// activeRun is the run that holds the session's active slot.
+// activeRun is the run that holds the active slot of the session the runs
+// write into.
 func (s *effectLoop) activeRun() string {
 	var run string
-	_ = s.f.pool.QueryRow(s.f.ctx, `SELECT run_id::text FROM session_runs WHERE session_id=$1 AND state IN ('accepted', 'running', 'waiting_decision', 'finishing') LIMIT 1`, s.f.sessionID).Scan(&run)
+	_ = s.f.pool.QueryRow(s.f.ctx, `SELECT run_id::text FROM session_runs WHERE session_id=$1 AND state IN ('accepted', 'running', 'waiting_decision', 'finishing') LIMIT 1`, s.runSession()).Scan(&run)
 	return run
+}
+
+// runSession is the session the runs write into: the agent's thread for the
+// subagent entry, the fixture's session for the others.
+func (s *effectLoop) runSession() string {
+	if s.spawner != nil {
+		return s.child
+	}
+	return s.f.sessionID
 }
 
 // pairedToolParts reports a tool call a request leaves without its result,
@@ -340,7 +366,7 @@ func (s *effectLoop) writeForeignRow(ctx context.Context) error {
 		return err
 	}
 	_, err = f.messages.Persist(ctx, messagepkg.PersistInput{
-		BotID: f.botID, SessionID: f.sessionID, Role: "assistant", Content: content, DisplayText: foreignRow,
+		BotID: f.botID, SessionID: s.runSession(), Role: "assistant", Content: content, DisplayText: foreignRow,
 		Metadata: map[string]any{"background_task_id": "dep-1", "background_task_event": "completed"},
 	})
 	return err
@@ -687,6 +713,63 @@ func (s *effectLoop) replaceLatest(start replaceTurn) string {
 
 // discuss delivers text as an unanswered Discuss message, received now so
 // the steps that answer it follow it, and lets the driver answer it.
+// subagent sends text to the managed agent worker the way its parent's model
+// does: the first as the task that creates it, the rest as follow-ups. The
+// tasks run in the foreground, so each returns once its run has ended.
+func (s *effectLoop) subagent(text string) string {
+	f := s.f
+	f.t.Helper()
+	session := tools.SessionContext{BotID: f.botID, ChatID: f.botID, SessionID: f.sessionID, UserID: s.userID, CurrentPlatform: "local", ForkContext: s.inherit}
+	name, args := tools.ToolSendMessage().String(), map[string]any{"id": "worker", "message": text}
+	if s.child == "" {
+		name, args = tools.ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": text, "fork": s.inherit != nil}
+	}
+	available, err := s.spawner.Tools(f.ctx, session)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	at := slices.IndexFunc(available, func(tool toolexec.Tool) bool { return tool.Name == name })
+	if at < 0 {
+		f.t.Fatalf("the parent has no %s tool", name)
+	}
+	out, err := available[at].Execute(&toolexec.ToolExecContext{Context: f.ctx}, toolexec.ArgumentsFromValue(args))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	raw, _ := json.Marshal(toolexec.OutputValue(out))
+	var result struct {
+		SessionID string `json:"session_id"`
+		Status    string `json:"status"`
+		Code      string `json:"code"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		f.t.Fatalf("decode the %s result %s: %v", name, raw, err)
+	}
+	if s.child == "" {
+		s.child = result.SessionID
+	}
+	if result.Status != string(background.TaskCompleted) {
+		return cmp.Or(result.Code, result.Status)
+	}
+	return ""
+}
+
+// newSpawnProvider wires the agent-control tools the way the server does: a
+// spawned run is bound by the service like any admitted native run.
+func newSpawnProvider(f *backlogFixture) *tools.SpawnProvider {
+	logger := slog.Default()
+	queries := postgresstore.NewQueriesWithPool(f.pool, sqlc.New(f.pool))
+	spawner := tools.NewSpawnProvider(logger, settings.NewService(logger, queries, nil, nil), models.NewService(logger, queries), queries, threadpkg.NewService(logger, queries, nil), background.New(logger))
+	adapter := native.NewSpawnAdapter(f.agent)
+	adapter.SetRunBinder(f.service.BindSubagentRun)
+	adapter.SetRunObserverFactory(f.service.SubagentRunObserver)
+	adapter.SetFailureTranslator(f.service.SubagentFailure)
+	spawner.SetAgent(adapter)
+	spawner.SetMessageService(f.messages)
+	spawner.SetSubagentAdmitter(f.service)
+	return spawner
+}
+
 func (s *effectLoop) discuss(text string) string {
 	s.f.appendMessageAt(uuid.NewString(), text, time.Now().Truncate(time.Millisecond))
 	return s.f.trigger()
@@ -720,6 +803,47 @@ func TestPostgresInRunCompactionByEntry(t *testing.T) {
 				scenario.run(t, entry, newEffectLoop(t, entry))
 			})
 		}
+	}
+}
+
+// A forked subagent inherits more of its parent's context than its window
+// holds. Its first request folds the inherited rows into a summary on the
+// agent's own thread instead of trimming them, keeps its task raw and runs
+// every effect once. The inherited rows stay out of the thread's chat view,
+// the parent's history is untouched, and the agent's next task replays the
+// summary without folding again.
+func TestPostgresForkedSubagentFoldsWhatItInherited(t *testing.T) {
+	const steps = 3
+	entry := runEntryNamed("subagent")
+	s := newEffectLoop(t, entry)
+	f := s.f
+	inherited := make([]sdk.Message, 0, 16)
+	for i := range 16 {
+		inherited = append(inherited, sdk.UserMessage(fmt.Sprintf("INHERITED_%02d ", i)+strings.Repeat("parent context ", 150)))
+	}
+	s.inherit = tools.NewMessageSnapshot(inherited)
+	code, requests := s.run(entry, loopInput, steps)
+	if code != "" || !slices.Equal(s.effects, []int{1, 2, 3}) || len(requests) != steps+1 || f.summaries.Load() == 0 {
+		t.Fatalf("code=%q effects=%v provider_calls=%d summary_calls=%d, want every effect once after a fold", code, s.effects, len(requests), f.summaries.Load())
+	}
+	first := requests[0]
+	if strings.Count(first, loopInput) != 1 || len(summaryContents(t, first)) != 1 || strings.Contains(first, "INHERITED_00 ") || strings.Contains(first, contextview.HistoryTrimNotice) ||
+		!markersInOrder(first, loopSummary, loopInput) {
+		t.Fatalf("first request: task=%d summaries=%d raw_oldest=%v trimmed=%v, want the inherited rows folded before the task and nothing trimmed",
+			strings.Count(first, loopInput), len(summaryContents(t, first)), strings.Contains(first, "INHERITED_00 "), strings.Contains(first, contextview.HistoryTrimNotice))
+	}
+	var shown int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_visible_history_messages WHERE session_id=$1 AND content::text LIKE '%INHERITED_%'`, s.child).Scan(&shown); err != nil {
+		t.Fatal(err)
+	}
+	if shown != 0 || f.activeSummariesOf(s.child) != 1 || f.activeSummaries() != 0 {
+		t.Fatalf("inherited rows shown=%d thread summaries=%d parent summaries=%d, want the summary on the thread only and the inherited rows out of its chat view",
+			shown, f.activeSummariesOf(s.child), f.activeSummaries())
+	}
+	summaries := f.summaries.Load()
+	code, requests = s.run(entry, "NEXT_ROUND_QUESTION", 0)
+	if code != "" || len(requests) != 1 || f.summaries.Load() != summaries || len(summaryContents(t, requests[0])) != 1 || strings.Contains(requests[0], "INHERITED_00 ") {
+		t.Fatalf("next task: code=%q provider_calls=%d summary_calls=%d, want the summary replayed without folding again", code, len(requests), f.summaries.Load()-summaries)
 	}
 }
 
@@ -1092,10 +1216,14 @@ func historyFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 func prefixFullScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	f := s.f
 	// The turns fit the request together; with the step after them they do
-	// not. The ask_user tool takes more of the request.
+	// not. The ask_user tool takes more of the request; a subagent's prompt
+	// and tools take less.
 	turnBytes := 3800
-	if s.askUser {
+	switch {
+	case s.askUser:
 		turnBytes = 3400
+	case s.spawner != nil:
+		turnBytes = 5000
 	}
 	for i := range 3 {
 		if code, _ := s.run(entry, fmt.Sprintf("PREFIX_TURN_%d ", i)+strings.Repeat("p", turnBytes), 0); code != "" {
@@ -1222,14 +1350,15 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	}
 	assertForksAskForTheRunsOutput(t, requests[len(requests)-1], summarized)
 	var running, toolRows, foldedRows, foreign int
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE state <> 'completed') FROM session_runs WHERE session_id=$1`, f.sessionID).Scan(&running); err != nil {
+	session := s.runSession()
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE state <> 'completed') FROM session_runs WHERE session_id=$1`, session).Scan(&running); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%'), count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%' AND h.folded), count(*) FILTER (WHERE h.content::text LIKE $2 AND NOT h.folded) FROM (`+historyRowsSQL+`) h`, f.sessionID, "%"+foreignRow+"%").Scan(&toolRows, &foldedRows, &foreign); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%'), count(*) FILTER (WHERE h.role='tool' AND h.content::text LIKE '%TOOL_RESULT_%' AND h.folded), count(*) FILTER (WHERE h.content::text LIKE $2 AND NOT h.folded) FROM (`+historyRowsSQL+`) h`, session, "%"+foreignRow+"%").Scan(&toolRows, &foldedRows, &foreign); err != nil {
 		t.Fatal(err)
 	}
-	if running != 0 || toolRows != steps || foldedRows != first-1 || foreign != 1 || f.activeSummaries() != 1 {
-		t.Fatalf("unfinished_runs=%d tool_rows=%d folded=%d raw_foreign_rows=%d active_summaries=%d, want every run completed, the %d folded steps under one summary and the foreign row raw", running, toolRows, foldedRows, foreign, f.activeSummaries(), first-1)
+	if active := f.activeSummariesOf(session); running != 0 || toolRows != steps || foldedRows != first-1 || foreign != 1 || active != 1 {
+		t.Fatalf("unfinished_runs=%d tool_rows=%d folded=%d raw_foreign_rows=%d active_summaries=%d, want every run completed, the %d folded steps under one summary and the foreign row raw", running, toolRows, foldedRows, foreign, active, first-1)
 	}
 	sent := summaryContents(t, requests[len(requests)-1])
 
@@ -1264,14 +1393,14 @@ func longLoopScenario(t *testing.T, entry runEntry, s *effectLoop) {
 	// transition, which is what an entry that polls the run waits for.
 	var reasons, failedRows int
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(20 * time.Millisecond) {
-		if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, f.sessionID).Scan(&reasons); err != nil {
+		if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM context_lifecycles, jsonb_array_elements(snapshot->'mutations') m WHERE session_id=$1 AND m->>'kind'='context_switch' AND m->>'detail' LIKE '%reason=summarizer_failed%'`, session).Scan(&reasons); err != nil {
 			t.Fatal(err)
 		}
 		if reasons > 0 || time.Now().After(deadline) {
 			break
 		}
 	}
-	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='tool' AND content::text LIKE '%TOOL_RESULT_%' AND created_at >= (SELECT max(created_at) FROM bot_history_messages WHERE session_id=$1 AND role='user' AND content::text LIKE '%SUMMARIZER_DOWN_INPUT%')`, f.sessionID).Scan(&failedRows); err != nil {
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_history_messages WHERE session_id=$1 AND role='tool' AND content::text LIKE '%TOOL_RESULT_%' AND created_at >= (SELECT max(created_at) FROM bot_history_messages WHERE session_id=$1 AND role='user' AND content::text LIKE '%SUMMARIZER_DOWN_INPUT%')`, session).Scan(&failedRows); err != nil {
 		t.Fatal(err)
 	}
 	if reasons != 1 || failedRows != len(s.effects) {
