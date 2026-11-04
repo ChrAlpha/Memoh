@@ -18,8 +18,8 @@ import (
 // fragment IDs) so the applier takes the legacy fallback path.
 func buildErrorFragsFirstConfig(messages []sdk.Message, window int) agentpkg.RunConfig {
 	system := systemTextFrag("system.prompt", "fragment system", contextfrag.KindSystemPrompt, 100)
-	first := attentionMessageFrag("duplicate", sdk.UserMessage("first"), 10)
-	second := attentionMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
+	first := sizedMessageFrag("duplicate", sdk.UserMessage("first"), 10)
+	second := sizedMessageFrag("duplicate", sdk.AssistantMessage("second"), 10)
 	return agentpkg.RunConfig{
 		System:                 "legacy system",
 		Messages:               messages,

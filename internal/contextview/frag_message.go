@@ -6,14 +6,6 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 )
 
-func rebuildMessageFrag(frag contextfrag.ContextFrag, msg sdk.Message) contextfrag.ContextFrag {
-	conflictKey := frag.ConflictKey
-	frag = contextfrag.RebuildFragMessage(frag, msg)
-	frag.ConflictKey = conflictKey
-	frag.TokenEstimate = 0
-	return frag
-}
-
 func isToolExchangeFrag(frag contextfrag.ContextFrag) bool {
 	msg := contextfrag.FragMessage(frag)
 	if msg == nil {

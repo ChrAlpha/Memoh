@@ -22,7 +22,6 @@ func TestCompileRendersLegacyFieldsAndSplitsToolUsage(t *testing.T) {
 		SessionID:        "sess-1",
 		CurrentMessageID: "msg-1",
 		EventID:          "evt-1",
-		Attention:        []AttentionReason{AttentionReply},
 	}
 
 	got := Compile(CompileInput{

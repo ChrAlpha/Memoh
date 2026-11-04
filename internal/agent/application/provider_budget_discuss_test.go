@@ -256,7 +256,7 @@ func TestDiscussProviderBudgetRecoveryKeepsUnresolvedOverflowFailClosed(t *testi
 	}
 }
 
-func TestDiscussProviderBudgetRecoveryCompactsOrdinaryHistoryBeforeTrimming(t *testing.T) {
+func TestDiscussProviderBudgetRecoveryCompactsOrdinaryHistory(t *testing.T) {
 	service, resolver, provider, compactor, cmd := discussBudgetRecoveryFixture(t)
 	configureDiscussLifecycle(service)
 	cmd.DiscussMessages = cmd.DiscussMessages[20:]
@@ -272,7 +272,7 @@ func TestDiscussProviderBudgetRecoveryCompactsOrdinaryHistoryBeforeTrimming(t *t
 		t.Errorf("ordinary history recovery failed: %v", err)
 	}
 	if !recomposed || len(compactor.configs) != 1 || provider.callCount() != 0 || resolver.storeCalls != 0 {
-		t.Fatalf("recompose=%t compaction/provider/history=%d/%d/%d, want recovery before trimmed provider dispatch", recomposed, len(compactor.configs), provider.callCount(), resolver.storeCalls)
+		t.Fatalf("recompose=%t compaction/provider/history=%d/%d/%d, want recovery before provider dispatch", recomposed, len(compactor.configs), provider.callCount(), resolver.storeCalls)
 	}
 	if cfg := compactor.configs[0]; cfg.TotalInputTokens != 2500 || cfg.HistoryBudgetTokens != 998 {
 		t.Fatalf("ordinary history recovery config = %#v, want raw=2500 compacted whole into 998", cfg)

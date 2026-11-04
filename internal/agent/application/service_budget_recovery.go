@@ -11,7 +11,6 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/turn"
-	"github.com/felinics/memoh/internal/contextview"
 )
 
 // pauseIdleDuringBudgetRecovery pauses the watchdog while the run recovers
@@ -91,7 +90,9 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 		if len(cmd.DiscussOmittedSources) > 0 {
 			return cfg, false, fmt.Errorf("%w: no history room for input Channel omitted", contextfrag.ErrBudgetUnsatisfied)
 		}
-		return cfg, shed, nil
+		// What must stay fills the history budget on its own, so no summary
+		// of the rest fits beside it.
+		return cfg, false, fmt.Errorf("%w: what must stay leaves no history room", contextfrag.ErrProtectedContextOverflow)
 	}
 	*compacted = true
 	recovery := ChatRequest{BotID: cmd.BotID, ChatID: cmd.BotID, ThreadID: cmd.ThreadID, RunID: cfg.RunID, discussCurrentSources: protected}
@@ -103,12 +104,12 @@ func (s *Service) recoverDiscussContextBudget(ctx context.Context, cmd turn.Star
 
 // shedOlderBatchImages strips images of older input of the batch, oldest
 // first, until what must stay fits the budget. Answered history before the
-// batch is what selection trims, or an armed run folds, first, so it does not
-// count; an image costs far more than its message's text and no summary can
-// carry it, so the text survives its images. The newest input keeps its own.
-// It reports whether any were shed.
+// batch is what a fold compacts first, so it does not count; an image costs
+// far more than its message's text and no summary can carry it, so the text
+// survives its images. The newest input keeps its own. It reports whether
+// any were shed.
 func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMessageSource, historyBudget int) (native.RunConfig, bool) {
-	excess, total, trimmable, inBatch := -historyBudget, -historyBudget, false, false
+	excess, total, inBatch := -historyBudget, -historyBudget, false
 	for _, frag := range cfg.ContextSourceFrags {
 		if frag.Slot == contextfrag.SlotSystem || frag.Slot == contextfrag.SlotCurrentUser || frag.Kind == contextfrag.KindCurrentUserMessage {
 			continue
@@ -119,15 +120,10 @@ func shedOlderBatchImages(cfg native.RunConfig, batch map[string]turn.ContextMes
 		inBatch = inBatch || member && frag.Kind == contextfrag.KindConversationEvent
 		if inBatch || frag.Slot != contextfrag.SlotHistory || frag.Kind != contextfrag.KindConversationEvent {
 			excess += cost
-		} else {
-			trimmable = true
 		}
 	}
 	if total <= 0 {
 		return cfg, false
-	}
-	if trimmable && cfg.SwitchContext == nil {
-		excess += contextfrag.ResolveProviderBudgetFragTokens(contextview.TrimNoticeFrag(contextfrag.Scope{}))
 	}
 	var shed []string
 	frags, messages := slices.Clone(cfg.ContextSourceFrags), slices.Clone(cfg.Messages)

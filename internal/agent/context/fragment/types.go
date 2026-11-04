@@ -225,18 +225,6 @@ type Provenance struct {
 	FromMessage bool `json:"from_message,omitempty"`
 }
 
-// AttentionReason explains why an IM/group-chat event deserves attention.
-type AttentionReason string
-
-const (
-	AttentionDirect   AttentionReason = "direct"
-	AttentionMention  AttentionReason = "mention"
-	AttentionReply    AttentionReason = "reply"
-	AttentionCommand  AttentionReason = "command"
-	AttentionSchedule AttentionReason = "schedule"
-	AttentionPassive  AttentionReason = "passive"
-)
-
 // Scope preserves IM/group-chat topology separately from rendered text.
 type Scope struct {
 	BotID                     string            `json:"bot_id,omitempty"`
@@ -257,7 +245,6 @@ type Scope struct {
 	ForwardMessageID          string            `json:"forward_message_id,omitempty"`
 	ForwardFromUserID         string            `json:"forward_from_user_id,omitempty"`
 	ForwardFromConversationID string            `json:"forward_from_conversation_id,omitempty"`
-	Attention                 []AttentionReason `json:"attention,omitempty"`
 	Metadata                  map[string]string `json:"metadata,omitempty"`
 }
 

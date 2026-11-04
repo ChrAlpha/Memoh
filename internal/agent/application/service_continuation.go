@@ -122,7 +122,6 @@ func (s *Service) prepareContinuationRunConfig(
 		historyEstimates[i] = estimateMessageTokens(outgoing[i])
 	}
 	base.ContextHistoryTokenEstimates = historyEstimates
-	base.ContextTrimmableMessages = len(outgoing)
 	base.ContextFrags = historyContextFragsForMessages(outgoing, retained)
 	base.Messages = normalized.sent()
 	base.ContextProvenance = contextProvenance(outgoing, append(compactionInputs(req), req.continuationAnchors...))

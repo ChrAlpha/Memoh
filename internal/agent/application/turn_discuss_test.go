@@ -304,7 +304,8 @@ func TestDiscussInlinesImagesOnTheirMessages(t *testing.T) {
 }
 
 // The turn-wide vision budget goes to the newest input first: older images
-// are history a budget may trim, the newest input's own images are protected.
+// are history compaction may cover, the newest input's own images are
+// protected.
 func TestDiscussVisionBudgetKeepsTheNewestInputImages(t *testing.T) {
 	assets := map[string][]byte{}
 	cmd := discussCommand()
@@ -345,7 +346,7 @@ func TestDiscussVisionBudgetKeepsTheNewestInputImages(t *testing.T) {
 }
 
 // A repeated image belongs to its newest sender: the older message is history
-// a budget may trim, the newest input is protected.
+// compaction may cover, the newest input is protected.
 func TestDiscussRepeatedImageRidesOnTheNewestInput(t *testing.T) {
 	agent := &fakeAgentStreamer{}
 	resolver := &fakeDiscussService{resolveResult: ResolveRunConfigResult{RunConfig: native.RunConfig{SupportsImageInput: true}, ModelID: "model-1"}}

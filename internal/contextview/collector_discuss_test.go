@@ -154,7 +154,7 @@ func TestDiscussCollectorProtectsOnlyTheNewestUnconsumedInput(t *testing.T) {
 }
 
 // Images ride on the message they arrived with, so older input of the batch
-// stays history a budget may trim or compaction may cover, with its images.
+// stays history compaction may cover, with its images.
 func TestDiscussCollectorAttachesImagesToTheirOwnMessages(t *testing.T) {
 	older := sdk.ImagePart{Image: "data:image/png;base64,b2xkZXI="}
 	newest := sdk.ImagePart{Image: "data:image/png;base64,bmV3ZXN0"}

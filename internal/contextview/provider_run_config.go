@@ -60,7 +60,6 @@ func CollectNonSystemProviderSourceFrags(ctx context.Context, cfg agentpkg.RunCo
 		CurrentUserMessageIndex: cfg.ContextCurrentUserMessageIndex,
 		MemoryMessageIndex:      cfg.ContextMemoryMessageIndex,
 		TokenEstimates:          cfg.ContextHistoryTokenEstimates,
-		TrimmablePrefix:         cfg.ContextTrimmableMessages,
 		RepairToolClosures:      true,
 	}
 	history, err := (&HistoryMessagesCollector{}).Collect(ctx, CollectRequest{
@@ -223,18 +222,6 @@ func ToolUsageFrag(usage string, scope contextfrag.Scope) contextfrag.ContextFra
 	})
 }
 
-const DefaultRecentProtectTokens = 20000
-
-func resolveRecentProtectTokens(override *int) int {
-	if override == nil {
-		return DefaultRecentProtectTokens
-	}
-	if *override < 0 {
-		return 0
-	}
-	return *override
-}
-
 func providerContextBudgetPlan(ctx context.Context, cfg agentpkg.RunConfig) (*contextfrag.ContextBudgetPlan, error) {
 	if cfg.ContextBudgetMaxTokens == 0 {
 		return nil, nil
@@ -367,29 +354,23 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		return providerViewFallback(logger, fallbackCfg, ledger, budgetPlan, "budget_plan_error", "context budget plan failed", budgetErr), nil
 	}
 
-	// An armed run keeps its whole history and folds what does not fit before
-	// it dispatches; every dispatch checks the allowance.
+	// Selection keeps the whole history. An armed run folds what does not fit
+	// before it dispatches, where every dispatch checks the allowance; any
+	// other run that does not fit fails the rendered-envelope check below.
 	armed := cfg.SwitchContext != nil
 	registry := NewMapCollectorRegistry(StaticCollector{CollectorName: sourceFragsCollectorName, Frags: frags})
 	builder := NewBuilder(registry, selector, StablePrefixPlacer{}, NewMapRendererRegistry(&SDKMessagesRenderer{}))
 	view, err := builder.Build(ctx, BuildInput{
 		Scope: cfg.ContextScope, Intent: contextfrag.IntentRunConfigPreProvider,
-		Sources: []SourceSpec{{Name: sourceFragsCollectorName}},
-		Targets: []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
-		Budget: BudgetEnvelope{
-			MaxTokens:           cfg.ContextBudgetMaxTokens,
-			Plan:                budgetPlan,
-			RecentProtectTokens: resolveRecentProtectTokens(cfg.ContextRecentProtectTokens),
-			KeepHistory:         armed,
-		},
+		Sources:         []SourceSpec{{Name: sourceFragsCollectorName}},
+		Targets:         []contextfrag.RenderTarget{contextfrag.RenderSDKMessages},
+		Budget:          BudgetEnvelope{Plan: budgetPlan},
 		DynamicMutators: cfg.ContextDynamicMutators,
 	})
-	compacted := recoveryAttempts > 0
-	// One compaction per request: what it leaves is only rechecked, never
-	// compacted again to reach a lower mark.
-	if recoveryAttempts == 0 && budgetErr == nil && (err == nil || errors.Is(err, contextfrag.ErrProtectedContextOverflow)) &&
-		cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 &&
-		budgetPlan.ActualSystemCost <= budgetPlan.SystemBudget && ctx.Err() == nil {
+	// One recovery per request: what it leaves is only rechecked, never
+	// recovered again to reach a lower mark.
+	if recoveryAttempts == 0 && budgetErr == nil && err == nil &&
+		cfg.RecoverContextBudget != nil && budgetPlan != nil && budgetPlan.HistoryBudget > 0 && ctx.Err() == nil {
 		recovery := cfg
 		recovery.ContextManifest.BudgetPlan = budgetPlan
 		recovery, recovered, recoveryErr := cfg.RecoverContextBudget(ctx, recovery)
@@ -405,24 +386,13 @@ func applyProviderRunConfigAttempt(ctx context.Context, logger *slog.Logger, cfg
 		if recovered && recoveryErr == nil && !reflect.DeepEqual(recovery.ContextSourceFrags, cfg.ContextSourceFrags) {
 			return applyProviderRunConfigAttempt(ctx, logger, recovery, recoveryAttempts+1)
 		}
-		compacted = compacted || recovered || errors.Is(recoveryErr, contextfrag.ErrBudgetUnsatisfied)
-		if errors.Is(recoveryErr, contextfrag.ErrBudgetUnsatisfied) {
+		if isContextBudgetError(recoveryErr) {
 			err = recoveryErr
 		}
-	}
-	if compacted && errors.Is(err, contextfrag.ErrProtectedContextOverflow) {
-		err = fmt.Errorf("%w: compaction did not make the context fit: %s", contextfrag.ErrBudgetUnsatisfied, err.Error())
 	}
 	if budgetErr != nil {
 		recordContextBudgetFailure(ledger, budgetErr)
 		return providerBudgetAuditConfig(cfg, view, ledger, budgetPlan), budgetErr
-	}
-	if err == nil && cfg.RecoverContextBudget != nil && (slices.ContainsFunc(view.Selected, func(frag contextfrag.ContextFrag) bool {
-		return frag.ID == historyTrimNoticeID
-	}) || slices.ContainsFunc(view.Manifest.SelectionDecisions, func(decision contextfrag.SelectionDecision) bool {
-		return decision.Reason == summaryBudgetEditReason
-	})) {
-		err = contextfrag.ErrBudgetUnsatisfied
 	}
 	if err != nil {
 		if isContextBudgetError(err) {

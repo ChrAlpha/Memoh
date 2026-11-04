@@ -9,6 +9,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 func TestFragBudgetDropsOversizedFragEvenWithoutEnvelopeBudget(t *testing.T) {
@@ -249,9 +250,35 @@ func TestFragBudgetOverflowKeepIgnoresConfiguredLimits(t *testing.T) {
 	}
 }
 
+func TestFragCharCountAddsToolPayloadToText(t *testing.T) {
+	t.Parallel()
+
+	text := "Running the search now."
+	frag := toolCallMessageFrag(text)
+
+	got := fragCharCount(frag)
+	if textOnly := utf8.RuneCountInString(text); got <= textOnly {
+		t.Fatalf("fragCharCount = %d, must exceed text-only count %d", got, textOnly)
+	}
+}
+
 func historyMessageFrag(id string, msg sdk.Message) contextfrag.ContextFrag {
 	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
 		ID: id, Message: msg, Kind: contextfrag.KindConversationEvent, Slot: contextfrag.SlotHistory,
 		Scope: contextfrag.Scope{BotID: "bot-1"}, Source: "run_config_fields", Collector: "history_messages",
+	})
+}
+
+func toolCallMessageFrag(text string) contextfrag.ContextFrag {
+	call := sdk.ToolCallPart{
+		ToolCallID: "call-1",
+		ToolName:   "web_search",
+		Input:      toolexec.ArgumentsFromValue(map[string]any{"query": "memoh context usage panel design"}),
+	}
+	return contextfrag.MessageFrag(contextfrag.MessageFragInput{
+		ID:      "message.000",
+		Message: sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.TextPart{Text: text}, call}},
+		Kind:    contextfrag.KindConversationEvent,
+		Slot:    contextfrag.SlotHistory,
 	})
 }

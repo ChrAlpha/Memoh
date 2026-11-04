@@ -36,7 +36,6 @@ func TestProviderViewCarriesProvenanceByPosition(t *testing.T) {
 		ContextCurrentUserMessageIndex: &current,
 		ContextQueryMaterialized:       true,
 		ContextHookText:                "hook context",
-		ContextTrimmableMessages:       2,
 	}
 	cfg.ContextSourceFrags = CollectNonSystemProviderSourceFrags(context.Background(), cfg)
 

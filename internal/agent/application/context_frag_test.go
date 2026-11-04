@@ -57,15 +57,6 @@ func TestBuildContextFragScopePreservesIMTopology(t *testing.T) {
 	if scope.ForwardMessageID != "fwd-1" || scope.ForwardFromUserID != "user-2" || scope.ForwardFromConversationID != "source-chat" {
 		t.Fatalf("unexpected forward topology: %#v", scope)
 	}
-	if !hasAttention(scope.Attention, contextfrag.AttentionReply) || !hasAttention(scope.Attention, contextfrag.AttentionCommand) {
-		t.Fatalf("attention reasons = %#v, want reply and command", scope.Attention)
-	}
-	if !hasAttention(scope.Attention, contextfrag.AttentionMention) {
-		t.Fatalf("attention reasons = %#v, want mention", scope.Attention)
-	}
-	if hasAttention(scope.Attention, contextfrag.AttentionPassive) {
-		t.Fatalf("attention reasons should not include passive when reply/command are present: %#v", scope.Attention)
-	}
 }
 
 func TestBuildContextFragScopeDoesNotInferDirectedReplyFromAnyReplyID(t *testing.T) {
@@ -83,11 +74,8 @@ func TestBuildContextFragScopeDoesNotInferDirectedReplyFromAnyReplyID(t *testing
 	if scope.ReplyToMessageID != "someone-elses-message" {
 		t.Fatalf("reply topology not preserved: %#v", scope)
 	}
-	if hasAttention(scope.Attention, contextfrag.AttentionReply) || hasAttention(scope.Attention, contextfrag.AttentionMention) {
-		t.Fatalf("attention should not infer directed reply/mention without structured flags: %#v", scope.Attention)
-	}
-	if !hasAttention(scope.Attention, contextfrag.AttentionPassive) {
-		t.Fatalf("group reply without directed flags should be passive attention: %#v", scope.Attention)
+	if scope.RepliesToBot || scope.MentionsBot {
+		t.Fatalf("a reply id alone must not read as directed at the bot: %#v", scope)
 	}
 }
 
@@ -302,15 +290,6 @@ func TestBuildProviderSourceFragsPlacesLegacyHookBeforeCurrent(t *testing.T) {
 	if got.System != system || !reflect.DeepEqual(got.Messages, wantMessages) {
 		t.Fatalf("provider placement changed: system=%q messages=%#v want=%#v", got.System, got.Messages, wantMessages)
 	}
-}
-
-func hasAttention(reasons []contextfrag.AttentionReason, want contextfrag.AttentionReason) bool {
-	for _, reason := range reasons {
-		if reason == want {
-			return true
-		}
-	}
-	return false
 }
 
 func messagesContainImage(messages []sdk.Message) bool {

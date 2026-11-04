@@ -25,7 +25,11 @@ type contextbench16KFixture struct {
 	messageCount int
 }
 
-func TestApplyProviderRunConfigContextbench16KRenderedEnvelope(t *testing.T) {
+// The contextbench request does not fit 16K whole. Its system prompt still
+// fits its share, leaving the history a budget a fold works against: an
+// armed run renders all of it and folds at the step, and a run that cannot
+// fold fails before dispatch.
+func TestApplyProviderRunConfigContextbench16KEnvelope(t *testing.T) {
 	t.Parallel()
 
 	fixture := buildContextbench16KFixture()
@@ -33,64 +37,45 @@ func TestApplyProviderRunConfigContextbench16KRenderedEnvelope(t *testing.T) {
 		t.Fatalf("fixture shape = system:%d messages:%d tools:%d, want 71/31/12",
 			fixture.systemCount, fixture.messageCount, len(fixture.toolDefs))
 	}
-	out, err := ProviderRunConfigApplier(nil)(context.Background(), agentpkg.RunConfig{
-		ContextSourceFrags:       slices.Clone(fixture.sourceFrags),
-		ContextScope:             contextfrag.Scope{BotID: "contextbench"},
-		ContextQueryMaterialized: true,
-		ContextToolDefs:          slices.Clone(fixture.toolDefs),
-		ContextToolDefsResolved:  true,
-		ContextBudgetMaxTokens:   16_000,
-	})
+	config := func() agentpkg.RunConfig {
+		return agentpkg.RunConfig{
+			ContextSourceFrags:       slices.Clone(fixture.sourceFrags),
+			ContextScope:             contextfrag.Scope{BotID: "contextbench"},
+			ContextQueryMaterialized: true,
+			ContextToolDefs:          slices.Clone(fixture.toolDefs),
+			ContextToolDefsResolved:  true,
+			ContextBudgetMaxTokens:   16_000,
+		}
+	}
+
+	armed := config()
+	armed.SwitchContext = func(context.Context, agentpkg.ContextSwitch) (string, error) { return "", nil }
+	out, err := ProviderRunConfigApplier(nil)(context.Background(), armed)
 	if err != nil {
-		t.Fatalf("contextbench 16k preflight error = %v, want conservative selection to fit", err)
+		t.Fatalf("armed contextbench 16k preflight error = %v, want the fold to size against the plan", err)
+	}
+	plan := out.ContextManifest.BudgetPlan
+	if plan == nil || plan.ActualSystemCost > plan.SystemBudget || plan.HistoryBudget <= 0 {
+		t.Fatalf("budget plan = %+v, want the system within its share and room left for history", plan)
+	}
+	if len(out.Messages) != fixture.messageCount {
+		t.Fatalf("messages = %d, want the whole history and the request (%d)", len(out.Messages), fixture.messageCount)
+	}
+	request := out.Messages[len(out.Messages)-1:]
+	if fixed := testRenderedProviderEnvelopeTokens(out.System, request, out.ContextToolDefs); fixed+plan.OutputReserve > plan.Window {
+		t.Fatalf("system, tools and request = %d + reserve %d exceed window %d", fixed, plan.OutputReserve, plan.Window)
 	}
 
-	inputTokens := testRenderedProviderEnvelopeTokens(out.System, out.Messages, out.ContextToolDefs)
-	if out.ContextManifest.BudgetPlan == nil {
-		t.Fatal("budget plan missing from manifest")
-	}
-	reserve := out.ContextManifest.BudgetPlan.OutputReserve
-	if envelope := inputTokens + reserve; envelope > out.ContextBudgetMaxTokens {
-		t.Fatalf("provider call allowed with rendered envelope %d > window %d (input=%d reserve=%d)",
-			envelope, out.ContextBudgetMaxTokens, inputTokens, reserve)
+	_, err = ProviderRunConfigApplier(nil)(context.Background(), config())
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || !strings.Contains(err.Error(), "rendered_input=") {
+		t.Fatalf("unarmed contextbench 16k preflight error = %v, want the rendered envelope to fail it", err)
 	}
 }
 
-func TestProviderSelectorReservesConservativeHistoryTrimNotice(t *testing.T) {
-	t.Parallel()
-
-	notice := TrimNoticeFrag(contextfrag.Scope{})
-	legacyCost := contextfrag.ResolveFragTokens(notice)
-	providerCost := contextfrag.ResolveProviderBudgetFragTokens(notice)
-	if legacyCost != 55 || providerCost != 68 || providerCost-legacyCost != 13 {
-		t.Fatalf("trim notice costs = legacy:%d provider:%d, want 55/68 (13-token drift)", legacyCost, providerCost)
-	}
-
-	frags := []contextfrag.ContextFrag{
-		testBudgetMessageFrag("old-1", sdk.UserMessage(strings.Repeat("a", 320)), contextfrag.SlotHistory, 100),
-		testBudgetMessageFrag("old-2", sdk.AssistantMessage(strings.Repeat("b", 320)), contextfrag.SlotHistory, 100),
-		testBudgetMessageFrag("current", sdk.UserMessage("current"), contextfrag.SlotCurrentUser, 10),
-	}
-	frags[2].Kind = contextfrag.KindCurrentUserMessage
-	frags[2].Trust = contextfrag.TrustUser
-	frags[2].Budget.Overflow = contextfrag.OverflowKeep
-	plan := &contextfrag.ContextBudgetPlan{SystemBudget: 167}
-	selector := &FragmentSelector{}
-	result := selector.Select(
-		frags,
-		selector.ProfileFor(contextfrag.IntentRunConfigPreProvider),
-		BudgetEnvelope{Plan: plan, RecentProtectTokens: 0},
-	)
-	if result.FatalError != nil {
-		t.Fatalf("selector error = %v", result.FatalError)
-	}
-	if !result.TrimNotice || len(result.Dropped) != 2 {
-		t.Fatalf("trim result = notice:%v dropped:%d, want conservative notice and both history messages dropped",
-			result.TrimNotice, len(result.Dropped))
-	}
-}
-
-func TestApplyProviderRunConfigTrimsUnderchargedHistoryBeforeDispatch(t *testing.T) {
+// The rendered envelope is priced from what renders, not from the estimates
+// the fragments carry: history whose estimate undercharges it still fails a
+// run that cannot fold it, before anything is dispatched.
+func TestApplyProviderRunConfigFailsUnderchargedHistoryBeforeDispatch(t *testing.T) {
 	t.Parallel()
 
 	history := testBudgetMessageFrag(
@@ -108,25 +93,20 @@ func TestApplyProviderRunConfigTrimsUnderchargedHistoryBeforeDispatch(t *testing
 		ContextSourceFrags:     []contextfrag.ContextFrag{history, current},
 		ContextBudgetMaxTokens: 1_000,
 	})
-	if err != nil {
-		t.Fatalf("preflight error = %v, want undercharged history trimmed by envelope pricing", err)
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || !strings.Contains(err.Error(), "rendered_input=") {
+		t.Fatalf("preflight error = %v, want the rendered envelope to reject undercharged history", err)
 	}
-	for _, message := range out.Messages {
-		if strings.Contains(messageText(t, message), "xxxx") {
-			t.Fatal("undercharged history reached the provider payload")
-		}
+	if len(out.Messages) != 0 {
+		t.Fatalf("messages = %#v, want nothing rendered for dispatch", out.Messages)
 	}
-	plan := out.ContextManifest.BudgetPlan
-	if plan == nil {
-		t.Fatal("budget plan missing from manifest")
+	if ids := fragIDs(out.ContextFrags); !slices.Contains(ids, "history-undercharged") {
+		t.Fatalf("audit = %#v, want the whole history", ids)
 	}
-	if rendered := contextfrag.ProviderEnvelopeTokens(out.System, out.Messages, nil); rendered+plan.OutputReserve > plan.Window {
-		t.Fatalf("rendered envelope = %d + reserve %d exceeds window %d", rendered, plan.OutputReserve, plan.Window)
-	}
-	for _, record := range out.ContextMutations.Records() {
-		if record.Kind == contextfrag.MutationContextBudgetFailure {
-			t.Fatalf("trimmable history recorded %#v", record)
-		}
+	records := out.ContextMutations.Records()
+	if len(records) != 1 || records[0] != (contextfrag.MutationRecord{
+		Kind: contextfrag.MutationContextBudgetFailure, Detail: "budget_unsatisfied",
+	}) {
+		t.Fatalf("mutations = %#v, want one budget_unsatisfied record", records)
 	}
 }
 

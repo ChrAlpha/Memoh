@@ -33,7 +33,6 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	threadpkg "github.com/felinics/memoh/internal/chat/thread"
 	"github.com/felinics/memoh/internal/chat/timeline"
-	"github.com/felinics/memoh/internal/contextview"
 	dbpkg "github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
@@ -808,8 +807,7 @@ func TestPostgresInRunCompactionByEntry(t *testing.T) {
 
 // A forked subagent inherits more of its parent's context than its window
 // holds. Its first request folds the inherited rows into a summary on the
-// agent's own thread instead of trimming them, keeps its task raw and runs
-// every effect once. The inherited rows stay out of the thread's chat view,
+// agent's own thread, keeps its task raw and runs every effect once. The inherited rows stay out of the thread's chat view,
 // the parent's history is untouched, and the agent's next task replays the
 // summary without folding again.
 func TestPostgresForkedSubagentFoldsWhatItInherited(t *testing.T) {
@@ -827,10 +825,10 @@ func TestPostgresForkedSubagentFoldsWhatItInherited(t *testing.T) {
 		t.Fatalf("code=%q effects=%v provider_calls=%d summary_calls=%d, want every effect once after a fold", code, s.effects, len(requests), f.summaries.Load())
 	}
 	first := requests[0]
-	if strings.Count(first, loopInput) != 1 || len(summaryContents(t, first)) != 1 || strings.Contains(first, "INHERITED_00 ") || strings.Contains(first, contextview.HistoryTrimNotice) ||
+	if strings.Count(first, loopInput) != 1 || len(summaryContents(t, first)) != 1 || strings.Contains(first, "INHERITED_00 ") ||
 		!markersInOrder(first, loopSummary, loopInput) {
-		t.Fatalf("first request: task=%d summaries=%d raw_oldest=%v trimmed=%v, want the inherited rows folded before the task and nothing trimmed",
-			strings.Count(first, loopInput), len(summaryContents(t, first)), strings.Contains(first, "INHERITED_00 "), strings.Contains(first, contextview.HistoryTrimNotice))
+		t.Fatalf("first request: task=%d summaries=%d raw_oldest=%v, want the inherited rows folded before the task",
+			strings.Count(first, loopInput), len(summaryContents(t, first)), strings.Contains(first, "INHERITED_00 "))
 	}
 	var shown int
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM bot_visible_history_messages WHERE session_id=$1 AND content::text LIKE '%INHERITED_%'`, s.child).Scan(&shown); err != nil {

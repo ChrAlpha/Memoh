@@ -76,16 +76,6 @@ func (c normalizedContext) sent() []sdk.Message {
 	return contextSentMessages(c.messages)
 }
 
-// prefixLength is how many messages normalizing the first n inputs alone
-// yields.
-func (c normalizedContext) prefixLength(n int) int {
-	if n <= 0 {
-		return 0
-	}
-	kept, _ := slices.BinarySearch(c.inputs, n)
-	return len(repairContextToolCalls(c.sanitized[:kept:kept], syntheticToolClosureError))
-}
-
 // index is where input i lands: the last message normalizing inputs up to
 // and including i yields, when i is a user message normalizing keeps.
 func (c normalizedContext) index(i *int) *int {

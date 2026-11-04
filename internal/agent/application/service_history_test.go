@@ -116,19 +116,6 @@ func TestMarkRequiredHistoryMessageCurrentRejectsNonUserAndMissingIDs(t *testing
 	}
 }
 
-func TestNormalizedContextPrefixLengthTracksSanitizedHistory(t *testing.T) {
-	t.Parallel()
-
-	messages := []ModelMessage{
-		{Content: newTextContent("invalid history")},
-		{Role: "user", Content: newTextContent("valid history")},
-		{Role: "user", Content: newTextContent("pinned tail")},
-	}
-	if got := normalizeContext(messages).prefixLength(2); got != 1 {
-		t.Fatalf("normalized prefix = %d, want 1", got)
-	}
-}
-
 func TestLoadHistoryCutResolvesTheCutoffMessage(t *testing.T) {
 	t.Parallel()
 

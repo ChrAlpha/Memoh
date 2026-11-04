@@ -33,21 +33,6 @@ func TestHistoryCollectorPreservesMessagesAndSeparatesCurrent(t *testing.T) {
 	}
 }
 
-func TestHistoryCollectorDoesNotInheritCurrentAttention(t *testing.T) {
-	t.Parallel()
-
-	frags, err := (&HistoryMessagesCollector{}).Collect(context.Background(), CollectRequest{
-		Scope:  contextfrag.Scope{Attention: []contextfrag.AttentionReason{contextfrag.AttentionDirect}},
-		Config: HistoryMessagesConfig{Messages: []sdk.Message{sdk.UserMessage("old")}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(frags[0].Scope.Attention) != 0 {
-		t.Fatalf("history attention = %#v", frags[0].Scope.Attention)
-	}
-}
-
 func TestMaterializedCurrentIndexFallsBackToLatestUser(t *testing.T) {
 	t.Parallel()
 
@@ -63,7 +48,7 @@ func TestMaterializedCurrentIndexFallsBackToLatestUser(t *testing.T) {
 	}
 }
 
-func TestHistoryCollectorsCarryBudgetInputsAndPinTheTail(t *testing.T) {
+func TestHistoryCollectorsCarryEstimatesAndPinTheCurrentRequest(t *testing.T) {
 	t.Parallel()
 
 	current := 2
@@ -77,7 +62,6 @@ func TestHistoryCollectorsCarryBudgetInputsAndPinTheTail(t *testing.T) {
 		CurrentUserMessageIndex: &current,
 		MemoryMessageIndex:      &memory,
 		TokenEstimates:          []int{11, 22, 33},
-		TrimmablePrefix:         1,
 	}
 
 	history, err := (&HistoryMessagesCollector{}).Collect(context.Background(), CollectRequest{Config: cfg})
@@ -88,7 +72,7 @@ func TestHistoryCollectorsCarryBudgetInputsAndPinTheTail(t *testing.T) {
 		t.Fatalf("history = %#v, want only the ordinary history message", history)
 	}
 	if history[0].TokenEstimate != 11 || history[0].Budget.Overflow != "" {
-		t.Fatalf("history budget fields = %#v, want estimate 11 and droppable overflow", history[0])
+		t.Fatalf("history budget fields = %#v, want estimate 11 and no overflow policy", history[0])
 	}
 
 	currentFrags, err := (&materializedCurrentUserCollector{}).Collect(context.Background(), CollectRequest{Config: cfg})
@@ -101,14 +85,13 @@ func TestHistoryCollectorsCarryBudgetInputsAndPinTheTail(t *testing.T) {
 	}
 }
 
-func TestHistoryCollectorPinsMessagesAtTrimmableBoundary(t *testing.T) {
+func TestHistoryCollectorFallsBackForMissingEstimates(t *testing.T) {
 	t.Parallel()
 
 	frags, err := (&HistoryMessagesCollector{}).Collect(context.Background(), CollectRequest{
 		Config: HistoryMessagesConfig{
-			Messages:        []sdk.Message{sdk.UserMessage("old"), sdk.AssistantMessage("tail")},
-			TokenEstimates:  []int{7},
-			TrimmablePrefix: 1,
+			Messages:       []sdk.Message{sdk.UserMessage("old"), sdk.AssistantMessage("tail")},
+			TokenEstimates: []int{7},
 		},
 	})
 	if err != nil {
@@ -117,17 +100,8 @@ func TestHistoryCollectorPinsMessagesAtTrimmableBoundary(t *testing.T) {
 	if len(frags) != 2 || frags[0].TokenEstimate != 7 || frags[1].TokenEstimate != 0 {
 		t.Fatalf("token estimates = %#v, want 7 then renderer fallback", frags)
 	}
-	if frags[0].Budget.Overflow != "" || frags[1].Budget.Overflow != contextfrag.OverflowKeep {
+	// Selection keeps all history, so no message needs an overflow policy.
+	if frags[0].Budget.Overflow != "" || frags[1].Budget.Overflow != "" {
 		t.Fatalf("overflow policies = %#v / %#v", frags[0].Budget, frags[1].Budget)
-	}
-
-	pinned, err := (&HistoryMessagesCollector{}).Collect(context.Background(), CollectRequest{
-		Config: HistoryMessagesConfig{Messages: []sdk.Message{sdk.UserMessage("all pinned")}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pinned) != 1 || pinned[0].Budget.Overflow != contextfrag.OverflowKeep {
-		t.Fatalf("zero-prefix history = %#v, want all messages pinned", pinned)
 	}
 }

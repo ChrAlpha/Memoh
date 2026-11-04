@@ -164,8 +164,6 @@ so compaction persistently triggers later than budget pressure implies.
   There is **no server-side context-size or admission knob today**.
 - `[session_runtime]` TOML: `state_ttl` (default 24 h) is the only retention bound on
   session snapshots, and it never evicts active runs.
-- `DefaultRecentProtectTokens = 20000`
-  (`internal/contextview/provider_run_config.go`), per-run override only.
 
 ## 4. Correctness requirements
 
@@ -592,6 +590,12 @@ snapshot clones, unbounded queries) maps to a requirement in §4 and a roadmap i
       inherited rows are context rows of its thread, older than its own turns,
       which its loads read and its checkpoints fold instead of a prefix that
       selection trimmed — CM-CMP-001, CM-ADM-002
+- [x] Selection never trims history. With every native run folding in place,
+      the context view drops the history budget pass, its attention tiers,
+      recent window, summary shrink, and trim notice; what it still leaves out
+      is per-fragment caps, the system share of the window, and a tool exchange
+      missing its other half. A run that cannot fold fails its rendered
+      envelope with `context.budget_unsatisfied` before dispatch — CM-ADM-002
 - [x] Thread history has no time window: compaction candidates are the rows the
       history checkpoint keeps and every row after its position, so history is
       summarized rather than dropped, and chat loads read the rows after the
@@ -705,7 +709,8 @@ They complement but never replace black-box acceptance.
 | long tool loop, fold cannot help | summarizer unavailable, or kept rows leave no room for a summary | `context.budget_unsatisfied` (or `context.protected_overflow`); committed steps stay, nothing is replayed; the next turn can recover before dispatch | CM-CMP-001, CM-ADM-002 |
 | replaced compacted turn | retry or edit of a turn that compacted in place | The attempt folds the history before the cutoff into a summary of its own; the active checkpoint stands for no row of the replaced turn | CM-CMP-001 |
 | Discuss run fails after a fold | a message arrives during the run, then the summarizer stops answering; the worker restarts with no durable cursor | The arrival is not covered by the run's summary; committed steps stay once; after the restart one answer carries the failed input and the arrival | CM-CMP-001, CM-ADM-002 |
-| forked subagent | inherited context larger than the window | The first request folds the inherited rows onto the agent thread's checkpoint instead of trimming them, the task stays raw, every effect runs once, and the next task replays the summary; the parent's history is untouched | CM-CMP-001, CM-ADM-002 |
+| forked subagent | inherited context larger than the window | The first request folds the inherited rows onto the agent thread's checkpoint, the task stays raw, every effect runs once, and the next task replays the summary; the parent's history is untouched | CM-CMP-001, CM-ADM-002 |
+| run that cannot fold | a run without in-run compaction whose history does not fit | `context.budget_unsatisfied` before dispatch (`context.protected_overflow` when what must stay fills the window); the audit keeps the whole history and nothing is trimmed | CM-ADM-002 |
 | ACP long thread | Discuss ACP, oversized history | Prompt built within budget; no unbounded `Query` | CM-ADM-001 |
 | replay at scale | cold start with 5k events | Paginated loads; what the checkpoint stands for is skipped before its payloads load; bounded replay memory | CM-RPL-001/002 |
 | cache pressure | many concurrent sessions | Evictions occur; evicted sessions recover via replay; resident bytes bounded | CM-CCH-001 |

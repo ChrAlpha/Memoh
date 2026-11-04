@@ -40,7 +40,7 @@ func TestProviderSystemMustKeepUsesPerFragmentPolicy(t *testing.T) {
 	}
 }
 
-func TestProviderHistoryBudgetNeverDropsSystemFragments(t *testing.T) {
+func TestProviderFragBudgetNeverDropsSystemFragments(t *testing.T) {
 	t.Parallel()
 
 	intents := []contextfrag.Intent{

@@ -20,20 +20,13 @@ type SourceSpec struct {
 	Config any
 }
 
+// BudgetEnvelope prices a view against the provider allowance. Selection
+// keeps every history fragment whatever the budget: a request that does not
+// fit is compacted or fails, never trimmed. Plan, when set, bounds the system
+// prompt to its share of the window, and the rendered request is checked
+// against it; nil leaves the view unbudgeted.
 type BudgetEnvelope struct {
-	MaxTokens int
-	// Plan activates unified provider-envelope budgeting. Nil preserves the
-	// legacy unbudgeted provider selection path. Plan makes the budget a
-	// provider allowance, which charges fragments at least the provider
-	// envelope estimate.
 	Plan *contextfrag.ContextBudgetPlan
-	// RecentProtectTokens bands the newest droppable history within this many
-	// charged tokens to drop last. Zero disables the window.
-	RecentProtectTokens int
-	// KeepHistory keeps every history fragment whatever the budget: an armed
-	// run folds what does not fit before it dispatches. A tool exchange
-	// missing its other half is still cut.
-	KeepHistory bool
 }
 
 type BuildOptions struct {

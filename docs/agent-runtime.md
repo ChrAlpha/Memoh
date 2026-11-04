@@ -138,8 +138,10 @@ of the budget. Older anchors fold, and a folded input records the images it
 carried as omitted. When nothing but summaries is left,
 they are rewritten only if they do not fit the room the next request has, and
 a remainder too small for any summary to replace ends the event once the
-request fits. The context view keeps an armed run's whole history, without
-trimming, and every dispatch checks the allowance.
+request fits. The context view keeps every run's whole history and never
+trims it: an armed run folds what does not fit and every dispatch checks the
+allowance, while a run that cannot fold fails its rendered envelope with
+`context.budget_unsatisfied` before it dispatches.
 
 The allowance is what the provider counts, and a run measures its request by
 an estimate that prices bytes at a fixed rate; content a provider's tokenizer

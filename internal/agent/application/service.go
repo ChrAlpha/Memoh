@@ -538,7 +538,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	if usePipeline {
 		currentMessageIndex = latestModelUserMessageIndex(messages)
 	}
-	historyMessageCount := len(messages)
 	if notice := currentWorkspaceTransitionMessage(historyRecords, req.WorkspaceTarget); notice != nil {
 		messages = append(messages, *notice)
 	}
@@ -557,7 +556,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	if err := interruptedPreparation(ctx, "normalize context messages"); err != nil {
 		return resolvedContext{}, req, err
 	}
-	trimmableMessages := normalized.prefixLength(historyMessageCount)
 	currentMessageIndex = normalized.index(currentMessageIndex)
 	memoryMessageIndex = normalized.index(memoryMessageIndex)
 	messages = normalized.models()
@@ -565,7 +563,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	for index := range messages {
 		runCfg.ContextHistoryTokenEstimates[index] = estimateMessageTokens(messages[index])
 	}
-	runCfg.ContextTrimmableMessages = min(trimmableMessages, len(messages))
 
 	displayName := s.resolveDisplayName(ctx, req)
 	mergedAttachments := s.routeAndMergeAttachments(ctx, chatModel, req)

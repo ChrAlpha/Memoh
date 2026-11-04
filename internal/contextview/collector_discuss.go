@@ -48,8 +48,8 @@ func (*DiscussContextCollector) Collect(_ context.Context, req CollectRequest) (
 
 	frags := make([]contextfrag.ContextFrag, 0, len(cfg.ComposedMessages))
 	// The provider envelope protects only the newest unconsumed input. Older
-	// input of the same batch is history the final budget may trim, with a
-	// selection decision under its source ID, or recovery may compact.
+	// input of the same batch is history, which compaction may cover under
+	// its source ID.
 	currentUserIndex, known := latestComposedCurrentIndex(cfg.ComposedMessages)
 	if !known {
 		currentUserIndex = latestComposedUserMessageIndex(cfg.ComposedMessages)

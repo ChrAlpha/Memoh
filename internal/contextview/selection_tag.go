@@ -21,11 +21,6 @@ const (
 type TaggedFrag struct {
 	Frag contextfrag.ContextFrag
 	Tags []SelectionTag
-	// Tokens is the cost budget arithmetic charges for Frag. A hard provider
-	// budget prices it with the envelope estimator so selection and the
-	// rendered-envelope check agree; the fragment's own estimate is left
-	// untouched so selection decisions do not read as trims.
-	Tokens int
 }
 
 func (t TaggedFrag) HasTag(tag SelectionTag) bool {
@@ -35,7 +30,7 @@ func (t TaggedFrag) HasTag(tag SelectionTag) bool {
 func tagFragments(frags []contextfrag.ContextFrag, profile IntentProfile) []TaggedFrag {
 	tagged := make([]TaggedFrag, 0, len(frags))
 	for _, frag := range frags {
-		next := TaggedFrag{Frag: frag, Tokens: contextfrag.ResolveFragTokens(frag)}
+		next := TaggedFrag{Frag: frag}
 		if isMustKeepFrag(frag, profile) {
 			next.Tags = appendSelectionTag(next.Tags, TagMustKeep)
 		}
@@ -86,8 +81,8 @@ func isMustKeepFrag(frag contextfrag.ContextFrag, profile IntentProfile) bool {
 	if frag.Budget.Overflow == contextfrag.OverflowKeep {
 		return true
 	}
-	// A compaction summary is the sole survivor of everything already evicted;
-	// trimming it before newer raw rows silently re-loses the compacted span.
+	// A compaction summary is the sole survivor of everything it folded;
+	// dropping it silently loses the whole span.
 	if frag.Kind == contextfrag.KindConversationSummary {
 		return true
 	}
@@ -215,20 +210,4 @@ func hasSelectionTag(tags []SelectionTag, tag SelectionTag) bool {
 		}
 	}
 	return false
-}
-
-// selectionDropReason reports the mutually exclusive retention state first
-// (must_keep / preserve_recent / can_drop) so a droppable tool-exchange
-// fragment reads as can_drop instead of the misleading closure tag; the
-// closure tag only surfaces when it is the sole marker.
-func selectionDropReason(tagged TaggedFrag) string {
-	for _, tag := range []SelectionTag{TagMustKeep, TagPreserveRecent, TagCanDrop, TagPreserveToolClosure} {
-		if tagged.HasTag(tag) {
-			return string(tag)
-		}
-	}
-	if tagged.Frag.ID != "" {
-		return "not_selected"
-	}
-	return string(TagCanDrop)
 }

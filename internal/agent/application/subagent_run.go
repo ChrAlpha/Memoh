@@ -64,7 +64,6 @@ func (s *Service) BindSubagentRun(ctx context.Context, task tools.SpawnRunConfig
 		estimates[i] = estimateMessageTokens(messages[i])
 	}
 	cfg.ContextHistoryTokenEstimates = estimates
-	cfg.ContextTrimmableMessages = len(messages)
 	cfg.ContextFrags = historyContextFragsForMessages(messages, history.records)
 	cfg.Messages = normalized.sent()
 	cfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(messages, history.records)

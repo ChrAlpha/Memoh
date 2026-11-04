@@ -463,9 +463,6 @@ func trustForMessage(msg sdk.Message) TrustLevel {
 }
 
 func normalizeScope(scope Scope) Scope {
-	if len(scope.Attention) == 0 {
-		scope.Attention = nil
-	}
 	if len(scope.Metadata) == 0 {
 		scope.Metadata = nil
 	}

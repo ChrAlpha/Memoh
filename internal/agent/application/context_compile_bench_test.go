@@ -42,7 +42,6 @@ func compileBenchConfig(rounds int) native.RunConfig {
 		System:                       "system",
 		Query:                        "current question",
 		ContextBudgetMaxTokens:       1_000_000,
-		ContextTrimmableMessages:     len(messages),
 		ContextFrags:                 historyContextFragsForMessages(messages, records),
 		ContextProvenance:            contextProvenance(messages, nil),
 		Messages:                     modelMessagesToSDKMessages(messages),

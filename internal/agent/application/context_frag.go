@@ -6,8 +6,6 @@ import (
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
-	"github.com/felinics/memoh/internal/agent/sessionmode"
-	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/contextview"
 )
 
@@ -44,44 +42,5 @@ func buildContextFragScope(req ChatRequest, displayName string, identity native.
 		ForwardFromUserID:         strings.TrimSpace(req.ForwardFromUserID),
 		ForwardFromConversationID: strings.TrimSpace(req.ForwardFromConversationID),
 	}
-	scope.Attention = contextFragAttentionReasons(req)
 	return scope
-}
-
-func contextFragAttentionReasons(req ChatRequest) []contextfrag.AttentionReason {
-	var reasons []contextfrag.AttentionReason
-	add := func(reason contextfrag.AttentionReason) {
-		for _, existing := range reasons {
-			if existing == reason {
-				return
-			}
-		}
-		reasons = append(reasons, reason)
-	}
-
-	if strings.TrimSpace(req.SessionType) == sessionmode.Schedule {
-		add(contextfrag.AttentionSchedule)
-	}
-	if req.MentionsBot {
-		add(contextfrag.AttentionMention)
-	}
-	if req.RepliesToBot {
-		add(contextfrag.AttentionReply)
-	}
-	query := strings.TrimSpace(firstNonEmpty(req.RawQuery, req.Query))
-	if strings.HasPrefix(query, "/") {
-		add(contextfrag.AttentionCommand)
-	}
-	switch turn.NormalizeConversationType(req.ConversationType) {
-	case turn.ConversationTypePrivate:
-		add(contextfrag.AttentionDirect)
-	case turn.ConversationTypeGroup, turn.ConversationTypeThread:
-		if len(reasons) == 0 {
-			add(contextfrag.AttentionPassive)
-		}
-	}
-	if len(reasons) == 0 {
-		add(contextfrag.AttentionPassive)
-	}
-	return reasons
 }

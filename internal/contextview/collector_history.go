@@ -26,9 +26,6 @@ type HistoryMessagesConfig struct {
 	// TokenEstimates carries per-message token estimates computed at the
 	// source. Missing entries fall back to fragment-side estimation.
 	TokenEstimates []int
-	// TrimmablePrefix marks the leading message count that may be dropped.
-	// Messages at or after the boundary are protected.
-	TrimmablePrefix int
 	// RepairToolClosures applies the shared repair when a caller has not
 	// already repaired its materialized message stream.
 	RepairToolClosures bool
@@ -49,8 +46,6 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 		return nil, nil
 	}
 
-	historyScope := req.Scope
-	historyScope.Attention = nil
 	memoryIndex, hasMemory := markedMemoryMessageIndex(cfg.Messages, cfg.MemoryMessageIndex)
 	currentUserIndex, hasCurrentUser := markedCurrentUserMessageIndex(cfg.Messages, cfg.CurrentUserMessageIndex, optionalIndex(memoryIndex, hasMemory)...)
 	frags := make([]contextfrag.ContextFrag, 0, len(cfg.Messages))
@@ -62,10 +57,6 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 		if i < len(cfg.TokenEstimates) {
 			estimate = cfg.TokenEstimates[i]
 		}
-		budget := contextfrag.BudgetPolicy{}
-		if i >= cfg.TrimmablePrefix {
-			budget.Overflow = contextfrag.OverflowKeep
-		}
 		frags = append(frags, contextfrag.MessageFrag(contextfrag.MessageFragInput{
 			ID:            fmt.Sprintf("message.%03d", i),
 			Message:       msg,
@@ -74,17 +65,16 @@ func (*HistoryMessagesCollector) Collect(_ context.Context, req CollectRequest) 
 			Priority:      contextfrag.PriorityForMessage(msg),
 			CacheClass:    cacheForSDKMessage(msg),
 			Trust:         trustForSDKMessage(msg),
-			Scope:         historyScope,
+			Scope:         req.Scope,
 			Source:        contextfrag.SourceRunConfig,
 			Collector:     historyMessagesCollectorName,
 			Index:         i,
 			FromMessage:   true,
-			Budget:        budget,
 			TokenEstimate: estimate,
 		}))
 	}
 	if cfg.RepairToolClosures {
-		frags = contextfrag.RepairToolClosureFrags(frags, historyScope, historyMessagesCollectorName)
+		frags = contextfrag.RepairToolClosureFrags(frags, req.Scope, historyMessagesCollectorName)
 	}
 	return frags, nil
 }

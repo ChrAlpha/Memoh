@@ -17,7 +17,6 @@ import (
 
 func recoveryBudgetFixture() native.RunConfig {
 	history := stableHistoryMessageFrag("history", sdk.AssistantMessage(strings.Repeat("h", 8000)))
-	history.Budget.Overflow = contextfrag.OverflowKeep
 	return native.RunConfig{
 		ContextBudgetMaxTokens:  16000,
 		ContextToolDefsResolved: true,
@@ -58,37 +57,17 @@ func TestProviderBudgetRecoveryUsesFinalHistoryBudget(t *testing.T) {
 	}
 }
 
-func TestProviderBudgetRecoveryCanCompactBeforeHistoryIsDropped(t *testing.T) {
-	cfg := recoveryBudgetFixture()
-	cfg.ContextSourceFrags[1].Budget.Overflow = contextfrag.OverflowDrop
-	calls := 0
-	cfg.RecoverContextBudget = func(_ context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
-		calls++
-		if cfg.ContextManifest.BudgetPlan.HistoryBudget != 998 {
-			t.Fatalf("history allowance = %+v", cfg.ContextManifest.BudgetPlan)
-		}
-		cfg.ContextSourceFrags = append([]contextfrag.ContextFrag(nil), cfg.ContextSourceFrags...)
-		cfg.ContextSourceFrags[1] = stableHistoryMessageFrag("summary", sdk.AssistantMessage("preserved by compaction"))
-		return cfg, true, nil
-	}
-	got, err := ProviderRunConfigApplier(nil)(t.Context(), cfg)
-	if err != nil || calls != 1 || !reflect.DeepEqual(got.Messages, []sdk.Message{sdk.AssistantMessage("preserved by compaction"), sdk.UserMessage("continue")}) {
-		t.Fatalf("droppable history bypassed budget compaction: calls=%d error=%v messages=%+v", calls, err, got.Messages)
-	}
-}
-
 func TestProviderBudgetRecoveryCannotBypassAdmission(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		recovered bool
 		summary   string
 		err       error
-		want      error
 	}{
-		{name: "declined", want: contextfrag.ErrProtectedContextOverflow},
-		{name: "still oversized", recovered: true, want: contextfrag.ErrBudgetUnsatisfied},
-		{name: "summary longer than the history budget", recovered: true, summary: strings.Repeat("s", 6000), want: contextfrag.ErrBudgetUnsatisfied},
-		{name: "compaction failed", err: fmt.Errorf("%w: summarizer down", contextfrag.ErrBudgetUnsatisfied), want: contextfrag.ErrBudgetUnsatisfied},
+		{name: "declined"},
+		{name: "still oversized", recovered: true},
+		{name: "summary longer than the history budget", recovered: true, summary: strings.Repeat("s", 6000)},
+		{name: "compaction failed", err: fmt.Errorf("%w: summarizer down", contextfrag.ErrBudgetUnsatisfied)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := recoveryBudgetFixture()
@@ -96,17 +75,16 @@ func TestProviderBudgetRecoveryCannotBypassAdmission(t *testing.T) {
 			cfg.RecoverContextBudget = func(_ context.Context, cfg native.RunConfig) (native.RunConfig, bool, error) {
 				calls++
 				if tc.summary != "" {
+					summary := stableHistoryMessageFrag("summary", sdk.UserMessage(tc.summary))
+					summary.Kind = contextfrag.KindConversationSummary
 					cfg.ContextSourceFrags = append([]contextfrag.ContextFrag(nil), cfg.ContextSourceFrags...)
-					cfg.ContextSourceFrags[1] = contextfrag.TextFrag(contextfrag.TextFragInput{
-						ID: "summary", Kind: contextfrag.KindConversationSummary, Role: sdk.MessageRoleUser,
-						Slot: contextfrag.SlotHistory, Text: tc.summary, Trust: contextfrag.TrustExternal,
-					})
+					cfg.ContextSourceFrags[1] = summary
 				}
 				return cfg, tc.recovered, tc.err
 			}
 			got, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-			if !errors.Is(err, tc.want) || calls != 1 || (errors.Is(tc.want, contextfrag.ErrBudgetUnsatisfied) && errors.Is(err, contextfrag.ErrProtectedContextOverflow)) {
-				t.Fatalf("recovery calls=%d error=%v, want %v", calls, err, tc.want)
+			if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || calls != 1 {
+				t.Fatalf("recovery calls=%d error=%v, want ErrBudgetUnsatisfied", calls, err)
 			}
 			found := false
 			for _, mutation := range got.ContextMutations.Records() {
@@ -148,7 +126,7 @@ func TestProviderBudgetRecoveryFailureKeepsBudgetAudit(t *testing.T) {
 		return native.RunConfig{}, false, errors.New("private compaction failure")
 	}
 	got, err := ProviderRunConfigApplier(nil)(context.Background(), cfg)
-	if !errors.Is(err, contextfrag.ErrProtectedContextOverflow) || got.ContextManifest.BudgetPlan == nil {
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || got.ContextManifest.BudgetPlan == nil {
 		t.Fatalf("failed recovery lost budget error or plan: %v / %+v", err, got.ContextManifest.BudgetPlan)
 	}
 	if len(got.ContextMutations.Records()) == 0 {
@@ -187,12 +165,11 @@ func TestProviderBudgetRecoveryHonorsCancellation(t *testing.T) {
 	}
 }
 
-// An armed run keeps its whole history over the budget, with no trim notice
-// and no failure: it folds what does not fit before it dispatches. A tool
-// exchange missing its other half is still cut.
+// An armed run over its budget does not fail before it dispatches: it folds
+// what does not fit at the step, against the plan selection leaves it. A
+// tool exchange missing its other half is still cut.
 func TestProviderArmedRunKeepsItsHistory(t *testing.T) {
 	cfg := recoveryBudgetFixture()
-	cfg.ContextSourceFrags[1].Budget.Overflow = contextfrag.OverflowDrop
 	orphan := stableHistoryMessageFrag("orphan", sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "gone", ToolName: "exec", Result: toolexec.OutputFromValue("lost")}))
 	cfg.ContextSourceFrags = append(cfg.ContextSourceFrags[:2], orphan, cfg.ContextSourceFrags[2])
 	cfg.SwitchContext = func(context.Context, native.ContextSwitch) (string, error) { return "", nil }
@@ -202,9 +179,27 @@ func TestProviderArmedRunKeepsItsHistory(t *testing.T) {
 	}
 	want := []sdk.Message{sdk.AssistantMessage(strings.Repeat("h", 8000)), sdk.UserMessage("continue")}
 	if !reflect.DeepEqual(got.Messages, want) {
-		t.Fatalf("messages = %+v, want the whole history without the orphan result and no trim notice", got.Messages)
+		t.Fatalf("messages = %+v, want the whole history without the orphan result", got.Messages)
 	}
 	if plan := got.ContextManifest.BudgetPlan; plan == nil || plan.HistoryBudget != 998 {
 		t.Fatalf("budget plan = %+v, want the plan the fold sizes against", plan)
+	}
+}
+
+// A run that cannot fold fails when its history does not fit, and its audit
+// still holds the whole history: nothing was trimmed to make it fit.
+func TestProviderUnarmedRunOverItsBudgetFails(t *testing.T) {
+	got, err := ProviderRunConfigApplier(nil)(t.Context(), recoveryBudgetFixture())
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("an unarmed run over its budget = %v, want ErrBudgetUnsatisfied", err)
+	}
+	if ids := fragIDs(got.ContextFrags); !reflect.DeepEqual(ids, []string{"system", "history", "current"}) {
+		t.Fatalf("audit = %v, want the whole history", ids)
+	}
+	records := got.ContextMutations.Records()
+	if len(records) != 1 || records[0] != (contextfrag.MutationRecord{
+		Kind: contextfrag.MutationContextBudgetFailure, Detail: "budget_unsatisfied",
+	}) {
+		t.Fatalf("mutations = %#v, want one budget_unsatisfied record", records)
 	}
 }

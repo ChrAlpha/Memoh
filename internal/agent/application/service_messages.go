@@ -19,7 +19,7 @@ func sdkMessagesToModelMessages(msgs []sdk.Message) []ModelMessage {
 
 // redactFilePartsForStorage replaces FileParts with text placeholders before
 // persistence. Storing document base64 in message history would bloat rows,
-// blow up the length-based token estimator (triggering history trimming), and
+// blow up the length-based token estimator (forcing needless compaction), and
 // deadlock replay after switching to a model without native file input. The
 // file itself stays in the workspace: follow-up turns re-read it via the read
 // tool, which re-injects it for whatever model is current.
