@@ -11,10 +11,7 @@ func rebuildMessageFrag(frag contextfrag.ContextFrag, msg sdk.Message) contextfr
 	frag = contextfrag.RebuildFragMessage(frag, msg)
 	frag.ConflictKey = conflictKey
 	frag.TokenEstimate = 0
-	frag.Ref.HashAlgo = ""
-	frag.Ref.HashScope = ""
-	frag.Ref.ContentHash = ""
-	return contextfrag.WithContextRef(frag, frag.Ref)
+	return frag
 }
 
 func isToolExchangeFrag(frag contextfrag.ContextFrag) bool {

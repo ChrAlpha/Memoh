@@ -56,8 +56,9 @@ func contextRecoveryFeedback(cfg RunConfig, err error) (modelretry.Overflow, boo
 // from that attempt commits or any of its tools execute. It folds the
 // rejected request to an allowance tighter than the one it was admitted at,
 // even when the estimate passed admission, and permits a new dispatch only
-// when a committed pass brought the request within it.
-func (a *Agent) recoverContextOverflow(ctx context.Context, cfg RunConfig, request *sdk.Request, failure error, recoveries *int) (bool, error) {
+// when a committed pass brought the request within it. offset is where the
+// compiled prefix starts in request.
+func (a *Agent) recoverContextOverflow(ctx context.Context, cfg RunConfig, request *sdk.Request, offset int, failure error, recoveries *int) (bool, error) {
 	feedback, overflow := contextRecoveryFeedback(cfg, failure)
 	if !overflow || cfg.contextSwitch == nil {
 		return false, failure
@@ -73,7 +74,7 @@ func (a *Agent) recoverContextOverflow(ctx context.Context, cfg RunConfig, reque
 	cfg.contextSwitch.observe(sdk.Usage{InputTokens: feedback.InputTokens})
 	before := contextfrag.ProviderEnvelopeTokens(request.System, request.Messages, request.Tools)
 	allowance := feedback.InputBudget(before)
-	changed, after, err := cfg.contextSwitch.fold(ctx, cfg, request, allowance, before)
+	changed, after, err := cfg.contextSwitch.fold(ctx, cfg, request, offset, allowance, before)
 	if err != nil {
 		return false, err
 	}

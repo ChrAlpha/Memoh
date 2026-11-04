@@ -610,7 +610,7 @@ func (e *streamEngine) run() {
 			continue
 		}
 		if _, overflow := contextRecoveryFeedback(e.cfg, failure); overflow {
-			recovered, err := e.agent.recoverContextOverflow(e.streamCtx, e.cfg, &stepParams, failure, &contextRecoveries)
+			recovered, err := e.agent.recoverContextOverflow(e.streamCtx, e.cfg, &stepParams, e.dispatch.compiledOffset(), failure, &contextRecoveries)
 			if !recovered {
 				e.endWithFailure(StreamEvent{Type: EventError, Cause: err})
 				return

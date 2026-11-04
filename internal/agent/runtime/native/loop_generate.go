@@ -239,7 +239,7 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 			err = exhaustedContextResult(cfg, result)
 		}
 		if err != nil {
-			recovered, recoveryErr := a.recoverContextOverflow(genCtx, cfg, &stepParams, err, &recoveries)
+			recovered, recoveryErr := a.recoverContextOverflow(genCtx, cfg, &stepParams, thread.dispatch.compiledOffset(), err, &recoveries)
 			if recovered {
 				refs := cfg.contextSwitch.remap(cfg.providerAttemptState.publishedRefs())
 				next, _ := cfg.contextSwitch.redispatch(cfg, thread.dispatch, stepParams, refs)
@@ -388,6 +388,16 @@ type generateDispatch struct {
 	// prompt into the message prefix, where a capability refresh cannot
 	// replace it.
 	systemPrepended bool
+}
+
+// compiledOffset is where the compiled prefix starts in the dispatched
+// request's messages: after the system message the prompt-cache plan
+// promoted into them.
+func (d generateDispatch) compiledOffset() int {
+	if d.systemPrepended {
+		return 1
+	}
+	return 0
 }
 
 // buildGenerateDispatch assembles the single-call input for the Memoh-owned

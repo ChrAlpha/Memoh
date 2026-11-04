@@ -62,14 +62,6 @@ func TestAgentGenerateFailedPreflightKeepsLastDispatchedHashAndFork(t *testing.T
 	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
 		t.Fatalf("Generate() error = %v, want %v", err, contextfrag.ErrBudgetUnsatisfied)
 	}
-	wantHash := contextfrag.ProviderPayloadHash(
-		firstProviderInput.System,
-		firstProviderInput.Messages,
-		firstProviderInput.Tools,
-	)
-	if got := ledger.FinalInputHash(); got != wantHash {
-		t.Fatalf("final input hash = %q, want last dispatched hash %q", got, wantHash)
-	}
 	forkMessages, snapshotErr := fork.Messages()
 	if snapshotErr != nil {
 		t.Fatalf("read fork snapshot: %v", snapshotErr)
@@ -417,14 +409,6 @@ func TestAgentGenerateCanceledPreflightKeepsLastDispatchedHashAndFork(t *testing
 	if modelProvider.calls.Load() != 1 {
 		t.Fatalf("provider calls = %d, want 1", modelProvider.calls.Load())
 	}
-	wantHash := contextfrag.ProviderPayloadHash(
-		firstProviderInput.System,
-		firstProviderInput.Messages,
-		firstProviderInput.Tools,
-	)
-	if got := ledger.FinalInputHash(); got != wantHash {
-		t.Fatalf("final input hash = %q, want last dispatched hash %q", got, wantHash)
-	}
 	forkMessages, snapshotErr := fork.Messages()
 	if snapshotErr != nil {
 		t.Fatalf("read fork snapshot: %v", snapshotErr)
@@ -433,7 +417,7 @@ func TestAgentGenerateCanceledPreflightKeepsLastDispatchedHashAndFork(t *testing
 		t.Fatalf("fork snapshot = %#v, want last dispatched messages %#v", forkMessages, firstProviderInput.Messages)
 	}
 	steps := ledger.StepSnapshots()
-	if len(steps) != 1 || steps[0].StepIndex != 0 || steps[0].PostPrepareInputHash != wantHash {
+	if len(steps) != 1 || steps[0].StepIndex != 0 {
 		t.Fatalf("step snapshots = %#v, want only the dispatched step-zero attempt", steps)
 	}
 	retryMessages, ok := attemptState.retryMessages(nil)

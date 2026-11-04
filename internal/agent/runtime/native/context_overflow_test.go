@@ -33,7 +33,7 @@ func TestAgentGenerateCompactsProviderOverflowBeforeRetryingSameStep(t *testing.
 	cfg := generateRetryRun(provider, fastRetry)
 	cfg.Messages = []sdk.Message{history, input}
 	cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 200000, 8000
-	cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+	cfg.ContextProvenance = []MessageProvenance{{Sources: rowSources("history")}, {Sources: rowSources("input"), Anchor: true}}
 	cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
 		folds++
 		if sw.UsageTokens >= 192000 {
@@ -79,7 +79,7 @@ func TestContextOverflowFoldsToTheProviderReportedLimit(t *testing.T) {
 	cfg := generateRetryRun(provider, fastRetry)
 	cfg.Messages = []sdk.Message{history, input}
 	cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 200000, 8000
-	cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+	cfg.ContextProvenance = []MessageProvenance{{Sources: rowSources("history")}, {Sources: rowSources("input"), Anchor: true}}
 	cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
 		events = append(events, sw)
 		sw.Fold(ContextFold{SummaryID: "checkpoint", Summary: sdk.UserMessage("Earlier evidence summarized"), Order: []int{-1, 1}})
@@ -119,7 +119,7 @@ func TestEmptyContextExhaustionRecoversBeforeCommittingInBothLoops(t *testing.T)
 			cfg := generateRetryRun(provider, fastRetry)
 			cfg.Messages = []sdk.Message{history, input}
 			cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 1000000, 8192
-			cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+			cfg.ContextProvenance = []MessageProvenance{{Sources: rowSources("history")}, {Sources: rowSources("input"), Anchor: true}}
 			cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
 				folds++
 				sw.Fold(ContextFold{SummaryID: "checkpoint", Summary: sdk.UserMessage("Earlier evidence summarized"), Order: []int{-1, 1}})
@@ -229,7 +229,7 @@ func TestContextOverflowKeepsCommittedToolEffectsInBothLoops(t *testing.T) {
 				cfg.Messages = []sdk.Message{history, input}
 				cfg.SupportsToolCall = true
 				cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 1000000, 8192
-				cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+				cfg.ContextProvenance = []MessageProvenance{{Sources: rowSources("history")}, {Sources: rowSources("input"), Anchor: true}}
 				cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
 					folds++
 					sw.Fold(foldCovering(sw, "checkpoint", sdk.UserMessage("Evidence summarized"), rowSources("history")...))
@@ -374,7 +374,7 @@ func TestStreamContextOverflowOnlyRecoversBeforeOutput(t *testing.T) {
 			history, input := sdk.UserMessage(strings.Repeat("history ", 10000)), sdk.UserMessage("task")
 			cfg.Messages = []sdk.Message{history, input}
 			cfg.ContextBudgetMaxTokens, cfg.ModelMaxOutputTokens = 200000, 8000
-			cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+			cfg.ContextProvenance = []MessageProvenance{{Sources: rowSources("history")}, {Sources: rowSources("input"), Anchor: true}}
 			cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
 				folds++
 				sw.Fold(ContextFold{SummaryID: "checkpoint", Summary: sdk.UserMessage("summary"), Order: []int{-1, 1}})
@@ -405,7 +405,7 @@ func TestContextOverflowDoesNotRetryWithoutCommittedReduction(t *testing.T) {
 			cfg.ContextBudgetMaxTokens = 200000
 			history, input := sdk.UserMessage(strings.Repeat("history ", 8000)), sdk.UserMessage("task")
 			cfg.Messages = []sdk.Message{history, input}
-			cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+			cfg.ContextProvenance = []MessageProvenance{{Sources: rowSources("history")}, {Sources: rowSources("input"), Anchor: true}}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			events := 0
@@ -438,7 +438,7 @@ func TestContextOverflowRecoveryIsBoundedPerStep(t *testing.T) {
 	cfg.ContextBudgetMaxTokens = 200000
 	history, input := sdk.UserMessage(strings.Repeat("history ", 8000)), sdk.UserMessage("task")
 	cfg.Messages = []sdk.Message{history, input}
-	cfg.ContextProvenance = []MessageProvenance{{Message: history, Sources: rowSources("history")}, {Message: input, Sources: rowSources("input"), Anchor: true}}
+	cfg.ContextProvenance = []MessageProvenance{{Sources: rowSources("history")}, {Sources: rowSources("input"), Anchor: true}}
 	folds := 0
 	cfg.SwitchContext = func(_ context.Context, sw ContextSwitch) (string, error) {
 		folds++

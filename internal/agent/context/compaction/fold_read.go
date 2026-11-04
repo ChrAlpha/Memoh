@@ -24,10 +24,11 @@ import (
 func forkRead(ev Event) ([]sdk.Message, error) {
 	messages := slices.Clip(ev.Request.Messages[:ev.cut])
 	capTokens := forkGroupCap(ev)
+	boundaries := foldBoundaries(messages, ev.Sources[:len(messages)])
 	var read []sdk.Message
 	for start := 0; start < len(messages); {
 		end := start + 1
-		for !foldBoundary(messages, end) {
+		for !boundaries[end] {
 			end++
 		}
 		var at []int

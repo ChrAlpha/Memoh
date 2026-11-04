@@ -94,8 +94,8 @@ func TestEmptyContextRecoveryKeepsRoomForProtectedInput(t *testing.T) {
 		Messages: []sdk.Message{history, input}, ContextBudgetMaxTokens: 1000000, ModelMaxOutputTokens: 8192,
 		Identity: native.SessionContext{BotID: s.botID, SessionID: s.session},
 		ContextProvenance: []native.MessageProvenance{
-			{Message: history, Sources: []turn.ContextMessageSource{s.row()}},
-			{Message: input, Sources: []turn.ContextMessageSource{s.row()}, Anchor: true},
+			{Sources: []turn.ContextMessageSource{s.row()}},
+			{Sources: []turn.ContextMessageSource{s.row()}, Anchor: true},
 		},
 		SwitchContext: func(ctx context.Context, sw native.ContextSwitch) (string, error) {
 			tokens := sw.UsageTokens

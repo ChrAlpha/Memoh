@@ -158,7 +158,7 @@ func TestSystemBudgetDropsGroupedItemsIndividually(t *testing.T) {
 	}) {
 		t.Fatalf("selected IDs = %v, want header and remaining skill item", got)
 	}
-	payload, _ := renderSDKPayload(t, result.Selected, placementFor(result.Selected))
+	payload := renderSDKPayload(t, result.Selected, placementFor(result.Selected))
 	want := "required\n\nskills header\n技能\n\n" + marker.Parts[0].Text
 	if payload.System != want {
 		t.Fatalf("rendered system = %q, want %q", payload.System, want)
@@ -279,7 +279,7 @@ func TestSystemBudgetCostUsesRendererPriorityOrderForGroups(t *testing.T) {
 	}
 
 	renderedFrags := sortSystemFragsByPriority(frags)
-	payload, _ := renderSDKPayload(t, renderedFrags, placementFor(renderedFrags))
+	payload := renderSDKPayload(t, renderedFrags, placementFor(renderedFrags))
 	const want = 11
 	if len(payload.System) != 34 {
 		t.Fatalf("fixture rendered bytes = %d, want 34", len(payload.System))

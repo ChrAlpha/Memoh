@@ -13,7 +13,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -605,7 +604,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.ContextFrags = historyContextFragsForMessages(messages, historyRecords)
 	runCfg.Messages = normalized.sent()
 	runCfg.ForkContextSourceMessageIDs = historySourceMessageIDsForMessages(messages, historyRecords)
-	runCfg.ContextProvenance = contextProvenance(messages, runCfg.Messages, historyRecords, compactionInputs(req))
+	runCfg.ContextProvenance = contextProvenance(messages, compactionInputs(req))
 	runCfg.ContextMemoryMessageIndex = memoryMessageIndex
 	if usePipeline {
 		runCfg.ContextCurrentUserMessageIndex = currentMessageIndex
@@ -1390,7 +1389,6 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		cfg.ContextCurrentUserMessageIndex = &index
 		cfg.ContextQueryMaterialized = true
 		cfg.ContextProvenance = append(cfg.ContextProvenance, native.MessageProvenance{
-			Message: cfg.Messages[index],
 			Sources: []turnpkg.ContextMessageSource{requestSource},
 			Anchor:  true,
 		})
@@ -1413,23 +1411,18 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			)
 			if currentIndex != nil {
 				i := *currentIndex
-				rendered := cfg.Messages[i]
 				cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
+				// The input renders the same sources with its media, but no
+				// longer the bytes a fork could reference.
 				if i < len(cfg.ForkContextSourceMessageIDs) {
 					cfg.ForkContextSourceMessageIDs[i] = ""
-				}
-				// The input renders the same sources with its media.
-				for j := range cfg.ContextProvenance {
-					if reflect.DeepEqual(cfg.ContextProvenance[j].Message, rendered) {
-						cfg.ContextProvenance[j].Message = cfg.Messages[i]
-						break
-					}
 				}
 			} else {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 				cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
 				index := len(cfg.Messages) - 1
 				currentIndex = &index
+				cfg.ContextProvenance = append(cfg.ContextProvenance, native.MessageProvenance{})
 			}
 			cfg.ContextCurrentUserMessageIndex = currentIndex
 			cfg.ContextQueryMaterialized = true

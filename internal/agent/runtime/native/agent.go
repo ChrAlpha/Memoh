@@ -225,8 +225,8 @@ func sendEvent(ctx context.Context, ch chan<- StreamEvent, evt StreamEvent) bool
 // NextInputs continue on the next inner-loop iteration.
 
 // logContextLifecycle emits the one-line audit summary linking the context
-// view manifest to the final provider input: what was selected, what the
-// cache plan pinned, and which mutations ran after the view.
+// view manifest to the provider input: what was selected, what the cache plan
+// pinned, and which mutations ran after the view.
 func (a *Agent) logContextLifecycle(cfg RunConfig) {
 	if a == nil || a.logger == nil || cfg.ContextMutations == nil {
 		return
@@ -240,10 +240,9 @@ func (a *Agent) logContextLifecycle(cfg RunConfig) {
 	a.logger.Debug("context lifecycle",
 		slog.String("view", string(cfg.ContextManifest.View)),
 		slog.Int("manifest_items", len(cfg.ContextManifest.Items)),
-		slog.String("stable_prefix_hash", cfg.ContextCachePlan.StablePrefixHash),
+		slog.Int("stable_message_count", cfg.ContextCachePlan.StableMessageCount),
 		slog.Int("mutations", len(cfg.ContextMutations.Records())),
 		slog.String("cache_outcome", cacheOutcome),
-		slog.String("final_input_hash", cfg.ContextMutations.FinalInputHash()),
 	)
 }
 
@@ -310,7 +309,11 @@ func prepareProviderAttempt(
 	// A step request only grows between compaction events. A request that
 	// still does not fit after compaction ends the run without pruning.
 	if cfg.contextSwitch != nil {
-		switched, folded, err := cfg.contextSwitch.fold(ctx, cfg, params, allowance, usage)
+		offset := 0
+		if systemPrepended {
+			offset = 1
+		}
+		switched, folded, err := cfg.contextSwitch.fold(ctx, cfg, params, offset, allowance, usage)
 		switch {
 		case ctx.Err() != nil:
 			handoff.reject()

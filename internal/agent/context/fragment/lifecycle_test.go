@@ -52,11 +52,7 @@ func TestLifecycleHolderKeepsDurableContentLightBudgetAudit(t *testing.T) {
 		t.Fatalf("content-light snapshot leaked manifest items: %s", raw)
 	}
 
-	ledger.SetFinalInputHash("final-hash")
 	refreshed, _ := holder.Snapshot()
-	if refreshed.FinalInputHash != "final-hash" {
-		t.Fatalf("live final hash = %q", refreshed.FinalInputHash)
-	}
 	refreshed.Selection.DropReasons["system_budget"] = 99
 	again, _ := holder.Snapshot()
 	if again.Selection.DropReasons["system_budget"] != 1 {
@@ -88,7 +84,7 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 
 	ledger := contextfrag.NewMutationLedger()
 	ledger.SetModelInfo("claude-x", "anthropic-messages")
-	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: "step-hash-0"})
+	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0})
 	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{
 		StepIndex:        0,
 		CacheReadTokens:  11,
@@ -104,7 +100,7 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 	if snapshot.Model != "claude-x" || snapshot.ClientType != "anthropic-messages" {
 		t.Fatalf("snapshot model/client_type = (%q, %q)", snapshot.Model, snapshot.ClientType)
 	}
-	if len(snapshot.Steps) != 1 || snapshot.Steps[0].PostPrepareInputHash != "step-hash-0" {
+	if len(snapshot.Steps) != 1 || snapshot.Steps[0].StepIndex != 0 {
 		t.Fatalf("snapshot steps = %#v", snapshot.Steps)
 	}
 	if snapshot.CacheReadTokens != 11 || snapshot.CacheWriteTokens != 7 || len(snapshot.CacheUsage) != 1 {
@@ -117,7 +113,7 @@ func TestLifecycleSnapshotIncludesAttemptAudit(t *testing.T) {
 	}
 	for _, want := range []string{
 		`"model":"claude-x"`, `"client_type":"anthropic-messages"`,
-		`"steps":`, "step-hash-0",
+		`"steps":`,
 		`"step_index":0`, `"cache_read_tokens":11`, `"cache_write_tokens":7`,
 	} {
 		if !strings.Contains(string(raw), want) {
@@ -130,7 +126,7 @@ func TestLifecycleHolderSnapshotOwnsSteps(t *testing.T) {
 	t.Parallel()
 
 	ledger := contextfrag.NewMutationLedger()
-	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: "step-hash"})
+	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 2})
 	holder := contextfrag.NewLifecycleHolder()
 	holder.SetManifest(contextfrag.Manifest{View: contextfrag.ViewRunConfigPreProvider, Mutations: ledger})
 
@@ -138,10 +134,10 @@ func TestLifecycleHolderSnapshotOwnsSteps(t *testing.T) {
 	if !ok || len(first.Steps) != 1 {
 		t.Fatalf("snapshot = %#v, ok = %v", first, ok)
 	}
-	first.Steps[0].PostPrepareInputHash = "mutated"
+	first.Steps[0].StepIndex = 99
 
 	second, _ := holder.Snapshot()
-	if second.Steps[0].PostPrepareInputHash != "step-hash" {
+	if second.Steps[0].StepIndex != 2 {
 		t.Fatalf("snapshot exposed mutable step audit: %#v", second.Steps)
 	}
 }
@@ -173,7 +169,6 @@ func TestLifecycleHolderKeepsRichContentLightSnapshot(t *testing.T) {
 		HistoryBudget:                4988,
 	}
 	cachePlan := &contextfrag.CachePlan{
-		StablePrefixHash:          "stable-prefix",
 		StableMessageCount:        3,
 		StablePrefixTokenEstimate: 1800,
 		MidStableMessageCount:     2,
@@ -201,11 +196,11 @@ func TestLifecycleHolderKeepsRichContentLightSnapshot(t *testing.T) {
 	toolDefs[0].Name = "mutated-tool"
 	decisions[0].ID = "mutated-decision"
 	budgetPlan.Estimator = "mutated-estimator"
-	cachePlan.StablePrefixHash = "mutated-prefix"
+	cachePlan.StableMessageCount = 99
 
 	ledger.Record(contextfrag.MutationContextSwitch, "mode=fold")
 	ledger.RecordCacheUsage(contextfrag.CacheUsageRecord{StepIndex: 0, CacheReadTokens: 11, CacheWriteTokens: 7})
-	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 0, PostPrepareInputHash: "step-hash"})
+	ledger.AppendStepSnapshot(contextfrag.StepSnapshot{StepIndex: 2})
 
 	snapshot, ok := holder.Snapshot()
 	if !ok {
@@ -224,8 +219,8 @@ func TestLifecycleHolderKeepsRichContentLightSnapshot(t *testing.T) {
 		snapshot.BudgetPlan.EstimatorSafetyFactorPercent != contextfrag.ProviderBudgetSafetyFactorPercent {
 		t.Fatalf("budget estimator metadata = %#v", snapshot.BudgetPlan)
 	}
-	if snapshot.StablePrefixHash != "stable-prefix" || snapshot.StableMessageCount != 3 || snapshot.StablePrefixTokenEstimate != 1800 {
-		t.Fatalf("flattened cache plan = (%q, %d, %d)", snapshot.StablePrefixHash, snapshot.StableMessageCount, snapshot.StablePrefixTokenEstimate)
+	if snapshot.StableMessageCount != 3 || snapshot.StablePrefixTokenEstimate != 1800 {
+		t.Fatalf("flattened cache plan = (%d, %d)", snapshot.StableMessageCount, snapshot.StablePrefixTokenEstimate)
 	}
 	if snapshot.CacheReadTokens != 11 || snapshot.CacheWriteTokens != 7 || len(snapshot.CacheUsage) != 1 {
 		t.Fatalf("live cache audit = %#v, totals = %d/%d", snapshot.CacheUsage, snapshot.CacheReadTokens, snapshot.CacheWriteTokens)
@@ -233,12 +228,12 @@ func TestLifecycleHolderKeepsRichContentLightSnapshot(t *testing.T) {
 	if snapshot.Model != "claude-x" || snapshot.ClientType != "anthropic-messages" {
 		t.Fatalf("live provider audit = (%q, %q)", snapshot.Model, snapshot.ClientType)
 	}
-	if len(snapshot.Steps) != 1 || snapshot.Steps[0].PostPrepareInputHash != "step-hash" {
+	if len(snapshot.Steps) != 1 || snapshot.Steps[0].StepIndex != 2 {
 		t.Fatalf("live step audit = %#v", snapshot.Steps)
 	}
-	snapshot.Steps[0].PostPrepareInputHash = "mutated"
+	snapshot.Steps[0].StepIndex = 99
 	again, _ := holder.Snapshot()
-	if again.Steps[0].PostPrepareInputHash != "step-hash" {
+	if again.Steps[0].StepIndex != 2 {
 		t.Fatalf("snapshot exposed mutable step audit: %#v", again.Steps)
 	}
 
@@ -251,7 +246,7 @@ func TestLifecycleHolderKeepsRichContentLightSnapshot(t *testing.T) {
 			t.Fatalf("content-light snapshot leaked %q: %s", forbidden, raw)
 		}
 	}
-	for _, want := range []string{`"stable_prefix_hash":"stable-prefix"`, `"stable_message_count":3`, `"stable_prefix_token_estimate":1800`} {
+	for _, want := range []string{`"stable_message_count":3`, `"stable_prefix_token_estimate":1800`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("snapshot JSON missing %q: %s", want, raw)
 		}
@@ -408,8 +403,7 @@ func TestDecodeLifecycleSnapshotMapsVersionOneCachePlan(t *testing.T) {
 	if snapshot.Version != contextfrag.LifecycleSnapshotVersion {
 		t.Fatalf("version = %d, want normalized %d", snapshot.Version, contextfrag.LifecycleSnapshotVersion)
 	}
-	if snapshot.StablePrefixHash != "hash-v1" ||
-		snapshot.StableMessageCount != 3 ||
+	if snapshot.StableMessageCount != 3 ||
 		snapshot.StablePrefixTokenEstimate != 512 {
 		t.Fatalf("snapshot = %#v, want version-1 cache_plan mapped onto flattened fields", snapshot)
 	}
@@ -433,7 +427,6 @@ func TestLifecycleSnapshotFromMetadataMigratesNestedVersionOne(t *testing.T) {
 		t.Fatal("metadata snapshot should decode")
 	}
 	if snapshot.Version != contextfrag.LifecycleSnapshotVersion ||
-		snapshot.StablePrefixHash != "hash-meta-v1" ||
 		snapshot.StableMessageCount != 2 ||
 		snapshot.StablePrefixTokenEstimate != 128 {
 		t.Fatalf("snapshot = %#v, want nested v1 cache_plan migrated", snapshot)

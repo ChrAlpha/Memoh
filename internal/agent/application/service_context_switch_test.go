@@ -32,7 +32,7 @@ func TestContextProvenanceKeepsTheStoredRowThroughReasoningProjection(t *testing
 		t.Fatal(err)
 	}
 	records := projectInterruptedHistoryReasoning([]historyfrag.HistoryRecord{record})
-	got := contextProvenance([]ModelMessage{records[0].ModelMessage}, modelMessagesToSDKMessages([]ModelMessage{records[0].ModelMessage}), records, nil)
+	got := contextProvenance([]ModelMessage{records[0].ModelMessage}, nil)
 	if len(got) != 1 || got[0].Sources[0] != (turn.ContextMessageSource{Kind: "history", ID: "checkpoint"}) || records[0].ModelMessage.TextContent() == record.ModelMessage.TextContent() {
 		t.Fatalf("projected checkpoint lost stored identity: %+v", got)
 	}
@@ -47,7 +47,7 @@ func TestContextProvenanceSurvivesToolResultNormalization(t *testing.T) {
 	result := ModelMessage{Role: "tool", ToolCallID: "call-1", Name: "exec", Content: json.RawMessage(`{"ok":true}`)}
 	records := []historyfrag.HistoryRecord{loadedRecord("call-row", call), loadedRecord("result-row", result)}
 	normalized := normalizeContext([]ModelMessage{records[0].ModelMessage, records[1].ModelMessage})
-	got := contextProvenance(normalized.models(), normalized.sent(), records, nil)
+	got := contextProvenance(normalized.models(), nil)
 	if len(got) != 2 || len(got[1].Sources) != 1 || got[1].Sources[0].ID != "result-row" {
 		t.Fatalf("normalized tool exchange lost its result source: %+v", got)
 	}
@@ -78,9 +78,9 @@ func TestContextProvenanceNamesTheCallRowForItsClosure(t *testing.T) {
 	}
 	normalized := normalizeContext([]ModelMessage{records[0].ModelMessage, records[1].ModelMessage})
 	messages := normalized.models()
-	got := contextProvenance(messages, normalized.sent(), records, nil)
+	got := contextProvenance(messages, nil)
 	call := got[0].Sources
-	if len(messages) != 3 || len(got) != 3 || got[1].Message.Role != sdk.MessageRoleTool || !reflect.DeepEqual(got[1].Sources, call) ||
+	if len(messages) != 3 || len(got) != 3 || messages[1].Role != "tool" || !reflect.DeepEqual(got[1].Sources, call) ||
 		call[0].ID != "call-row" || got[1].Anchor || got[2].Sources[0].ID != "later-row" {
 		t.Fatalf("closure provenance = %+v, want the closure named by its call row", got)
 	}
@@ -128,16 +128,14 @@ func TestContextProvenanceKeepsTheSourceOfAMovedDecisionResult(t *testing.T) {
 	}
 	normalized := normalizeContext(input)
 	messages := normalized.models()
-	got := contextProvenance(messages, normalized.sent(), records, nil)
+	got := contextProvenance(messages, nil)
 	if len(got) != len(messages) {
 		t.Fatalf("provenance = %+v, want every message named", got)
 	}
 	sources := map[string]string{}
-	for _, p := range got {
-		for _, part := range p.Message.Content {
-			if result, ok := part.(sdk.ToolResultPart); ok {
-				sources[result.ToolCallID] = p.Sources[0].ID
-			}
+	for i, p := range got {
+		for _, result := range extractToolResultParts(messages[i]) {
+			sources[result.ToolCallID] = p.Sources[0].ID
 		}
 	}
 	if sources["ask-1"] != "call-row" || sources["ask-2"] != "result-row" || sources["other"] != "result-row" {
@@ -146,38 +144,33 @@ func TestContextProvenanceKeepsTheSourceOfAMovedDecisionResult(t *testing.T) {
 }
 
 // A continuation renders everything as history: the turn before, the run's
-// request row, its deferred call and the approved result. Each message names
-// the row it was loaded from, a summary its artifact, and a pipeline message
-// its inbound source; only the request row and the live input are kept in
-// place, and a message with no source is not part of the view.
+// request row, its deferred call and the approved result. Each message names,
+// at its position, the row it was loaded from, a summary its artifact, and a
+// pipeline message its inbound source; only the request row and the live
+// input are kept in place, and a message with no source is runtime context.
 func TestContextProvenanceNamesWhatEachMessageRenders(t *testing.T) {
 	t.Parallel()
 
-	text := func(role, content string) ModelMessage {
-		return ModelMessage{Role: role, Content: turn.NewTextContent(content)}
+	text := func(role, content string, source *turn.ContextMessageSource) ModelMessage {
+		return ModelMessage{Role: role, Content: turn.NewTextContent(content), ContextSource: source}
+	}
+	row := func(id string) *turn.ContextMessageSource {
+		return &turn.ContextMessageSource{Kind: "history", ID: id}
 	}
 	messages := []ModelMessage{
-		text("user", "<summary>older</summary>"),
-		text("user", "earlier question"),
-		text("assistant", "earlier answer"),
-		text("user", "continued request"),
-		text("assistant", "deferred call"),
-		text("tool", "approved result"),
-		text("user", "unsourced"),
-	}
-	pipeline := text("user", "pipeline message")
-	pipeline.ContextSource = &turn.ContextMessageSource{Kind: "external", ID: "rc-1"}
-	live := text("user", "live input")
-	live.ContextSource = &turn.ContextMessageSource{Kind: "external", ID: "in-1", Current: true}
-	messages = append(messages, pipeline, live)
-	records := []historyfrag.HistoryRecord{{ModelMessage: messages[0], SourceKind: historyfrag.SourceCompactionLog, Ref: contextfrag.ContextRef{ID: "artifact-0"}}}
-	for i, id := range []string{"old-user", "old-assistant", "request", "call", "result"} {
-		records = append(records, loadedRecord(id, messages[i+1]))
-		messages[i+1] = records[i+1].ModelMessage
+		historyfrag.SummaryRecord("artifact-0", "older", contextfrag.Scope{}).ModelMessage,
+		text("user", "earlier question", row("old-user")),
+		text("assistant", "earlier answer", row("old-assistant")),
+		text("user", "continued request", row("request")),
+		text("assistant", "deferred call", row("call")),
+		text("tool", "approved result", row("result")),
+		text("user", "unsourced", nil),
+		text("user", "pipeline message", &turn.ContextMessageSource{Kind: "external", ID: "rc-1"}),
+		text("user", "live input", &turn.ContextMessageSource{Kind: "external", ID: "in-1", Current: true}),
 	}
 	req := ChatRequest{PersistedUserMessageID: "request", inputInHistory: true}
 
-	got := contextProvenance(messages, modelMessagesToSDKMessages(messages), records, compactionInputs(req))
+	got := contextProvenance(messages, compactionInputs(req))
 	want := []struct {
 		kind, id string
 		anchor   bool
@@ -188,6 +181,7 @@ func TestContextProvenanceNamesWhatEachMessageRenders(t *testing.T) {
 		{"history", "request", true},
 		{"history", "call", false},
 		{"history", "result", false},
+		{"", "", false},
 		{"external", "rc-1", false},
 		{"external", "in-1", true},
 	}
@@ -195,6 +189,12 @@ func TestContextProvenanceNamesWhatEachMessageRenders(t *testing.T) {
 		t.Fatalf("provenance for %d messages, want %d", len(got), len(want))
 	}
 	for i, w := range want {
+		if w.kind == "" {
+			if len(got[i].Sources) != 0 || got[i].Anchor {
+				t.Fatalf("message %d renders %v anchor=%v, want runtime context", i, got[i].Sources, got[i].Anchor)
+			}
+			continue
+		}
 		source := turn.ContextMessageSource{Kind: w.kind, ID: w.id}
 		if len(got[i].Sources) != 1 || got[i].Sources[0].Kind != source.Kind || got[i].Sources[0].ID != source.ID || got[i].Anchor != w.anchor {
 			t.Fatalf("message %d renders %v anchor=%v, want %v anchor=%v", i, got[i].Sources, got[i].Anchor, source, w.anchor)

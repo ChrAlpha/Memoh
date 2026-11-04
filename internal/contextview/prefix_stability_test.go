@@ -65,8 +65,8 @@ func TestApplyProviderRunConfigStablePrefixIgnoresTurnLocalScope(t *testing.T) {
 	if first.System != second.System || !reflect.DeepEqual(first.Messages, second.Messages) {
 		t.Fatalf("provider bytes differ: first system %q messages %#v, second system %q messages %#v", first.System, first.Messages, second.System, second.Messages)
 	}
-	if first.ContextCachePlan.StablePrefixHash == "" || first.ContextCachePlan.StablePrefixHash != second.ContextCachePlan.StablePrefixHash {
-		t.Fatalf("stable prefix hashes = %q and %q", first.ContextCachePlan.StablePrefixHash, second.ContextCachePlan.StablePrefixHash)
+	if first.ContextCachePlan.StableMessageCount != second.ContextCachePlan.StableMessageCount {
+		t.Fatalf("stable message counts = %d and %d", first.ContextCachePlan.StableMessageCount, second.ContextCachePlan.StableMessageCount)
 	}
 	for _, item := range first.ContextManifest.Items {
 		if item.Scope.CurrentMessageID != firstScope.CurrentMessageID || item.Scope.EventID != firstScope.EventID {
@@ -100,10 +100,6 @@ func TestApplyProviderRunConfigImageOnlyCurrentMovesStableMessageBoundary(t *tes
 	}
 	if first.ContextCachePlan.StableMessageCount != 0 || second.ContextCachePlan.StableMessageCount != 0 {
 		t.Fatalf("stable message counts = %d and %d, want image target excluded", first.ContextCachePlan.StableMessageCount, second.ContextCachePlan.StableMessageCount)
-	}
-	wantHash := stablePrefixHash([]contextfrag.ContextFrag{system})
-	if wantHash == "" || first.ContextCachePlan.StablePrefixHash != wantHash || second.ContextCachePlan.StablePrefixHash != wantHash {
-		t.Fatalf("stable hashes = %q and %q, want system-only %q", first.ContextCachePlan.StablePrefixHash, second.ContextCachePlan.StablePrefixHash, wantHash)
 	}
 }
 

@@ -51,13 +51,11 @@ type ContextView struct {
 }
 
 type RenderedPayload struct {
-	Target      contextfrag.RenderTarget
-	ContentHash string
-	Data        any
+	Target contextfrag.RenderTarget
+	Data   any
 }
 
 type PlacementPlan struct {
-	StablePrefixHash   string
 	FirstVolatileIndex int
 	Items              []PlacementItem
 }
@@ -97,7 +95,6 @@ type PlacementSummary struct {
 }
 
 type RenderSummary struct {
-	Target      contextfrag.RenderTarget
-	ContentHash string
-	ItemCount   int
+	Target    contextfrag.RenderTarget
+	ItemCount int
 }

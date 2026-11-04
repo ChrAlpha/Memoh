@@ -6,8 +6,6 @@ import (
 	"slices"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -18,12 +16,23 @@ import (
 // historyContextFragsForMessages is the fragment of each summary the
 // messages render, at the message that renders it.
 func historyContextFragsForMessages(messages []ModelMessage, records []historyfrag.HistoryRecord) []contextfrag.ContextFrag {
+	summaries := make(map[string]historyfrag.HistoryRecord)
+	for _, record := range records {
+		if record.Kind == contextfrag.KindConversationSummary {
+			summaries[record.Ref.ID] = record
+		}
+	}
 	var frags []contextfrag.ContextFrag
-	for i, index := range matchHistoryRecords(messages, records) {
-		if index < 0 || records[index].Kind != contextfrag.KindConversationSummary {
+	for i, message := range messages {
+		source := message.ContextSource
+		if source == nil || source.Kind != "summary" {
 			continue
 		}
-		frag := historyfrag.ToFrag(records[index])
+		record, ok := summaries[source.ID]
+		if !ok {
+			continue
+		}
+		frag := historyfrag.ToFrag(record)
 		frag.ID = fmt.Sprintf("message.%03d", i)
 		frag.Provenance.Index = i
 		frags = append(frags, frag)
@@ -31,89 +40,48 @@ func historyContextFragsForMessages(messages []ModelMessage, records []historyfr
 	return frags
 }
 
+// historySourceMessageIDsForMessages names, for each message, the row it
+// was loaded from: a fork snapshot can then reference the row instead of its
+// bytes. A message without a row source names none.
 func historySourceMessageIDsForMessages(messages []ModelMessage, records []historyfrag.HistoryRecord) []string {
+	rows := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		if id := strings.TrimSpace(record.DBMessageID); id != "" {
+			rows[id] = struct{}{}
+		}
+	}
 	sourceIDs := make([]string, len(messages))
-	for i, index := range matchHistoryRecords(messages, records) {
-		if index >= 0 {
-			sourceIDs[i] = strings.TrimSpace(records[index].DBMessageID)
+	for i, message := range messages {
+		source := message.ContextSource
+		if source == nil || source.Kind != "history" {
+			continue
+		}
+		if _, ok := rows[strings.TrimSpace(source.ID)]; ok {
+			sourceIDs[i] = strings.TrimSpace(source.ID)
 		}
 	}
 	return sourceIDs
 }
 
-// contextProvenance names what each message of a request renders, for a run
-// that compacts in place: the inbound message or row a message carries as
-// its source, or else the compaction log a summary renders. sent is messages
-// in provider form. A message that renders the request's own input is an
-// anchor.
-func contextProvenance(messages []ModelMessage, sent []sdk.Message, records []historyfrag.HistoryRecord, inputs []turn.ContextMessageSource) []native.MessageProvenance {
-	matched := matchHistoryRecords(messages, records)
-	var out []native.MessageProvenance
+// contextProvenance names what each message of a request renders, by
+// position, for a run that compacts in place: the source the message
+// carries, the row, inbound message or summary it was loaded from. A
+// message without one is runtime context. A message that renders the
+// request's own input is an anchor.
+func contextProvenance(messages []ModelMessage, inputs []turn.ContextMessageSource) []native.MessageProvenance {
+	out := make([]native.MessageProvenance, len(messages))
 	for i, message := range messages {
-		var source turn.ContextMessageSource
-		switch index := matched[i]; {
-		case message.ContextSource != nil:
-			source = *message.ContextSource
-		case index >= 0:
-			source = turn.ContextMessageSource{Kind: "summary", ID: records[index].Ref.ID}
-		default:
+		if message.ContextSource == nil || message.ContextSource.ID == "" {
 			continue
 		}
-		anchor := source.Current || slices.ContainsFunc(inputs, func(input turn.ContextMessageSource) bool {
+		source := *message.ContextSource
+		out[i].Anchor = source.Current || slices.ContainsFunc(inputs, func(input turn.ContextMessageSource) bool {
 			return input.Kind == source.Kind && input.ID == source.ID
 		})
 		source.Current = false
-		out = append(out, native.MessageProvenance{
-			Message: sent[i],
-			Sources: []turn.ContextMessageSource{source},
-			Anchor:  anchor,
-		})
+		out[i].Sources = []turn.ContextMessageSource{source}
 	}
 	return out
-}
-
-// matchHistoryRecords pairs each message with the index of the stored record
-// it was loaded from, or -1. A message loaded from a row names that row as
-// its source, however a replay projection rewrote it; a summary names none
-// and is matched, in order, to the compaction log whose rendering it carries.
-func matchHistoryRecords(messages []ModelMessage, records []historyfrag.HistoryRecord) []int {
-	rows := make(map[string]int, len(records))
-	summaries := make(map[string][]int)
-	for i, record := range records {
-		if record.SourceKind == historyfrag.SourceCompactionLog {
-			key := summaryMatchKey(record.ModelMessage)
-			summaries[key] = append(summaries[key], i)
-			continue
-		}
-		if id := strings.TrimSpace(record.DBMessageID); id != "" {
-			if _, seen := rows[id]; !seen {
-				rows[id] = i
-			}
-		}
-	}
-	matched := make([]int, len(messages))
-	for i, message := range messages {
-		matched[i] = -1
-		if source := message.ContextSource; source != nil && source.Kind == "history" {
-			if index, ok := rows[strings.TrimSpace(source.ID)]; ok {
-				matched[i] = index
-			}
-			continue
-		}
-		if len(summaries) == 0 {
-			continue
-		}
-		key := summaryMatchKey(message)
-		if candidates := summaries[key]; len(candidates) > 0 {
-			matched[i] = candidates[0]
-			summaries[key] = candidates[1:]
-		}
-	}
-	return matched
-}
-
-func summaryMatchKey(message ModelMessage) string {
-	return strings.ToLower(strings.TrimSpace(message.Role)) + "\x00" + string(message.Content)
 }
 
 // historyCut is where an edit or retry replays history: the checkpoint its
