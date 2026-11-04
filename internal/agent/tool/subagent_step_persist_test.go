@@ -27,6 +27,7 @@ func newStepPersistProvider(t *testing.T, agent SpawnAgent, admitter SubagentAdm
 	p.sessionService = &fakeAgentSessionService{}
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
+	p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 	p.SetSubagentAdmitter(admitter)
 	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{

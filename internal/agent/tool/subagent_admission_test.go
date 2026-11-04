@@ -328,8 +328,9 @@ func TestRunSubagentTaskPreservesOwningCancellationCause(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(context.Canceled)
 	p := &SpawnProvider{
-		agent:  &canceledSubagentSpawnAgent{},
-		logger: slog.New(slog.DiscardHandler),
+		agent:       &canceledSubagentSpawnAgent{},
+		transcripts: &fakeTranscriptLoader{},
+		logger:      slog.New(slog.DiscardHandler),
 		modelResolver: func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 			return resolvedSubagentModel{}, nil
 		},
@@ -364,8 +365,9 @@ func TestRunSubagentTaskKeepsResolvedFailureWhenCancellationRaces(t *testing.T) 
 		},
 	}
 	p := &SpawnProvider{
-		agent:  agent,
-		logger: slog.New(slog.DiscardHandler),
+		agent:       agent,
+		transcripts: &fakeTranscriptLoader{},
+		logger:      slog.New(slog.DiscardHandler),
 		modelResolver: func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 			return resolvedSubagentModel{}, nil
 		},
@@ -392,7 +394,9 @@ func newSubagentAdmissionTestProvider(t *testing.T, agent SpawnAgent, admitter S
 	p := NewSpawnProvider(nil, nil, nil, nil, nil, background.New(nil))
 	p.sessionService = &fakeAgentSessionService{}
 	p.SetAgent(agent)
-	p.SetMessageService(newFakeAgentMessageService())
+	messageSvc := newFakeAgentMessageService()
+	p.SetMessageService(messageSvc)
+	p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 	p.SetSubagentAdmitter(admitter)
 	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{

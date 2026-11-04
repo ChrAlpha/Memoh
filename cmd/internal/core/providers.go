@@ -574,6 +574,9 @@ func injectToolProviders(a *native.Agent, msgService *message.DBService, hookSer
 			// A spawned turn takes its thread's single run slot like any other,
 			// so without admission this provider starts nothing.
 			sp.SetSubagentAdmitter(agentService)
+			// A spawned turn replays the same history window a direct turn on
+			// the agent's thread does.
+			sp.SetTranscriptLoader(agentService)
 		}
 	}
 }
