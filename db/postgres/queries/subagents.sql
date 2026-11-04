@@ -16,6 +16,11 @@ FROM subagent_configs
 WHERE session_id = $1;
 
 -- name: CreateSubagentForkContext :one
+-- Copies the parent's context into a new forked thread as rows the chat view
+-- leaves out (turn_visible = false) but its history reads: they take the
+-- thread's first positions, one turn each, and the thread's own turns start
+-- after them. The history reads (history_checkpoints.sql) rely on that: a
+-- thread's inherited rows all come before its own turns.
 WITH target_session AS MATERIALIZED (
   SELECT child.id, child.bot_id, child.team_id
   FROM bot_sessions child

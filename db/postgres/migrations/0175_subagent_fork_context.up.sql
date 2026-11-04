@@ -5,9 +5,9 @@
 -- history loads and folded by its checkpoints like any other row.
 --
 -- bot_context_history_messages names a session's context rows: the rows of
--- its visible turns and a forked subagent's inherited rows. The two arms are
--- disjoint and each keeps its own partial index
--- (idx_bot_history_messages_visible_session_order and
+-- its visible turns and a forked subagent's inherited rows, which all come
+-- before the thread's own turns. The two arms are disjoint and each keeps its
+-- own partial index (idx_bot_history_messages_visible_session_order and
 -- idx_bot_history_messages_subagent_fork_context).
 CREATE OR REPLACE VIEW public.bot_context_history_messages
 WITH (security_invoker = true) AS

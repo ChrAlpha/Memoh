@@ -371,17 +371,18 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
     SELECT first.session_id, first.id, first.turn_position, first.turn_message_seq, first.created_at,
       COALESCE(first.known_bytes, octet_length(first.content::text)::bigint) AS cumulative_bytes,
       (first.role <> 'tool')::int::bigint AS call_group,
-      (first.turn_position, first.turn_message_seq) > ($3::bigint, $4::bigint) AS past_position
+      (first.turn_position, first.turn_message_seq) > ($3::bigint, $4::bigint) AS past_position,
+      first.inherited
     FROM (
       (
-        SELECT kept.session_id, kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at, kept.role, NULL::jsonb AS content, kept.content_bytes AS known_bytes
+        SELECT kept.session_id, kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at, kept.role, NULL::jsonb AS content, kept.content_bytes AS known_bytes, false AS inherited
         FROM kept_rows kept
         ORDER BY kept.turn_position ASC, kept.turn_message_seq ASC, kept.created_at ASC, kept.id ASC
         LIMIT 1
       )
       UNION ALL
       (
-        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint AS known_bytes
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint AS known_bytes, false AS inherited
         FROM bot_history_messages m
         WHERE m.team_id = public.memoh_current_team_id()
           AND m.session_id = $1
@@ -398,7 +399,7 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
       )
       UNION ALL
       (
-        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint AS known_bytes
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint AS known_bytes, true AS inherited
         FROM bot_history_messages m
         WHERE m.team_id = public.memoh_current_team_id()
           AND m.session_id = $1
@@ -423,14 +424,15 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
   SELECT next.session_id, next.id, next.turn_position, next.turn_message_seq, next.created_at,
     previous.cumulative_bytes + COALESCE(next.known_bytes, octet_length(next.content::text)::bigint) AS cumulative_bytes,
     previous.call_group + (next.role <> 'tool')::int::bigint AS call_group,
-    (next.turn_position, next.turn_message_seq) > ($3::bigint, $4::bigint) AS past_position
+    (next.turn_position, next.turn_message_seq) > ($3::bigint, $4::bigint) AS past_position,
+    next.inherited
   FROM candidate_walk previous
   CROSS JOIN LATERAL (
     SELECT later.session_id, later.id, later.turn_position, later.turn_message_seq, later.created_at, later.role,
-      later.content, later.known_bytes
+      later.content, later.known_bytes, later.inherited
     FROM (
       (
-        SELECT kept.session_id, kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at, kept.role, NULL::jsonb AS content, kept.content_bytes AS known_bytes
+        SELECT kept.session_id, kept.id, kept.turn_position, kept.turn_message_seq, kept.created_at, kept.role, NULL::jsonb AS content, kept.content_bytes AS known_bytes, false AS inherited
         FROM kept_rows kept
         WHERE NOT previous.past_position
           AND (kept.turn_position, kept.turn_message_seq, kept.created_at, kept.id)
@@ -440,7 +442,7 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
       )
       UNION ALL
       (
-        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint, false
         FROM bot_history_messages m
         WHERE m.team_id = public.memoh_current_team_id()
           AND m.turn_visible = true
@@ -467,10 +469,12 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
       UNION ALL
       (
         -- The session's next inherited row, from the small fork index, after
-        -- the same lower bound.
-        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint
+        -- the same lower bound, until the walk takes a visible row after the
+        -- position.
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint, true
         FROM bot_history_messages m
-        WHERE m.team_id = public.memoh_current_team_id()
+        WHERE (previous.inherited OR NOT previous.past_position)
+          AND m.team_id = public.memoh_current_team_id()
           AND m.session_id = previous.session_id
           AND m.turn_visible = false
           AND m.session_mode = 'subagent'
@@ -632,8 +636,11 @@ type ListHistoryCheckpointCandidatesWithinBytesRow struct {
 // that candidates are left after the admitted prefix. The kept rows the
 // checkpoint's position does not already cover are older than every row
 // after it, so the walk takes them first. A forked subagent's inherited rows
-// are context rows older than its own turns: each step also takes the
-// session's next inherited row from its own index, and the older wins.
+// are context rows, and all of them come before its own turns: its fork
+// writes them at the thread's first positions before the thread has a turn
+// of its own. So a step reads the next inherited row, from its own small
+// index, only until the walk takes a visible row after the position; a
+// session that inherited nothing reads that index once.
 func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context, arg ListHistoryCheckpointCandidatesWithinBytesParams) ([]ListHistoryCheckpointCandidatesWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listHistoryCheckpointCandidatesWithinBytes,
 		arg.SessionID,
@@ -977,47 +984,51 @@ WITH RECURSIVE history_window AS (
   SELECT older.session_id, older.id, older.turn_position, older.turn_message_seq, older.created_at,
     previous.total_bytes + (SELECT octet_length(c.content::text) FROM bot_history_messages c WHERE c.id = older.id)::bigint AS total_bytes
   FROM history_window previous
-  CROSS JOIN LATERAL (
-    SELECT step.session_id, step.id, step.turn_position, step.turn_message_seq, step.created_at
-    FROM (
-      (
-        -- Step to the previous context index entry without a session equality
-        -- estimate. Stop outside the step at another session or the checkpoint.
-        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
-        FROM bot_history_messages m
-        WHERE m.team_id = public.memoh_current_team_id()
-          AND m.turn_visible = true
-          AND m.turn_id IS NOT NULL
-          AND m.turn_position IS NOT NULL
-          AND m.turn_message_seq IS NOT NULL
-          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-          AND (m.session_id, m.turn_position, m.turn_message_seq, m.created_at, m.id)
-            < (previous.session_id, previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
-        ORDER BY m.session_id DESC, m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-        LIMIT 1
-      )
-      UNION ALL
-      (
-        -- The session's previous inherited row, from the small fork index.
-        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
-        FROM bot_history_messages m
-        WHERE m.team_id = public.memoh_current_team_id()
-          AND m.session_id = previous.session_id
-          AND m.turn_visible = false
-          AND m.session_mode = 'subagent'
-          AND m.metadata->>'context_scope' = 'subagent_fork'
-          AND m.turn_id IS NOT NULL
-          AND m.turn_position IS NOT NULL
-          AND m.turn_message_seq IS NOT NULL
-          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-          AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
-            < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
-        ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
-        LIMIT 1
-      )
-    ) step
-    ORDER BY step.session_id DESC, step.turn_position DESC, step.turn_message_seq DESC, step.created_at DESC, step.id DESC
+  LEFT JOIN LATERAL (
+    -- Step to the previous context index entry without a session equality
+    -- estimate. Stop outside the step at another session or the checkpoint.
+    SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
+    FROM bot_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND (m.session_id, m.turn_position, m.turn_message_seq, m.created_at, m.id)
+        < (previous.session_id, previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY m.session_id DESC, m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
     LIMIT 1
+  ) visible ON true
+  LEFT JOIN LATERAL (
+    -- The session's previous inherited row, read only once no visible row of
+    -- the session is left before the previous one.
+    SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
+    FROM bot_history_messages m
+    WHERE visible.session_id IS DISTINCT FROM previous.session_id
+      AND m.team_id = public.memoh_current_team_id()
+      AND m.session_id = previous.session_id
+      AND m.turn_visible = false
+      AND m.session_mode = 'subagent'
+      AND m.metadata->>'context_scope' = 'subagent_fork'
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+        < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    LIMIT 1
+  ) inherited ON true
+  -- The step takes the visible row while it is the session's, else the
+  -- inherited one.
+  CROSS JOIN LATERAL (
+    SELECT
+      CASE WHEN visible.session_id = previous.session_id THEN visible.session_id ELSE inherited.session_id END AS session_id,
+      CASE WHEN visible.session_id = previous.session_id THEN visible.id ELSE inherited.id END AS id,
+      CASE WHEN visible.session_id = previous.session_id THEN visible.turn_position ELSE inherited.turn_position END AS turn_position,
+      CASE WHEN visible.session_id = previous.session_id THEN visible.turn_message_seq ELSE inherited.turn_message_seq END AS turn_message_seq,
+      CASE WHEN visible.session_id = previous.session_id THEN visible.created_at ELSE inherited.created_at END AS created_at
   ) older
   WHERE previous.total_bytes < $6::bigint
     AND older.session_id = $1
@@ -1086,9 +1097,12 @@ type ListHistoryWindowRow struct {
 // kept, so the newest row always loads), as ids in ascending order. The walk
 // follows the context-order index one row per step and stops at the budget, so older
 // rows are never measured, however much history the checkpoint leaves raw.
-// A forked subagent's inherited rows are context rows older than its own
-// turns: each step also takes the session's previous inherited row from its
-// own index, and the newer of the two wins.
+// A forked subagent's inherited rows are context rows, and all of them come
+// before its own turns: its fork writes them at the thread's first positions
+// before the thread has a turn of its own. So the walk takes them, from their
+// own small index, only once the visible rows of the session are behind it;
+// a session that inherited nothing never reads that index past the step
+// where its walk ends.
 // truncated reports that the budget, not the window, ended the walk: context
 // rows of the window remain older than the oldest it admitted. Callers load
 // the projection they need by id. Each step selects keys only and measures

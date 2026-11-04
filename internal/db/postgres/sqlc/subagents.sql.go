@@ -211,6 +211,11 @@ type CreateSubagentForkContextRow struct {
 	CopiedAssetCount int64 `json:"copied_asset_count"`
 }
 
+// Copies the parent's context into a new forked thread as rows the chat view
+// leaves out (turn_visible = false) but its history reads: they take the
+// thread's first positions, one turn each, and the thread's own turns start
+// after them. The history reads (history_checkpoints.sql) rely on that: a
+// thread's inherited rows all come before its own turns.
 func (q *Queries) CreateSubagentForkContext(ctx context.Context, arg CreateSubagentForkContextParams) (CreateSubagentForkContextRow, error) {
 	row := q.db.QueryRow(ctx, createSubagentForkContext, arg.ParentSessionID, arg.SessionID, arg.ContextMessages)
 	var i CreateSubagentForkContextRow

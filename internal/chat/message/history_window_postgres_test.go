@@ -16,7 +16,8 @@ import (
 // Compare the bounded index walk to the cumulative-window definition of the
 // raw history after a checkpoint. Timestamps deliberately disagree with turn
 // order, and rows on the same turn share timestamps, so keyset pagination
-// must use the full ordering tuple.
+// must use the full ordering tuple. The neighboring sessions hold rows a
+// forked subagent inherited, which the walk must not take either.
 func TestPostgresHistoryIndexWalkPreservesAdmission(t *testing.T) {
 	ctx := context.Background()
 	tx := beginPostgresMessageTestTx(t, ctx)
@@ -33,6 +34,14 @@ func TestPostgresHistoryIndexWalkPreservesAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
+      (id,bot_id,session_id,role,content,metadata,session_mode,turn_id,turn_position,turn_message_seq,turn_visible)
+      SELECT gen_random_uuid(),$1,s.id::uuid,'user','{"content":"inherited by another session"}'::jsonb,
+        '{"context_scope":"subagent_fork"}'::jsonb,'subagent',gen_random_uuid(),n,1,false
+      FROM (VALUES ('00000000-0000-0000-0000-000000074100'),('00000000-0000-0000-0000-000000074104')) s(id),
+        generate_series(1,40) n`, postgresMessageTestBotID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
   (id,bot_id,session_id,role,content,metadata,created_at,turn_id,turn_position,turn_message_seq,turn_visible)
   SELECT gen_random_uuid(),$1,$2,'assistant',
    jsonb_build_object('content',repeat('x',CASE WHEN n=70 THEN 100000 ELSE n%100+1 END)),
@@ -45,10 +54,65 @@ func TestPostgresHistoryIndexWalkPreservesAdmission(t *testing.T) {
 	if err := session.Scan(postgresMessageTestSessionID); err != nil {
 		t.Fatal(err)
 	}
+	assertHistoryWindowAdmission(t, ctx, tx, session, []historyPosition{{0, 0}, {12, 1}}, &historyPosition{35, 0})
+}
+
+// A forked subagent's thread renders its inherited rows before its own turns:
+// the fork wrote them at the thread's first positions. The walk takes the
+// visible rows and then the inherited ones, as the cumulative window over the
+// thread's context rows does, from any checkpoint position and cutoff, with
+// the inherited rows of the neighboring sessions left alone.
+func TestPostgresHistoryWindowReadsAForkedThread(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	if _, err := tx.Exec(ctx, `WITH neighbors AS (
+      INSERT INTO bot_sessions (id, bot_id, channel_type, type) VALUES
+        ('00000000-0000-0000-0000-000000074100', $1, 'local', 'subagent'),
+        ('00000000-0000-0000-0000-000000074104', $1, 'local', 'subagent') RETURNING id
+    ) INSERT INTO bot_history_messages
+      (id,bot_id,session_id,role,content,metadata,session_mode,turn_id,turn_position,turn_message_seq,turn_visible)
+      SELECT gen_random_uuid(),$1,id,'user','{"content":"inherited by another session"}'::jsonb,
+        '{"context_scope":"subagent_fork"}'::jsonb,'subagent',gen_random_uuid(),n,1,false
+      FROM neighbors, generate_series(1,40) n`, postgresMessageTestBotID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
+  (id,bot_id,session_id,role,content,metadata,session_mode,created_at,turn_id,turn_position,turn_message_seq,turn_visible)
+  SELECT gen_random_uuid(),$1,$2,'user',
+   jsonb_build_object('content',repeat('f',n*7%90+1)),
+   jsonb_build_object('context_scope','subagent_fork') || CASE WHEN n%9=0 THEN '{"trigger_mode":"passive_sync"}'::jsonb ELSE '{}'::jsonb END,
+   'subagent','2026-01-01'::timestamptz+(50-n)*interval '1 second',gen_random_uuid(),n,1,false
+  FROM generate_series(1,25) n`, postgresMessageTestBotID, postgresMessageTestSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
+  (id,bot_id,session_id,role,content,metadata,session_mode,created_at,turn_id,turn_position,turn_message_seq,turn_visible)
+  SELECT gen_random_uuid(),$1,$2,'assistant',
+   jsonb_build_object('content',repeat('x',CASE WHEN n=30 THEN 4000 ELSE n%100+1 END)),
+   CASE WHEN n%11=0 THEN '{"trigger_mode":"passive_sync"}'::jsonb ELSE '{}'::jsonb END,
+   'subagent','2026-01-01'::timestamptz+(100-n/2)*interval '1 second',gen_random_uuid(),26+n/2,n%2,n%13<>0
+  FROM generate_series(1,60) n`, postgresMessageTestBotID, postgresMessageTestSessionID); err != nil {
+		t.Fatal(err)
+	}
+	var session pgtype.UUID
+	if err := session.Scan(postgresMessageTestSessionID); err != nil {
+		t.Fatal(err)
+	}
+	assertHistoryWindowAdmission(t, ctx, tx, session, []historyPosition{{0, 0}, {7, 1}, {25, 1}, {40, 0}}, &historyPosition{12, 1})
+	assertHistoryWindowAdmission(t, ctx, tx, session, []historyPosition{{0, 0}, {30, 1}}, &historyPosition{45, 0})
+}
+
+type historyPosition struct{ turn, seq int64 }
+
+// assertHistoryWindowAdmission compares ListHistoryWindow with the
+// cumulative-window definition over the session's context rows, after each
+// position, with and without the cutoff, for budgets from none to all.
+func assertHistoryWindowAdmission(t *testing.T, ctx context.Context, tx pgx.Tx, session pgtype.UUID, afters []historyPosition, cutoff *historyPosition) {
+	t.Helper()
 	q := dbsqlc.New(tx)
-	type position struct{ turn, seq int64 }
-	for _, after := range []position{{0, 0}, {12, 1}} {
-		for _, before := range []*position{nil, {35, 0}} {
+	for _, after := range afters {
+		for _, before := range []*historyPosition{nil, cutoff} {
 			for _, budget := range []int64{-1, 0, 1, 100, 500, 10000, 1000000} {
 				name := fmt.Sprintf("after_%d_%d/before_%v/%d", after.turn, after.seq, before != nil, budget)
 				t.Run(name, func(t *testing.T) {
@@ -63,7 +127,7 @@ func TestPostgresHistoryIndexWalkPreservesAdmission(t *testing.T) {
        SUM(octet_length(m.content::text)) OVER
         (ORDER BY m.turn_position DESC,m.turn_message_seq DESC,m.created_at DESC,m.id DESC)
         - octet_length(m.content::text) AS preceding_bytes
-      FROM bot_visible_history_messages m
+      FROM bot_context_history_messages m
       WHERE m.team_id=public.memoh_current_team_id() AND m.session_id=$1
        AND (m.turn_position,m.turn_message_seq) > ($2,$3)
        AND ($4::bigint IS NULL OR (m.turn_position,m.turn_message_seq) < ($4,$5))
@@ -184,4 +248,58 @@ func (p historyWindowPlan) visitedRows() (float64, bool) {
 		indexed = indexed || i
 	}
 	return rows, indexed
+}
+
+// A forked subagent's thread walks its inherited rows on their own index one
+// row a step, as it walks its visible rows: a long inheritance costs the rows
+// the budget admits, not the inheritance.
+func TestPostgresHistoryWindowWalksInheritedRowsByIndex(t *testing.T) {
+	ctx := context.Background()
+	tx := beginPostgresMessageTestTx(t, ctx)
+	setupPostgresMessageTestFixtures(t, ctx, tx)
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
+      (id,bot_id,session_id,role,content,metadata,session_mode,turn_id,turn_position,turn_message_seq,turn_visible,created_at)
+      SELECT gen_random_uuid(),$1,$2,'user',jsonb_build_object('content',repeat('f',1024)),
+        '{"context_scope":"subagent_fork"}'::jsonb,'subagent',gen_random_uuid(),n,1,false,'2026-01-01'::timestamptz+n*interval '1 second'
+      FROM generate_series(1,5000) n`, postgresMessageTestBotID, postgresMessageTestSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO bot_history_messages
+      (id,bot_id,session_id,role,content,turn_id,turn_position,turn_message_seq,turn_visible,created_at)
+      SELECT gen_random_uuid(),$1,$2,'assistant',jsonb_build_object('content',repeat('x',1024)),
+        gen_random_uuid(),5000+n,0,true,'2026-02-01'::timestamptz+n*interval '1 second'
+      FROM generate_series(1,8) n`, postgresMessageTestBotID, postgresMessageTestSessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `ANALYZE bot_history_messages`); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &historyWindowQueryRecorder{Tx: tx}
+	q := dbsqlc.New(recorder)
+	var session pgtype.UUID
+	if err := session.Scan(postgresMessageTestSessionID); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := q.ListHistoryWindow(ctx, dbsqlc.ListHistoryWindowParams{SessionID: session, MaxBytes: 32768})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 32 || !rows[0].Truncated {
+		t.Fatalf("admitted %d rows (truncated=%v), want 32 including the crossing row, with inherited rows left", len(rows), len(rows) > 0 && rows[0].Truncated)
+	}
+	var raw []byte
+	if err := tx.QueryRow(ctx, "EXPLAIN (ANALYZE, FORMAT JSON) "+recorder.query, recorder.args...).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var plans []struct{ Plan historyWindowPlan }
+	if err := json.Unmarshal(raw, &plans); err != nil {
+		t.Fatal(err)
+	}
+	// Each step reads at most one row from each arm and the row it measures;
+	// the first step and the cut check add a few rows more, never a row per
+	// inherited row the budget left out.
+	visited, _ := plans[0].Plan.visitedRows()
+	if !strings.Contains(string(raw), "subagent_fork_context") || visited > float64(len(rows)*3+12) {
+		t.Fatalf("visited %.0f history rows for %d admitted; plan=%s", visited, len(rows), raw)
+	}
 }

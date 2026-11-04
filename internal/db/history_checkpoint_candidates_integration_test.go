@@ -231,3 +231,150 @@ func TestHistoryCheckpointCandidatesEndAtACallGroup(t *testing.T) {
 		}
 	}
 }
+
+// TestHistoryContextRowsIncludeAForkedSubagentsInheritedRows exercises the
+// real SQL over a forked subagent's thread: the rows its fork inherited stay
+// out of the chat view but are context rows older than its own turns. The
+// history window, compaction candidates, a fold's span and source lookups
+// and the reads by id take them; a row a replaced turn hid does not become a
+// context row for being hidden, and another session's inherited rows never
+// reach the thread.
+func TestHistoryContextRowsIncludeAForkedSubagentsInheritedRows(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("TEST_POSTGRES_DSN is not set")
+	}
+	ctx := context.Background()
+	pool, err := OpenPostgresDSN(ctx, dsn)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, err := pool.Exec(ctx, sql, args...); err != nil {
+			t.Fatalf("exec %q: %v", sql, err)
+		}
+	}
+	userID, botID := uuid.NewString(), uuid.NewString()
+	childID, otherID := uuid.NewString(), uuid.NewString()
+	exec(`WITH u AS (INSERT INTO users (id, username, is_active) VALUES ($1::uuid, $1::text, true) RETURNING id)
+		INSERT INTO team_members (user_id, role) SELECT id, 'admin' FROM u`, userID)
+	exec(`INSERT INTO bots (id, owner_user_id, name) VALUES ($1::uuid, $2, $1::text)`, botID, userID)
+	exec(`INSERT INTO bot_sessions (id, bot_id, channel_type, type) VALUES ($1, $3, 'local', 'subagent'), ($2, $3, 'local', 'subagent')`, childID, otherID, botID)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM bots WHERE id = $1`, botID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, userID)
+	})
+	// inherited writes a row as a fork copies it; own writes a row of the
+	// thread's own turns, visible or hidden by a replacement.
+	inherited := func(session string, turn int64) pgtype.UUID {
+		t.Helper()
+		id := uuid.NewString()
+		exec(`INSERT INTO bot_history_messages
+			(id, bot_id, session_id, role, content, metadata, session_mode, turn_id, turn_position, turn_message_seq, turn_visible, created_at)
+			VALUES ($1, $2, $3, 'user', '{"role":"user","content":"inherited"}'::jsonb,
+			  '{"context_scope":"subagent_fork","context_version":1}'::jsonb, 'subagent', gen_random_uuid(), $4, 1, false, clock_timestamp())`,
+			id, botID, session, turn)
+		return ParseUUIDOrEmpty(id)
+	}
+	own := func(turn, seq int64, visible bool) pgtype.UUID {
+		t.Helper()
+		id := uuid.NewString()
+		exec(`INSERT INTO bot_history_messages
+			(id, bot_id, session_id, role, content, metadata, session_mode, turn_id, turn_position, turn_message_seq, turn_visible, created_at)
+			VALUES ($1, $2, $3, 'user', '{"role":"user","content":"own"}'::jsonb, '{}'::jsonb, 'subagent', gen_random_uuid(), $4, $5, $6, clock_timestamp())`,
+			id, botID, childID, turn, seq, visible)
+		return ParseUUIDOrEmpty(id)
+	}
+	first, second := inherited(childID, 1), inherited(childID, 2)
+	inherited(otherID, 1)
+	task, answer := own(3, 1, true), own(3, 2, true)
+	own(4, 1, false)
+	contextRows := []pgtype.UUID{first, second, task, answer}
+
+	queries := sqlc.New(pool)
+	session := ParseUUIDOrEmpty(childID)
+	ids := func(rows []sqlc.ListHistoryWindowRow) []pgtype.UUID {
+		out := make([]pgtype.UUID, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, row.ID)
+		}
+		return out
+	}
+
+	window, err := queries.ListHistoryWindow(ctx, sqlc.ListHistoryWindowParams{SessionID: session, MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("history window: %v", err)
+	}
+	if got := ids(window); !slices.Equal(got, contextRows) || window[0].Truncated {
+		t.Fatalf("window = %v, want the inherited rows before the thread's own, untruncated", got)
+	}
+	var rowBytes int64
+	if err := pool.QueryRow(ctx, `SELECT octet_length(content::text) FROM bot_history_messages WHERE id = $1`, answer).Scan(&rowBytes); err != nil {
+		t.Fatalf("measure a row: %v", err)
+	}
+	window, err = queries.ListHistoryWindow(ctx, sqlc.ListHistoryWindowParams{SessionID: session, MaxBytes: 2 * rowBytes})
+	if err != nil {
+		t.Fatalf("bounded history window: %v", err)
+	}
+	if got := ids(window); !slices.Equal(got, []pgtype.UUID{task, answer}) || !window[0].Truncated {
+		t.Fatalf("bounded window = %v, want the newest rows with the inherited ones left over", got)
+	}
+	window, err = queries.ListHistoryWindow(ctx, sqlc.ListHistoryWindowParams{SessionID: session, MaxBytes: 3 * rowBytes})
+	if err != nil {
+		t.Fatalf("window into the inherited rows: %v", err)
+	}
+	if got := ids(window); !slices.Equal(got, contextRows[1:]) || !window[0].Truncated {
+		t.Fatalf("window = %v, want it to walk on into the newest inherited row", got)
+	}
+
+	candidates, err := queries.ListHistoryCheckpointCandidatesWithinBytes(ctx, sqlc.ListHistoryCheckpointCandidatesWithinBytesParams{SessionID: session, MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("candidates: %v", err)
+	}
+	read := make([]pgtype.UUID, 0, len(candidates))
+	for _, row := range candidates {
+		read = append(read, row.ID)
+	}
+	if !slices.Equal(read, contextRows) {
+		t.Fatalf("candidates = %v, want the inherited rows first", read)
+	}
+	if left, err := queries.HasHistoryCheckpointCandidates(ctx, sqlc.HasHistoryCheckpointCandidatesParams{SessionID: session, AfterTurnPosition: 1, AfterTurnMessageSeq: 1, BeforeTurnPosition: pgtype.Int8{Int64: 3, Valid: true}, BeforeTurnMessageSeq: pgtype.Int8{Int64: 1, Valid: true}}); err != nil || !left {
+		t.Fatalf("an inherited row after the position is a candidate: %v (%v)", left, err)
+	}
+	// A checkpoint that keeps an inherited row by reference reads it first.
+	kept, err := queries.ListHistoryCheckpointCandidatesWithinBytes(ctx, sqlc.ListHistoryCheckpointCandidatesWithinBytesParams{
+		SessionID: session, AfterTurnPosition: 2, AfterTurnMessageSeq: 1, KeptIds: []pgtype.UUID{second}, MaxBytes: 1 << 20,
+	})
+	if err != nil || len(kept) != 3 || kept[0].ID != second || kept[1].ID != task {
+		t.Fatalf("candidates keeping an inherited row = %+v (%v), want it before the rows after the position", kept, err)
+	}
+
+	span, err := queries.ListHistoryCheckpointSpanRows(ctx, sqlc.ListHistoryCheckpointSpanRowsParams{
+		SessionID: session, ThroughTurnPosition: 3, ThroughTurnMessageSeq: 1, Ids: []pgtype.UUID{answer},
+	})
+	if err != nil {
+		t.Fatalf("checkpoint span: %v", err)
+	}
+	spanned := make([]pgtype.UUID, 0, len(span))
+	for _, row := range span {
+		spanned = append(spanned, row.ID)
+	}
+	if !slices.Equal(spanned, contextRows) {
+		t.Fatalf("span = %v, want the inherited rows within it", spanned)
+	}
+	sources, err := queries.ListHistoryRowsBySources(ctx, sqlc.ListHistoryRowsBySourcesParams{SessionID: session, Ids: contextRows})
+	if err != nil || len(sources) != len(contextRows) || sources[0].ID != first {
+		t.Fatalf("rows by source = %+v (%v), want every context row the request names", sources, err)
+	}
+	messages, err := queries.ListHistoryMessagesByIDs(ctx, sqlc.ListHistoryMessagesByIDsParams{SessionID: session, Ids: contextRows})
+	if err != nil || len(messages) != len(contextRows) || messages[0].ID != first || messages[1].ID != second {
+		t.Fatalf("messages by id = %d rows (%v), want every context row in order", len(messages), err)
+	}
+
+	var shown int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM bot_visible_history_messages WHERE session_id = $1`, childID).Scan(&shown); err != nil || shown != 2 {
+		t.Fatalf("chat view shows %d rows (%v), want only the thread's own visible turn", shown, err)
+	}
+}

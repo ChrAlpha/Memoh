@@ -1756,8 +1756,8 @@ WHERE m.turn_visible = true
 
 -- A session's context rows: the rows of its visible turns and a forked
 -- subagent's inherited rows, which stay out of the chat view but are part of
--- the child's history. The two arms are disjoint and each keeps its own
--- partial index.
+-- the child's history and all come before its own turns. The two arms are
+-- disjoint and each keeps its own partial index.
 CREATE OR REPLACE VIEW public.bot_context_history_messages
 WITH (security_invoker = true) AS
 SELECT
