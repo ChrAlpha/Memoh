@@ -267,21 +267,16 @@ type mockSpawnAgent struct {
 	// generateFunc is the function called by GenerateWithWatchdog.
 	// It receives the context and a touchFn. The implementation should
 	// call touchFn to simulate activity, or not call it to simulate a hang.
-	generateFunc func(ctx context.Context, cfg SpawnRunConfig, touchFn func()) (*SpawnResult, error)
+	generateFunc func(ctx context.Context, cfg SpawnRunConfig, watchdog *SubagentWatchdog) (*SpawnResult, error)
 
 	// generateCount tracks how many times GenerateWithWatchdog was called.
 	generateCount atomic.Int32
 }
 
-func (m *mockSpawnAgent) Generate(_ context.Context, _ SpawnRunConfig) (*SpawnResult, error) {
-	_ = m // interface satisfaction only
-	return nil, errors.New("not implemented in mock")
-}
-
-func (m *mockSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+func (m *mockSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunConfig, watchdog *SubagentWatchdog) (*SpawnResult, error) {
 	m.generateCount.Add(1)
 	if m.generateFunc != nil {
-		return m.generateFunc(ctx, cfg, touchFn)
+		return m.generateFunc(ctx, cfg, watchdog)
 	}
 	return &SpawnResult{Text: "ok"}, nil
 }
@@ -293,7 +288,7 @@ func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
 	callCount := atomic.Int32{}
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ SpawnRunConfig, watchdog *SubagentWatchdog) (*SpawnResult, error) {
 			count := callCount.Add(1)
 			if count <= 2 {
 				// First 2 calls: don't touch — simulate a stuck agent.
@@ -306,7 +301,7 @@ func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
 			for {
 				select {
 				case <-ticker.C:
-					touchFn()
+					watchdog.Touch()
 				case <-ctx.Done():
 					if errors.Is(context.Cause(ctx), ErrWatchdogTimedOut) {
 						return nil, context.Cause(ctx)
@@ -324,7 +319,7 @@ func TestWatchdogKillsStuckAgentAndRetries(t *testing.T) {
 	var lastErr error
 	for attempt := 0; attempt <= 3; attempt++ {
 		wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd)
 		wd.Stop()
 
 		if err == nil {
@@ -347,7 +342,7 @@ func TestWatchdogParentCancelStopsImmediately(t *testing.T) {
 
 	started := make(chan struct{})
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 			close(started)
 			<-ctx.Done()
 			return nil, context.Cause(ctx)
@@ -361,7 +356,7 @@ func TestWatchdogParentCancelStopsImmediately(t *testing.T) {
 
 	doneCh := make(chan error, 1)
 	go func() {
-		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd)
 		wd.Stop()
 		doneCh <- err
 	}()
@@ -385,7 +380,7 @@ func TestWatchdogKeepsActiveAgentAlive(t *testing.T) {
 
 	timeout := 200 * time.Millisecond
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ SpawnRunConfig, watchdog *SubagentWatchdog) (*SpawnResult, error) {
 			// Simulate a long-running agent that keeps touching the watchdog.
 			ticker := time.NewTicker(50 * time.Millisecond)
 			defer ticker.Stop()
@@ -394,7 +389,7 @@ func TestWatchdogKeepsActiveAgentAlive(t *testing.T) {
 			for {
 				select {
 				case <-ticker.C:
-					touchFn()
+					watchdog.Touch()
 				case <-elapsed:
 					return &SpawnResult{Text: "done"}, nil
 				case <-ctx.Done():
@@ -408,7 +403,7 @@ func TestWatchdogKeepsActiveAgentAlive(t *testing.T) {
 	defer safetyCancel()
 
 	wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-	result, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+	result, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd)
 	wd.Stop()
 
 	if err != nil {
@@ -426,14 +421,14 @@ func TestWatchdogSafetyNetFiresWhenAgentTouchesButNeverConverges(t *testing.T) {
 	safetyTimeout := 300 * time.Millisecond
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ SpawnRunConfig, watchdog *SubagentWatchdog) (*SpawnResult, error) {
 			// Agent keeps touching but never completes — safety net should fire.
 			ticker := time.NewTicker(50 * time.Millisecond)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
-					touchFn()
+					watchdog.Touch()
 				case <-ctx.Done():
 					return nil, context.Cause(ctx)
 				}
@@ -445,7 +440,7 @@ func TestWatchdogSafetyNetFiresWhenAgentTouchesButNeverConverges(t *testing.T) {
 	defer safetyCancel()
 
 	wdCtx, wd := NewSubagentWatchdog(safetyCtx, watchdogTimeout, slog.Default())
-	_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+	_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd)
 	wd.Stop()
 
 	if err == nil {
@@ -465,7 +460,7 @@ func TestWatchdogStoppedAfterSuccess(t *testing.T) {
 
 	timeout := 100 * time.Millisecond
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 			return &SpawnResult{Text: "instant"}, nil
 		},
 	}
@@ -474,7 +469,7 @@ func TestWatchdogStoppedAfterSuccess(t *testing.T) {
 	defer safetyCancel()
 
 	wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-	result, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+	result, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd)
 	wd.Stop()
 
 	if err != nil {
@@ -499,7 +494,7 @@ func TestWatchdogRetryBudget(t *testing.T) {
 
 	callCount := atomic.Int32{}
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 			callCount.Add(1)
 			<-ctx.Done() // always stuck
 			return nil, context.Cause(ctx)
@@ -512,7 +507,7 @@ func TestWatchdogRetryBudget(t *testing.T) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		wdCtx, wd := NewSubagentWatchdog(safetyCtx, timeout, slog.Default())
-		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd.Touch)
+		_, err := agent.GenerateWithWatchdog(wdCtx, SpawnRunConfig{}, wd)
 		wd.Stop()
 		if err == nil {
 			t.Fatal("should not succeed")

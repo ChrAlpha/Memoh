@@ -558,25 +558,21 @@ func injectToolProviders(a *native.Agent, msgService *message.DBService, hookSer
 		}
 		if sp, ok := p.(*agenttools.SpawnProvider); ok {
 			adapter := native.NewSpawnAdapter(a)
-			// Incremental step persistence and live runtime publishing both key
-			// off the admitted run handle AdmitSubagentRun leaves on the run
-			// context; when either is unavailable the adapter degrades to the
-			// terminal-snapshot behavior on its own.
-			adapter.SetStepCommitFactory(agentService.SubagentStepCommit)
+			// A spawned run is armed like every admitted native run: its
+			// thread's history, step persistence and in-place compaction all
+			// key off the admitted run handle AdmitSubagentRun leaves on the
+			// run context, as does live runtime publishing.
+			adapter.SetRunBinder(agentService.BindSubagentRun)
 			adapter.SetRunObserverFactory(agentService.SubagentRunObserver)
 			// The parent model reads a spawned run's failure by the code the
 			// run itself failed with.
 			adapter.SetFailureTranslator(agentService.SubagentFailure)
 			sp.SetAgent(adapter)
 			sp.SetMessageService(msgService)
-			sp.SetSystemPromptFunc(native.SpawnSystemPrompt)
 			sp.SetHookService(hookService)
 			// A spawned turn takes its thread's single run slot like any other,
 			// so without admission this provider starts nothing.
 			sp.SetSubagentAdmitter(agentService)
-			// A spawned turn replays the same history window a direct turn on
-			// the agent's thread does.
-			sp.SetTranscriptLoader(agentService)
 		}
 	}
 }

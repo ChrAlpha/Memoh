@@ -16,7 +16,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	"github.com/felinics/memoh/internal/apperror"
-	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
 func newStepPersistProvider(t *testing.T, agent SpawnAgent, admitter SubagentAdmitter) (*SpawnProvider, *fakeAgentMessageService) {
@@ -27,7 +26,6 @@ func newStepPersistProvider(t *testing.T, agent SpawnAgent, admitter SubagentAdm
 	p.sessionService = &fakeAgentSessionService{}
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
-	p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 	p.SetSubagentAdmitter(admitter)
 	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{
@@ -169,7 +167,7 @@ func TestSubagentDoesNotRetryAfterPersistedStep(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 			retryErr := ErrWatchdogTimedOut
 			if cfg.OnStepPersisted != nil {
 				cfg.OnStepPersisted()
@@ -208,7 +206,7 @@ func TestSubagentStillRetriesBeforeAnyPersistedStep(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{}
-	agent.generateFunc = func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+	agent.generateFunc = func(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 		if agent.generateCount.Load() == 1 {
 			retryErr := ErrWatchdogTimedOut
 			if cfg.Attempt != 1 || cfg.MaxAttempts != subagentMaxRetries+1 {
@@ -249,7 +247,7 @@ func TestSubagentDoesNotRetryProviderFailure(t *testing.T) {
 
 	providerErr := apperror.Wrap(apperror.CodeAgentProviderOverloaded, errors.New("mid-stream retry: all 5 attempts failed (last: api error 529)"), nil)
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 			if cfg.ResolveAttempt == nil || cfg.ResolveAttempt(providerErr) != SpawnAttemptFailure {
 				t.Errorf("provider failure disposition is not failure")
 			}
@@ -287,21 +285,15 @@ func assertCatalogFailure(t *testing.T, result map[string]any, code apperror.Cod
 	}
 }
 
-// TestSubagentSkipsTerminalPersistWhenStepsOwnHistory: a result marked
-// Persisted means incremental persistence already wrote every step, so the
-// terminal snapshot must not write the messages again.
-func TestSubagentSkipsTerminalPersistWhenStepsOwnHistory(t *testing.T) {
+// TestSubagentWritesOnlyItsTaskRow: the run persists its own steps as they
+// commit, so the spawn writes nothing for the result: the thread holds only
+// the task the spawn wrote before the run started.
+func TestSubagentWritesOnlyItsTaskRow(t *testing.T) {
 	t.Parallel()
 
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			return &SpawnResult{
-				Text: "done",
-				Messages: []sdk.Message{
-					sdk.AssistantMessage("done"),
-				},
-				Persisted: true,
-			}, nil
+		generateFunc: func(context.Context, SpawnRunConfig, *SubagentWatchdog) (*SpawnResult, error) {
+			return &SpawnResult{Text: "done"}, nil
 		},
 	}
 	p, messageSvc := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
@@ -311,37 +303,27 @@ func TestSubagentSkipsTerminalPersistWhenStepsOwnHistory(t *testing.T) {
 		"id":   "worker",
 		"task": "do the work",
 	}))
-	if result["status"] != string(background.TaskCompleted) {
-		t.Fatalf("status = %v, want completed", result["status"])
+	if result["status"] != string(background.TaskCompleted) || result["text"] != "done" {
+		t.Fatalf("result = %v, want the run's answer", result)
 	}
-
-	childSessionID, _ := result["session_id"].(string)
-	msgs, err := messageSvc.ListBySession(context.Background(), childSessionID)
-	if err != nil {
-		t.Fatalf("list session messages: %v", err)
-	}
-	// Only the pre-run user message may be present; the assistant output was
-	// declared persisted by the step committer and must not be written twice.
-	for _, msg := range msgs {
-		if msg.Role != "user" {
-			t.Fatalf("terminal persist wrote a %s message despite Persisted=true", msg.Role)
-		}
+	inputs := messageSvc.persistInputs()
+	if len(inputs) != 1 || inputs[0].Role != "user" {
+		t.Fatalf("spawn wrote %+v, want only the task row", inputs)
 	}
 }
 
-// TestSubagentMessagesFileUnderAdmittedTurn: the task's user message becomes
-// the admitted turn's request row (TurnID + TurnPosition), and the assistant
-// rows bind to it via TurnRequestMessageID — one history turn per task, the
-// same turn the runtime view names, so a mid-stream reader sees one loop.
-func TestSubagentMessagesFileUnderAdmittedTurn(t *testing.T) {
+// TestSubagentTaskFilesUnderAdmittedTurn: the task's user message becomes the
+// admitted turn's request row (TurnID + TurnPosition), which the run answers
+// and binds its steps to: one history turn per task, the same turn the
+// runtime view names, so a mid-stream reader sees one loop.
+func TestSubagentTaskFilesUnderAdmittedTurn(t *testing.T) {
 	t.Parallel()
 
+	var task SpawnRunConfig
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, _ SpawnRunConfig, _ func()) (*SpawnResult, error) {
-			return &SpawnResult{
-				Text:     "done",
-				Messages: []sdk.Message{sdk.AssistantMessage("done")},
-			}, nil
+		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
+			task = cfg
+			return &SpawnResult{Text: "done"}, nil
 		},
 	}
 	p, messageSvc := newStepPersistProvider(t, agent, &fakeSubagentAdmitter{})
@@ -353,32 +335,42 @@ func TestSubagentMessagesFileUnderAdmittedTurn(t *testing.T) {
 	})
 
 	inputs := messageSvc.persistInputs()
-	var userInput, assistantInput *messagepkg.PersistInput
-	for i := range inputs {
-		switch inputs[i].Role {
-		case "user":
-			userInput = &inputs[i]
-		case "assistant":
-			assistantInput = &inputs[i]
-		}
+	if len(inputs) != 1 || inputs[0].Role != "user" {
+		t.Fatalf("spawn wrote %+v, want the task row", inputs)
 	}
-	if userInput == nil || assistantInput == nil {
-		t.Fatalf("expected user and assistant rows, got %d inputs", len(inputs))
+	request := inputs[0]
+	if request.TurnID == "" || request.TurnPosition == nil || request.RunID == "" {
+		t.Fatalf("task row lacks the admitted turn identity: %+v", request)
 	}
-	if userInput.TurnID == "" || userInput.TurnPosition == nil {
-		t.Fatalf("user row lacks the admitted turn identity: %+v", userInput)
+	stored, _ := messageSvc.ListBySession(context.Background(), request.SessionID)
+	if len(stored) != 1 || task.TurnRequestMessageID != stored[0].ID {
+		t.Fatalf("run answers %q, want the task row %+v", task.TurnRequestMessageID, stored)
 	}
-	if userInput.RunID == "" {
-		t.Fatal("user row lacks the run id")
+	if task.RunID != request.RunID || task.TurnPosition == nil || *task.TurnPosition != *request.TurnPosition {
+		t.Fatalf("run identity = run %q position %v, want the task row's %q at %d", task.RunID, task.TurnPosition, request.RunID, *request.TurnPosition)
 	}
-	if assistantInput.TurnID != "" || assistantInput.TurnPosition != nil {
-		t.Fatal("assistant row must not mint a turn of its own")
+}
+
+// TestSubagentFailsWhenItsTaskCannotPersist: the task row is the run's input,
+// so a task whose row cannot be written fails before its run starts.
+func TestSubagentFailsWhenItsTaskCannotPersist(t *testing.T) {
+	t.Parallel()
+
+	agent := &mockSpawnAgent{}
+	admitter := &fakeSubagentAdmitter{}
+	p, messageSvc := newStepPersistProvider(t, agent, admitter)
+	messageSvc.persistErr = errors.New("history unavailable")
+	session := SessionContext{BotID: "bot1", SessionID: "parent1"}
+
+	result := asMap(t, mustExecuteAgentTool(t, p, session, "spawn_agent", map[string]any{
+		"id":   "worker",
+		"task": "do the work",
+	}))
+	if result["status"] != string(background.TaskFailed) || agent.generateCount.Load() != 0 {
+		t.Fatalf("status = %v with %d runs, want the task failed before its run", result["status"], agent.generateCount.Load())
 	}
-	if assistantInput.TurnRequestMessageID == "" {
-		t.Fatal("assistant row does not bind to the task's request message")
-	}
-	if assistantInput.RunID != userInput.RunID {
-		t.Fatalf("run ids diverge: user %q assistant %q", userInput.RunID, assistantInput.RunID)
+	if terminals := admitter.terminals(); len(terminals) != 1 || !strings.Contains(terminals[0].cause, "history unavailable") {
+		t.Fatalf("terminal records = %#v, want the admitted run ended with the failure", terminals)
 	}
 }
 
@@ -430,14 +422,14 @@ func TestSubagentAbortedRunReportsKilled(t *testing.T) {
 
 	var touched atomic.Bool
 	agent := &mockSpawnAgent{
-		generateFunc: func(ctx context.Context, _ SpawnRunConfig, touchFn func()) (*SpawnResult, error) {
+		generateFunc: func(ctx context.Context, _ SpawnRunConfig, watchdog *SubagentWatchdog) (*SpawnResult, error) {
 			touched.Store(true)
 			ticker := time.NewTicker(10 * time.Millisecond)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
-					touchFn()
+					watchdog.Touch()
 				case <-ctx.Done():
 					return nil, context.Cause(ctx)
 				}

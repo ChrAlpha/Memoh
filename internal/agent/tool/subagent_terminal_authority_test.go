@@ -23,7 +23,7 @@ type terminalRaceSpawnAgent struct {
 func TestRunSubagentTaskRejectsCleanEndAfterOwningAbort(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 			cancel(context.Canceled)
 			if cfg.ResolveCompletion == nil {
 				t.Fatal("completion resolver is nil")
@@ -35,9 +35,8 @@ func TestRunSubagentTaskRejectsCleanEndAfterOwningAbort(t *testing.T) {
 		},
 	}
 	p := &SpawnProvider{
-		agent:       agent,
-		transcripts: &fakeTranscriptLoader{},
-		logger:      slog.New(slog.DiscardHandler),
+		agent:  agent,
+		logger: slog.New(slog.DiscardHandler),
 		modelResolver: func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 			return resolvedSubagentModel{}, nil
 		},
@@ -59,11 +58,7 @@ func TestRunSubagentTaskRejectsCleanEndAfterOwningAbort(t *testing.T) {
 	}
 }
 
-func (a *terminalRaceSpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
-	return a.GenerateWithWatchdog(ctx, cfg, func() {})
-}
-
-func (a *terminalRaceSpawnAgent) GenerateWithWatchdog(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+func (a *terminalRaceSpawnAgent) GenerateWithWatchdog(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 	if a.terminalErr != nil {
 		if cfg.ResolveAttempt == nil {
 			return nil, errors.New("attempt resolver is unavailable")
@@ -120,7 +115,6 @@ func TestSpawnedResolvedTerminalSurvivesLateBackgroundStop(t *testing.T) {
 			p.SetAgent(agent)
 			messageSvc := newFakeAgentMessageService()
 			p.SetMessageService(messageSvc)
-			p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 			p.SetSubagentAdmitter(&fakeSubagentAdmitter{})
 			p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 				return resolvedSubagentModel{

@@ -54,6 +54,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetRunBinder(taskOnlyBinder)
 	adapter.SetRunObserverFactory(func(ctx context.Context) native.SpawnRunObserver {
 		publish := service.SubagentRunObserver(ctx)
 		return func(event native.StreamEvent) native.SpawnRunObservation {
@@ -97,7 +98,7 @@ func TestSpawnCleanEndRacingAbortControlAlignsAllTerminals(t *testing.T) {
 		ReconcileTerminal: func(outcome tools.SpawnAttemptDisposition) {
 			terminalOutcome = outcome
 		},
-	}, func() {})
+	}, testSubagentWatchdog(t))
 	if !errors.Is(runErr, context.Canceled) {
 		t.Fatalf("spawn error = %v, want routed cancellation", runErr)
 	}

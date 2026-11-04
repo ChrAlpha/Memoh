@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log/slog"
 	"reflect"
 	"strconv"
 	"strings"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/background"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -35,11 +33,7 @@ type fakeSpawnAgent struct {
 	calls []SpawnRunConfig
 }
 
-func (f *fakeSpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
-	return f.GenerateWithWatchdog(ctx, cfg, func() {})
-}
-
-func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, cfg)
 	f.mu.Unlock()
@@ -58,11 +52,7 @@ func (f *fakeSpawnAgent) GenerateWithWatchdog(ctx context.Context, cfg SpawnRunC
 		return nil, errors.New(msg)
 	}
 	return &SpawnResult{
-		Text: "report for " + cfg.Query,
-		Messages: []sdk.Message{{
-			Role:    sdk.MessageRoleAssistant,
-			Content: []sdk.MessagePart{sdk.TextPart{Text: "report for " + cfg.Query}},
-		}},
+		Text:             "report for " + cfg.Query,
 		ContextLifecycle: f.contextLifecycle,
 	}, nil
 }
@@ -145,21 +135,6 @@ func (s *fakeAgentSessionService) CreateSubagent(ctx context.Context, input sess
 	return sess, config, nil
 }
 
-func (s *fakeAgentSessionService) ListSubagentForkContext(_ context.Context, sessionID string) ([]sessionpkg.SubagentForkContextMessage, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	contextMessages := s.contexts[sessionID]
-	out := make([]sessionpkg.SubagentForkContextMessage, 0, len(contextMessages))
-	for _, message := range contextMessages {
-		out = append(out, sessionpkg.SubagentForkContextMessage{
-			SourceMessageID: message.SourceMessageID,
-			Role:            message.Role,
-			Message:         append(json.RawMessage(nil), message.Message...),
-		})
-	}
-	return out, nil
-}
-
 func (s *fakeAgentSessionService) GetSubagentConfig(_ context.Context, sessionID string) (sessionpkg.SubagentConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -185,6 +160,13 @@ func (s *fakeAgentSessionService) ListSubagentsByParent(_ context.Context, paren
 	return out, nil
 }
 
+// forkContext is what the agent's thread inherited from its parent.
+func (s *fakeAgentSessionService) forkContext(sessionID string) []sessionpkg.SubagentForkContextMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]sessionpkg.SubagentForkContextMessage(nil), s.contexts[sessionID]...)
+}
+
 func (s *fakeAgentSessionService) byAgent(parentSessionID, agentID string) (sessionpkg.Thread, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -200,6 +182,8 @@ type fakeAgentMessageService struct {
 	mu       sync.Mutex
 	messages map[string][]messagepkg.Message
 	inputs   []messagepkg.PersistInput
+	// persistErr fails every write when set.
+	persistErr error
 }
 
 func newFakeAgentMessageService() *fakeAgentMessageService {
@@ -209,6 +193,9 @@ func newFakeAgentMessageService() *fakeAgentMessageService {
 func (s *fakeAgentMessageService) Persist(_ context.Context, input messagepkg.PersistInput) (messagepkg.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.persistErr != nil {
+		return messagepkg.Message{}, s.persistErr
+	}
 	s.inputs = append(s.inputs, input)
 	msg := messagepkg.Message{
 		ID:        "msg_" + strconv.Itoa(len(s.messages[input.SessionID])+1),
@@ -228,83 +215,6 @@ func (s *fakeAgentMessageService) persistInputs() []messagepkg.PersistInput {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]messagepkg.PersistInput(nil), s.inputs...)
-}
-
-// A tool call whose arguments cannot be encoded is typed as invalid argument
-// text, so the message persists with that text instead of being dropped.
-func TestPersistSubagentMessagesKeepsUnencodableInputAsText(t *testing.T) {
-	messages := newFakeAgentMessageService()
-	provider := &SpawnProvider{
-		messageService: messages,
-		logger:         slog.New(slog.DiscardHandler),
-	}
-	req := &agentRequest{
-		agentSessionID:   "subagent-session",
-		parentSession:    SessionContext{BotID: "bot-1"},
-		requestMessageID: "request-1",
-		runtime:          resolvedSubagentModel{UUID: "model-1"},
-	}
-	result := &SpawnResult{Messages: []sdk.Message{
-		{
-			Role: sdk.MessageRoleAssistant,
-			Content: []sdk.MessagePart{sdk.ToolCallPart{
-				ToolCallID: "bad-call", ToolName: "bad", Input: toolexec.ArgumentsFromValue(func() {}),
-			}},
-		},
-		sdk.AssistantMessage("durable report"),
-	}}
-
-	if err := provider.persistMessages(context.Background(), req, result, false); err != nil {
-		t.Fatalf("persistMessages() error = %v", err)
-	}
-	inputs := messages.persistInputs()
-	if len(inputs) != 2 || inputs[0].Role != string(sdk.MessageRoleAssistant) || inputs[1].Role != string(sdk.MessageRoleAssistant) {
-		t.Fatalf("persisted inputs = %#v, want both assistant messages", inputs)
-	}
-	if !strings.Contains(string(inputs[0].Content), `"input":"0x`) {
-		t.Fatalf("unencodable input = %s, want the printed value as invalid argument text", inputs[0].Content)
-	}
-}
-
-// fakeTranscriptLoader stands in for the application's history window: it
-// replays every stored row of the agent's thread except the run's request.
-type fakeTranscriptLoader struct {
-	messages *fakeAgentMessageService
-
-	mu       sync.Mutex
-	requests []SubagentTranscriptRequest
-}
-
-func (l *fakeTranscriptLoader) LoadSubagentTranscript(ctx context.Context, req SubagentTranscriptRequest) ([]sdk.Message, error) {
-	l.mu.Lock()
-	l.requests = append(l.requests, req)
-	l.mu.Unlock()
-	if l.messages == nil {
-		return nil, nil
-	}
-	rows, err := l.messages.ListBySession(ctx, req.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]sdk.Message, 0, len(rows))
-	for _, row := range rows {
-		if row.ID == req.RequestMessageID {
-			continue
-		}
-		if converted, ok := sdkMessageFromPersisted(row); ok {
-			out = append(out, converted)
-		}
-	}
-	return out, nil
-}
-
-func (l *fakeTranscriptLoader) requestAt(index int) (SubagentTranscriptRequest, bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if index < 0 || index >= len(l.requests) {
-		return SubagentTranscriptRequest{}, false
-	}
-	return l.requests[index], true
 }
 
 func (s *fakeAgentMessageService) ListBySession(_ context.Context, sessionID string) ([]messagepkg.Message, error) {
@@ -418,7 +328,6 @@ func newAgentControlProviderWithAdmitter(t *testing.T, agent *fakeSpawnAgent, ad
 	p.sessionService = sessionSvc
 	p.SetAgent(agent)
 	p.SetMessageService(messageSvc)
-	p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 	p.SetSubagentAdmitter(admitter)
 	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{
@@ -651,6 +560,7 @@ func TestSendMessageReusesSessionAndHistory(t *testing.T) {
 		t.Fatalf("expected send_message to reuse child session, first=%v second=%v", first, second)
 	}
 
+	firstCall, _ := agent.callAt(0)
 	call, ok := agent.callAt(1)
 	if !ok {
 		t.Fatal("expected second agent call")
@@ -658,17 +568,17 @@ func TestSendMessageReusesSessionAndHistory(t *testing.T) {
 	if call.Identity.SessionID != first["session_id"] {
 		t.Fatalf("expected reused identity session, got %q want %q", call.Identity.SessionID, first["session_id"])
 	}
-	if len(call.Messages) < 2 {
-		t.Fatalf("expected persisted history loaded into second call, got %d messages", len(call.Messages))
-	}
 	rec, ok := sessions.byAgent("parent1", "worker")
 	if !ok || rec.Metadata["agent_control_version"] != agentControlVersion {
 		t.Fatalf("expected persisted agent metadata, got %+v", rec)
 	}
+	// Each task is a request row of the thread, which its run answers; the
+	// run reads the rows before it as its history.
 	stored, _ := messages.ListBySession(context.Background(), first["session_id"].(string))
-	if len(stored) != 4 {
+	if len(stored) != 2 || stored[0].ID != firstCall.TurnRequestMessageID || stored[1].ID != call.TurnRequestMessageID ||
+		!strings.Contains(string(stored[1].Content), "second") {
 		raw, _ := json.Marshal(stored)
-		t.Fatalf("expected two user+assistant turns persisted, got %d: %s", len(stored), raw)
+		t.Fatalf("task rows = %s, want each task persisted as the request its run answers", raw)
 	}
 }
 
@@ -694,9 +604,11 @@ func TestSpawnAgentRecordsPinnedModelOnSessionMetadata(t *testing.T) {
 	}
 }
 
-func TestForkedSubagentKeepsInvisibleParentSnapshotAcrossFollowUps(t *testing.T) {
+// A forked agent's thread inherits the parent's snapshot once, as rows the
+// chat view leaves out; its runs read them back as the start of its history.
+func TestForkedSubagentStoresTheParentSnapshotOnItsThread(t *testing.T) {
 	agent := &fakeSpawnAgent{}
-	p, _, _, messages := newAgentControlProvider(t, agent)
+	p, _, sessions, messages := newAgentControlProvider(t, agent)
 	parentMessages := []sdk.Message{
 		sdk.UserMessage("parent question"),
 		sdk.AssistantMessage("parent working context"),
@@ -715,51 +627,54 @@ func TestForkedSubagentKeepsInvisibleParentSnapshotAcrossFollowUps(t *testing.T)
 	if first["fork"] != true {
 		t.Fatalf("expected fork metadata in result, got %v", first)
 	}
-	firstCall, ok := agent.callAt(0)
-	if !ok || !reflect.DeepEqual(firstCall.Messages, parentMessages) {
-		t.Fatalf("expected only invisible parent prefix before first child query, got %+v", firstCall.Messages)
+	child := first["session_id"].(string)
+	inherited := sessions.forkContext(child)
+	if len(inherited) != 2 || inherited[0].Role != "user" || inherited[1].Role != "assistant" {
+		t.Fatalf("inherited rows = %+v, want the parent snapshot in order", inherited)
 	}
-	stored, _ := messages.ListBySession(context.Background(), first["session_id"].(string))
-	if len(stored) != 2 {
-		t.Fatalf("fork prefix must not be copied into visible child history, got %d stored messages", len(stored))
+	stored, _ := messages.ListBySession(context.Background(), child)
+	if len(stored) != 1 || stored[0].Role != "user" {
+		t.Fatalf("visible child rows = %+v, want only the task", stored)
 	}
 
 	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{
 		"id":      "worker",
 		"message": "second child task",
 	})
-	secondCall, ok := agent.callAt(1)
-	if !ok || len(secondCall.Messages) != 4 {
-		t.Fatalf("expected parent prefix plus first child turn, got %+v", secondCall.Messages)
+	second, ok := agent.callAt(1)
+	if !ok || second.Identity.SessionID != child || second.TurnRequestMessageID == "" {
+		t.Fatalf("follow-up = %+v, want a task on the same thread with its own request", second)
 	}
-	if !reflect.DeepEqual(secondCall.Messages[:2], parentMessages) {
-		t.Fatalf("follow-up lost immutable parent prefix: %+v", secondCall.Messages)
+	if again := sessions.forkContext(child); len(again) != 2 {
+		t.Fatalf("follow-up copied the snapshot again: %d inherited rows", len(again))
 	}
 }
 
 func TestNonForkedSubagentDoesNotInheritAvailableParentSnapshot(t *testing.T) {
 	agent := &fakeSpawnAgent{}
-	p, _, _, _ := newAgentControlProvider(t, agent)
+	p, _, sessions, _ := newAgentControlProvider(t, agent)
 	session := SessionContext{
 		BotID:       "bot1",
 		SessionID:   "parent1",
 		ForkContext: NewMessageSnapshot([]sdk.Message{sdk.UserMessage("parent-only")}),
 	}
 
-	mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{
+	result := asMap(t, mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{
 		"id":   "worker",
 		"task": "isolated child task",
-	})
-	call, ok := agent.callAt(0)
-	if !ok || len(call.Messages) != 0 {
-		t.Fatalf("fork=false should not inherit parent context, got %+v", call.Messages)
+	}))
+	if inherited := sessions.forkContext(result["session_id"].(string)); len(inherited) != 0 {
+		t.Fatalf("fork=false inherited %+v, want nothing", inherited)
 	}
 }
 
-func TestSpawnAgentPersistsLifecycleOnFinalAssistantAndAssociatesItsID(t *testing.T) {
+// The run's lifecycle snapshot reaches the admitted run's terminal. The run
+// writes its own rows as its steps commit; the spawn writes only the task.
+func TestSpawnAgentHandsTheRunsLifecycleToItsTerminal(t *testing.T) {
 	snapshot := &contextfrag.LifecycleSnapshot{
-		Version: 1,
-		Counts:  contextfrag.ManifestCounts{Fragments: 3, Messages: 2},
+		Version:            1,
+		Counts:             contextfrag.ManifestCounts{Fragments: 3, Messages: 2},
+		AssistantMessageID: "assistant-1",
 	}
 	admitter := &fakeSubagentAdmitter{}
 	p, _, sessions, messages := newAgentControlProviderWithAdmitter(
@@ -780,19 +695,12 @@ func TestSpawnAgentPersistsLifecycleOnFinalAssistantAndAssociatesItsID(t *testin
 	if err != nil {
 		t.Fatalf("ListBySession error: %v", err)
 	}
-	if len(stored) != 2 {
-		t.Fatalf("persisted messages = %d, want user and assistant", len(stored))
-	}
-	metadataSnapshot, ok := stored[1].Metadata[contextfrag.MetadataContextLifecycleKey].(contextfrag.LifecycleSnapshot)
-	if !ok || metadataSnapshot.Counts.Fragments != snapshot.Counts.Fragments {
-		t.Fatalf("assistant metadata lifecycle = %#v, want content-light snapshot", stored[1].Metadata)
+	if len(stored) != 1 || stored[0].Role != "user" {
+		t.Fatalf("spawn wrote %+v, want only the task", stored)
 	}
 	terminals := admitter.terminals()
-	if len(terminals) != 1 || terminals[0].contextLifecycle == nil {
-		t.Fatalf("terminal records = %#v, want one lifecycle snapshot", terminals)
-	}
-	if got := terminals[0].contextLifecycle.AssistantMessageID; got != stored[1].ID {
-		t.Fatalf("assistant message association = %q, want %q", got, stored[1].ID)
+	if len(terminals) != 1 || !reflect.DeepEqual(terminals[0].contextLifecycle, snapshot) {
+		t.Fatalf("terminal records = %#v, want the run's lifecycle snapshot", terminals)
 	}
 }
 
@@ -1012,23 +920,19 @@ func TestQueuedAgentMessageDoesNotPersistBeforeItRuns(t *testing.T) {
 	waitUntil(t, 2*time.Second, func() bool {
 		return len(agent.queries()) == 2
 	})
+	firstCall, _ := agent.callAt(0)
 	secondCall, ok := agent.callAt(1)
 	if !ok {
 		t.Fatal("expected queued message to run")
 	}
-	if got := len(secondCall.Messages); got != 2 {
-		t.Fatalf("expected second run history to exclude current repeated query, got %d messages", got)
+	// The repeated text is a request of its own: the run answers its row, not
+	// the first task's.
+	stored, _ = messages.ListBySession(context.Background(), childSessionID)
+	if len(stored) != 2 || secondCall.TurnRequestMessageID == "" || secondCall.TurnRequestMessageID == firstCall.TurnRequestMessageID ||
+		stored[1].ID != secondCall.TurnRequestMessageID {
+		raw, _ := json.Marshal(stored)
+		t.Fatalf("queued run answers %q after %q, rows %s: want its own request row", secondCall.TurnRequestMessageID, firstCall.TurnRequestMessageID, raw)
 	}
-	if secondCall.Messages[0].Role != sdk.MessageRoleUser || strings.TrimSpace(messageContentTextForTest(secondCall.Messages[0])) != "repeat" {
-		t.Fatalf("expected previous user turn first in history, got %+v", secondCall.Messages[0])
-	}
-	if secondCall.Messages[1].Role != sdk.MessageRoleAssistant {
-		t.Fatalf("expected previous assistant turn second in history, got %+v", secondCall.Messages[1])
-	}
-	waitUntil(t, 2*time.Second, func() bool {
-		stored, _ := messages.ListBySession(context.Background(), childSessionID)
-		return len(stored) == 4
-	})
 }
 
 func TestBackgroundWaitTimeoutDoesNotCancelRunningAgentTask(t *testing.T) {
@@ -1109,39 +1013,12 @@ func TestListAgentsScopedByCurrentSession(t *testing.T) {
 	}
 }
 
-// History rows hold the stored content shape; the subagent context reader
-// types them through the history codec, so argument objects and nested
-// annotations survive instead of failing an SDK decode.
-func TestSDKMessageFromPersistedTypesStoredRow(t *testing.T) {
-	msg, ok := sdkMessageFromPersisted(messagepkg.Message{
-		ID:      "m1",
-		Role:    "assistant",
-		Content: json.RawMessage(`{"role":"assistant","content":[{"type":"tool-call","toolCallId":"call-1","toolName":"exec","input":{"command":"ls && pwd"},"providerMetadata":{"approval":{"approval_id":"a1","status":"approved"}}}]}`),
-	})
-	if !ok || msg.Role != sdk.MessageRoleAssistant || len(msg.Content) != 1 {
-		t.Fatalf("message = %#v, ok=%v", msg, ok)
-	}
-	call, isCall := msg.Content[0].(sdk.ToolCallPart)
-	if !isCall {
-		t.Fatalf("part = %#v, want a tool call", msg.Content[0])
-	}
-	if args, _ := toolexec.ArgumentsValue(call.Input).(map[string]any); args["command"] != "ls && pwd" {
-		t.Fatalf("tool call input = %#v", toolexec.ArgumentsValue(call.Input))
-	}
-	if approval, ok := partmeta.Object(call.ProviderMetadata, partmeta.KeyApproval); !ok || approval["status"] != "approved" {
-		t.Fatalf("approval annotation = %#v", call.ProviderMetadata)
-	}
-	if _, ok := sdkMessageFromPersisted(messagepkg.Message{Role: "assistant", Content: json.RawMessage(`{"role":"assistant","content":[]}`)}); ok {
-		t.Fatal("empty row must be skipped")
-	}
-}
-
-// A parent thread may hold an assistant message without content (a step that
-// produced neither text nor calls). The fork skips such a row, as the
-// direct-turn reader does, instead of refusing the whole fork.
-func TestForkedSubagentToleratesEmptyParentMessage(t *testing.T) {
+// A parent snapshot may hold an assistant message without content (a step
+// that produced neither text nor calls). It renders nothing, so the fork
+// copies the rest of the snapshot without it.
+func TestForkedSubagentSkipsEmptyParentMessage(t *testing.T) {
 	agent := &fakeSpawnAgent{}
-	p, _, _, _ := newAgentControlProvider(t, agent)
+	p, _, sessions, _ := newAgentControlProvider(t, agent)
 	parentMessages := []sdk.Message{
 		sdk.UserMessage("parent question"),
 		{Role: sdk.MessageRoleAssistant},
@@ -1150,21 +1027,9 @@ func TestForkedSubagentToleratesEmptyParentMessage(t *testing.T) {
 	session := SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: NewMessageSnapshot(parentMessages)}
 
 	result := asMap(t, mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true}))
-	if result["fork"] != true {
-		t.Fatalf("fork result = %v", result)
-	}
-	// The follow-up reloads the fork rows from storage.
-	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
-	second, ok := agent.callAt(1)
-	if !ok {
-		t.Fatal("follow-up call missing")
-	}
-	var texts []string
-	for _, msg := range second.Messages[:2] {
-		texts = append(texts, messageContentTextForTest(msg))
-	}
-	if texts[0] != "parent question" || texts[1] != "parent working context" {
-		t.Fatalf("fork prefix after reload = %q, want the two non-empty parent messages", texts)
+	inherited := sessions.forkContext(result["session_id"].(string))
+	if len(inherited) != 2 || !strings.Contains(string(inherited[0].Message), "parent question") || !strings.Contains(string(inherited[1].Message), "parent working context") {
+		t.Fatalf("inherited rows = %+v, want the two parent messages with content", inherited)
 	}
 }
 
@@ -1173,34 +1038,18 @@ func TestForkedSubagentToleratesEmptyParentMessage(t *testing.T) {
 // content from the workspace itself; images are inherited as they are.
 func TestForkedSubagentInheritsFileNameNotFileBytes(t *testing.T) {
 	agent := &fakeSpawnAgent{}
-	p, _, _, _ := newAgentControlProvider(t, agent)
+	p, _, sessions, _ := newAgentControlProvider(t, agent)
 	parentMessages := []sdk.Message{
 		sdk.UserMessage("read this", sdk.FilePart{Data: "JVBERi0xLjQ=", MediaType: "application/pdf", Filename: "brief.pdf"}),
 	}
 	session := SessionContext{BotID: "bot1", SessionID: "parent1", ForkContext: NewMessageSnapshot(parentMessages)}
-	mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true})
-	mustExecuteAgentTool(t, p, session, ToolSendMessage().String(), map[string]any{"id": "worker", "message": "again"})
-	second, ok := agent.callAt(1)
-	if !ok {
-		t.Fatal("follow-up call missing")
+	result := asMap(t, mustExecuteAgentTool(t, p, session, ToolSpawnAgent().String(), map[string]any{"id": "worker", "task": "child task", "fork": true}))
+	inherited := sessions.forkContext(result["session_id"].(string))
+	if len(inherited) != 1 {
+		t.Fatalf("inherited rows = %+v, want the parent message", inherited)
 	}
-	text := messageContentTextForTest(second.Messages[0])
-	if !strings.Contains(text, "brief.pdf") || !strings.Contains(text, "application/pdf") {
-		t.Fatalf("forked prefix = %q, want the attachment name and type", text)
+	row := string(inherited[0].Message)
+	if !strings.Contains(row, "brief.pdf") || !strings.Contains(row, "application/pdf") || strings.Contains(row, "JVBERi0xLjQ=") {
+		t.Fatalf("inherited row = %s, want the attachment name and type without its bytes", row)
 	}
-	for _, part := range second.Messages[0].Content {
-		if _, isFile := part.(sdk.FilePart); isFile {
-			t.Fatalf("forked prefix carries document bytes: %#v", part)
-		}
-	}
-}
-
-func messageContentTextForTest(message sdk.Message) string {
-	var b strings.Builder
-	for _, part := range message.Content {
-		if text, ok := part.(sdk.TextPart); ok {
-			b.WriteString(text.Text)
-		}
-	}
-	return b.String()
 }

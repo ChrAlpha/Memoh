@@ -239,39 +239,3 @@ func (q *Queries) GetSubagentConfig(ctx context.Context, sessionID pgtype.UUID) 
 	)
 	return i, err
 }
-
-const listSubagentForkContext = `-- name: ListSubagentForkContext :many
-SELECT role, content
-FROM bot_history_messages
-WHERE team_id = public.memoh_current_team_id()
-  AND session_id = $1
-  AND session_mode = 'subagent'
-  AND turn_visible = false
-  AND metadata->>'context_scope' = 'subagent_fork'
-ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC
-`
-
-type ListSubagentForkContextRow struct {
-	Role    string `json:"role"`
-	Content []byte `json:"content"`
-}
-
-func (q *Queries) ListSubagentForkContext(ctx context.Context, sessionID pgtype.UUID) ([]ListSubagentForkContextRow, error) {
-	rows, err := q.db.Query(ctx, listSubagentForkContext, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListSubagentForkContextRow
-	for rows.Next() {
-		var i ListSubagentForkContextRow
-		if err := rows.Scan(&i.Role, &i.Content); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}

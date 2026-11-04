@@ -10,11 +10,9 @@ import (
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
-	"github.com/google/uuid"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
-	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 )
 
@@ -27,56 +25,31 @@ func TestSpawnRunConfigPreservesAdmittedRunID(t *testing.T) {
 	}
 }
 
-func TestSpawnRunConfigMintsRunIDForDirectCaller(t *testing.T) {
-	first := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{})
-	second := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{RunID: " \t"})
-
-	if _, err := uuid.Parse(first.RunID); err != nil {
-		t.Fatalf("first RunID = %q, want minted UUID: %v", first.RunID, err)
-	}
-	if _, err := uuid.Parse(second.RunID); err != nil {
-		t.Fatalf("second RunID = %q, want minted UUID: %v", second.RunID, err)
-	}
-	if first.RunID == second.RunID {
-		t.Fatalf("direct callers received the same RunID %q", first.RunID)
-	}
-}
-
-func TestSpawnAdapterStepCommitSharesLifecycleAndInstallsInterrupt(t *testing.T) {
+// The binder arms the run on the lifecycle the adapter reports, so what it
+// records lands on the result.
+func TestSpawnAdapterBindsTheRunsLifecycle(t *testing.T) {
 	adapter := NewSpawnAdapter(newTestAgent())
 	var captured *contextfrag.LifecycleHolder
-	adapter.SetStepCommitFactory(func(
-		_ context.Context,
-		_, _, _, _ string,
-		lifecycle *contextfrag.LifecycleHolder,
-		_ func(),
-	) (
-		func(context.Context, int, *step.Record) error,
-		func(context.Context, int, *step.Record) error,
-	) {
-		captured = lifecycle
-		callback := func(context.Context, int, *step.Record) error { return nil }
-		return callback, callback
+	adapter.SetRunBinder(func(_ context.Context, task tools.SpawnRunConfig, rc *RunConfig, _ *tools.SubagentWatchdog) (func(context.Context) error, error) {
+		renderTask(task, rc)
+		captured = rc.ContextLifecycle
+		captured.SetAssistantMessageID("assistant-1")
+		return func(context.Context) error { return nil }, nil
 	})
-	rc := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{})
-
-	if !adapter.installStepCommit(context.Background(), tools.SpawnRunConfig{}, &rc) {
-		t.Fatal("step persistence was not installed")
+	provider := &atomicMockProvider{
+		handler: func(_ int, _ sdk.Request) (sdk.ModelResult, error) {
+			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+		},
 	}
-	if captured == nil || captured != rc.ContextLifecycle {
-		t.Fatalf("captured lifecycle = %p, run lifecycle = %p", captured, rc.ContextLifecycle)
+	result, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
+		Model: &sdk.Model{ID: "spawn-bound-lifecycle", Provider: provider},
+		Query: "do the task",
+	}, testWatchdog(t))
+	if err != nil {
+		t.Fatalf("GenerateWithWatchdog error: %v", err)
 	}
-	if rc.OnStepCommitted == nil || rc.OnStepInterrupted == nil {
-		t.Fatal("complete and interrupted step callbacks must be installed together")
-	}
-	captured.SetManifest(contextfrag.Manifest{
-		View:   contextfrag.ViewRunConfigPreProvider,
-		Counts: contextfrag.ManifestCounts{Fragments: 2},
-	})
-	captured.SetAssistantMessageID("assistant-1")
-	snapshot, ok := rc.ContextLifecycle.Snapshot()
-	if !ok || snapshot.Counts.Fragments != 2 || snapshot.AssistantMessageID != "assistant-1" {
-		t.Fatalf("shared lifecycle snapshot = %#v, set = %v", snapshot, ok)
+	if captured == nil || result == nil || result.ContextLifecycle == nil || result.ContextLifecycle.AssistantMessageID != "assistant-1" {
+		t.Fatalf("result lifecycle = %#v, want the lifecycle the binder recorded on", result)
 	}
 }
 
@@ -86,7 +59,7 @@ func TestSpawnAdapterGenerateWithWatchdogCarriesLifecycleSnapshot(t *testing.T) 
 			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
-	result, err := NewSpawnAdapter(newTestAgent()).GenerateWithWatchdog(
+	result, err := newTaskAdapter(newTestAgent()).GenerateWithWatchdog(
 		context.Background(),
 		tools.SpawnRunConfig{
 			Model: &sdk.Model{
@@ -101,7 +74,7 @@ func TestSpawnAdapterGenerateWithWatchdogCarriesLifecycleSnapshot(t *testing.T) 
 				IsSubagent: true,
 			},
 		},
-		func() {},
+		testWatchdog(t),
 	)
 	if err != nil {
 		t.Fatalf("GenerateWithWatchdog error: %v", err)
@@ -138,7 +111,7 @@ func TestSpawnAdapterGenerateWithWatchdogClearsRecoveredStreamError(t *testing.T
 		},
 	}
 
-	result, err := NewSpawnAdapter(newTestAgent()).GenerateWithWatchdog(
+	result, err := newTaskAdapter(newTestAgent()).GenerateWithWatchdog(
 		context.Background(),
 		tools.SpawnRunConfig{
 			Model: &sdk.Model{
@@ -157,7 +130,7 @@ func TestSpawnAdapterGenerateWithWatchdogClearsRecoveredStreamError(t *testing.T
 				return tools.SpawnAttemptFailure
 			},
 		},
-		func() {},
+		testWatchdog(t),
 	)
 	if err != nil {
 		t.Fatalf("GenerateWithWatchdog retained recovered error: %v", err)
@@ -217,7 +190,7 @@ func TestSpawnAdapterGenerateWithWatchdogRejectsTextLoopAbort(t *testing.T) {
 		},
 	}
 	outerCtx := context.Background()
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newTaskAdapter(newTestAgent())
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
@@ -234,7 +207,7 @@ func TestSpawnAdapterGenerateWithWatchdogRejectsTextLoopAbort(t *testing.T) {
 			LoopDetection: tools.SpawnLoopConfig{Enabled: true},
 			Identity:      tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
 		},
-		func() {},
+		testWatchdog(t),
 	)
 	if err == nil || err.Error() != "agent run aborted" {
 		t.Fatalf("GenerateWithWatchdog error = %v, want generic abort cause", err)
@@ -279,7 +252,7 @@ func TestSpawnAdapterGenerateWithWatchdogPreservesOwningCancellationCause(t *tes
 		},
 	}
 
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newTaskAdapter(newTestAgent())
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
@@ -295,7 +268,7 @@ func TestSpawnAdapterGenerateWithWatchdogPreservesOwningCancellationCause(t *tes
 			SessionType: sessionmode.Subagent,
 			Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
 		},
-		func() {},
+		testWatchdog(t),
 	)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("GenerateWithWatchdog error = %v, want owning cancellation", err)
@@ -322,7 +295,7 @@ func TestSpawnAdapterGenerateWithWatchdogTreatsOtherContextCausesAsFailures(t *t
 		},
 	}
 
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newTaskAdapter(newTestAgent())
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
@@ -338,7 +311,7 @@ func TestSpawnAdapterGenerateWithWatchdogTreatsOtherContextCausesAsFailures(t *t
 			SessionType: sessionmode.Subagent,
 			Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
 		},
-		func() {},
+		testWatchdog(t),
 	)
 	if !errors.Is(err, wantCause) {
 		t.Fatalf("GenerateWithWatchdog error = %v, want owning failure %v", err, wantCause)
@@ -353,7 +326,7 @@ func TestSpawnAdapterGenerateFailureCarriesLifecycleSnapshot(t *testing.T) {
 			return sdk.ModelResult{}, providerErr
 		},
 	}
-	result, err := NewSpawnAdapter(newTestAgent()).Generate(
+	result, err := newTaskAdapter(newTestAgent()).GenerateWithWatchdog(
 		context.Background(),
 		tools.SpawnRunConfig{
 			Model: &sdk.Model{
@@ -368,12 +341,13 @@ func TestSpawnAdapterGenerateFailureCarriesLifecycleSnapshot(t *testing.T) {
 				IsSubagent: true,
 			},
 		},
+		testWatchdog(t),
 	)
 	if err == nil {
-		t.Fatal("Generate error = nil, want provider failure")
+		t.Fatal("GenerateWithWatchdog error = nil, want provider failure")
 	}
 	if result == nil || result.ContextLifecycle == nil {
-		t.Fatalf("Generate result = %#v, want failure lifecycle snapshot", result)
+		t.Fatalf("GenerateWithWatchdog result = %#v, want failure lifecycle snapshot", result)
 	}
 	if result.ContextLifecycle.Counts.Fragments == 0 || result.ContextLifecycle.Counts.Messages == 0 {
 		t.Fatalf("failure lifecycle counts = %+v, want assembled context", result.ContextLifecycle.Counts)

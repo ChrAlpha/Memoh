@@ -242,15 +242,16 @@ func TestPostgresCreateSubagentStoresForkContextAsHiddenHistory(t *testing.T) {
 		t.Fatalf("configless legacy subagent was not ignored: %+v", listed)
 	}
 
-	contextMessages, err := svc.ListSubagentForkContext(ctx, child.ID)
-	if err != nil {
-		t.Fatalf("list subagent fork context: %v", err)
-	}
-	if len(contextMessages) != 2 || contextMessages[0].Role != "assistant" || contextMessages[1].Role != "system" {
-		t.Fatalf("unexpected fork context: %+v", contextMessages)
-	}
-
+	// The inherited rows are the child's history: its history load reads
+	// them, in fork order, while the chat view leaves them out.
 	messageSvc := message.NewService(nil, postgresstore.NewQueries(dbsqlc.New(tx)))
+	history, err := messageSvc.ListHistoryWithinBytes(ctx, child.ID, message.HistoryWindow{MaxBytes: 1 << 20})
+	if err != nil {
+		t.Fatalf("load child history: %v", err)
+	}
+	if history.Truncated || len(history.Messages) != 2 || history.Messages[0].Role != "assistant" || history.Messages[1].Role != "system" {
+		t.Fatalf("unexpected child history: truncated=%v %+v", history.Truncated, history.Messages)
+	}
 	visible, err := messageSvc.ListBySession(ctx, child.ID)
 	if err != nil {
 		t.Fatalf("list visible child history: %v", err)

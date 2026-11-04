@@ -149,15 +149,7 @@ func subagentSubmission(req *agentRequest) ([]byte, error) {
 // rejectedAgentRun describes a task that never started, in the shape the
 // background record and the parent model both read.
 func rejectedAgentRun(req *agentRequest, cause error) agentRunResult {
-	res := agentRunResult{
-		AgentID:   req.agentID,
-		SessionID: req.agentSessionID,
-		TaskID:    req.taskID,
-		ModelID:   req.config.ModelID,
-		Provider:  req.config.ProviderName,
-		Fork:      req.config.Forked,
-		Message:   req.message,
-	}
+	res := newAgentRunResult(req)
 	if message, ok := subagentAdmissionMessage(cause); ok {
 		res.Error = message
 		return res

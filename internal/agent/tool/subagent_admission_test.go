@@ -150,11 +150,7 @@ type retryingIdentitySpawnAgent struct {
 	terminal *contextfrag.LifecycleSnapshot
 }
 
-func (a *retryingIdentitySpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
-	return a.GenerateWithWatchdog(ctx, cfg, func() {})
-}
-
-func (a *retryingIdentitySpawnAgent) GenerateWithWatchdog(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+func (a *retryingIdentitySpawnAgent) GenerateWithWatchdog(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, cfg)
@@ -162,11 +158,7 @@ func (a *retryingIdentitySpawnAgent) GenerateWithWatchdog(_ context.Context, cfg
 		return &SpawnResult{ContextLifecycle: a.first}, ErrWatchdogTimedOut
 	}
 	return &SpawnResult{
-		Text: "done",
-		Messages: []sdk.Message{{
-			Role:    sdk.MessageRoleAssistant,
-			Content: []sdk.MessagePart{sdk.TextPart{Text: "done"}},
-		}},
+		Text:             "done",
 		ContextLifecycle: a.terminal,
 	}, nil
 }
@@ -218,8 +210,8 @@ func TestSpawnedTurnReusesAdmittedRunIDAcrossRetries(t *testing.T) {
 	if len(terminals) != 1 {
 		t.Fatalf("terminal calls = %d, want 1", len(terminals))
 	}
-	if got := terminals[0].contextLifecycle; got == nil || got.Counts.Fragments != 2 || got.AssistantMessageID != "msg_2" {
-		t.Fatalf("terminal snapshot = %#v, want final retry snapshot associated with msg_2", got)
+	if got := terminals[0].contextLifecycle; got != final {
+		t.Fatalf("terminal snapshot = %#v, want the final retry's snapshot", got)
 	}
 }
 
@@ -227,11 +219,7 @@ type failedLifecycleSpawnAgent struct {
 	snapshot *contextfrag.LifecycleSnapshot
 }
 
-func (a *failedLifecycleSpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
-	return a.GenerateWithWatchdog(ctx, cfg, func() {})
-}
-
-func (a *failedLifecycleSpawnAgent) GenerateWithWatchdog(context.Context, SpawnRunConfig, func()) (*SpawnResult, error) {
+func (a *failedLifecycleSpawnAgent) GenerateWithWatchdog(context.Context, SpawnRunConfig, *SubagentWatchdog) (*SpawnResult, error) {
 	return &SpawnResult{ContextLifecycle: a.snapshot}, errors.New("provider unavailable")
 }
 
@@ -270,11 +258,7 @@ type abortingSpawnAgent struct {
 	snapshot *contextfrag.LifecycleSnapshot
 }
 
-func (a *abortingSpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
-	return a.GenerateWithWatchdog(ctx, cfg, func() {})
-}
-
-func (a *abortingSpawnAgent) GenerateWithWatchdog(context.Context, SpawnRunConfig, func()) (*SpawnResult, error) {
+func (a *abortingSpawnAgent) GenerateWithWatchdog(context.Context, SpawnRunConfig, *SubagentWatchdog) (*SpawnResult, error) {
 	a.calls++
 	return &SpawnResult{ContextLifecycle: a.snapshot}, errors.New("agent run aborted")
 }
@@ -312,14 +296,10 @@ func TestSpawnedTurnDoesNotCompleteAdmittedRunAfterAgentAbort(t *testing.T) {
 
 type canceledSubagentSpawnAgent struct{}
 
-func (*canceledSubagentSpawnAgent) Generate(ctx context.Context, cfg SpawnRunConfig) (*SpawnResult, error) {
-	return (&canceledSubagentSpawnAgent{}).GenerateWithWatchdog(ctx, cfg, func() {})
-}
-
 func (*canceledSubagentSpawnAgent) GenerateWithWatchdog(
 	ctx context.Context,
 	_ SpawnRunConfig,
-	_ func(),
+	_ *SubagentWatchdog,
 ) (*SpawnResult, error) {
 	return nil, context.Cause(ctx)
 }
@@ -328,9 +308,8 @@ func TestRunSubagentTaskPreservesOwningCancellationCause(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cancel(context.Canceled)
 	p := &SpawnProvider{
-		agent:       &canceledSubagentSpawnAgent{},
-		transcripts: &fakeTranscriptLoader{},
-		logger:      slog.New(slog.DiscardHandler),
+		agent:  &canceledSubagentSpawnAgent{},
+		logger: slog.New(slog.DiscardHandler),
 		modelResolver: func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 			return resolvedSubagentModel{}, nil
 		},
@@ -353,7 +332,7 @@ func TestRunSubagentTaskKeepsResolvedFailureWhenCancellationRaces(t *testing.T) 
 	providerErr := errors.New("provider failed before cancellation")
 	ctx, cancel := context.WithCancelCause(context.Background())
 	agent := &mockSpawnAgent{
-		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ func()) (*SpawnResult, error) {
+		generateFunc: func(_ context.Context, cfg SpawnRunConfig, _ *SubagentWatchdog) (*SpawnResult, error) {
 			if cfg.ResolveAttempt == nil {
 				t.Fatal("attempt resolver is nil")
 			}
@@ -365,9 +344,8 @@ func TestRunSubagentTaskKeepsResolvedFailureWhenCancellationRaces(t *testing.T) 
 		},
 	}
 	p := &SpawnProvider{
-		agent:       agent,
-		transcripts: &fakeTranscriptLoader{},
-		logger:      slog.New(slog.DiscardHandler),
+		agent:  agent,
+		logger: slog.New(slog.DiscardHandler),
 		modelResolver: func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 			return resolvedSubagentModel{}, nil
 		},
@@ -396,7 +374,6 @@ func newSubagentAdmissionTestProvider(t *testing.T, agent SpawnAgent, admitter S
 	p.SetAgent(agent)
 	messageSvc := newFakeAgentMessageService()
 	p.SetMessageService(messageSvc)
-	p.SetTranscriptLoader(&fakeTranscriptLoader{messages: messageSvc})
 	p.SetSubagentAdmitter(admitter)
 	p.modelResolver = func(context.Context, SessionContext, string, string, string) (resolvedSubagentModel, error) {
 		return resolvedSubagentModel{

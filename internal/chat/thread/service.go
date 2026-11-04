@@ -291,7 +291,6 @@ type Queries interface {
 	ListSessionsByBotAndCreatedByUserPaged(context.Context, sqlc.ListSessionsByBotAndCreatedByUserPagedParams) ([]sqlc.ListSessionsByBotAndCreatedByUserPagedRow, error)
 	ListSessionsByBotPaged(context.Context, sqlc.ListSessionsByBotPagedParams) ([]sqlc.ListSessionsByBotPagedRow, error)
 	ListSessionsByRoute(context.Context, pgtype.UUID) ([]sqlc.BotSession, error)
-	ListSubagentForkContext(context.Context, pgtype.UUID) ([]sqlc.ListSubagentForkContextRow, error)
 	ListSubagentSessionsByParent(context.Context, pgtype.UUID) ([]sqlc.BotSession, error)
 	SoftDeleteSession(context.Context, pgtype.UUID) error
 	TouchSession(context.Context, pgtype.UUID) error
@@ -640,27 +639,6 @@ func (s *Service) GetSubagentConfig(ctx context.Context, sessionID string) (Suba
 		return SubagentConfig{}, err
 	}
 	return toSubagentConfig(row), nil
-}
-
-// ListSubagentForkContext loads only the hidden rows reserved for a forked
-// subagent's inherited model context. Other invisible history rows are ignored.
-func (s *Service) ListSubagentForkContext(ctx context.Context, sessionID string) ([]SubagentForkContextMessage, error) {
-	pgSessionID, err := dbpkg.ParseUUID(sessionID)
-	if err != nil {
-		return nil, fmt.Errorf("invalid subagent session id: %w", err)
-	}
-	rows, err := s.queries.ListSubagentForkContext(ctx, pgSessionID)
-	if err != nil {
-		return nil, err
-	}
-	messages := make([]SubagentForkContextMessage, 0, len(rows))
-	for _, row := range rows {
-		messages = append(messages, SubagentForkContextMessage{
-			Role:    row.Role,
-			Message: append(json.RawMessage(nil), row.Content...),
-		})
-	}
-	return messages, nil
 }
 
 // ForkFromAssistantTurn creates a new chat thread containing the source

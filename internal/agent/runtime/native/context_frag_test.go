@@ -165,12 +165,11 @@ func TestRefreshContextFragMarksToolUsageBeforeWorkspaceInstructions(t *testing.
 	}
 }
 
-func TestSpawnRunConfigCarriesContextScopeAndMaterializedQuery(t *testing.T) {
+func TestSpawnRunConfigCarriesContextScope(t *testing.T) {
 	t.Parallel()
 
-	rc := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{
-		Query:    "do the task",
-		Messages: []sdk.Message{sdk.UserMessage("history")},
+	task := tools.SpawnRunConfig{
+		Query: "do the task",
 		Identity: tools.SpawnIdentity{
 			BotID:             "bot-1",
 			ChatID:            "chat-1",
@@ -179,17 +178,12 @@ func TestSpawnRunConfigCarriesContextScopeAndMaterializedQuery(t *testing.T) {
 			CurrentPlatform:   "telegram",
 			IsSubagent:        true,
 		},
-	})
-
-	if !rc.ContextQueryMaterialized {
-		t.Fatal("spawn query should be marked materialized because it is appended to Messages")
 	}
+	rc := runConfigFromSpawnRunConfig(task)
+	renderTask(task, &rc)
 	rc = rc.RefreshContextFrag()
 	if !manifestHasAgentKind(rc.ContextManifest, contextfrag.KindCurrentUserMessage) {
-		t.Fatalf("manifest should classify the materialized query as current user: %#v", rc.ContextManifest.Items)
-	}
-	if rc.ContextManifest.Counts.Messages != 2 {
-		t.Fatalf("manifest message count = %d, want history + materialized query", rc.ContextManifest.Counts.Messages)
+		t.Fatalf("manifest should classify the task as current user: %#v", rc.ContextManifest.Items)
 	}
 	for _, item := range rc.ContextManifest.Items {
 		if item.Scope.BotID != "bot-1" || item.Scope.SessionID != "child-1" || item.Scope.ChannelIdentityID != "identity-1" {

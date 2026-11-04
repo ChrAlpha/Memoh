@@ -159,13 +159,3 @@ copied_assets AS (
 SELECT
   (SELECT count(*)::bigint FROM inserted_messages) AS inserted_count,
   (SELECT count(*)::bigint FROM copied_assets) AS copied_asset_count;
-
--- name: ListSubagentForkContext :many
-SELECT role, content
-FROM bot_history_messages
-WHERE team_id = public.memoh_current_team_id()
-  AND session_id = sqlc.arg(session_id)
-  AND session_mode = 'subagent'
-  AND turn_visible = false
-  AND metadata->>'context_scope' = 'subagent_fork'
-ORDER BY turn_position ASC, turn_message_seq ASC, created_at ASC, id ASC;

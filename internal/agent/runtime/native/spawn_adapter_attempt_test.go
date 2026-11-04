@@ -3,13 +3,13 @@ package native
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	agentevent "github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/step"
@@ -48,7 +48,7 @@ func TestSpawnAdapterGenerateWithWatchdogKeepsRetryableAttemptNonTerminal(t *tes
 					return sdk.ModelResult{FinishReason: sdk.FinishReasonStop}, nil
 				},
 			}
-			adapter := NewSpawnAdapter(newTestAgent())
+			adapter := newTaskAdapter(newTestAgent())
 			var observed []StreamEvent
 			adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 				return func(event StreamEvent) SpawnRunObservation {
@@ -69,7 +69,7 @@ func TestSpawnAdapterGenerateWithWatchdogKeepsRetryableAttemptNonTerminal(t *tes
 					}
 					return tools.SpawnAttemptFailure
 				},
-			}, func() {})
+			}, testWatchdog(t))
 			if !errors.Is(err, tc.err) {
 				t.Fatalf("GenerateWithWatchdog error = %v, want %v", err, tc.err)
 			}
@@ -86,7 +86,7 @@ func TestSpawnAdapterGenerateWithWatchdogMakesFinalWatchdogAttemptTerminal(t *te
 			return sdk.ModelResult{FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
-	adapter := NewSpawnAdapter(newTestAgent())
+	adapter := newTaskAdapter(newTestAgent())
 	var observed []StreamEvent
 	var dispositionCalls int
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
@@ -109,7 +109,7 @@ func TestSpawnAdapterGenerateWithWatchdogMakesFinalWatchdogAttemptTerminal(t *te
 			}
 			return tools.SpawnAttemptFailure
 		},
-	}, func() {})
+	}, testWatchdog(t))
 	if !errors.Is(err, tools.ErrWatchdogTimedOut) {
 		t.Fatalf("GenerateWithWatchdog error = %v, want watchdog timeout", err)
 	}
@@ -125,7 +125,6 @@ func TestSpawnAdapterGenerateWithWatchdogMakesFinalWatchdogAttemptTerminal(t *te
 }
 
 func TestSpawnAdapterGenerateWithWatchdogDoesNotRetryPersistedInterruptedCheckpoint(t *testing.T) {
-	ctx, cancel := context.WithCancelCause(context.Background())
 	provider := &atomicMockProvider{
 		stream: func(streamCtx context.Context, _ sdk.Request) (<-chan sdk.StreamPart, error) {
 			parts := make(chan sdk.StreamPart)
@@ -151,21 +150,15 @@ func TestSpawnAdapterGenerateWithWatchdogDoesNotRetryPersistedInterruptedCheckpo
 	adapter := NewSpawnAdapter(newTestAgent())
 	var persisted atomic.Bool
 	var interruptedCalls atomic.Int32
-	adapter.SetStepCommitFactory(func(
-		_ context.Context,
-		_ string,
-		_ string,
-		_ string,
-		_ string,
-		_ *contextfrag.LifecycleHolder,
-		onPersisted func(),
-	) (func(context.Context, int, *step.Record) error, func(context.Context, int, *step.Record) error) {
-		return func(context.Context, int, *step.Record) error { return nil },
-			func(context.Context, int, *step.Record) error {
-				interruptedCalls.Add(1)
-				onPersisted()
-				return nil
-			}
+	adapter.SetRunBinder(func(_ context.Context, task tools.SpawnRunConfig, rc *RunConfig, _ *tools.SubagentWatchdog) (func(context.Context) error, error) {
+		renderTask(task, rc)
+		rc.OnStepCommitted = func(context.Context, int, *step.Record) (StepDirective, error) { return StepDirective{}, nil }
+		rc.OnStepInterrupted = func(context.Context, int, *step.Record) error {
+			interruptedCalls.Add(1)
+			task.OnStepPersisted()
+			return nil
+		}
+		return func(context.Context) error { return nil }, nil
 	})
 	var observed []StreamEvent
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
@@ -174,7 +167,10 @@ func TestSpawnAdapterGenerateWithWatchdogDoesNotRetryPersistedInterruptedCheckpo
 			return SpawnRunObservation{}
 		}
 	})
-	var touches atomic.Int32
+	// The stream goes quiet after its partial output; the watchdog ends the
+	// attempt once its window passes without activity.
+	ctx, watchdog := tools.NewSubagentWatchdog(context.Background(), 200*time.Millisecond, slog.New(slog.DiscardHandler))
+	defer watchdog.Stop()
 	_, err := adapter.GenerateWithWatchdog(ctx, tools.SpawnRunConfig{
 		Model:       &sdk.Model{ID: "spawn-interrupted-model", Provider: provider},
 		Query:       "preserve interrupted output",
@@ -191,11 +187,7 @@ func TestSpawnAdapterGenerateWithWatchdogDoesNotRetryPersistedInterruptedCheckpo
 			}
 			return tools.SpawnAttemptRetry
 		},
-	}, func() {
-		if touches.Add(1) == 3 {
-			cancel(tools.ErrWatchdogTimedOut)
-		}
-	})
+	}, watchdog)
 	if !errors.Is(err, tools.ErrWatchdogTimedOut) {
 		t.Fatalf("GenerateWithWatchdog error = %v, want watchdog timeout", err)
 	}
@@ -365,7 +357,7 @@ func TestSpawnAdapterArbitratesCleanEndBeforePublishingTerminal(t *testing.T) {
 					return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 				},
 			}
-			adapter := NewSpawnAdapter(newTestAgent())
+			adapter := newTaskAdapter(newTestAgent())
 			var observed []StreamEvent
 			adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 				return func(event StreamEvent) SpawnRunObservation {
@@ -383,7 +375,7 @@ func TestSpawnAdapterArbitratesCleanEndBeforePublishingTerminal(t *testing.T) {
 					resolutionCalls++
 					return tc.disposition
 				},
-			}, func() {})
+			}, testWatchdog(t))
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("GenerateWithWatchdog error = %v, want %v", err, tc.wantErr)
 			}
@@ -403,19 +395,28 @@ func TestSpawnAdapterArbitratesCleanEndBeforePublishingTerminal(t *testing.T) {
 	}
 }
 
-func TestSpawnAdapterPersistsFallbackBeforePublishingTerminal(t *testing.T) {
+// A completed run closes its persistence before it is published as
+// completed.
+func TestSpawnAdapterClosesTheRunBeforePublishingTerminal(t *testing.T) {
 	provider := &atomicMockProvider{
 		handler: func(_ int, _ sdk.Request) (sdk.ModelResult, error) {
 			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
 	adapter := NewSpawnAdapter(newTestAgent())
-	durable := false
-	terminalBeforeDurable := false
+	closes := 0
+	adapter.SetRunBinder(func(_ context.Context, task tools.SpawnRunConfig, rc *RunConfig, _ *tools.SubagentWatchdog) (func(context.Context) error, error) {
+		renderTask(task, rc)
+		return func(context.Context) error {
+			closes++
+			return nil
+		}, nil
+	})
+	terminalBeforeClose := false
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
-			if event.Type == EventAgentEnd && !durable {
-				terminalBeforeDurable = true
+			if event.Type == EventAgentEnd && closes == 0 {
+				terminalBeforeClose = true
 			}
 			return SpawnRunObservation{}
 		}
@@ -426,32 +427,30 @@ func TestSpawnAdapterPersistsFallbackBeforePublishingTerminal(t *testing.T) {
 		Query:       "finish the task",
 		SessionType: sessionmode.Subagent,
 		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
-		BeforeTerminal: func(_ context.Context, result *tools.SpawnResult) error {
-			if result == nil || result.Text != "done" {
-				t.Fatalf("fallback result = %#v, want assembled output", result)
-			}
-			durable = true
-			return nil
-		},
-	}, func() {})
+	}, testWatchdog(t))
 	if err != nil {
 		t.Fatalf("GenerateWithWatchdog() error = %v", err)
 	}
-	if terminalBeforeDurable {
-		t.Fatal("terminal event was published before fallback persistence")
+	if terminalBeforeClose || closes != 1 {
+		t.Fatalf("terminal before close=%v closes=%d, want the run closed once before its terminal", terminalBeforeClose, closes)
 	}
-	if result == nil || !result.Persisted {
-		t.Fatalf("result = %#v, want fallback persistence recorded", result)
+	if result == nil || result.Text != "done" {
+		t.Fatalf("result = %#v, want the run's answer", result)
 	}
 }
 
-func TestSpawnAdapterWithholdsTerminalWhenFallbackPersistenceFails(t *testing.T) {
+func TestSpawnAdapterWithholdsTerminalWhenTheRunFailsToClose(t *testing.T) {
 	provider := &atomicMockProvider{
 		handler: func(_ int, _ sdk.Request) (sdk.ModelResult, error) {
 			return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 		},
 	}
 	adapter := NewSpawnAdapter(newTestAgent())
+	closeErr := errors.New("history unavailable")
+	adapter.SetRunBinder(func(_ context.Context, task tools.SpawnRunConfig, rc *RunConfig, _ *tools.SubagentWatchdog) (func(context.Context) error, error) {
+		renderTask(task, rc)
+		return func(context.Context) error { return closeErr }, nil
+	})
 	var terminalSeen bool
 	adapter.SetRunObserverFactory(func(context.Context) SpawnRunObserver {
 		return func(event StreamEvent) SpawnRunObservation {
@@ -459,7 +458,6 @@ func TestSpawnAdapterWithholdsTerminalWhenFallbackPersistenceFails(t *testing.T)
 			return SpawnRunObservation{}
 		}
 	})
-	persistErr := errors.New("history unavailable")
 	var reconciled tools.SpawnAttemptDisposition
 
 	_, err := adapter.GenerateWithWatchdog(context.Background(), tools.SpawnRunConfig{
@@ -467,18 +465,15 @@ func TestSpawnAdapterWithholdsTerminalWhenFallbackPersistenceFails(t *testing.T)
 		Query:       "finish the task",
 		SessionType: sessionmode.Subagent,
 		Identity:    tools.SpawnIdentity{BotID: "bot-1", SessionID: "session-1", IsSubagent: true},
-		BeforeTerminal: func(context.Context, *tools.SpawnResult) error {
-			return persistErr
-		},
 		ReconcileTerminal: func(outcome tools.SpawnAttemptDisposition) {
 			reconciled = outcome
 		},
-	}, func() {})
-	if !errors.Is(err, persistErr) {
-		t.Fatalf("GenerateWithWatchdog() error = %v, want persistence failure", err)
+	}, testWatchdog(t))
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("GenerateWithWatchdog() error = %v, want the close failure", err)
 	}
 	if terminalSeen {
-		t.Fatal("terminal event was published after fallback persistence failed")
+		t.Fatal("terminal event was published after the run failed to close")
 	}
 	if reconciled != tools.SpawnAttemptFailure {
 		t.Fatalf("reconciled outcome = %v, want failure", reconciled)

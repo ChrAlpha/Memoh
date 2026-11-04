@@ -303,10 +303,22 @@ SELECT (
     FROM bot_history_messages m
     WHERE m.team_id = public.memoh_current_team_id()
       AND m.session_id = $1
-      AND m.turn_visible = true
+      AND m.turn_visible = false
+      AND m.session_mode = 'subagent'
+      AND m.metadata->>'context_scope' = 'subagent_fork'
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      AND ($4::bigint IS NULL
+        OR (m.turn_position, m.turn_message_seq) < ($4::bigint, $5::bigint))
+  )
+  OR EXISTS (
+    SELECT 1
+    FROM bot_context_history_messages m
+    WHERE m.team_id = public.memoh_current_team_id()
+      AND m.session_id = $1
       AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
       AND m.id = ANY($6::uuid[])
       AND ($4::bigint IS NULL
@@ -344,13 +356,9 @@ func (q *Queries) HasHistoryCheckpointCandidates(ctx context.Context, arg HasHis
 const listHistoryCheckpointCandidatesWithinBytes = `-- name: ListHistoryCheckpointCandidatesWithinBytes :many
 WITH RECURSIVE kept_rows AS MATERIALIZED (
   SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, octet_length(m.content::text)::bigint AS content_bytes
-  FROM bot_history_messages m
+  FROM bot_context_history_messages m
   WHERE m.team_id = public.memoh_current_team_id()
     AND m.session_id = $1
-    AND m.turn_visible = true
-    AND m.turn_id IS NOT NULL
-    AND m.turn_position IS NOT NULL
-    AND m.turn_message_seq IS NOT NULL
     AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
     AND m.id = ANY($2::uuid[])
     AND (m.turn_position, m.turn_message_seq) <= ($3::bigint, $4::bigint)
@@ -378,6 +386,25 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
         WHERE m.team_id = public.memoh_current_team_id()
           AND m.session_id = $1
           AND m.turn_visible = true
+          AND m.turn_id IS NOT NULL
+          AND m.turn_position IS NOT NULL
+          AND m.turn_message_seq IS NOT NULL
+          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+          AND (m.turn_position, m.turn_message_seq) > ($3::bigint, $4::bigint)
+          AND ($5::bigint IS NULL
+            OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
+        ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+        LIMIT 1
+      )
+      UNION ALL
+      (
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint AS known_bytes
+        FROM bot_history_messages m
+        WHERE m.team_id = public.memoh_current_team_id()
+          AND m.session_id = $1
+          AND m.turn_visible = false
+          AND m.session_mode = 'subagent'
+          AND m.metadata->>'context_scope' = 'subagent_fork'
           AND m.turn_id IS NOT NULL
           AND m.turn_position IS NOT NULL
           AND m.turn_message_seq IS NOT NULL
@@ -435,6 +462,30 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
             CASE WHEN previous.past_position THEN previous.id ELSE 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid END
           )
         ORDER BY m.session_id ASC, m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
+        LIMIT 1
+      )
+      UNION ALL
+      (
+        -- The session's next inherited row, from the small fork index, after
+        -- the same lower bound.
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at, m.role, m.content, NULL::bigint
+        FROM bot_history_messages m
+        WHERE m.team_id = public.memoh_current_team_id()
+          AND m.session_id = previous.session_id
+          AND m.turn_visible = false
+          AND m.session_mode = 'subagent'
+          AND m.metadata->>'context_scope' = 'subagent_fork'
+          AND m.turn_id IS NOT NULL
+          AND m.turn_position IS NOT NULL
+          AND m.turn_message_seq IS NOT NULL
+          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+          AND (m.turn_position, m.turn_message_seq, m.created_at, m.id) > (
+            CASE WHEN previous.past_position THEN previous.turn_position ELSE $3::bigint END,
+            CASE WHEN previous.past_position THEN previous.turn_message_seq ELSE $4::bigint END,
+            CASE WHEN previous.past_position THEN previous.created_at ELSE 'infinity'::timestamptz END,
+            CASE WHEN previous.past_position THEN previous.id ELSE 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid END
+          )
+        ORDER BY m.turn_position ASC, m.turn_message_seq ASC, m.created_at ASC, m.id ASC
         LIMIT 1
       )
     ) later
@@ -505,6 +556,28 @@ WITH RECURSIVE kept_rows AS MATERIALIZED (
         AND ($5::bigint IS NULL
           OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
     )
+    OR EXISTS (
+      SELECT 1
+      FROM last_walked last
+      JOIN bot_history_messages m
+        ON m.team_id = public.memoh_current_team_id()
+       AND m.session_id = $1
+       AND (m.turn_position, m.turn_message_seq, m.created_at, m.id) > (
+         CASE WHEN last.past_position THEN last.turn_position ELSE $3::bigint END,
+         CASE WHEN last.past_position THEN last.turn_message_seq ELSE $4::bigint END,
+         CASE WHEN last.past_position THEN last.created_at ELSE 'infinity'::timestamptz END,
+         CASE WHEN last.past_position THEN last.id ELSE 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid END
+       )
+      WHERE m.turn_visible = false
+        AND m.session_mode = 'subagent'
+        AND m.metadata->>'context_scope' = 'subagent_fork'
+        AND m.turn_id IS NOT NULL
+        AND m.turn_position IS NOT NULL
+        AND m.turn_message_seq IS NOT NULL
+        AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+        AND ($5::bigint IS NULL
+          OR (m.turn_position, m.turn_message_seq) < ($5::bigint, $6::bigint))
+    )
   )::boolean AS truncated
 )
 SELECT
@@ -558,7 +631,9 @@ type ListHistoryCheckpointCandidatesWithinBytesRow struct {
 // time measures each row once. truncated reports
 // that candidates are left after the admitted prefix. The kept rows the
 // checkpoint's position does not already cover are older than every row
-// after it, so the walk takes them first.
+// after it, so the walk takes them first. A forked subagent's inherited rows
+// are context rows older than its own turns: each step also takes the
+// session's next inherited row from its own index, and the older wins.
 func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context, arg ListHistoryCheckpointCandidatesWithinBytesParams) ([]ListHistoryCheckpointCandidatesWithinBytesRow, error) {
 	rows, err := q.db.Query(ctx, listHistoryCheckpointCandidatesWithinBytes,
 		arg.SessionID,
@@ -598,7 +673,7 @@ func (q *Queries) ListHistoryCheckpointCandidatesWithinBytes(ctx context.Context
 
 const listHistoryCheckpointSpanRows = `-- name: ListHistoryCheckpointSpanRows :many
 SELECT m.id, m.turn_position, m.turn_message_seq
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND (
@@ -717,7 +792,7 @@ SELECT
   ci.display_name AS sender_display_name,
   ci.avatar_url AS sender_avatar_url,
   s.channel_type AS platform
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 LEFT JOIN channel_identities ci ON ci.id = m.sender_channel_identity_id AND ci.team_id = public.memoh_current_team_id()
 LEFT JOIN bot_sessions s ON s.id = m.session_id AND s.team_id = public.memoh_current_team_id()
 WHERE m.team_id = public.memoh_current_team_id()
@@ -800,7 +875,7 @@ func (q *Queries) ListHistoryMessagesByIDs(ctx context.Context, arg ListHistoryM
 
 const listHistoryRowsBySources = `-- name: ListHistoryRowsBySources :many
 SELECT m.id, m.source_message_id, m.turn_position, m.turn_message_seq
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND (m.id = ANY($2::uuid[]) OR m.source_message_id = ANY($3::text[]))
@@ -855,20 +930,47 @@ WITH RECURSIVE history_window AS (
   SELECT newest.session_id, newest.id, newest.turn_position, newest.turn_message_seq, newest.created_at,
     (SELECT octet_length(c.content::text) FROM bot_history_messages c WHERE c.id = newest.id)::bigint AS total_bytes
   FROM (
-    SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
-    FROM bot_history_messages m
-    WHERE m.team_id = public.memoh_current_team_id()
-      AND m.session_id = $1
-      AND m.turn_visible = true
-      AND m.turn_id IS NOT NULL
-      AND m.turn_position IS NOT NULL
-      AND m.turn_message_seq IS NOT NULL
-      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
-      AND ($4::bigint IS NULL
-        OR (m.turn_position, m.turn_message_seq) < ($4::bigint, $5::bigint))
-      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-      AND $6::bigint > 0
-    ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    SELECT context.session_id, context.id, context.turn_position, context.turn_message_seq, context.created_at
+    FROM (
+      (
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
+        FROM bot_history_messages m
+        WHERE m.team_id = public.memoh_current_team_id()
+          AND m.session_id = $1
+          AND m.turn_visible = true
+          AND m.turn_id IS NOT NULL
+          AND m.turn_position IS NOT NULL
+          AND m.turn_message_seq IS NOT NULL
+          AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+          AND ($4::bigint IS NULL
+            OR (m.turn_position, m.turn_message_seq) < ($4::bigint, $5::bigint))
+          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+          AND $6::bigint > 0
+        ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+        LIMIT 1
+      )
+      UNION ALL
+      (
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
+        FROM bot_history_messages m
+        WHERE m.team_id = public.memoh_current_team_id()
+          AND m.session_id = $1
+          AND m.turn_visible = false
+          AND m.session_mode = 'subagent'
+          AND m.metadata->>'context_scope' = 'subagent_fork'
+          AND m.turn_id IS NOT NULL
+          AND m.turn_position IS NOT NULL
+          AND m.turn_message_seq IS NOT NULL
+          AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+          AND ($4::bigint IS NULL
+            OR (m.turn_position, m.turn_message_seq) < ($4::bigint, $5::bigint))
+          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+          AND $6::bigint > 0
+        ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+        LIMIT 1
+      )
+    ) context
+    ORDER BY context.turn_position DESC, context.turn_message_seq DESC, context.created_at DESC, context.id DESC
     LIMIT 1
   ) newest
   UNION ALL
@@ -876,19 +978,45 @@ WITH RECURSIVE history_window AS (
     previous.total_bytes + (SELECT octet_length(c.content::text) FROM bot_history_messages c WHERE c.id = older.id)::bigint AS total_bytes
   FROM history_window previous
   CROSS JOIN LATERAL (
-    -- Step to the previous context index entry without a session equality
-    -- estimate. Stop outside the step at another session or the checkpoint.
-    SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
-    FROM bot_history_messages m
-    WHERE m.team_id = public.memoh_current_team_id()
-      AND m.turn_visible = true
-      AND m.turn_id IS NOT NULL
-      AND m.turn_position IS NOT NULL
-      AND m.turn_message_seq IS NOT NULL
-      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
-      AND (m.session_id, m.turn_position, m.turn_message_seq, m.created_at, m.id)
-        < (previous.session_id, previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
-    ORDER BY m.session_id DESC, m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+    SELECT step.session_id, step.id, step.turn_position, step.turn_message_seq, step.created_at
+    FROM (
+      (
+        -- Step to the previous context index entry without a session equality
+        -- estimate. Stop outside the step at another session or the checkpoint.
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
+        FROM bot_history_messages m
+        WHERE m.team_id = public.memoh_current_team_id()
+          AND m.turn_visible = true
+          AND m.turn_id IS NOT NULL
+          AND m.turn_position IS NOT NULL
+          AND m.turn_message_seq IS NOT NULL
+          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+          AND (m.session_id, m.turn_position, m.turn_message_seq, m.created_at, m.id)
+            < (previous.session_id, previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+        ORDER BY m.session_id DESC, m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+        LIMIT 1
+      )
+      UNION ALL
+      (
+        -- The session's previous inherited row, from the small fork index.
+        SELECT m.session_id, m.id, m.turn_position, m.turn_message_seq, m.created_at
+        FROM bot_history_messages m
+        WHERE m.team_id = public.memoh_current_team_id()
+          AND m.session_id = previous.session_id
+          AND m.turn_visible = false
+          AND m.session_mode = 'subagent'
+          AND m.metadata->>'context_scope' = 'subagent_fork'
+          AND m.turn_id IS NOT NULL
+          AND m.turn_position IS NOT NULL
+          AND m.turn_message_seq IS NOT NULL
+          AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+          AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+            < (previous.turn_position, previous.turn_message_seq, previous.created_at, previous.id)
+        ORDER BY m.turn_position DESC, m.turn_message_seq DESC, m.created_at DESC, m.id DESC
+        LIMIT 1
+      )
+    ) step
+    ORDER BY step.session_id DESC, step.turn_position DESC, step.turn_message_seq DESC, step.created_at DESC, step.id DESC
     LIMIT 1
   ) older
   WHERE previous.total_bytes < $6::bigint
@@ -909,6 +1037,22 @@ WITH RECURSIVE history_window AS (
      AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
        < (oldest.turn_position, oldest.turn_message_seq, oldest.created_at, oldest.id)
     WHERE m.turn_visible = true
+      AND m.turn_id IS NOT NULL
+      AND m.turn_position IS NOT NULL
+      AND m.turn_message_seq IS NOT NULL
+      AND (m.turn_position, m.turn_message_seq) > ($2::bigint, $3::bigint)
+      AND (m.metadata->>'trigger_mode' IS NULL OR m.metadata->>'trigger_mode' != 'passive_sync')
+    UNION ALL
+    SELECT 1
+    FROM oldest
+    JOIN bot_history_messages m
+      ON m.team_id = public.memoh_current_team_id()
+     AND m.session_id = $1
+     AND (m.turn_position, m.turn_message_seq, m.created_at, m.id)
+       < (oldest.turn_position, oldest.turn_message_seq, oldest.created_at, oldest.id)
+    WHERE m.turn_visible = false
+      AND m.session_mode = 'subagent'
+      AND m.metadata->>'context_scope' = 'subagent_fork'
       AND m.turn_id IS NOT NULL
       AND m.turn_position IS NOT NULL
       AND m.turn_message_seq IS NOT NULL
@@ -942,6 +1086,9 @@ type ListHistoryWindowRow struct {
 // kept, so the newest row always loads), as ids in ascending order. The walk
 // follows the context-order index one row per step and stops at the budget, so older
 // rows are never measured, however much history the checkpoint leaves raw.
+// A forked subagent's inherited rows are context rows older than its own
+// turns: each step also takes the session's previous inherited row from its
+// own index, and the newer of the two wins.
 // truncated reports that the budget, not the window, ended the walk: context
 // rows of the window remain older than the oldest it admitted. Callers load
 // the projection they need by id. Each step selects keys only and measures
@@ -983,7 +1130,7 @@ SELECT
   COALESCE(m.metadata->'agent_step_interrupted' = 'true'::jsonb, false)::boolean AS interrupted,
   COALESCE(m.metadata->'discuss_step' = 'true'::jsonb, false)::boolean AS discuss_step,
   m.source_message_id AS external_message_id
-FROM bot_visible_history_messages m
+FROM bot_context_history_messages m
 WHERE m.team_id = public.memoh_current_team_id()
   AND m.session_id = $1
   AND m.id = ANY($2::uuid[])

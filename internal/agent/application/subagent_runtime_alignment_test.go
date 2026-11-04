@@ -114,6 +114,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetRunBinder(taskOnlyBinder)
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
 		RunID: admission.RunID,
@@ -128,7 +129,7 @@ func TestSpawnAbortAlignsManagerLedgerAndLifecycle(t *testing.T) {
 			SessionID:  lifecycleTestSessionID,
 			IsSubagent: true,
 		},
-	}, func() {})
+	}, testSubagentWatchdog(t))
 	if runErr == nil || runErr.Error() != "agent run aborted" {
 		t.Fatalf("spawn error = %v, want generic abort failure", runErr)
 	}
@@ -202,6 +203,7 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetRunBinder(taskOnlyBinder)
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	adapter.SetFailureTranslator(service.SubagentFailure)
 	result, runErr := adapter.GenerateWithWatchdog(runCtx, tools.SpawnRunConfig{
@@ -213,7 +215,7 @@ func TestSpawnProviderFailureNamesTheSessionRun(t *testing.T) {
 			SessionID:  lifecycleTestSessionID,
 			IsSubagent: true,
 		},
-	}, func() {})
+	}, testSubagentWatchdog(t))
 	var apiErr *sdk.APIError
 	if got := apperror.CodeOf(runErr); got != apperror.CodeAgentProviderAuthFailed {
 		t.Fatalf("spawn error code = %q, want the provider's code", got)
@@ -269,6 +271,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		t.Fatalf("admit subagent run: %v", err)
 	}
 	adapter := native.NewSpawnAdapter(native.New(native.Deps{}))
+	adapter.SetRunBinder(taskOnlyBinder)
 	adapter.SetRunObserverFactory(service.SubagentRunObserver)
 	attemptCtx, cancelAttempt := context.WithCancelCause(runCtx)
 	cancelAttempt(tools.ErrWatchdogTimedOut)
@@ -292,7 +295,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 			}
 			return tools.SpawnAttemptFailure
 		},
-	}, func() {})
+	}, testSubagentWatchdog(t))
 	if !errors.Is(firstErr, tools.ErrWatchdogTimedOut) {
 		t.Fatalf("first attempt error = %v, want watchdog timeout", firstErr)
 	}
@@ -328,7 +331,7 @@ func TestSpawnWatchdogRetryKeepsManagerRunActive(t *testing.T) {
 		},
 		Attempt:     2,
 		MaxAttempts: 2,
-	}, func() {})
+	}, testSubagentWatchdog(t))
 	if finalErr != nil {
 		t.Fatalf("final attempt: %v", finalErr)
 	}

@@ -538,11 +538,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	if usePipeline {
 		currentMessageIndex = latestModelUserMessageIndex(messages)
 	}
-	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
-		// The inherited parent snapshot precedes the thread's own transcript,
-		// exactly as parent-driven subagent tasks assemble it.
-		messages, currentMessageIndex = prependContextMessages(forkContext, messages, currentMessageIndex)
-	}
 	historyMessageCount := len(messages)
 	if notice := currentWorkspaceTransitionMessage(historyRecords, req.WorkspaceTarget); notice != nil {
 		messages = append(messages, *notice)
@@ -1437,20 +1432,6 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	)
 	cfg.ContextSourceWarnings = hookBuild.Warnings
 	return cfg.RefreshContextFrag()
-}
-
-func prependContextMessages(prefix, messages []ModelMessage, trackedIndex *int) ([]ModelMessage, *int) {
-	if len(prefix) == 0 {
-		return messages, trackedIndex
-	}
-	if trackedIndex != nil {
-		if *trackedIndex < 0 || *trackedIndex >= len(messages) {
-			trackedIndex = nil
-		} else {
-			trackedIndex = intPointer(*trackedIndex + len(prefix))
-		}
-	}
-	return append(prefix, messages...), trackedIndex
 }
 
 func latestModelUserMessageIndex(messages []ModelMessage) *int {

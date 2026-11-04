@@ -2,34 +2,27 @@ package native
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
-	sdk "github.com/felinics/twilight/sdk"
-	"github.com/google/uuid"
-
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 )
 
-// SpawnStepCommitFactory builds the per-step persistence callback for one
-// spawned run. It receives the run context (which carries the admitted run's
-// identity) and returns nil when incremental persistence is unavailable, in
-// which case the spawn provider keeps its terminal-snapshot persistence.
-// turnRequestMessageID is the persisted task user message the step rows bind
-// to, so every step lands in the turn admission allocated.
-type SpawnStepCommitFactory func(
+// SpawnRunBinder arms one spawned run the way the application arms every
+// admitted native run: it fills rc with the agent thread's history under its
+// checkpoint, the task's request row as the input the run answers, persists
+// each step as it commits, and compacts the request in place when a step does
+// not fit. It pauses watchdog for the work it does that streams nothing. The
+// call it returns closes the run's persistence once the run has ended; a
+// failed close of a completed run fails the run.
+type SpawnRunBinder func(
 	ctx context.Context,
-	botID, sessionID, modelUUID, turnRequestMessageID string,
-	contextLifecycle *contextfrag.LifecycleHolder,
-	onPersisted func(),
-) (
-	func(context.Context, int, *step.Record) error,
-	func(context.Context, int, *step.Record) error,
-)
+	task tools.SpawnRunConfig,
+	rc *RunConfig,
+	watchdog *tools.SubagentWatchdog,
+) (func(context.Context) error, error)
 
 // SpawnRunObservation carries the terminal outcome selected by the session
 // runtime that serialized terminal publication against routed controls.
@@ -49,11 +42,13 @@ type SpawnRunObserverFactory func(ctx context.Context) SpawnRunObserver
 
 var errSpawnAgentAborted = errors.New("agent run aborted")
 
+var errSpawnRunUnbound = errors.New("spawned run has no binder")
+
 // SpawnAdapter wraps *Agent to satisfy tools.SpawnAgent without creating
 // an import cycle (tools -> agent).
 type SpawnAdapter struct {
 	agent       *Agent
-	stepCommit  SpawnStepCommitFactory
+	bind        SpawnRunBinder
 	runObserver SpawnRunObserverFactory
 	failure     func(StreamEvent) error
 }
@@ -63,9 +58,10 @@ func NewSpawnAdapter(a *Agent) *SpawnAdapter {
 	return &SpawnAdapter{agent: a}
 }
 
-// SetStepCommitFactory installs incremental step persistence for spawned runs.
-func (s *SpawnAdapter) SetStepCommitFactory(f SpawnStepCommitFactory) {
-	s.stepCommit = f
+// SetRunBinder installs what arms each spawned run. Without one a spawned run
+// fails before it starts: nothing would persist its steps.
+func (s *SpawnAdapter) SetRunBinder(b SpawnRunBinder) {
+	s.bind = b
 }
 
 // SetRunObserverFactory installs live event publishing for spawned runs.
@@ -92,69 +88,7 @@ func (s *SpawnAdapter) attemptFailure(event StreamEvent) error {
 	return event.Cause
 }
 
-// installStepCommit resolves the step-commit callback for this run and wires
-// it into the run config. It reports whether incremental persistence owns the
-// run's history, so the caller can skip its terminal snapshot.
-func (s *SpawnAdapter) installStepCommit(ctx context.Context, cfg tools.SpawnRunConfig, rc *RunConfig) bool {
-	if s.stepCommit == nil {
-		return false
-	}
-	commit, interrupt := s.stepCommit(
-		ctx,
-		cfg.Identity.BotID,
-		cfg.Identity.SessionID,
-		cfg.ModelUUID,
-		cfg.TurnRequestMessageID,
-		rc.ContextLifecycle,
-		cfg.OnStepPersisted,
-	)
-	if commit == nil || interrupt == nil {
-		return false
-	}
-	rc.OnStepCommitted = func(ctx context.Context, stepIndex int, step *step.Record) (StepDirective, error) {
-		return StepDirective{}, commit(ctx, stepIndex, step)
-	}
-	rc.OnStepInterrupted = interrupt
-	return true
-}
-
-func (s *SpawnAdapter) Generate(ctx context.Context, cfg tools.SpawnRunConfig) (*tools.SpawnResult, error) {
-	rc := runConfigFromSpawnRunConfig(cfg)
-	persisted := s.installStepCommit(ctx, cfg, &rc)
-
-	result, err := s.agent.Generate(ctx, rc)
-	if err != nil {
-		return spawnFailureResult(rc), err
-	}
-
-	spawnResult := &tools.SpawnResult{
-		Messages:  result.Messages,
-		Text:      result.Text,
-		Usage:     result.Usage,
-		Persisted: persisted,
-	}
-	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
-		spawnResult.ContextLifecycle = &snapshot
-	}
-	return spawnResult, nil
-}
-
 func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
-	runID := strings.TrimSpace(cfg.RunID)
-	if runID == "" {
-		runID = uuid.NewString()
-	}
-	messages := cfg.Messages
-	var currentUserMessageIndex *int
-	if cfg.Query != "" {
-		messages = append(messages, sdk.Message{
-			Role:    sdk.MessageRoleUser,
-			Content: []sdk.MessagePart{sdk.TextPart{Text: cfg.Query}},
-		})
-		index := len(messages) - 1
-		currentUserMessageIndex = &index
-	}
-
 	identity := SessionContext{
 		BotID:               cfg.Identity.BotID,
 		ChatID:              cfg.Identity.ChatID,
@@ -181,32 +115,27 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 			Path:        skill.Path,
 		})
 	}
-	rc := RunConfig{
-		RunID:                          runID,
-		Model:                          cfg.Model,
-		CurrentModelUUID:               cfg.ModelUUID,
-		CurrentModelID:                 cfg.ModelID,
-		CurrentModelProvider:           cfg.ModelProvider,
-		CurrentModelProviderID:         cfg.ModelProviderID,
-		System:                         cfg.System,
-		Query:                          cfg.Query,
-		ContextQueryMaterialized:       cfg.Query != "",
-		ContextCurrentUserMessageIndex: currentUserMessageIndex,
-		SessionType:                    cfg.SessionType,
-		Messages:                       messages,
-		ReasoningConfig:                cfg.ReasoningConfig,
-		ReasoningStoredEffort:          cfg.ReasoningStoredEffort,
-		ReasoningRequestedEffort:       cfg.ReasoningRequestedEffort,
-		PromptCacheTTL:                 cfg.PromptCacheTTL,
-		ChatCompletionsCompat:          cfg.ChatCompletionsCompat,
-		SupportsImageInput:             cfg.SupportsImageInput,
-		SupportsFileInput:              cfg.SupportsFileInput,
-		SupportsToolCall:               cfg.SupportsToolCall,
-		Identity:                       identity,
-		Skills:                         skills,
-		BackgroundManager:              cfg.BackgroundManager,
-		ContextBudgetMaxTokens:         cfg.ContextBudgetMaxTokens,
-		ModelMaxOutputTokens:           cfg.ModelMaxOutputTokens,
+	return RunConfig{
+		RunID:                    strings.TrimSpace(cfg.RunID),
+		Model:                    cfg.Model,
+		CurrentModelUUID:         cfg.ModelUUID,
+		CurrentModelID:           cfg.ModelID,
+		CurrentModelProvider:     cfg.ModelProvider,
+		CurrentModelProviderID:   cfg.ModelProviderID,
+		SessionType:              cfg.SessionType,
+		ReasoningConfig:          cfg.ReasoningConfig,
+		ReasoningStoredEffort:    cfg.ReasoningStoredEffort,
+		ReasoningRequestedEffort: cfg.ReasoningRequestedEffort,
+		PromptCacheTTL:           cfg.PromptCacheTTL,
+		ChatCompletionsCompat:    cfg.ChatCompletionsCompat,
+		SupportsImageInput:       cfg.SupportsImageInput,
+		SupportsFileInput:        cfg.SupportsFileInput,
+		SupportsToolCall:         cfg.SupportsToolCall,
+		Identity:                 identity,
+		Skills:                   skills,
+		BackgroundManager:        cfg.BackgroundManager,
+		ContextBudgetMaxTokens:   cfg.ContextBudgetMaxTokens,
+		ModelMaxOutputTokens:     cfg.ModelMaxOutputTokens,
 		ContextScope: contextfrag.Scope{
 			BotID:             identity.BotID,
 			ChatID:            identity.ChatID,
@@ -219,50 +148,39 @@ func runConfigFromSpawnRunConfig(cfg tools.SpawnRunConfig) RunConfig {
 		},
 		ContextLifecycle: contextfrag.NewLifecycleHolder(),
 	}
-	rc.ContextSourceFrags = SpawnContextSourceFrags(rc)
-	return rc
 }
 
-// SpawnContextSourceFrags uses typed system sections only when they reproduce
-// the caller-supplied System exactly. Custom spawn prompts deliberately stay
-// on the legacy collector fallback so PR1 cannot replace or normalize them.
-func SpawnContextSourceFrags(rc RunConfig) []contextfrag.ContextFrag {
-	sections := GenerateSystemSections(SystemPromptParams{SessionType: rc.SessionType})
-	if renderSystemSections(sections) != rc.System {
-		return nil
-	}
-	query := rc.Query
-	if rc.ContextQueryMaterialized {
-		query = ""
-	}
-	messages := contextfrag.CompileFrags(contextfrag.CompileInput{
-		Scope:                   rc.ContextScope,
-		Messages:                rc.Messages,
-		CurrentUserMessageIndex: rc.ContextCurrentUserMessageIndex,
-		Query:                   query,
-	})
-	frags := SystemSectionFrags(sections, rc.ContextScope)
-	return append(frags, messages...)
-}
-
-// GenerateWithWatchdog runs the agent in streaming mode, touching the
-// provided touchFn on every stream event (token, tool progress, etc.).
-// It collects the full result and returns it in the same shape as Generate.
-// This enables activity-based watchdog monitoring for subagent execution.
-func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.SpawnRunConfig, touchFn func()) (*tools.SpawnResult, error) {
+// GenerateWithWatchdog runs one spawned task in streaming mode: the binder
+// arms the run, every stream event (token, tool progress, etc.) touches
+// watchdog, and the result is collected once the stream ends.
+func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.SpawnRunConfig, watchdog *tools.SubagentWatchdog) (*tools.SpawnResult, error) {
 	rc := runConfigFromSpawnRunConfig(cfg)
-	persisted := s.installStepCommit(ctx, cfg, &rc)
 	var observe SpawnRunObserver
 	if s.runObserver != nil {
 		observe = s.runObserver(ctx)
 	}
+	finish, err := s.bindRun(ctx, cfg, &rc, watchdog)
+	if err != nil {
+		outcome := observeSpawnAttemptFailure(ctx, observe, cfg, nil, []StreamEvent{{Type: EventError, Cause: err}}, err)
+		if cfg.ReconcileTerminal != nil {
+			cfg.ReconcileTerminal(outcome)
+		}
+		return spawnFailureResult(rc), err
+	}
+	closed := false
+	closeRun := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return finish(context.WithoutCancel(ctx))
+	}
+	defer func() { _ = closeRun() }()
 
 	// Use Stream instead of Generate to get per-token/per-tool activity signals.
 	eventCh := s.agent.Stream(ctx, rc)
 
 	var allText strings.Builder
-	var finalMessages []sdk.Message
-	var totalUsage sdk.Usage
 	var lastFailure *StreamEvent
 	completed := false
 	var abortEvent *StreamEvent
@@ -271,7 +189,7 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 
 	for evt := range eventCh {
 		// Touch the watchdog on every event — this is the activity signal.
-		touchFn()
+		watchdog.Touch()
 		switch evt.Type {
 		case EventError:
 			// The stream reports only the failure it ends with; a failure it
@@ -307,12 +225,6 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 			} else {
 				terminal := evt
 				abortEvent = &terminal
-			}
-			if evt.Messages != nil {
-				_ = json.Unmarshal(evt.Messages, &finalMessages)
-			}
-			if evt.Usage != nil {
-				_ = json.Unmarshal(evt.Usage, &totalUsage)
 			}
 		}
 	}
@@ -350,23 +262,19 @@ func (s *SpawnAdapter) GenerateWithWatchdog(ctx context.Context, cfg tools.Spawn
 	if cfg.ResolveCompletion != nil {
 		disposition = cfg.ResolveCompletion()
 	}
-	spawnResult := &tools.SpawnResult{
-		Messages:  finalMessages,
-		Text:      allText.String(),
-		Usage:     &totalUsage,
-		Persisted: persisted,
-	}
+	spawnResult := &tools.SpawnResult{Text: allText.String()}
 	if snapshot, ok := rc.ContextLifecycle.Snapshot(); ok {
 		spawnResult.ContextLifecycle = &snapshot
 	}
-	if disposition == tools.SpawnAttemptCompleted && !persisted && cfg.BeforeTerminal != nil {
-		if persistErr := cfg.BeforeTerminal(context.WithoutCancel(ctx), spawnResult); persistErr != nil {
+	// The steps are durable as they commit; what closes the run's persistence
+	// lands before the run is published as completed.
+	if disposition == tools.SpawnAttemptCompleted {
+		if closeErr := closeRun(); closeErr != nil {
 			if cfg.ReconcileTerminal != nil {
 				cfg.ReconcileTerminal(tools.SpawnAttemptFailure)
 			}
-			return spawnFailureResult(rc), fmt.Errorf("persist subagent terminal before publication: %w", persistErr)
+			return spawnFailureResult(rc), fmt.Errorf("close subagent run before publication: %w", closeErr)
 		}
-		spawnResult.Persisted = true
 	}
 	terminal := StreamEvent{Type: EventAgentEnd}
 	if endEvent != nil {
@@ -486,9 +394,10 @@ func spawnFailureResult(rc RunConfig) *tools.SpawnResult {
 	return &tools.SpawnResult{ContextLifecycle: &snapshot}
 }
 
-// SpawnSystemPrompt returns the system prompt for a given session type.
-func SpawnSystemPrompt(sessionType string) string {
-	return GenerateSystemPrompt(SystemPromptParams{
-		SessionType: sessionType,
-	})
+// bindRun arms the run through the installed binder.
+func (s *SpawnAdapter) bindRun(ctx context.Context, cfg tools.SpawnRunConfig, rc *RunConfig, watchdog *tools.SubagentWatchdog) (func(context.Context) error, error) {
+	if s.bind == nil {
+		return nil, errSpawnRunUnbound
+	}
+	return s.bind(ctx, cfg, rc, watchdog)
 }

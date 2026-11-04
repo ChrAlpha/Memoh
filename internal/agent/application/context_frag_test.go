@@ -268,29 +268,6 @@ func TestNormalizeContextMessagesRemapsCurrentAndMemory(t *testing.T) {
 	}
 }
 
-func TestPrependContextMessagesShiftsTrackedCurrentUser(t *testing.T) {
-	t.Parallel()
-
-	prefix := []ModelMessage{
-		{Role: "user", Content: newTextContent("parent fork context")},
-		{Role: "assistant", Content: newTextContent("parent answer")},
-	}
-	messages := []ModelMessage{
-		{Role: "assistant", Content: newTextContent("thread history")},
-		{Role: "user", Content: newTextContent("pipeline current")},
-	}
-	currentIndex := 1
-
-	got, gotCurrent := prependContextMessages(prefix, messages, &currentIndex)
-
-	if gotCurrent == nil || *gotCurrent != 3 {
-		t.Fatalf("current index = %#v, want shifted index 3", gotCurrent)
-	}
-	if got[*gotCurrent].TextContent() != "pipeline current" {
-		t.Fatalf("tracked message = %q, want pipeline current", got[*gotCurrent].TextContent())
-	}
-}
-
 func TestBuildProviderSourceFragsPlacesLegacyHookBeforeCurrent(t *testing.T) {
 	t.Parallel()
 	params := native.SystemPromptParams{SessionType: sessionmode.Chat, Timezone: "UTC"}

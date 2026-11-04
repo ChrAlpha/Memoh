@@ -380,7 +380,6 @@ type Queries interface {
 	ListMessagesBeforeCursorBySession(ctx context.Context, arg dbsqlc.ListMessagesBeforeCursorBySessionParams) ([]dbsqlc.ListMessagesBeforeCursorBySessionRow, error)
 	ListRunHistoryTurnRequestMessageIDs(ctx context.Context, arg dbsqlc.ListRunHistoryTurnRequestMessageIDsParams) ([]pgtype.UUID, error)
 	ListMessagesBySession(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListMessagesBySessionRow, error)
-	ListSubagentForkContext(ctx context.Context, sessionID pgtype.UUID) ([]dbsqlc.ListSubagentForkContextRow, error)
 	ListMessagesLatest(ctx context.Context, arg dbsqlc.ListMessagesLatestParams) ([]dbsqlc.ListMessagesLatestRow, error)
 	ListMessagesLatestBySession(ctx context.Context, arg dbsqlc.ListMessagesLatestBySessionParams) ([]dbsqlc.ListMessagesLatestBySessionRow, error)
 	ListMessagesLatestUIBySession(ctx context.Context, arg dbsqlc.ListMessagesLatestUIBySessionParams) ([]dbsqlc.ListMessagesLatestUIBySessionRow, error)

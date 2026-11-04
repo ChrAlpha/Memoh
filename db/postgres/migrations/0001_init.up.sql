@@ -1754,6 +1754,70 @@ WHERE m.turn_visible = true
   AND m.turn_position IS NOT NULL
   AND m.turn_message_seq IS NOT NULL;
 
+-- A session's context rows: the rows of its visible turns and a forked
+-- subagent's inherited rows, which stay out of the chat view but are part of
+-- the child's history. The two arms are disjoint and each keeps its own
+-- partial index.
+CREATE OR REPLACE VIEW public.bot_context_history_messages
+WITH (security_invoker = true) AS
+SELECT
+  m.team_id,
+  m.turn_id,
+  m.turn_position,
+  m.turn_message_seq,
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id,
+  m.source_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.session_mode,
+  m.runtime_type,
+  m.model_id,
+  m.event_id,
+  m.display_text,
+  m.created_at
+FROM public.bot_history_messages m
+WHERE m.turn_visible = true
+  AND m.turn_id IS NOT NULL
+  AND m.turn_position IS NOT NULL
+  AND m.turn_message_seq IS NOT NULL
+UNION ALL
+SELECT
+  m.team_id,
+  m.turn_id,
+  m.turn_position,
+  m.turn_message_seq,
+  m.id,
+  m.bot_id,
+  m.session_id,
+  m.sender_channel_identity_id,
+  m.sender_account_user_id,
+  m.source_message_id,
+  m.source_reply_to_message_id,
+  m.role,
+  m.content,
+  m.metadata,
+  m.usage,
+  m.session_mode,
+  m.runtime_type,
+  m.model_id,
+  m.event_id,
+  m.display_text,
+  m.created_at
+FROM public.bot_history_messages m
+WHERE m.turn_visible = false
+  AND m.session_mode = 'subagent'
+  AND m.metadata->>'context_scope' = 'subagent_fork'
+  AND m.turn_id IS NOT NULL
+  AND m.turn_position IS NOT NULL
+  AND m.turn_message_seq IS NOT NULL;
+
 -- ---------------------------------------------------------------------------
 -- Team-prefixed secondary indexes
 -- ---------------------------------------------------------------------------
