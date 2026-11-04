@@ -30,7 +30,8 @@ func rowSources(ids ...string) []turn.ContextMessageSource {
 // switchRequest is an armed run's request before its third step: an earlier
 // summary, two history rows around a pipeline message the fold leaves alone
 // and a passive message the run never rendered as a source, the run's input,
-// its first step, a steer, and its latest step.
+// its first step, a steer, and its latest step. The provenance describes the
+// request the run compiled, up to the steer, by position.
 func switchRequest() ([]sdk.Message, []MessageProvenance) {
 	call := func(id string) sdk.Message {
 		return sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{ToolCallID: id, ToolName: "effect", Input: toolexec.ArgumentsFromValue(map[string]any{"id": id})}}}
@@ -56,11 +57,9 @@ func switchRequest() ([]sdk.Message, []MessageProvenance) {
 		nil, rowSources("h2"),
 		rowSources("input"), rowSources("c1"), rowSources("r1"), rowSources("steer"),
 	}
-	var provenance []MessageProvenance
+	provenance := make([]MessageProvenance, len(sources))
 	for i, source := range sources {
-		if source != nil {
-			provenance = append(provenance, MessageProvenance{Message: messages[i], Sources: source, Anchor: i == 5 || i == 8})
-		}
+		provenance[i] = MessageProvenance{Sources: source, Anchor: i == 5 || i == 8}
 	}
 	return messages, provenance
 }
@@ -78,6 +77,7 @@ func armedRun(t *testing.T, messages []sdk.Message, provenance []MessageProvenan
 		ContextMutations:  contextfrag.NewMutationLedger(),
 		ContextManifest:   contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: contextfrag.ProviderEnvelopeTokens("", append(kept, sdk.UserMessage("<summary>\nnew\n")), nil) + 8}},
 		SwitchContext:     event,
+		Messages:          messages[:len(provenance)],
 		ContextProvenance: provenance,
 	}
 	cfg.contextSwitch = newContextSwitchState(cfg)
@@ -118,7 +118,7 @@ func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
 		spliced = sw.Fold(foldCovering(sw, "A1", summary, append(rowSources("h1", "h2", "c1", "r1"), summarySource("A0"))...))
 		return "trigger=in_run passes=1", nil
 	})
-	cfg.ContextCachePlan = contextfrag.CachePlan{StablePrefixHash: "compiled", StableMessageCount: 5, StablePrefixTokenEstimate: 4000}
+	cfg.ContextCachePlan = contextfrag.CachePlan{StableMessageCount: 5, StablePrefixTokenEstimate: 4000}
 	params := prepareArmed(cfg, messages)
 
 	if *failure != nil || !reflect.DeepEqual(params.Messages, want) {
@@ -155,15 +155,15 @@ func TestArmedRunFoldsItsOwnRequestInPlace(t *testing.T) {
 	}
 
 	cfg.Messages = messages
-	next, ok := cfg.contextSwitch.redispatch(cfg, generateDispatch{initialMessageCount: len(messages)}, *params)
+	next, ok := cfg.contextSwitch.redispatch(cfg, generateDispatch{initialMessageCount: len(messages)}, *params, nil)
 	if !ok || len(next.Messages) != len(want) || next.initialProviderMessageCount != len(want) || next.ContextCachePlan.StableMessageCount != 2 {
 		t.Fatalf("redispatch ok=%v messages=%d prefix=%d stable=%d, want the spliced request with its prefix and breakpoint moved", ok, len(next.Messages), next.initialProviderMessageCount, next.ContextCachePlan.StableMessageCount)
 	}
 	estimate := 4000 + messagesTokens(want[:2]) - messagesTokens(messages[:5])
-	if plan := next.ContextCachePlan; plan.StablePrefixTokenEstimate != estimate || plan.StablePrefixHash != "" {
-		t.Fatalf("cache plan = %+v, want the estimate %d of the spliced prefix and no compiled hash", plan, estimate)
+	if plan := next.ContextCachePlan; plan.StablePrefixTokenEstimate != estimate {
+		t.Fatalf("cache plan = %+v, want the estimate %d of the spliced prefix", plan, estimate)
 	}
-	if _, again := cfg.contextSwitch.redispatch(cfg, generateDispatch{}, *params); again {
+	if _, again := cfg.contextSwitch.redispatch(cfg, generateDispatch{}, *params, nil); again {
 		t.Fatal("a second redispatch without a splice")
 	}
 }
@@ -227,11 +227,7 @@ func TestArmedRunFoldsAClosureWithItsCall(t *testing.T) {
 			abandoned := sdk.Message{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ToolCallPart{ToolCallID: "c0", ToolName: "ask_user", Input: toolexec.ArgumentsFromValue(map[string]any{})}}}
 			closure := sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "c0", ToolName: "ask_user", Result: toolexec.OutputFromValue("interrupted"), IsError: true})
 			messages = slices.Insert(messages, 2, abandoned, closure)
-			known := []MessageProvenance{{Message: abandoned, Sources: rowSources("c0")}}
-			if tc.sources != nil {
-				known = append(known, MessageProvenance{Message: closure, Sources: tc.sources})
-			}
-			provenance = slices.Insert(provenance, 2, known...)
+			provenance = slices.Insert(provenance, 2, MessageProvenance{Sources: rowSources("c0")}, MessageProvenance{Sources: tc.sources})
 			summary := sdk.UserMessage("<summary>\nnew\n")
 			want := []sdk.Message{messages[4], messages[5], messages[7], summary, messages[10], messages[11], messages[12]}
 			// The window also holds a closure left behind, as an orphan
@@ -245,6 +241,7 @@ func TestArmedRunFoldsAClosureWithItsCall(t *testing.T) {
 					sw.Fold(foldCovering(sw, "A1", summary, append(rowSources("h1", "c0", "h2", "c1", "r1"), summarySource("A0"))...))
 					return "trigger=in_run passes=1", nil
 				},
+				Messages:          messages[:len(provenance)],
 				ContextProvenance: provenance,
 			}
 			cfg.contextSwitch = newContextSwitchState(cfg)
@@ -301,7 +298,7 @@ func TestArmedRunContinuesOnItsSplicedRequest(t *testing.T) {
 				Model: &sdk.Model{ID: "mock-model", Provider: provider}, Messages: []sdk.Message{input}, SupportsToolCall: true,
 				Identity: SessionContext{BotID: "bot-1", SessionID: "sess-1"}, ContextMutations: contextfrag.NewMutationLedger(),
 				ContextManifest:   contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 2600}},
-				ContextProvenance: []MessageProvenance{{Message: input, Sources: rowSources("input"), Anchor: true}},
+				ContextProvenance: []MessageProvenance{{Sources: rowSources("input"), Anchor: true}},
 				OnStepCommitted: func(_ context.Context, index int, record *step.Record) (StepDirective, error) {
 					provenance := make([]MessageProvenance, len(record.Messages))
 					for i := range provenance {
@@ -366,9 +363,9 @@ func TestArmedRunFoldsBeforeItsFirstStep(t *testing.T) {
 				ContextManifest:                contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 1200}},
 				ContextCurrentUserMessageIndex: &current,
 				ContextProvenance: []MessageProvenance{
-					{Message: older, Sources: rowSources("older")},
-					{Message: answer, Sources: rowSources("answer")},
-					{Message: input, Sources: []turn.ContextMessageSource{request}, Anchor: true},
+					{Sources: rowSources("older")},
+					{Sources: rowSources("answer")},
+					{Sources: []turn.ContextMessageSource{request}, Anchor: true},
 				},
 				SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
 					events = append(events, sw)
@@ -419,9 +416,9 @@ func TestArmedRunRecordsTheImagesOfAFoldedInput(t *testing.T) {
 		Identity: SessionContext{BotID: "bot-1", SessionID: "sess-1"}, ContextMutations: contextfrag.NewMutationLedger(),
 		ContextManifest: contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 600}},
 		ContextProvenance: []MessageProvenance{
-			{Message: pictured, Sources: []turn.ContextMessageSource{{Kind: "external", ID: "older"}}, Anchor: true},
-			{Message: answered, Sources: rowSources("answered")},
-			{Message: newest, Sources: []turn.ContextMessageSource{{Kind: "external", ID: "newest"}}, Anchor: true},
+			{Sources: []turn.ContextMessageSource{{Kind: "external", ID: "older"}}, Anchor: true},
+			{Sources: rowSources("answered")},
+			{Sources: []turn.ContextMessageSource{{Kind: "external", ID: "newest"}}, Anchor: true},
 		},
 		SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
 			events = append(events, sw)
@@ -523,7 +520,7 @@ func TestArmedRunCalibratesItsEstimateByTheProviderCount(t *testing.T) {
 					Model: &sdk.Model{ID: "mock-model", Provider: provider}, Messages: []sdk.Message{input}, SupportsToolCall: true,
 					Identity: SessionContext{BotID: "bot-1", SessionID: "sess-1"}, ContextMutations: contextfrag.NewMutationLedger(),
 					ContextManifest:   contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 5000}},
-					ContextProvenance: []MessageProvenance{{Message: input, Sources: rowSources("input"), Anchor: true}},
+					ContextProvenance: []MessageProvenance{{Sources: rowSources("input"), Anchor: true}},
 					OnStepCommitted: func(_ context.Context, index int, record *step.Record) (StepDirective, error) {
 						estimates = append(estimates, record.InputEstimateTokens)
 						provenance := make([]MessageProvenance, len(record.Messages))
@@ -581,6 +578,7 @@ func TestArmedRunStartsFromTheSessionsCalibration(t *testing.T) {
 		cfg := RunConfig{
 			ContextMutations:  contextfrag.NewMutationLedger(),
 			ContextManifest:   contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: window}},
+			Messages:          messages[:len(provenance)],
 			ContextProvenance: provenance,
 			ContextDensity:    tc.density,
 			SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
@@ -589,6 +587,7 @@ func TestArmedRunStartsFromTheSessionsCalibration(t *testing.T) {
 			},
 		}
 		cfg.contextSwitch = newContextSwitchState(cfg)
+		cfg.contextSwitch.committed(messages[len(provenance):], []MessageProvenance{{Sources: rowSources("c2")}, {Sources: rowSources("r2")}})
 		cfg.contextStepFailure = func(error) {}
 		prepareArmed(cfg, messages)
 		if len(events) != tc.events {
@@ -599,6 +598,122 @@ func TestArmedRunStartsFromTheSessionsCalibration(t *testing.T) {
 			if sw := events[0]; sw.Density != want || sw.AllowanceTokens != int(float64(window)/want) {
 				t.Fatalf("density %v: event density=%v allowance=%d, want %v and %d", tc.density, sw.Density, sw.AllowanceTokens, want, int(float64(window)/want))
 			}
+		}
+	}
+}
+
+// The run knows its compiled request by position, not by its bytes: two
+// stored messages with the same text keep their own rows, and runtime text
+// that reads like a stored message stays runtime context. A request its
+// provenance does not describe fails the fold rather than guess.
+func TestArmedRunKnowsItsCompiledRequestByPosition(t *testing.T) {
+	t.Parallel()
+
+	ok := sdk.UserMessage("OK" + strings.Repeat(" o", 1000))
+	messages := []sdk.Message{ok, sdk.AssistantMessage("noted"), ok, ok, sdk.UserMessage("INPUT")}
+	provenance := []MessageProvenance{
+		{Sources: rowSources("first")},
+		{Sources: rowSources("noted")},
+		{Sources: rowSources("second")},
+		{},
+		{Sources: rowSources("input"), Anchor: true},
+	}
+	var seen []*MessageProvenance
+	cfg := RunConfig{
+		ContextMutations:  contextfrag.NewMutationLedger(),
+		ContextManifest:   contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 64}},
+		Messages:          messages,
+		ContextProvenance: provenance,
+		SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
+			seen = sw.Provenance
+			return "", fmt.Errorf("%w: stop", contextfrag.ErrBudgetUnsatisfied)
+		},
+	}
+	cfg.contextSwitch = newContextSwitchState(cfg)
+	params := sdk.Request{Messages: slices.Clone(messages)}
+	if _, _, err := cfg.contextSwitch.fold(context.Background(), cfg, &params, 0, 32, contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)); !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("fold err = %v", err)
+	}
+	want := [][]turn.ContextMessageSource{rowSources("first"), rowSources("noted"), rowSources("second"), nil, rowSources("input")}
+	if len(seen) != len(want) {
+		t.Fatalf("event saw provenance for %d messages, want %d", len(seen), len(want))
+	}
+	for i, w := range want {
+		var got []turn.ContextMessageSource
+		if seen[i] != nil {
+			got = seen[i].Sources
+		}
+		if !reflect.DeepEqual(got, w) {
+			t.Fatalf("message %d renders %v, want %v", i, got, w)
+		}
+	}
+
+	cfg.Messages = messages[1:]
+	cfg.contextSwitch = newContextSwitchState(cfg)
+	seen = nil
+	if _, _, err := cfg.contextSwitch.fold(context.Background(), cfg, &params, 0, 32, contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)); !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) || seen != nil {
+		t.Fatalf("fold of a request its provenance does not describe: err=%v event=%v", err, seen != nil)
+	}
+}
+
+// After a splice the run compiles the spliced request up to where its
+// compiled prefix ended, past a promoted system message, and knows what
+// follows by what its steps committed: a background message the loop strips
+// and re-adds, and the steps after the splice, keep every position right.
+func TestArmedRunKnowsItsRequestAfterASplice(t *testing.T) {
+	t.Parallel()
+
+	long := func(text string) string { return text + strings.Repeat(" x", 1000) }
+	system := sdk.SystemMessage("system")
+	compiled := []sdk.Message{sdk.UserMessage(long("older")), sdk.AssistantMessage(long("answer")), sdk.UserMessage("INPUT")}
+	step := []sdk.Message{sdk.AssistantMessage(long("step one"))}
+	summary := sdk.UserMessage("<summary>\nolder\n")
+	folds := 0
+	var seen []*MessageProvenance
+	cfg := RunConfig{
+		ContextMutations: contextfrag.NewMutationLedger(),
+		ContextManifest:  contextfrag.Manifest{BudgetPlan: &contextfrag.ContextBudgetPlan{Window: 1200}},
+		Messages:         compiled,
+		ContextProvenance: []MessageProvenance{
+			{Sources: rowSources("older")}, {Sources: rowSources("answer")}, {Sources: rowSources("input"), Anchor: true},
+		},
+		SwitchContext: func(_ context.Context, sw ContextSwitch) (string, error) {
+			folds++
+			seen = sw.Provenance
+			if folds == 1 {
+				sw.Fold(foldCovering(sw, "a1", summary, rowSources("older", "answer")...))
+			}
+			return "", nil
+		},
+	}
+	cfg.contextSwitch = newContextSwitchState(cfg)
+	cfg.contextSwitch.committed(step, []MessageProvenance{{Sources: rowSources("s0")}})
+	background := backgroundSummaryMessage("task running")
+	params := sdk.Request{Messages: append(append(append([]sdk.Message{system}, compiled...), step...), background)}
+	if switched, _, err := cfg.contextSwitch.fold(context.Background(), cfg, &params, 1, 600, contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)); err != nil || !switched {
+		t.Fatalf("first fold switched=%v err=%v", switched, err)
+	}
+
+	// The next boundary strips the background message, appends the next
+	// step and the message again, and the request still does not fit.
+	messages := removeBackgroundSummaryMessages(params.Messages, 1)
+	next := sdk.AssistantMessage(long("step two"))
+	cfg.contextSwitch.committed([]sdk.Message{next}, []MessageProvenance{{Sources: rowSources("s1")}})
+	params.Messages = append(append(messages, next), background)
+	if _, _, err := cfg.contextSwitch.fold(context.Background(), cfg, &params, 1, 400, contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)); err != nil || folds != 2 {
+		t.Fatalf("second fold folds=%d err=%v", folds, err)
+	}
+	want := [][]turn.ContextMessageSource{nil, {summarySource("a1")}, rowSources("input"), rowSources("s0"), rowSources("s1"), nil}
+	if len(seen) != len(want) {
+		t.Fatalf("second event saw provenance for %d messages, want %d", len(seen), len(want))
+	}
+	for i, w := range want {
+		var got []turn.ContextMessageSource
+		if seen[i] != nil {
+			got = seen[i].Sources
+		}
+		if !reflect.DeepEqual(got, w) {
+			t.Fatalf("message %d renders %v, want %v", i, got, w)
 		}
 	}
 }

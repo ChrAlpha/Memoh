@@ -2,9 +2,6 @@ package contextview
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,8 +12,11 @@ import (
 )
 
 type SDKRenderedPayload struct {
-	System       string
-	Messages     []sdk.Message
+	System   string
+	Messages []sdk.Message
+	// Origins is, for each message, the index of the request message it
+	// renders, or -1 for one the view itself adds.
+	Origins      []int
 	Query        string
 	InlineImages []sdk.ImagePart
 }
@@ -32,12 +32,7 @@ func (*SDKMessagesRenderer) Render(_ context.Context, input RenderInput) (Render
 	if err != nil {
 		return RenderedPayload{}, err
 	}
-	payload := renderSDKPayloadFromFrags(ordered)
-	hash, err := sdkRenderedPayloadHash(payload)
-	if err != nil {
-		return RenderedPayload{}, err
-	}
-	return RenderedPayload{Target: contextfrag.RenderSDKMessages, ContentHash: hash, Data: payload}, nil
+	return RenderedPayload{Target: contextfrag.RenderSDKMessages, Data: renderSDKPayloadFromFrags(ordered)}, nil
 }
 
 func renderSDKPayloadFromFrags(ordered []contextfrag.ContextFrag) *SDKRenderedPayload {
@@ -120,7 +115,7 @@ func renderCurrentUserFrag(payload *SDKRenderedPayload, frag contextfrag.Context
 			}
 		case contextfrag.PartSDKMessage:
 			if msg := sdkMessagePart(part); msg != nil {
-				payload.Messages = append(payload.Messages, cloneSDKMessage(*msg))
+				payload.appendMessage(*msg, frag)
 			}
 		}
 	}
@@ -130,10 +125,20 @@ func renderMessageFrag(payload *SDKRenderedPayload, frag contextfrag.ContextFrag
 	for _, part := range frag.Parts {
 		if part.Type == contextfrag.PartSDKMessage {
 			if msg := sdkMessagePart(part); msg != nil {
-				payload.Messages = append(payload.Messages, cloneSDKMessage(*msg))
+				payload.appendMessage(*msg, frag)
 			}
 		}
 	}
+}
+
+// appendMessage renders msg of frag, from the request message frag renders.
+func (p *SDKRenderedPayload) appendMessage(msg sdk.Message, frag contextfrag.ContextFrag) {
+	origin := -1
+	if frag.Provenance.FromMessage {
+		origin = frag.Provenance.Index
+	}
+	p.Messages = append(p.Messages, cloneSDKMessage(msg))
+	p.Origins = append(p.Origins, origin)
 }
 
 func materializeRenderedCurrent(payload *SDKRenderedPayload) {
@@ -145,6 +150,7 @@ func materializeRenderedCurrent(payload *SDKRenderedPayload) {
 	}
 	if payload.Query != "" {
 		payload.Messages = append(payload.Messages, sdk.UserMessage(payload.Query, images...))
+		payload.Origins = append(payload.Origins, -1)
 		payload.Query = ""
 		payload.InlineImages = nil
 		return
@@ -160,6 +166,7 @@ func materializeRenderedCurrent(payload *SDKRenderedPayload) {
 		}
 	}
 	payload.Messages = append(payload.Messages, sdk.UserMessage("", images...))
+	payload.Origins = append(payload.Origins, -1)
 	payload.InlineImages = nil
 }
 
@@ -181,20 +188,6 @@ func cloneSDKMessage(msg sdk.Message) sdk.Message {
 	out := msg
 	out.Content = append([]sdk.MessagePart(nil), msg.Content...)
 	return out
-}
-
-func sdkRenderedPayloadHash(payload *SDKRenderedPayload) (string, error) {
-	raw, err := json.Marshal(struct {
-		System       string          `json:"system"`
-		Messages     []sdk.Message   `json:"messages"`
-		Query        string          `json:"query"`
-		InlineImages []sdk.ImagePart `json:"inline_images"`
-	}{payload.System, payload.Messages, payload.Query, payload.InlineImages})
-	if err != nil {
-		return "", fmt.Errorf("marshal sdk rendered payload: %w", err)
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
 }
 
 func sortSystemFragsByPriority(ordered []contextfrag.ContextFrag) []contextfrag.ContextFrag {

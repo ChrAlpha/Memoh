@@ -2,8 +2,6 @@ package contextview
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 	"testing"
 
@@ -16,7 +14,7 @@ func TestRuntimeRenderer_ChatModePassThroughMarkdown(t *testing.T) {
 	t.Parallel()
 
 	markdown := "# Memoh Runtime Context\n\n  keep spacing exactly  \n"
-	payload, rendered := renderRuntimeChat(t, RuntimeRenderConfig{
+	payload, _ := renderRuntimeChat(t, RuntimeRenderConfig{
 		Mode:            RuntimeRenderModeChat,
 		ContextMarkdown: markdown,
 		ContextURI:      "memoh://custom/context",
@@ -27,10 +25,6 @@ func TestRuntimeRenderer_ChatModePassThroughMarkdown(t *testing.T) {
 	}
 	if payload.ContextURI != "memoh://custom/context" {
 		t.Fatalf("ContextURI = %q, want custom URI", payload.ContextURI)
-	}
-	wantHash := acpTestSHA256(markdown)
-	if payload.ContentHash != wantHash || rendered.ContentHash != wantHash {
-		t.Fatalf("hashes = payload:%q rendered:%q, want %q", payload.ContentHash, rendered.ContentHash, wantHash)
 	}
 }
 
@@ -126,11 +120,6 @@ func runtimeRenderTextFrag(id string, slot contextfrag.Slot, kind contextfrag.Ki
 		Trust: contextfrag.TrustUser, Scope: contextfrag.Scope{BotID: "bot-1"},
 		Source: "runtime_context", Collector: "runtime_sections",
 	})
-}
-
-func acpTestSHA256(value string) string {
-	sum := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(sum[:])
 }
 
 func TestRuntimeRendererAuditsFinalPrune(t *testing.T) {

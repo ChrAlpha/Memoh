@@ -171,6 +171,46 @@ func TestEstimateSDKMessageTokensCountsToolResult(t *testing.T) {
 	}
 }
 
+// Tool parts are priced at the size json.Marshal writes for them, every
+// escape, cache control and provider metadata included, without encoding
+// them.
+func TestEstimateSDKMessageTokensSizesToolPartsAsEncoded(t *testing.T) {
+	t.Parallel()
+
+	html := strings.Repeat(`<div class="row"><a href="/x?a=1&b=2">link</a></div>`+"\n", 40)
+	// Output cut at a byte limit, through a multi-byte rune, and binary bytes.
+	binary := "日志输出"[:7] + "\xff\xfe\x00 done"
+	cache := &sdk.CacheControl{Type: "ephemeral", TTL: "1h"}
+	metadata := sdk.ProviderMetadata{
+		"memoh":  {"pending_approval": "true", "execution": "<workspace> & \"host\""},
+		"google": {"thoughtSignature": "c2lnbmF0dXJl\u2028"},
+		"empty":  {},
+		"none":   nil,
+	}
+	parts := []sdk.MessagePart{
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "fetch", Result: sdk.TextOutput(html)},
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "fetch", Result: toolexec.OutputFromValue(map[string]any{"content": html})},
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "exec", Result: sdk.TextOutput("denied: \"/root\"\t\x01\b\f\x7f"), IsError: true},
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "exec", Result: sdk.TextOutput(binary), CacheControl: cache},
+		sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "read", Result: sdk.ToolOutput{Text: "line\u2028para\u2029", JSON: json.RawMessage("{\"text\":\"a\u2028b<c>\u2029&\"}")}},
+		sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: toolexec.ArgumentsFromValue(map[string]any{"command": "a > b && c < d"})},
+		sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: sdk.ParseToolArguments(`{"command":`)},
+		sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: toolexec.ArgumentsFromValue(map[string]any{"command": "ls"}), CacheControl: &sdk.CacheControl{Type: "ephemeral"}, ProviderMetadata: metadata},
+		sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: toolexec.ArgumentsFromValue(map[string]any{"command": "ls"}), ProviderMetadata: sdk.ProviderMetadata{}},
+		sdk.FilePart{Data: "JVBERi0xLjQK", MediaType: "application/pdf", Filename: "a.pdf", CacheControl: cache},
+		sdk.FilePart{Data: binary},
+	}
+	for _, part := range parts {
+		encoded, err := json.Marshal(part)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := sdkMessageEstimate(sdk.Message{Content: []sdk.MessagePart{part}}); got != len(encoded) {
+			t.Errorf("sdkMessageEstimate(%T) = %d bytes, json.Marshal writes %d: %s", part, got, len(encoded), encoded)
+		}
+	}
+}
+
 func TestEstimateSDKMessageTokensCountsReasoning(t *testing.T) {
 	t.Parallel()
 
@@ -318,5 +358,8 @@ func TestProviderEnvelopeTokensSumsSystemMessagesAndTools(t *testing.T) {
 	}
 	if got := ProviderEnvelopeTokens("", nil, nil); got != 0 {
 		t.Fatalf("ProviderEnvelopeTokens(empty) = %d, want 0", got)
+	}
+	if fixed, priced := ProviderFixedEnvelopeTokens(system, tools), ProviderMessagesTokens(messages); fixed+priced != want || priced != 250+ResolveProviderBudgetFragTokens(MessageFrag(MessageFragInput{Message: messages[1]})) {
+		t.Fatalf("fixed %d + messages %d, want the envelope %d split into system and tools, then messages", fixed, priced, want)
 	}
 }

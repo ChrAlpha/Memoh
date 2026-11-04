@@ -11,7 +11,6 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
-	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -104,13 +103,6 @@ func TestPrepareHistoryContextDecodesUndecodedAdmissionMetadata(t *testing.T) {
 	record := prepared.records[1]
 	if _, ok := record.Metadata[contextfrag.MetadataContextLifecycleKey]; ok {
 		t.Fatal("history record kept the lifecycle audit")
-	}
-	decoded := checkpoint
-	if err := json.Unmarshal(checkpoint.RawMetadata, &decoded.Metadata); err != nil {
-		t.Fatal(err)
-	}
-	if want := historyfrag.DBMessageSourceHash(decoded).Value; record.Ref.ContentHash != want {
-		t.Fatalf("undecoded row hash = %s, want the decoded row's %s", record.Ref.ContentHash, want)
 	}
 }
 

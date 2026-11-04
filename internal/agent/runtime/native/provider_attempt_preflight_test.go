@@ -137,19 +137,12 @@ func TestAgentGenerateInitialHookContextIsCheckedAgainstTheAllowance(t *testing.
 				t.Fatalf("step snapshots = %#v, want exactly attempt 0 step 0", steps)
 			}
 			if tc.wantError != nil {
-				if steps[0].PostPrepareInputHash != "" {
-					t.Fatalf("failed preflight hash = %q, want empty", steps[0].PostPrepareInputHash)
-				}
 				if got := countProviderAttemptMutations(ledger.Records(), contextfrag.MutationContextBudgetFailure); got != 1 {
 					t.Fatalf("budget failure mutations = %d, want 1", got)
 				}
 				return
 			}
 
-			wantHash := contextfrag.ProviderPayloadHash(providerParams.System, providerParams.Messages, providerParams.Tools)
-			if steps[0].PostPrepareInputHash != wantHash {
-				t.Fatalf("step hash = %q, want actual provider hash %q", steps[0].PostPrepareInputHash, wantHash)
-			}
 			if !providerAttemptContainsText(providerParams.Messages, marker) {
 				t.Fatalf("provider payload lost hook marker: %#v", providerParams.Messages)
 			}
@@ -195,8 +188,8 @@ func TestAgentGenerateInitialHookWindowZeroRunsPreflightWithoutBudgetEnforcement
 		t.Fatalf("provider payload = %#v, want unbudgeted hook context", providerParams.Messages)
 	}
 	steps := ledger.StepSnapshots()
-	if len(steps) != 1 || steps[0].PostPrepareInputHash == "" {
-		t.Fatalf("step snapshots = %#v, want one evaluated and hashed step", steps)
+	if len(steps) != 1 || steps[0].StepIndex != 0 {
+		t.Fatalf("step snapshots = %#v, want one evaluated step", steps)
 	}
 	if countProviderAttemptMutations(ledger.Records(), contextfrag.MutationContextBudgetFailure) != 0 {
 		t.Fatalf("window-zero run recorded budget failure: %#v", ledger.Records())
@@ -235,16 +228,12 @@ func TestPrepareProviderAttemptKeepsToolResultsWhole(t *testing.T) {
 	if len(steps) != 1 || steps[0].StepIndex != 0 {
 		t.Fatalf("step snapshots = %#v", steps)
 	}
-	wantHash := contextfrag.ProviderPayloadHash(params.System, params.Messages, params.Tools)
-	if steps[0].PostPrepareInputHash != wantHash || ledger.FinalInputHash() != wantHash {
-		t.Fatalf("step/final hashes = %q/%q, want %q", steps[0].PostPrepareInputHash, ledger.FinalInputHash(), wantHash)
-	}
 	if records := ledger.Records(); len(records) != 0 {
 		t.Fatalf("mutation records = %#v, want none", records)
 	}
 }
 
-func TestAgentGenerateSnapshotHashesResolvedMapToolSchema(t *testing.T) {
+func TestAgentGenerateSendsResolvedMapToolSchema(t *testing.T) {
 	t.Parallel()
 
 	ledger := contextfrag.NewMutationLedger()
@@ -284,8 +273,7 @@ func TestAgentGenerateSnapshotHashesResolvedMapToolSchema(t *testing.T) {
 		t.Fatalf("provider tools = %#v, want one", providerParams.Tools)
 	}
 	// The request carries the resolved JSON Schema document, not the caller's
-	// map literal: the frozen definition is what the digest and the provider
-	// both see.
+	// map literal.
 	var schema struct {
 		Type       string         `json:"type"`
 		Properties map[string]any `json:"properties"`
@@ -298,22 +286,8 @@ func TestAgentGenerateSnapshotHashesResolvedMapToolSchema(t *testing.T) {
 		t.Fatalf("provider schema = %s, want the resolved map schema with one property and one required entry", providerParams.Tools[0].Parameters)
 	}
 
-	steps := ledger.StepSnapshots()
-	if len(steps) != 1 {
+	if steps := ledger.StepSnapshots(); len(steps) != 1 {
 		t.Fatalf("step snapshots = %#v, want one", steps)
-	}
-	wantHash := contextfrag.ProviderPayloadHash(
-		providerParams.System,
-		providerParams.Messages,
-		providerParams.Tools,
-	)
-	if steps[0].PostPrepareInputHash != wantHash || ledger.FinalInputHash() != wantHash {
-		t.Fatalf(
-			"step/final hashes = %q/%q, want resolved provider payload hash %q",
-			steps[0].PostPrepareInputHash,
-			ledger.FinalInputHash(),
-			wantHash,
-		)
 	}
 }
 
@@ -390,12 +364,6 @@ func TestAgentGenerateHookStaysGovernedAcrossAnthropicProviderSteps(t *testing.T
 	for i, step := range steps {
 		if step.Attempt != 0 || step.StepIndex != i {
 			t.Fatalf("steps[%d] = %#v", i, step)
-		}
-		wantHash := contextfrag.ProviderPayloadHash(
-			callParams[i].System, callParams[i].Messages, callParams[i].Tools,
-		)
-		if step.PostPrepareInputHash != wantHash {
-			t.Fatalf("steps[%d] hash = %q, want %q", i, step.PostPrepareInputHash, wantHash)
 		}
 	}
 }

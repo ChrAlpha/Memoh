@@ -225,8 +225,8 @@ func sendEvent(ctx context.Context, ch chan<- StreamEvent, evt StreamEvent) bool
 // NextInputs continue on the next inner-loop iteration.
 
 // logContextLifecycle emits the one-line audit summary linking the context
-// view manifest to the final provider input: what was selected, what the
-// cache plan pinned, and which mutations ran after the view.
+// view manifest to the provider input: what was selected, what the cache plan
+// pinned, and which mutations ran after the view.
 func (a *Agent) logContextLifecycle(cfg RunConfig) {
 	if a == nil || a.logger == nil || cfg.ContextMutations == nil {
 		return
@@ -240,10 +240,9 @@ func (a *Agent) logContextLifecycle(cfg RunConfig) {
 	a.logger.Debug("context lifecycle",
 		slog.String("view", string(cfg.ContextManifest.View)),
 		slog.Int("manifest_items", len(cfg.ContextManifest.Items)),
-		slog.String("stable_prefix_hash", cfg.ContextCachePlan.StablePrefixHash),
+		slog.Int("stable_message_count", cfg.ContextCachePlan.StableMessageCount),
 		slog.Int("mutations", len(cfg.ContextMutations.Records())),
 		slog.String("cache_outcome", cacheOutcome),
-		slog.String("final_input_hash", cfg.ContextMutations.FinalInputHash()),
 	)
 }
 
@@ -306,10 +305,15 @@ func prepareProviderAttempt(
 	// request by its estimate, calibrated by what the provider counted for
 	// the run's or the session's latest step.
 	allowance := cfg.contextSwitch.calibrated(providerInputAllowance(cfg))
+	usage := providerAttemptEnvelope(cfg, params, allowance)
 	// A step request only grows between compaction events. A request that
 	// still does not fit after compaction ends the run without pruning.
 	if cfg.contextSwitch != nil {
-		switched, err := cfg.contextSwitch.fold(ctx, cfg, params, allowance)
+		offset := 0
+		if systemPrepended {
+			offset = 1
+		}
+		switched, folded, err := cfg.contextSwitch.fold(ctx, cfg, params, offset, allowance, usage)
 		switch {
 		case ctx.Err() != nil:
 			handoff.reject()
@@ -317,18 +321,19 @@ func prepareProviderAttempt(
 		case err != nil:
 			return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, err)
 		case switched:
+			usage = folded
 			dynamicRefs = verifyDynamicRefs(cfg.dynamicInputs, cfg.contextSwitch.remap(dynamicRefs), params.Messages)
 		}
 	}
-	if overflow := providerAttemptEnvelopeOverflow(params, allowance); overflow > 0 {
+	if allowance > 0 && usage > allowance {
 		return failPreparedProviderAttempt(cfg, handoff, params, snapshot, prefixCount, fmt.Errorf(
 			"%w: input_overflow=%d allowance=%d",
 			contextfrag.ErrBudgetUnsatisfied,
-			overflow,
+			usage-allowance,
 			allowance,
 		))
 	}
-	cfg.contextSwitch.staged(params)
+	cfg.contextSwitch.staged(usage)
 	stagePreparedProviderAttempt(ctx, handoff, snapshot, systemPrepended, dynamicRefs)
 	return params
 }
@@ -347,11 +352,14 @@ func stagePreparedProviderAttempt(
 	handoff.stage(snapshot, systemPrepended, dynamicRefs)
 }
 
-func providerAttemptEnvelopeOverflow(params *sdk.Request, allowance int) int {
-	if params == nil || allowance <= 0 {
+// providerAttemptEnvelope prices a step request once for the compaction
+// trigger, the envelope check and an armed run's calibration; a request
+// without an allowance that no calibration reads is not priced.
+func providerAttemptEnvelope(cfg RunConfig, params *sdk.Request, allowance int) int {
+	if params == nil || allowance <= 0 && cfg.contextSwitch == nil {
 		return 0
 	}
-	return contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools) - allowance
+	return contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
 }
 
 func failPreparedProviderAttempt(

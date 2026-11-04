@@ -42,6 +42,7 @@ func (*MemoryContextCollector) Collect(_ context.Context, req CollectRequest) ([
 		ID: "memory.recall", Message: msg, Kind: contextfrag.KindMemoryRecall, Slot: contextfrag.SlotHistory,
 		Priority: 60, CacheClass: contextfrag.CacheNever, Trust: contextfrag.TrustWorkspace,
 		Scope: req.Scope, Source: "memory_context", Collector: memoryContextCollectorName, Index: cfg.Index,
+		FromMessage: cfg.Message != nil,
 	})}, nil
 }
 

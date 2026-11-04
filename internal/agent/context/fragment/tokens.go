@@ -1,7 +1,9 @@
 package contextfrag
 
 import (
+	"bytes"
 	"encoding/json"
+	"unicode/utf8"
 
 	sdk "github.com/felinics/twilight/sdk"
 
@@ -63,9 +65,9 @@ func ProviderBudgetTokensFromBytes(n int) int {
 }
 
 // EstimateSDKMessageTokens estimates tokens for one SDK message additively
-// across all parts: text and reasoning count their raw bytes, tool calls and
-// tool results count their serialized payload, and each image counts the
-// flat EstimateImageTokens instead of its base64 payload.
+// across all parts: text and reasoning count their raw bytes, tool calls,
+// tool results and files count their serialized size, and each image counts
+// the flat EstimateImageTokens instead of its base64 payload.
 func EstimateSDKMessageTokens(msg sdk.Message) int {
 	bytes, images := sdkMessageEstimate(msg)
 	return TokensFromBytes(bytes) + images*EstimateImageTokens
@@ -80,6 +82,25 @@ func sdkMessageEstimate(msg sdk.Message) (bytes, images int) {
 			bytes += len(p.Text)
 		case sdk.ImagePart:
 			images++
+		case sdk.ToolCallPart:
+			bytes += len(`{"toolCallId":,"toolName":,"input":{}}`) + jsonStringBytes(p.ToolCallID) +
+				jsonStringBytes(p.ToolName) + jsonPayloadBytes(p.Input.Text, p.Input.JSON) +
+				jsonCacheControlBytes(p.CacheControl) + jsonMetadataBytes(p.ProviderMetadata)
+		case sdk.ToolResultPart:
+			bytes += len(`{"toolCallId":,"toolName":,"result":{}}`) + jsonStringBytes(p.ToolCallID) +
+				jsonStringBytes(p.ToolName) + jsonPayloadBytes(p.Result.Text, p.Result.JSON) +
+				jsonCacheControlBytes(p.CacheControl)
+			if p.IsError {
+				bytes += len(`,"isError":true`)
+			}
+		case sdk.FilePart:
+			bytes += len(`{"data":}`) + jsonStringBytes(p.Data) + jsonCacheControlBytes(p.CacheControl)
+			if p.MediaType != "" {
+				bytes += len(`,"mediaType":`) + jsonStringBytes(p.MediaType)
+			}
+			if p.Filename != "" {
+				bytes += len(`,"filename":`) + jsonStringBytes(p.Filename)
+			}
 		default:
 			if data, err := json.Marshal(part); err == nil {
 				bytes += len(data)
@@ -87,6 +108,111 @@ func sdkMessageEstimate(msg sdk.Message) (bytes, images int) {
 		}
 	}
 	return bytes, images
+}
+
+// The sizes below are what json.Marshal writes for a tool exchange or file,
+// computed without encoding it: the estimate prices those parts on every
+// pass, and they carry most of a context's bytes. They count every escape
+// encoding/json writes, so markup and binary output keep their price. Tool
+// arguments and outputs keep their JSON canonical; whitespace a non-canonical
+// document carries, which encoding/json compacts away, is priced too.
+
+// jsonPayloadBytes sizes the "text" and "json" members of tool arguments or
+// output, each omitted when empty.
+func jsonPayloadBytes(text string, raw []byte) int {
+	n := 0
+	if text != "" {
+		n += len(`"text":`) + jsonStringBytes(text)
+	}
+	if len(raw) > 0 {
+		if n > 0 {
+			n++
+		}
+		n += len(`"json":`) + jsonRawBytes(raw)
+	}
+	return n
+}
+
+// jsonCacheControlBytes sizes a part's "cacheControl" member, omitted when
+// unset.
+func jsonCacheControlBytes(cache *sdk.CacheControl) int {
+	if cache == nil {
+		return 0
+	}
+	n := len(`,"cacheControl":{"type":}`) + jsonStringBytes(cache.Type)
+	if cache.TTL != "" {
+		n += len(`,"ttl":`) + jsonStringBytes(cache.TTL)
+	}
+	return n
+}
+
+// jsonMetadataBytes sizes a part's "providerMetadata" member, omitted when
+// empty.
+func jsonMetadataBytes(metadata sdk.ProviderMetadata) int {
+	if len(metadata) == 0 {
+		return 0
+	}
+	n := len(`,"providerMetadata":{}`) + len(metadata) - 1
+	for namespace, values := range metadata {
+		n += jsonStringBytes(namespace) + len(`:`)
+		if values == nil {
+			n += len(`null`)
+			continue
+		}
+		n += len(`{}`) + max(len(values)-1, 0)
+		for key, value := range values {
+			n += jsonStringBytes(key) + len(`:`) + jsonStringBytes(value)
+		}
+	}
+	return n
+}
+
+// jsonStringBytes is the length of s encoded as a JSON string.
+func jsonStringBytes(s string) int {
+	n := len(s) + len(`""`)
+	for i := 0; i < len(s); {
+		if c := s[i]; c < utf8.RuneSelf {
+			n += int(jsonEscapeGrowth[c])
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		switch {
+		case r == utf8.RuneError && size == 1:
+			// An invalid byte is replaced by a six-byte escape.
+			n += len(`\ufffd`) - 1
+		case r == '\u2028' || r == '\u2029':
+			// Line and paragraph separators grow from three bytes to a
+			// six-byte escape.
+			n += len(`\u2028`) - size
+		}
+		i += size
+	}
+	return n
+}
+
+// jsonEscapeGrowth is how many bytes encoding/json adds when it escapes an
+// ASCII byte inside a string.
+var jsonEscapeGrowth = func() (growth [utf8.RuneSelf]uint8) {
+	for c := range 0x20 {
+		growth[c] = uint8(len(`\u0000`) - 1)
+	}
+	for _, c := range []byte{'"', '\\', '\n', '\r', '\t', '\b', '\f'} {
+		growth[c] = 1
+	}
+	for _, c := range []byte{'<', '>', '&'} {
+		growth[c] = uint8(len(`\u0000`) - 1)
+	}
+	return growth
+}()
+
+// jsonRawBytes is the length of an embedded canonical JSON document as
+// encoding/json writes it: the HTML characters and the line and paragraph
+// separators it escapes grow it.
+func jsonRawBytes(raw []byte) int {
+	html := bytes.Count(raw, []byte{'<'}) + bytes.Count(raw, []byte{'>'}) + bytes.Count(raw, []byte{'&'})
+	separators := bytes.Count(raw, []byte("\u2028")) + bytes.Count(raw, []byte("\u2029"))
+	return len(raw) + html*(len(`\u0000`)-1) + separators*(len(`\u2028`)-len("\u2028"))
 }
 
 // EstimateFragTokens computes the token estimate from the fragment's parts,
@@ -141,15 +267,33 @@ func ResolveProviderBudgetFragTokens(frag ContextFrag) int {
 // frozen into a prefix. Tools are the provider-neutral definitions the request
 // actually carries, not the local executable tool set.
 func ProviderEnvelopeTokens(system string, messages []sdk.Message, tools []sdk.ToolDefinition) int {
+	return ProviderFixedEnvelopeTokens(system, tools) + ProviderMessagesTokens(messages)
+}
+
+// ProviderFixedEnvelopeTokens prices the part of a provider payload that a
+// change to its messages leaves alone: the system prompt and the tools.
+func ProviderFixedEnvelopeTokens(system string, tools []sdk.ToolDefinition) int {
 	total := ProviderBudgetTokensFromBytes(len(system))
-	for _, message := range messages {
-		bytes, images := sdkMessageEstimate(message)
-		total += ProviderBudgetTokensFromBytes(bytes) + images*EstimateImageTokens
-	}
 	for _, tool := range tools {
 		total += ProviderToolDefTokens(ToolDefinitionAccountingFor("", tool))
 	}
 	return total
+}
+
+// ProviderMessagesTokens prices provider messages for envelope decisions.
+func ProviderMessagesTokens(messages []sdk.Message) int {
+	total := 0
+	for _, message := range messages {
+		total += ProviderMessageTokens(message)
+	}
+	return total
+}
+
+// ProviderMessageTokens prices one provider message for envelope decisions; a
+// payload prices at the sum of its messages.
+func ProviderMessageTokens(message sdk.Message) int {
+	bytes, images := sdkMessageEstimate(message)
+	return ProviderBudgetTokensFromBytes(bytes) + images*EstimateImageTokens
 }
 
 // ProviderToolDefTokens prices one tool definition for envelope decisions.

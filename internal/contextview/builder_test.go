@@ -104,7 +104,7 @@ func TestBuildNormalizesCollectedContextRefs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if view.SourceFrags[0].Ref.ID == "" || view.Selected[0].Ref.ContentHash == "" {
+	if view.SourceFrags[0].Ref.ID == "" || view.Selected[0].Ref.Namespace == "" {
 		t.Fatalf("refs were not normalized: %#v", view.Selected[0].Ref)
 	}
 	if view.Placement.Items[0].Ref.Schema != contextfrag.SchemaContextRef {
@@ -168,7 +168,9 @@ func TestBuildRecordsDroppedFragmentEditTrace(t *testing.T) {
 	}
 }
 
-func TestSelectionDecisionsMarksChangedSelectionTrimmed(t *testing.T) {
+// A fragment the selector edited is trimmed; one it kept as is is selected,
+// whatever the two weigh.
+func TestSelectionDecisionsMarksEditedSelectionTrimmed(t *testing.T) {
 	t.Parallel()
 
 	source := textFrag("same", contextfrag.SlotSystem, contextfrag.KindSystemPrompt, sdk.MessageRoleSystem, "changed")
@@ -179,15 +181,23 @@ func TestSelectionDecisionsMarksChangedSelectionTrimmed(t *testing.T) {
 		t.Fatal("fixture must keep the same token estimate")
 	}
 
-	decisions := selectionDecisions([]contextfrag.ContextFrag{source}, SelectionResult{
+	kept := selectionDecisions([]contextfrag.ContextFrag{source}, SelectionResult{
 		Selected: []contextfrag.ContextFrag{selected},
 		Summary:  SelectionSummary{TotalCollected: 1, TotalSelected: 1},
 	})
-	if len(decisions) != 1 || decisions[0].Decision != contextfrag.DecisionTrimmed {
+	if len(kept) != 1 || kept[0].Decision != contextfrag.DecisionSelected {
+		t.Fatalf("unedited selection decisions = %#v", kept)
+	}
+	decisions := selectionDecisions([]contextfrag.ContextFrag{source}, SelectionResult{
+		Selected:    []contextfrag.ContextFrag{selected},
+		EditReasons: map[string]string{source.ID: "frag_budget"},
+		Summary:     SelectionSummary{TotalCollected: 1, TotalSelected: 1},
+	})
+	if len(decisions) != 1 || decisions[0].Decision != contextfrag.DecisionTrimmed || decisions[0].Reason != "frag_budget" {
 		t.Fatalf("selection decisions = %#v", decisions)
 	}
-	if decisions[0].Ref.ContentHash != selected.Ref.ContentHash || decisions[0].Ref.ContentHash == source.Ref.ContentHash {
-		t.Fatalf("decision ref = %#v, source = %#v, selected = %#v", decisions[0].Ref, source.Ref, selected.Ref)
+	if decisions[0].Ref != selected.Ref {
+		t.Fatalf("decision ref = %#v, selected = %#v", decisions[0].Ref, selected.Ref)
 	}
 	if decisions[0].TextBytes != len("change") || decisions[0].TokenEstimate != contextfrag.ResolveFragTokens(selected) {
 		t.Fatalf("decision accounting = %#v", decisions[0])

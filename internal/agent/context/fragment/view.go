@@ -21,16 +21,15 @@ const (
 	RenderRuntimeFullContext RenderTarget = "runtime_full_context"
 )
 
-// NormalizeContextRefs fills durable refs and canonical hashes for fragments
-// coming from collectors, mirroring what Compile does for legacy inputs.
+// NormalizeContextRefs fills the refs of fragments coming from collectors,
+// mirroring what Compile does for legacy inputs.
 func NormalizeContextRefs(frags []ContextFrag) []ContextFrag {
 	return normalizeContextRefs(frags)
 }
 
 // CachePlan records the stable prefix selected for provider prompt caching.
 type CachePlan struct {
-	StablePrefixHash          string `json:"stable_prefix_hash,omitempty"`
-	StableMessageCount        int    `json:"stable_message_count,omitempty"`
-	StablePrefixTokenEstimate int    `json:"stable_prefix_token_estimate,omitempty"`
-	MidStableMessageCount     int    `json:"mid_stable_message_count,omitempty"`
+	StableMessageCount        int `json:"stable_message_count,omitempty"`
+	StablePrefixTokenEstimate int `json:"stable_prefix_token_estimate,omitempty"`
+	MidStableMessageCount     int `json:"mid_stable_message_count,omitempty"`
 }

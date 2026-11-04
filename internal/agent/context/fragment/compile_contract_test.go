@@ -1,6 +1,7 @@
 package contextfrag
 
 import (
+	"reflect"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -28,9 +29,6 @@ func TestCompileAddsRefsAndManifestTraceWithoutChangingRenderedLegacyView(t *tes
 		if err := ValidateContextRef(frag.Ref); err != nil {
 			t.Fatalf("compiled frag %q has invalid ref %#v: %v", frag.ID, frag.Ref, err)
 		}
-		if frag.Ref.HashScope != HashScopeCanonicalFragment || frag.Ref.ContentHash == "" {
-			t.Fatalf("compiled frag %q missing canonical hash ref: %#v", frag.ID, frag.Ref)
-		}
 	}
 	if len(got.Manifest.RenderedOutputs) == 0 {
 		t.Fatal("manifest should explain rendered output refs")
@@ -47,9 +45,6 @@ func TestContextRefEmptyDurabilityMatchesDurableIdentity(t *testing.T) {
 	durable := legacy
 	durable.Durability = RefDurable
 
-	if !legacy.EqualIdentity(durable) {
-		t.Fatalf("empty durability should match durable identity: legacy=%#v durable=%#v", legacy, durable)
-	}
 	if legacy.StableKey() != durable.StableKey() {
 		t.Fatalf("empty durability stable key = %q, durable = %q", legacy.StableKey(), durable.StableKey())
 	}
@@ -86,103 +81,6 @@ func TestBuildManifestWarnsForDirectNonDurableRefs(t *testing.T) {
 	manifest := BuildManifest([]ContextFrag{synthetic, debug})
 	if countManifestWarnings(manifest, "non_durable_context_ref") != 2 {
 		t.Fatalf("BuildManifest should warn for direct synthetic/debug refs: %#v", manifest.ValidationWarnings)
-	}
-}
-
-func TestCompileUsesStableContentAddressedRefsWhenSourceIDIsMissing(t *testing.T) {
-	t.Parallel()
-
-	first := Compile(CompileInput{
-		Source:   "test",
-		Messages: []sdk.Message{sdk.UserMessage("target")},
-	})
-	second := Compile(CompileInput{
-		Source:   "test",
-		Messages: []sdk.Message{sdk.UserMessage("prefix"), sdk.UserMessage("target")},
-	})
-
-	firstRef, ok := refForRenderedMessageText(first.Frags, "target")
-	if !ok {
-		t.Fatalf("missing target ref in first compile: %#v", first.Manifest.Items)
-	}
-	secondRef, ok := refForRenderedMessageText(second.Frags, "target")
-	if !ok {
-		t.Fatalf("missing target ref in second compile: %#v", second.Manifest.Items)
-	}
-	if firstRef.ID != secondRef.ID {
-		t.Fatalf("source-less legacy message ref drifted with position: first=%#v second=%#v", firstRef, secondRef)
-	}
-	if firstRef.Durability != RefSynthetic || secondRef.Durability != RefSynthetic {
-		t.Fatalf("source-less fallback refs must be marked synthetic: first=%#v second=%#v", firstRef, secondRef)
-	}
-}
-
-func TestCompileMarksDuplicateSourceLessRefsSynthetic(t *testing.T) {
-	t.Parallel()
-
-	got := Compile(CompileInput{
-		Source: "test",
-		Messages: []sdk.Message{
-			sdk.UserMessage("same"),
-			sdk.UserMessage("same"),
-		},
-	})
-
-	var refs []ContextRef
-	for _, frag := range got.Frags {
-		if frag.Slot == SlotHistory {
-			refs = append(refs, frag.Ref)
-		}
-	}
-	if len(refs) != 2 {
-		t.Fatalf("history refs = %d, want 2: %#v", len(refs), got.Manifest.Items)
-	}
-	if refs[0].ID != refs[1].ID {
-		t.Fatalf("duplicate source-less content should share content-addressed ID for trace: %#v", refs)
-	}
-	for _, ref := range refs {
-		if ref.Durability != RefSynthetic || ref.IsDurable() {
-			t.Fatalf("duplicate source-less refs must not be treated as durable: %#v", ref)
-		}
-	}
-	if !manifestHasWarning(got.Manifest, "non_durable_context_ref") {
-		t.Fatalf("manifest missing synthetic warning for duplicate source-less refs: %#v", got.Manifest.ValidationWarnings)
-	}
-	if countManifestWarnings(got.Manifest, "non_durable_context_ref") != 2 {
-		t.Fatalf("manifest should warn for each non-durable ref: %#v", got.Manifest.ValidationWarnings)
-	}
-}
-
-func TestCompileWarnsWhenSourceLessRefsDependOnScope(t *testing.T) {
-	t.Parallel()
-
-	first := Compile(CompileInput{
-		Source:   "test",
-		Scope:    Scope{CurrentMessageID: "msg-1"},
-		Messages: []sdk.Message{sdk.UserMessage("same")},
-	})
-	second := Compile(CompileInput{
-		Source:   "test",
-		Scope:    Scope{CurrentMessageID: "msg-2"},
-		Messages: []sdk.Message{sdk.UserMessage("same")},
-	})
-
-	firstRef, ok := refForRenderedMessageText(first.Frags, "same")
-	if !ok {
-		t.Fatalf("missing first ref: %#v", first.Manifest.Items)
-	}
-	secondRef, ok := refForRenderedMessageText(second.Frags, "same")
-	if !ok {
-		t.Fatalf("missing second ref: %#v", second.Manifest.Items)
-	}
-	if firstRef.ID == secondRef.ID {
-		t.Fatalf("scope-dependent source-less refs should expose drift, got same ID %#v", firstRef)
-	}
-	if firstRef.Durability != RefSynthetic || secondRef.Durability != RefSynthetic {
-		t.Fatalf("scope-dependent source-less refs must be synthetic: first=%#v second=%#v", firstRef, secondRef)
-	}
-	if !manifestHasWarning(first.Manifest, "non_durable_context_ref") || !manifestHasWarning(second.Manifest, "non_durable_context_ref") {
-		t.Fatalf("missing synthetic warnings: first=%#v second=%#v", first.Manifest.ValidationWarnings, second.Manifest.ValidationWarnings)
 	}
 }
 
@@ -253,7 +151,7 @@ func TestCompilePreservesExplicitMessageFragAtSourcePosition(t *testing.T) {
 	if assembled.Manifest.Items[1].Kind != KindConversationSummary {
 		t.Fatalf("second manifest item kind = %q, want %q", assembled.Manifest.Items[1].Kind, KindConversationSummary)
 	}
-	if !assembled.Manifest.Items[1].Ref.EqualIdentity(summaryRef) {
+	if assembled.Manifest.Items[1].Ref.StableKey() != summaryRef.StableKey() {
 		t.Fatalf("explicit message ref was not preserved: %#v", assembled.Manifest.Items[1].Ref)
 	}
 }
@@ -287,7 +185,45 @@ func TestCompilePreservesUnmatchedExplicitMessageFrag(t *testing.T) {
 	if assembled.Manifest.Items[0].Kind != KindConversationSummary {
 		t.Fatalf("first manifest item kind = %q, want %q", assembled.Manifest.Items[0].Kind, KindConversationSummary)
 	}
-	if !assembled.Manifest.Items[0].Ref.EqualIdentity(summaryRef) {
+	if assembled.Manifest.Items[0].Ref.StableKey() != summaryRef.StableKey() {
 		t.Fatalf("unmatched explicit message ref was not preserved: %#v", assembled.Manifest.Items[0].Ref)
+	}
+}
+
+// A request is compiled again whenever the fields it compiles from change, on
+// top of the fragments its last compile produced. Recompiling from those must
+// give what compiling once from the explicit fragments they kept gives, so a
+// caller never needs a compile only to prepare the next one.
+func TestCompileOverItsOwnFragsMatchesOneCompile(t *testing.T) {
+	t.Parallel()
+
+	summary := sdk.UserMessage("<summary>\ncondensed\n</summary>")
+	summaryFrag := MessageFrag(MessageFragInput{
+		ID:      "message.001",
+		Message: summary,
+		Kind:    KindConversationSummary,
+		Slot:    SlotHistory,
+		Source:  "compaction_log",
+	})
+	summaryFrag.Ref = ContextRef{Namespace: "compaction_log", ID: "log-1", Schema: SchemaContextRef, Durability: RefDurable}
+	usage := TextFrag(TextFragInput{ID: "tool_usage", Kind: KindToolUsage, Role: sdk.MessageRoleSystem, Slot: SlotSystem, Text: "use tools", Source: SourceAgentToolUsage})
+	history := []sdk.Message{sdk.UserMessage("before"), summary, sdk.AssistantMessage("after")}
+	memory, current := 3, 4
+	final := CompileInput{
+		Source:                  SourceRunConfig,
+		System:                  "system prompt\n\n## Tool usage\n\nuse tools",
+		ToolUsage:               "## Tool usage\n\nuse tools",
+		Messages:                append(append([]sdk.Message(nil), history...), sdk.UserMessage("recall"), sdk.UserMessage("question")),
+		MemoryMessageIndex:      &memory,
+		CurrentUserMessageIndex: &current,
+		InlineImages:            []sdk.ImagePart{{Image: "data:image/png;base64,abc", MediaType: "image/png"}},
+		Existing:                []ContextFrag{usage, summaryFrag},
+	}
+	earlier := CompileInput{Source: SourceRunConfig, Messages: history, Query: "draft", Existing: final.Existing}
+
+	recompiled := final
+	recompiled.Existing = Compile(earlier).Frags
+	if got, want := Compile(recompiled), Compile(final); !reflect.DeepEqual(got, want) {
+		t.Fatalf("recompiling over compiled fragments diverges from one compile:\ngot:  %#v\nwant: %#v", got.Frags, want.Frags)
 	}
 }

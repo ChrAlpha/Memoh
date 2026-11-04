@@ -1,8 +1,6 @@
 package compaction
 
 import (
-	"strings"
-
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
@@ -22,12 +20,14 @@ func summaryReplayTokens(summary string) int {
 
 // summaryOutputLimit is the longest summary, in tokens, the prompt may ask
 // for: one that long, with a token to spare for rounding, still fits
-// replayBudget as the request carries it.
+// replayBudget as the request carries it. The search prices lengths, not
+// summaries: a summary's text prices by its bytes, which its wrapper adds to.
 func summaryOutputLimit(replayBudget, modelLimit int) int {
+	wrapper := len(turn.SummaryText(""))
 	low, high := 0, min(modelLimit, replayBudget)
 	for low < high {
 		mid := (low + high + 1) / 2
-		if summaryReplayTokens(strings.Repeat("x", (mid+1)*contextfrag.EstimateBytesPerToken)) <= replayBudget {
+		if contextfrag.ProviderBudgetTokensFromBytes(wrapper+(mid+1)*contextfrag.EstimateBytesPerToken) <= replayBudget {
 			low = mid
 		} else {
 			high = mid - 1

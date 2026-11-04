@@ -11,8 +11,7 @@ func TestMutationLedgerNilSafe(t *testing.T) {
 
 	var ledger *MutationLedger
 	ledger.Record(MutationBackgroundSummary, "bytes=10")
-	ledger.SetFinalInputHash("abc")
-	if ledger.Records() != nil || ledger.FinalInputHash() != "" {
+	if ledger.Records() != nil {
 		t.Fatal("nil ledger must be inert")
 	}
 }
@@ -23,48 +22,12 @@ func TestMutationLedgerRecordsInOrder(t *testing.T) {
 	ledger := NewMutationLedger()
 	ledger.Record(MutationBackgroundSummary, "bytes=10")
 	ledger.Record(MutationContextSwitch, "mode=fold")
-	ledger.SetFinalInputHash("hash-1")
 
 	records := ledger.Records()
 	if len(records) != 2 ||
 		records[0].Kind != MutationBackgroundSummary ||
 		records[1].Kind != MutationContextSwitch {
 		t.Fatalf("records = %#v", records)
-	}
-	if ledger.FinalInputHash() != "hash-1" {
-		t.Fatalf("final hash = %q", ledger.FinalInputHash())
-	}
-}
-
-func TestProviderInputHashDeterministic(t *testing.T) {
-	t.Parallel()
-
-	first := ProviderInputHash("system", []string{"a", "b"})
-	second := ProviderInputHash("system", []string{"a", "b"})
-	changed := ProviderInputHash("system", []string{"a", "c"})
-	if first == "" || first != second {
-		t.Fatal("hash must be deterministic and non-empty")
-	}
-	if first == changed {
-		t.Fatal("hash must track payload changes")
-	}
-}
-
-func TestProviderPayloadHashTracksTools(t *testing.T) {
-	t.Parallel()
-
-	withoutTools := ProviderPayloadHash("system", []string{"a"}, nil)
-	withEmptyTools := ProviderPayloadHash("system", []string{"a"}, []string(nil))
-	withAllocatedEmptyTools := ProviderPayloadHash("system", []string{"a"}, []string{})
-	withTools := ProviderPayloadHash("system", []string{"a"}, []string{"tool"})
-	if withoutTools != withEmptyTools || withoutTools != withAllocatedEmptyTools {
-		t.Fatal("empty tools must preserve the legacy payload identity")
-	}
-	if withoutTools != ProviderInputHash("system", []string{"a"}) {
-		t.Fatal("ProviderInputHash must stay the tool-less payload identity")
-	}
-	if withTools == withoutTools {
-		t.Fatal("tool definitions must participate in provider payload identity")
 	}
 }
 
@@ -88,9 +51,9 @@ func TestMutationLedgerAppendStepSnapshotStampsCurrentAttempt(t *testing.T) {
 	t.Parallel()
 
 	ledger := NewMutationLedger()
-	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0, PostPrepareInputHash: "hash-0"})
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0})
 	ledger.AdvanceAttempt()
-	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0, PostPrepareInputHash: "hash-1"})
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0})
 
 	steps := ledger.StepSnapshots()
 	if len(steps) != 2 {
@@ -153,22 +116,21 @@ func TestMutationLedgerMarshalJSONIncludesAttemptAudit(t *testing.T) {
 
 	ledger := NewMutationLedger()
 	ledger.Record(MutationContextSwitch, "mode=fold trigger=in_run step=3")
-	ledger.SetFinalInputHash("final-hash")
 	ledger.SetModelInfo("claude-x", "anthropic-messages")
-	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0, PostPrepareInputHash: "step-hash-0"})
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 0})
 	ledger.RecordCacheUsage(CacheUsageRecord{StepIndex: 0, CacheReadTokens: 11})
 	ledger.AdvanceAttempt()
-	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 1, PostPrepareInputHash: "step-hash-1"})
+	ledger.AppendStepSnapshot(StepSnapshot{StepIndex: 1})
 
 	raw, err := json.Marshal(ledger)
 	if err != nil {
 		t.Fatalf("marshal ledger: %v", err)
 	}
 	for _, want := range []string{
-		"context_switch", "mode=fold trigger=in_run step=3", "final-hash",
+		"context_switch", "mode=fold trigger=in_run step=3",
 		`"model":"claude-x"`, `"client_type":"anthropic-messages"`,
-		`"step_index":0`, "step-hash-0", `"cache_read_tokens":11`,
-		`"step_index":1`, "step-hash-1", `"attempt":1`,
+		`"step_index":0`, `"cache_read_tokens":11`,
+		`"step_index":1`, `"attempt":1`,
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("ledger JSON missing %q:\n%s", want, raw)

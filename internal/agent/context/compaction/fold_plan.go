@@ -160,9 +160,10 @@ func retain(ev Event, unfoldable map[int]bool) retention {
 	}
 	budget -= used
 	latest := true
+	boundaries := foldBoundaries(messages, sources)
 	for at := r.cut; at > 0; {
 		start := at - 1
-		for start > 0 && !foldBoundary(messages, start) {
+		for start > 0 && !boundaries[start] {
 			start--
 		}
 		group, stop := false, false
@@ -258,10 +259,10 @@ func (p foldPlan) final() bool { return p.end == p.cut }
 // of its output when that is fixed, else, within its cap, at least half of
 // the summary what the pass reads may need and never less than
 // minForkOutputTokens.
-func (p foldPlan) answers(ev Event) bool {
+func (p foldPlan) answers(ev Event, price passPrice) bool {
 	need := ev.MaxOutputTokens
 	if !ev.FixedOutput {
-		need = min(need, max(minForkOutputTokens, min(summaryBudget(ev), p.replaced)/2))
+		need = min(need, max(minForkOutputTokens, min(price.summaryBudget(), p.replaced)/2))
 	}
 	return p.maxTokens >= need
 }
@@ -311,8 +312,9 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 		}
 	}
 	var ends []int
+	boundaries := foldBoundaries(messages, sources)
 	for end := max(first+1, summariesEnd); end <= ev.cut; end++ {
-		if foldBoundary(messages, end) {
+		if boundaries[end] {
 			ends = append(ends, end)
 		}
 	}
@@ -324,10 +326,11 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	if err != nil {
 		return foldPlan{}, err
 	}
+	price := pricePass(ev, read)
 	plan := func(end int) (foldPlan, error) {
 		p := spanPlan(ev, kept, end)
 		p.rewrite, p.fork = rewrite, read[:end]
-		return p, p.size(ev)
+		return p, p.size(ev, price)
 	}
 	pass, err := plan(ends[len(ends)-1])
 	switch {
@@ -337,10 +340,10 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 		// Only summaries are left, and they fit: folding them again would
 		// only rewrite them.
 		return foldPlan{}, nil
-	case err == nil && !pass.answers(ev):
+	case err == nil && !pass.answers(ev, price):
 		answering := sort.Search(len(ends)-1, func(i int) bool {
 			p, _ := plan(ends[i])
-			return !p.answers(ev)
+			return !p.answers(ev, price)
 		})
 		pass, err = plan(ends[max(answering-1, 0)])
 		if err == nil && answering == 0 {
@@ -350,7 +353,7 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	if err != nil {
 		// What is left is too little for any summary to replace; once the
 		// request fits, the event is done.
-		if forkTokens(ev.Request) <= ev.Allowance {
+		if price.request() <= ev.Allowance {
 			return foldPlan{}, nil
 		}
 		return foldPlan{}, err
@@ -358,9 +361,92 @@ func planFold(ev Event, unfoldable map[int]bool) (foldPlan, error) {
 	return pass, nil
 }
 
-// foldBoundary reports whether a pass may end its read before message end: a
-// tool result never starts what a pass leaves, so a call and its results
-// stay on one side.
+// passPrice is a pass's request and fork priced once, as forkTokens prices
+// them, for every read the pass weighs: the system prompt and tools, which
+// every request and fork of the event carries unchanged, each message of the
+// request and of the fork's read (forkRead), and the room the request has
+// (fixedRoom). forkTokens prices a payload at its system prompt and tools
+// plus each of its messages, so what a read takes is a sum of these.
+type passPrice struct {
+	envelope int
+	messages []int
+	read     []int
+	room     int
+}
+
+func pricePass(ev Event, read []sdk.Message) passPrice {
+	price := passPrice{
+		envelope: contextfrag.ProviderFixedEnvelopeTokens(ev.Request.System, ev.Request.Tools),
+		messages: messageTokens(ev.Request.Messages),
+		read:     messageTokens(read),
+	}
+	price.room = ev.Allowance - price.envelope
+	for i, tokens := range price.messages {
+		if len(ev.Sources[i].Sources) == 0 {
+			price.room -= tokens
+		}
+	}
+	return price
+}
+
+func messageTokens(messages []sdk.Message) []int {
+	tokens := make([]int, len(messages))
+	for i, message := range messages {
+		tokens[i] = contextfrag.ProviderMessageTokens(message)
+	}
+	return tokens
+}
+
+// request is what the request takes, its system prompt and tools included.
+func (p passPrice) request() int {
+	tokens := p.envelope
+	for _, message := range p.messages {
+		tokens += message
+	}
+	return tokens
+}
+
+// fork is what the fork's read of the first end messages takes, the system
+// prompt and tools included.
+func (p passPrice) fork(end int) int {
+	tokens := p.envelope
+	for _, message := range p.read[:end] {
+		tokens += message
+	}
+	return tokens
+}
+
+// summaryBudget is summaryBudget of the pass's event.
+func (p passPrice) summaryBudget() int { return p.room / roomShare }
+
+// foldBoundaries reports, for each end from 0 to len(messages), whether a
+// pass may end its read before message end: a tool result never starts what
+// a pass leaves, so a call and its results stay on one side, and no source
+// renders on both sides, so a stored row folds or stays whole. The read path
+// can render one row at two places, a decision result it moves behind its
+// projection and the rest of the row.
+func foldBoundaries(messages []sdk.Message, sources []Source) []bool {
+	last := map[turn.ContextMessageSource]int{}
+	for i, source := range sources {
+		for _, s := range source.Sources {
+			last[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}] = i
+		}
+	}
+	boundaries := make([]bool, len(messages)+1)
+	reach := -1
+	for end := 1; end <= len(messages); end++ {
+		if end-1 < len(sources) {
+			for _, s := range sources[end-1].Sources {
+				reach = max(reach, last[turn.ContextMessageSource{Kind: s.Kind, ID: s.ID}])
+			}
+		}
+		boundaries[end] = end == len(messages) || reach < end && foldBoundary(messages, end)
+	}
+	return boundaries
+}
+
+// foldBoundary reports whether a tool result does not start message end, so
+// a pass ending its read there keeps a call and its results on one side.
 func foldBoundary(messages []sdk.Message, end int) bool {
 	if end <= 0 || end > len(messages) {
 		return false
@@ -411,27 +497,26 @@ func spanPlan(ev Event, kept map[int]bool, end int) foldPlan {
 	return plan
 }
 
-// size prices the pass: what it replaces, the room the next request leaves
-// its summary, the fork's output cap and the summary length to ask for.
-func (p *foldPlan) size(ev Event) error {
+// size prices the pass by what price holds of its event: what it replaces,
+// the room the next request leaves its summary, the fork's output cap and
+// the summary length to ask for.
+func (p *foldPlan) size(ev Event, price passPrice) error {
 	capability := ev.MaxOutputTokens
-	messages := ev.Request.Messages
-	var replaced, keptMessages []sdk.Message
-	for i, message := range messages {
+	replaced, kept := 0, price.envelope
+	for i, tokens := range price.messages {
 		if i < p.end && len(ev.Sources[i].Sources) > 0 && !p.keep[i] {
-			replaced = append(replaced, message)
+			replaced += tokens
 		} else {
-			keptMessages = append(keptMessages, message)
+			kept += tokens
 		}
 	}
-	p.replaced = forkTokens(sdk.Request{Messages: replaced})
-	p.room = ev.Allowance - forkTokens(sdk.Request{System: ev.Request.System, Messages: keptMessages, Tools: ev.Request.Tools})
-	prefix := forkTokens(sdk.Request{System: ev.Request.System, Messages: p.fork, Tools: ev.Request.Tools})
+	prefix := price.fork(len(p.fork))
+	p.replaced, p.room = replaced, ev.Allowance-kept
 	p.instruction = forkInstruction(ev, p)
 	// The instruction is priced as a second request carries it, with the
 	// reminder after a tool call.
 	p.maxTokens = min(capability, ev.Window-prefix-instructionTokens(p.instruction+noToolsReminder)-instructionNumberSlack)
-	p.stated = min(p.maxTokens*3/4, summaryBudget(ev), summaryOutputLimit(p.replaced-1, capability))
+	p.stated = min(p.maxTokens*3/4, price.summaryBudget(), summaryOutputLimit(p.replaced-1, capability))
 	if p.bounded() {
 		p.stated = min(p.stated, summaryOutputLimit(p.room, capability))
 	}

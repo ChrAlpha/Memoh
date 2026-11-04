@@ -124,11 +124,11 @@ func TestGetSessionContextLifecycleReturnsFailedRunWithoutAssistantMessage(t *te
 	t.Parallel()
 
 	const (
-		failedRunID          = "33333333-3333-3333-3333-333333333333"
-		completedRunID       = "44444444-4444-4444-4444-444444444444"
-		assistantMessageID   = "55555555-5555-5555-5555-555555555555"
-		budgetErrorCode      = "context.budget_unsatisfied"
-		failedFinalInputHash = "failed-before-assistant"
+		failedRunID        = "33333333-3333-3333-3333-333333333333"
+		completedRunID     = "44444444-4444-4444-4444-444444444444"
+		assistantMessageID = "55555555-5555-5555-5555-555555555555"
+		budgetErrorCode    = "context.budget_unsatisfied"
+		failedModel        = "failed-before-assistant"
 	)
 	createdAt := time.Unix(1000, 0).UTC()
 	queries := newContextLifecycleTestQueries()
@@ -139,9 +139,9 @@ func TestGetSessionContextLifecycleReturnsFailedRunWithoutAssistantMessage(t *te
 			ErrorCode: pgtype.Text{String: budgetErrorCode, Valid: true},
 			CreatedAt: pgtype.Timestamptz{Time: createdAt.Add(time.Minute), Valid: true},
 			Snapshot: lifecycleSnapshotJSON(t, contextfrag.LifecycleSnapshot{
-				Version:        1,
-				Counts:         contextfrag.ManifestCounts{Fragments: 2, Messages: 1},
-				FinalInputHash: failedFinalInputHash,
+				Version: 1,
+				Counts:  contextfrag.ManifestCounts{Fragments: 2, Messages: 1},
+				Model:   failedModel,
 			}),
 		},
 		{
@@ -181,7 +181,7 @@ func TestGetSessionContextLifecycleReturnsFailedRunWithoutAssistantMessage(t *te
 	failed := response.Turns[0]
 	if failed.RunID != failedRunID || failed.Status != "failed_budget" ||
 		failed.ErrorCode != budgetErrorCode || failed.AssistantMessageID != "" ||
-		failed.Snapshot.Counts.Fragments != 2 || failed.Snapshot.FinalInputHash != failedFinalInputHash {
+		failed.Snapshot.Counts.Fragments != 2 || failed.Snapshot.Model != failedModel {
 		t.Fatalf("failed run response = %#v", failed)
 	}
 	completed := response.Turns[1]
@@ -214,9 +214,9 @@ func TestLoadContextLifecycleTurnsPrefersRunRowsWithoutAssistantMessage(t *testi
 			ErrorCode: pgtype.Text{String: "context.budget_unsatisfied", Valid: true},
 			CreatedAt: pgtype.Timestamptz{Time: createdAt, Valid: true},
 			Snapshot: lifecycleSnapshotJSON(t, contextfrag.LifecycleSnapshot{
-				Version:        1,
-				Counts:         contextfrag.ManifestCounts{Fragments: 1},
-				FinalInputHash: "failed-before-assistant",
+				Version: 1,
+				Counts:  contextfrag.ManifestCounts{Fragments: 1},
+				Model:   "failed-before-assistant",
 			}),
 		}},
 	}
@@ -240,7 +240,7 @@ func TestLoadContextLifecycleTurnsPrefersRunRowsWithoutAssistantMessage(t *testi
 		!turn.CreatedAt.Equal(createdAt) {
 		t.Fatalf("turn = %#v, want run-keyed failed_budget lifecycle", turn)
 	}
-	if turn.Snapshot.FinalInputHash != "failed-before-assistant" {
+	if turn.Snapshot.Model != "failed-before-assistant" {
 		t.Fatalf("snapshot = %#v, want persisted run snapshot", turn.Snapshot)
 	}
 	if len(queries.legacyParams) != 0 {
@@ -407,8 +407,8 @@ func TestLegacyLifecycleTurnsFromRowsSupportsLegacyAndMemoryOnlySnapshots(t *tes
 			},
 		}),
 		legacyLifecycleRow(t, pgtype.UUID{Bytes: [16]byte{1}, Valid: true}, base, &contextfrag.LifecycleSnapshot{
-			Version:        1,
-			FinalInputHash: "legacy-snapshot",
+			Version: 1,
+			Model:   "legacy-snapshot",
 		}),
 	}
 
@@ -420,7 +420,7 @@ func TestLegacyLifecycleTurnsFromRowsSupportsLegacyAndMemoryOnlySnapshots(t *tes
 		turns[0].Snapshot.MemoryRecall.Result.Count != 1 {
 		t.Fatalf("memory-only snapshot = %#v", turns[0].Snapshot)
 	}
-	if turns[1].Snapshot.MemoryRecall != nil || turns[1].Snapshot.FinalInputHash != "legacy-snapshot" {
+	if turns[1].Snapshot.MemoryRecall != nil || turns[1].Snapshot.Model != "legacy-snapshot" {
 		t.Fatalf("legacy snapshot changed compatibility semantics: %#v", turns[1].Snapshot)
 	}
 }

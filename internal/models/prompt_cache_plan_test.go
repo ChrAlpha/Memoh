@@ -43,7 +43,7 @@ func TestApplyPromptCachePlanSetsStableMessageBreakpoint(t *testing.T) {
 		sdk.UserMessage("stable summary"),
 		sdk.UserMessage("volatile question"),
 	}
-	plan := contextfrag.CachePlan{StablePrefixHash: "abc", StableMessageCount: 1}
+	plan := contextfrag.CachePlan{StableMessageCount: 1}
 
 	_, got, _, _, actualStableCount := ApplyPromptCacheWithPlan(model, "5m", plan, "system", messages, nil)
 

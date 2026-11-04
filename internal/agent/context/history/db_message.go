@@ -1,12 +1,9 @@
 package historyfrag
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"sort"
 	"strings"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
@@ -37,12 +34,7 @@ func FromDBMessageWithLogger(log *slog.Logger, msg messagepkg.Message, fallback 
 	modelMessage := DecodeStoredModelMessage(log, msg.ID, msg.Role, msg.Content)
 	modelMessage.ContextSource = &turn.ContextMessageSource{Kind: "history", ID: rowID}
 	inputTokens, outputTokens := parseUsage(msg.Usage)
-	// The ref hashes the full stored row, metadata included, so it also
-	// changes with lifecycle audits the record itself does not keep.
 	metadata := dbMessageMetadata(msg)
-	ref.HashAlgo = contextfrag.HashAlgoSHA256
-	ref.HashScope = contextfrag.HashScopeSourcePayload
-	ref.ContentHash = dbMessageSourceHash(msg, metadata).Value
 	scope := scopeFromDBMessage(msg, fallback)
 	provenance := contextfrag.Provenance{
 		Source:    string(SourceDBMessage),
@@ -94,62 +86,6 @@ func DBMessageIdentityRef(id string) (contextfrag.ContextRef, error) {
 		Schema:     contextfrag.SchemaContextRef,
 		Durability: contextfrag.RefDurable,
 	}, nil
-}
-
-func DBMessageSourceHash(msg messagepkg.Message) contextfrag.FragmentHash {
-	return dbMessageSourceHash(msg, dbMessageMetadata(msg))
-}
-
-func dbMessageSourceHash(msg messagepkg.Message, metadata map[string]any) contextfrag.FragmentHash {
-	payload := dbMessageSourceHashPayload{
-		ID:                      strings.TrimSpace(msg.ID),
-		BotID:                   strings.TrimSpace(msg.BotID),
-		SessionID:               strings.TrimSpace(msg.SessionID),
-		SenderChannelIdentityID: strings.TrimSpace(msg.SenderChannelIdentityID),
-		SenderUserID:            strings.TrimSpace(msg.SenderUserID),
-		Platform:                strings.TrimSpace(msg.Platform),
-		ExternalMessageID:       strings.TrimSpace(msg.ExternalMessageID),
-		SourceReplyToMessageID:  strings.TrimSpace(msg.SourceReplyToMessageID),
-		Role:                    strings.TrimSpace(msg.Role),
-		Content:                 string(msg.Content),
-		Metadata:                metadata,
-		Usage:                   string(msg.Usage),
-		EventID:                 strings.TrimSpace(msg.EventID),
-		Assets:                  mediaRefsFromDBMessage(msg),
-	}
-	sort.Slice(payload.Assets, func(i, j int) bool {
-		if payload.Assets[i].Ordinal != payload.Assets[j].Ordinal {
-			return payload.Assets[i].Ordinal < payload.Assets[j].Ordinal
-		}
-		if payload.Assets[i].ContentHash != payload.Assets[j].ContentHash {
-			return payload.Assets[i].ContentHash < payload.Assets[j].ContentHash
-		}
-		return payload.Assets[i].Role < payload.Assets[j].Role
-	})
-	raw, _ := json.Marshal(payload)
-	sum := sha256.Sum256(raw)
-	return contextfrag.FragmentHash{
-		Algo:  contextfrag.HashAlgoSHA256,
-		Scope: contextfrag.HashScopeSourcePayload,
-		Value: hex.EncodeToString(sum[:]),
-	}
-}
-
-type dbMessageSourceHashPayload struct {
-	ID                      string         `json:"id"`
-	BotID                   string         `json:"bot_id,omitempty"`
-	SessionID               string         `json:"session_id,omitempty"`
-	SenderChannelIdentityID string         `json:"sender_channel_identity_id,omitempty"`
-	SenderUserID            string         `json:"sender_user_id,omitempty"`
-	Platform                string         `json:"platform,omitempty"`
-	ExternalMessageID       string         `json:"external_message_id,omitempty"`
-	SourceReplyToMessageID  string         `json:"source_reply_to_message_id,omitempty"`
-	Role                    string         `json:"role"`
-	Content                 string         `json:"content,omitempty"`
-	Metadata                map[string]any `json:"metadata,omitempty"`
-	Usage                   string         `json:"usage,omitempty"`
-	EventID                 string         `json:"event_id,omitempty"`
-	Assets                  []MediaRef     `json:"assets,omitempty"`
 }
 
 func parseUsage(raw json.RawMessage) (*int, *int) {
