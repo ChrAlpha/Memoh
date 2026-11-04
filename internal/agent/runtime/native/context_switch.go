@@ -113,11 +113,11 @@ func (s *contextSwitchState) calibrated(tokens int) int {
 }
 
 // staged records what the estimate prices the request a step sends at.
-func (s *contextSwitchState) staged(params *sdk.Request) {
-	if s == nil || params == nil {
+func (s *contextSwitchState) staged(tokens int) {
+	if s == nil {
 		return
 	}
-	s.dispatched = contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
+	s.dispatched = tokens
 }
 
 // observe calibrates the estimate by the input tokens the provider counted
@@ -168,19 +168,16 @@ func (s *contextSwitchState) align(messages []sdk.Message) []*MessageProvenance 
 	return out
 }
 
-// fold runs one compaction event when params does not fit allowance, which
-// is calibrated, and splices each pass it commits into params; the event
-// decides what stays verbatim. Every message no pass covers stays as it was.
-// It reports whether params changed; an event that leaves the request over
-// its allowance fails as the event says. The event works in the estimate's
-// units, so the window a fork reads within is calibrated too.
-func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, allowance int) (bool, error) {
-	if s == nil || allowance <= 0 {
-		return false, nil
-	}
-	usage := contextfrag.ProviderEnvelopeTokens(params.System, params.Messages, params.Tools)
-	if usage <= allowance {
-		return false, nil
+// fold runs one compaction event when params, priced at usage, does not fit
+// allowance, which is calibrated, and splices each pass it commits into
+// params; the event decides what stays verbatim. Every message no pass covers
+// stays as it was. It reports whether params changed and, when it did, what
+// the request now costs; an event that leaves the request over its allowance
+// fails as the event says. The event works in the estimate's units, so the
+// window a fork reads within is calibrated too.
+func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sdk.Request, allowance, usage int) (bool, int, error) {
+	if s == nil || allowance <= 0 || usage <= allowance {
+		return false, usage, nil
 	}
 	provenance := s.align(params.Messages)
 	window, reserve := providerWindow(cfg)
@@ -189,6 +186,9 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	for i := range splice.from {
 		splice.from[i] = i
 	}
+	// The system prompt and tools stay as they are; a pass reprices only the
+	// messages.
+	fixed := contextfrag.ProviderFixedEnvelopeTokens(params.System, params.Tools)
 	tokens := usage
 	applied := false
 	sw := ContextSwitch{
@@ -203,7 +203,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		Fold: func(fold ContextFold) ContextSplice {
 			splice.apply(fold)
 			applied = true
-			tokens = contextfrag.ProviderEnvelopeTokens(params.System, splice.messages, params.Tools)
+			tokens = fixed + contextfrag.ProviderMessagesTokens(splice.messages)
 			request := *params
 			request.Messages = splice.messages
 			return ContextSplice{Request: request, Provenance: splice.provenance, Tokens: tokens}
@@ -223,15 +223,15 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 	}
 	if err != nil {
 		if ctx.Err() != nil {
-			return false, ctx.Err()
+			return false, usage, ctx.Err()
 		}
 		if errors.Is(err, contextfrag.ErrProtectedContextOverflow) || errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
-			return false, err
+			return false, usage, err
 		}
-		return false, fmt.Errorf("%w: context switch: %w", contextfrag.ErrBudgetUnsatisfied, err)
+		return false, usage, fmt.Errorf("%w: context switch: %w", contextfrag.ErrBudgetUnsatisfied, err)
 	}
 	if !applied {
-		return false, nil
+		return false, usage, nil
 	}
 	recordFoldedInputImages(cfg.ContextMutations, params.Messages, provenance, splice.from)
 	params.Messages = splice.messages
@@ -242,7 +242,7 @@ func (s *contextSwitchState) fold(ctx context.Context, cfg RunConfig, params *sd
 		}
 	}
 	s.moved = splice.from
-	return true, nil
+	return true, tokens, nil
 }
 
 // requestSplice is a request an event rewrites pass by pass: its messages,

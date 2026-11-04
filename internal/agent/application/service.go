@@ -621,10 +621,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.InlineImages = extractNativeImageParts(mergedAttachments)
 	runCfg.InlineAttachments = extractNativeAttachmentParts(mergedAttachments)
 	runCfg.ContextScope = buildContextFragScope(req, displayName, runCfg.Identity)
-	runCfg = runCfg.RefreshContextFrag()
-	if err := interruptedPreparation(ctx, "compile context"); err != nil {
-		return resolvedContext{}, req, err
-	}
 
 	var injectedRecords *[]InjectedMessageRecord
 	if req.InjectCh != nil {

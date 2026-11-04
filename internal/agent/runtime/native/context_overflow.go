@@ -73,11 +73,10 @@ func (a *Agent) recoverContextOverflow(ctx context.Context, cfg RunConfig, reque
 	cfg.contextSwitch.observe(sdk.Usage{InputTokens: feedback.InputTokens})
 	before := contextfrag.ProviderEnvelopeTokens(request.System, request.Messages, request.Tools)
 	allowance := feedback.InputBudget(before)
-	changed, err := cfg.contextSwitch.fold(ctx, cfg, request, allowance)
+	changed, after, err := cfg.contextSwitch.fold(ctx, cfg, request, allowance, before)
 	if err != nil {
 		return false, err
 	}
-	after := contextfrag.ProviderEnvelopeTokens(request.System, request.Messages, request.Tools)
 	if !changed || after > allowance {
 		return false, fmt.Errorf("%w: provider context recovery made no progress: %w", contextfrag.ErrBudgetUnsatisfied, failure)
 	}
