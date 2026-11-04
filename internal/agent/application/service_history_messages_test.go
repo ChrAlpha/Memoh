@@ -183,7 +183,7 @@ func TestBuildMessagesFromPipelinePinsTheCheckpointSummary(t *testing.T) {
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, "current question"))
-	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), nil)
+	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), &turnResponseSourceMessageService{truncated: true})
 
 	messages, pressure, _, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
@@ -278,7 +278,7 @@ func TestBuildMessagesFromPipelineKeepsHistoryOverBudget(t *testing.T) {
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m1", 1000, "old original"))
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m2", 2000, strings.Repeat("x", 4000)))
 	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("m3", 3000, "current question"))
-	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), nil)
+	svc := pipelineCheckpointService(pipeline, foldedSummaryQueries(t, "compacted window"), &turnResponseSourceMessageService{truncated: true})
 
 	messages, pressure, _, err := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
@@ -340,9 +340,9 @@ func TestBuildMessagesFromPipelineFailsWhenASourceCannotLoad(t *testing.T) {
 	}
 }
 
-// A pipeline load whose byte budget left turn responses out reports it, so
-// the request folds them before it runs instead of starting its history
-// later.
+// A pipeline load whose byte budget left turn responses out reports it, with
+// the pressure of what composed, so the request folds them before it runs
+// instead of starting its history later. A whole load measures nothing.
 func TestBuildMessagesFromPipelineReportsATruncatedLoad(t *testing.T) {
 	t.Parallel()
 	pipeline := timeline.NewPipeline(timeline.RenderParams{})
@@ -352,9 +352,18 @@ func TestBuildMessagesFromPipelineReportsATruncatedLoad(t *testing.T) {
 	for _, truncated := range []bool{false, true} {
 		messages := &turnResponseSourceMessageService{projected: []messagepkg.Message{answer}, truncated: truncated}
 		svc := pipelineCheckpointService(pipeline, &historyCheckpointQueries{}, messages)
-		_, _, got, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{BotID: pipelineTestBotID, ThreadID: pipelineTestSessionID}, 1000)
+		composed, pressure, got, err := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{BotID: pipelineTestBotID, ThreadID: pipelineTestSessionID}, 1000)
 		if err != nil || got != truncated {
 			t.Fatalf("truncated=%v err=%v, want %v", got, err, truncated)
+		}
+		want := 0
+		for _, message := range composed {
+			if truncated {
+				want += estimateMessageTokens(message)
+			}
+		}
+		if pressure != want {
+			t.Fatalf("truncated=%v: pressure = %d, want %d", truncated, pressure, want)
 		}
 	}
 }
