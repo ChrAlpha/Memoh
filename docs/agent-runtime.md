@@ -261,8 +261,11 @@ What the turn does with each failure:
   `BeforeModelCall` hooks are skipped for that turn, so a rule that checks
   messages before they reach the model does not run either. `PreToolUse` and
   `BeforeApprovalCreate` still refuse their operation. A missing file means no
-  hooks. This is not configurable; `hooks.json` is writable by the agent
-  itself, so continuing does not widen what it can already change. A run that
+  hooks. This is not configurable. Continuing is bounded by the turn itself:
+  without tools it can only answer in text, and the operation guards stay
+  closed. That holds whether or not the agent could change `hooks.json`; a
+  file the workspace account may not read is usually one it may not replace
+  either. A run that
   reads the configuration on its own, such as a background task, withholds its
   tools before assembling them and gets the same notice.
 - **Skills or an instruction file cannot be read**: the system prompt says so,
