@@ -255,8 +255,9 @@ What the turn does with each failure:
 - **Workspace unreachable or not ready**: the turn keeps the target's identity
   and answers without tools; the system prompt says the workspace is
   unavailable.
-- **Hooks configuration cannot be parsed, or its workspace cannot be
-  reached**: the turn answers without tools and the system prompt says hooks did not run. `UserMessageReceived` and
+- **Hooks configuration cannot be parsed, the workspace account may not read
+  it (the bridge's `PermissionDenied`), or its workspace cannot be reached**:
+  the turn answers without tools and the system prompt says hooks did not run. `UserMessageReceived` and
   `BeforeModelCall` hooks are skipped for that turn, so a rule that checks
   messages before they reach the model does not run either. `PreToolUse` and
   `BeforeApprovalCreate` still refuse their operation. A missing file means no
@@ -266,7 +267,7 @@ What the turn does with each failure:
   tools before assembling them and gets the same notice.
 - **Skills or an instruction file cannot be read**: the system prompt says so,
   instead of passing the content off as empty.
-- **Anything else** fails the turn as before: identity, permission and
+- **Anything else** fails the turn as before: identity, authorization and
   database errors, a caller's own expired deadline, and a workspace runtime
   that refused the request for a reason of its own (removed, over quota,
   conflict).

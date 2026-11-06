@@ -65,6 +65,9 @@ func (s *Service) Load(ctx context.Context, botID string) (Config, bool, error) 
 			cfg, err := ParseConfig(emptyConfigFile)
 			return cfg, false, err
 		}
+		if errors.Is(err, bridge.ErrForbidden) {
+			return Config{}, false, fmt.Errorf("%w: %w", errConfigUnreadable, err)
+		}
 		return Config{}, false, err
 	}
 	defer func() { _ = rc.Close() }()
@@ -80,8 +83,8 @@ func (s *Service) Load(ctx context.Context, botID string) (Config, bool, error) 
 }
 
 // LoadEffective returns the configuration hooks run with. A file that cannot
-// be parsed or read, or a workspace that cannot be reached, is
-// ErrConfigUnavailable. Any other failure is returned as is, so the turn fails with its cause: failing to
+// be parsed, one the workspace account may not read, or a workspace that
+// cannot be reached, is ErrConfigUnavailable. Any other failure is returned as is, so the turn fails with its cause: failing to
 // identify the bot's workspace target (a database error, for example), or a
 // workspace runtime that refused the request for a reason of its own, such as
 // one that was removed or is over quota. Within a turn scoped by
@@ -109,10 +112,12 @@ func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool
 	userCfg, exists, err := s.Load(ctx, botID)
 	if err != nil {
 		// Load reports exists only for a file it read but could not parse. A
-		// read that failed counts only when the workspace itself could not be
-		// reached, as for every other auxiliary read of the turn, and never
-		// when the caller's own context ended it.
-		if ctx.Err() != nil || (!exists && !bridge.MarkWorkspaceUnavailableOn(ctx, err)) {
+		// read that failed counts when the workspace refused its account the
+		// file, or when the workspace itself could not be reached, as for every
+		// other auxiliary read of the turn; never when the caller's own context
+		// ended it. Only an unreachable workspace is marked for the rest of the
+		// turn: one unreadable file says nothing about the other reads.
+		if ctx.Err() != nil || (!exists && !errors.Is(err, errConfigUnreadable) && !bridge.MarkWorkspaceUnavailableOn(ctx, err)) {
 			return Config{}, exists, err
 		}
 		return Config{}, exists, fmt.Errorf("%w: %w", ErrConfigUnavailable, err)

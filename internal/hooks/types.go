@@ -94,12 +94,17 @@ var (
 	ErrDenied      = errors.New("hook denied action")
 	ErrUnsupported = errors.New("unsupported hook action")
 	// ErrConfigUnavailable means the hooks configuration could not be parsed,
-	// or the workspace holding it could not be reached, so which hooks apply
-	// is unknown. Events that guard a turn
+	// the workspace refused its account the file, or the workspace holding it
+	// could not be reached, so which hooks apply is unknown. Events that guard a turn
 	// (UserMessageReceived, BeforeModelCall) let it continue without tools;
 	// events that guard an operation (PreToolUse, BeforeApprovalCreate) still
 	// refuse it.
 	ErrConfigUnavailable = errors.New("hooks configuration unavailable")
+
+	// errConfigUnreadable marks a configuration file the workspace answered
+	// for but refused its account to read. Failing to obtain the workspace
+	// client at all, even with a permission error, is not it.
+	errConfigUnreadable = errors.New("hooks configuration unreadable")
 )
 
 var supportedEvents = map[string]struct{}{

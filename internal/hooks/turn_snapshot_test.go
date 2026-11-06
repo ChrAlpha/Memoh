@@ -93,6 +93,43 @@ func TestUnavailableWorkspaceSkipsConfigRead(t *testing.T) {
 	}
 }
 
+// deniedHookBridgeServer refuses to read the hooks configuration the way the
+// bridge reports a file its account may not open.
+type deniedHookBridgeServer struct {
+	*hookBridgeTestServer
+	reads atomic.Int32
+}
+
+func (s *deniedHookBridgeServer) ReadRaw(req *pb.ReadRawRequest, _ pb.ContainerService_ReadRawServer) error {
+	s.reads.Add(1)
+	return status.Errorf(codes.PermissionDenied, "open: open %s: permission denied", req.GetPath())
+}
+
+// A configuration the workspace account may not read is unavailable like a
+// broken one: the turn goes on without tools and operation guards refuse. The
+// workspace itself answered, so the rest of the turn still reads from it.
+func TestUnreadableConfigIsUnavailableWithoutMarkingTheWorkspace(t *testing.T) {
+	t.Parallel()
+
+	server := &deniedHookBridgeServer{hookBridgeTestServer: &hookBridgeTestServer{files: map[string][]byte{}}}
+	service := NewService(nil, hookBridgeProvider{client: newHookBridgeTestClient(t, server)})
+	ctx := WithTurnSnapshot(bridge.WithWorkspaceAvailability(t.Context()))
+
+	_, exists, err := service.LoadEffective(ctx, "bot-1")
+	if !errors.Is(err, ErrConfigUnavailable) || !errors.Is(err, bridge.ErrForbidden) || exists {
+		t.Fatalf("LoadEffective exists=%v error=%v, want ErrConfigUnavailable caused by bridge.ErrForbidden", exists, err)
+	}
+	if bridge.WorkspaceUnavailableFromContext(ctx) {
+		t.Fatal("an unreadable file marked the whole workspace unavailable")
+	}
+	if _, err := service.Run(ctx, Request{Event: EventPreToolUse, BotID: "bot-1"}, nil); !errors.Is(err, ErrConfigUnavailable) {
+		t.Fatalf("Run error = %v, want ErrConfigUnavailable so policy gates fail closed", err)
+	}
+	if got := server.reads.Load(); got != 1 {
+		t.Fatalf("unreadable config read %d times in one turn, want 1", got)
+	}
+}
+
 func TestMissingConfigIsNoHooks(t *testing.T) {
 	t.Parallel()
 
@@ -251,7 +288,9 @@ func (p failingClientHookProvider) MCPClient(context.Context, string) (*bridge.C
 // run: a workspace runtime that refused the request for a reason of its own
 // (removed, over quota, conflict), a container the runtime does not know (a
 // chat turn resolves its target first and finds that one unavailable there),
-// or a permission failure.
+// or a permission failure obtaining the workspace client. A file the
+// workspace refused to read is a different answer; see
+// TestUnreadableConfigIsUnavailableWithoutMarkingTheWorkspace.
 func TestWorkspaceRefusalIsNotConfigUnavailable(t *testing.T) {
 	t.Parallel()
 
