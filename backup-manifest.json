@@ -1,0 +1,661 @@
+{
+  "label": "memoh",
+  "repo": "/workspaces/Memoh",
+  "remote": "chralpha",
+  "namespace": "backup/local-20261109T074808Z/memoh",
+  "refs": [
+    {
+      "source": "refs/heads/feat/persist-turn-context",
+      "sha": "6d6495060179eb960593e490ac06113d1b1ee6b4",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/feat/persist-turn-context"
+    },
+    {
+      "source": "refs/heads/feat/subagent-context-fold",
+      "sha": "c56706738c1fd08a523116bd30ab356994819a56",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/feat/subagent-context-fold"
+    },
+    {
+      "source": "refs/heads/feat/subagent-runtime-foundation",
+      "sha": "77127badbb47d036e21c1fce1f6eb9c8b26cb9d7",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/feat/subagent-runtime-foundation"
+    },
+    {
+      "source": "refs/heads/feat/telemetry-pool-acquire",
+      "sha": "0d1def303ce985ec727b7d40f80c9bf8f2ec515c",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/feat/telemetry-pool-acquire"
+    },
+    {
+      "source": "refs/heads/fix/1668-decision-lifecycle-continuity",
+      "sha": "4fe67e9e35441171312781b7bfbd6845c5bb3e4d",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/1668-decision-lifecycle-continuity"
+    },
+    {
+      "source": "refs/heads/fix/before-model-call-deny",
+      "sha": "49f8cd0cd7abb15bbb0dd1cd7b6d8557da95ec92",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/before-model-call-deny"
+    },
+    {
+      "source": "refs/heads/fix/botbackup-message-times",
+      "sha": "65d116c294b7ed934dfa25be3b810e75f0829b45",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/botbackup-message-times"
+    },
+    {
+      "source": "refs/heads/fix/channel-cold-replay-dedup",
+      "sha": "4d443a4ec5a941572aca5adba52a9ad8e1e8d76c",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/channel-cold-replay-dedup"
+    },
+    {
+      "source": "refs/heads/fix/compaction-pass-lifecycle",
+      "sha": "835f376eb40b3a705ce5145f115862f9339f51f4",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/compaction-pass-lifecycle"
+    },
+    {
+      "source": "refs/heads/fix/memoh-173-image-history-placeholder",
+      "sha": "9612de1aeedd9752253d91cf8c4896d0acf38ce0",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/memoh-173-image-history-placeholder"
+    },
+    {
+      "source": "refs/heads/fix/provider-cache-replay",
+      "sha": "3fe47898afade4c169e2fdb0e8fc510713e0ac7b",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/provider-cache-replay"
+    },
+    {
+      "source": "refs/heads/fix/provider-context-overflow",
+      "sha": "625da6ef80467d714df9a60d0fbbaa1f7b3e8300",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/fix/provider-context-overflow"
+    },
+    {
+      "source": "refs/heads/local/memoh-142-config-forbidden",
+      "sha": "43a7486866d31dc6b2b3d5e6e1462487317091a1",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/local/memoh-142-config-forbidden"
+    },
+    {
+      "source": "refs/heads/main",
+      "sha": "5d7b0eaf112fa76758461206f35fff7e022d415f",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/main"
+    },
+    {
+      "source": "refs/heads/perf/context-identity-estimate",
+      "sha": "260559ab0c1617c9f0e48915c5c64f9dbd5f61c9",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/perf/context-identity-estimate"
+    },
+    {
+      "source": "refs/heads/perf/history-checkpoint-reads",
+      "sha": "00dd730df6cc2d6e71fdbb1d54063760d9035645",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/perf/history-checkpoint-reads"
+    },
+    {
+      "source": "refs/heads/perf/history-read-path",
+      "sha": "0eb0f2d53d0ab839e6811e379b49e654fa40c6c9",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/perf/history-read-path"
+    },
+    {
+      "source": "refs/heads/perf/memory-graph-search-write",
+      "sha": "499bd0ccb59edcdc7bda6500f0888c5f1b61c68f",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/perf/memory-graph-search-write"
+    },
+    {
+      "source": "refs/heads/perf/provider-attempt-snapshot",
+      "sha": "e5bb10a3969e8900b39bd7491cb80a312990311f",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/perf/provider-attempt-snapshot"
+    },
+    {
+      "source": "refs/heads/perf/session-run-snapshot-lease",
+      "sha": "4ce65de6b9278ee77a85417e3c990d6b84630f93",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/perf/session-run-snapshot-lease"
+    },
+    {
+      "source": "refs/heads/perf/timeline-replay-outside-lock",
+      "sha": "192f15ac444feb8105d3feae80223c8fc567ef00",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/perf/timeline-replay-outside-lock"
+    },
+    {
+      "source": "refs/heads/refactor/trigger-display-text",
+      "sha": "7b34f5cd8375c7a727d64f521caff7aca8656424",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/heads/refactor/trigger-display-text"
+    },
+    {
+      "source": "refs/tags/backup-20260702-restack/budget-allocator-pr5",
+      "sha": "342fd2ac23e90661d780b4ef48a9ba2d1af8ece1",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup-20260702-restack/budget-allocator-pr5"
+    },
+    {
+      "source": "refs/tags/backup-20260702-restack/compaction-selector-pr2",
+      "sha": "dad0e02e7cd6a17fd2fe0a02ba883b23afdb08de",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup-20260702-restack/compaction-selector-pr2"
+    },
+    {
+      "source": "refs/tags/backup-20260702-restack/historyfrag-pr1",
+      "sha": "76021747a51d9e5d20b15574ec6f79fbc2b9bd58",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup-20260702-restack/historyfrag-pr1"
+    },
+    {
+      "source": "refs/tags/backup-20260702-restack/pipeline-summary-parity-pr4",
+      "sha": "0a5e09083ba683f64084202a182cae858605c513",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup-20260702-restack/pipeline-summary-parity-pr4"
+    },
+    {
+      "source": "refs/tags/backup-20260702-restack/summary-activation-pr3",
+      "sha": "5432c846557228469c356bfd88907d09d1d3fab8",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup-20260702-restack/summary-activation-pr3"
+    },
+    {
+      "source": "refs/tags/backup/pr1255-full-20260915",
+      "sha": "4cef3051fdf94ce08811b83bb329df6561649a0b",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup/pr1255-full-20260915"
+    },
+    {
+      "source": "refs/tags/backup/ui-refactor-pr673-pre-rebase",
+      "sha": "6253fdeb8cd79f6506cdf884ee39e3401bb45a48",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup/ui-refactor-pr673-pre-rebase"
+    },
+    {
+      "source": "refs/tags/backup/ui-refactor-pr673-pre-rebase-main",
+      "sha": "085f937a070b580690fbc5a8d066f21f1ccad4fb",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup/ui-refactor-pr673-pre-rebase-main"
+    },
+    {
+      "source": "refs/tags/backup/ui-refactor-pre-rebase-20260621",
+      "sha": "1f677204027e2a8e05fac073f388337c8ff0bd20",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup/ui-refactor-pre-rebase-20260621"
+    },
+    {
+      "source": "refs/tags/backup/ui-refactor-pre-split",
+      "sha": "f19b44f167e3a490a88d5feeb3673e5e86f7dc6b",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/backup/ui-refactor-pre-split"
+    },
+    {
+      "source": "refs/tags/delete",
+      "sha": "e16304d0652b3a26d9322e2765ae98405282ba89",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/delete"
+    },
+    {
+      "source": "refs/tags/v0.1.0",
+      "sha": "5b60480627ce66822f7a8493b3157cdd5325feb6",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0"
+    },
+    {
+      "source": "refs/tags/v0.1.0-beta.1",
+      "sha": "51faa1f29f0bc2a91251e1d1bd9300a62bea3eb8",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0-beta.1"
+    },
+    {
+      "source": "refs/tags/v0.1.0-beta.2",
+      "sha": "b3c85bcb4a01a2c58e3727aeb1b01badcfa9bf1c",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0-beta.2"
+    },
+    {
+      "source": "refs/tags/v0.1.0-beta.3",
+      "sha": "ab84e29ddec3e229784177512859cf0531773ccc",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0-beta.3"
+    },
+    {
+      "source": "refs/tags/v0.1.0-beta.4",
+      "sha": "1a9853338fa58dcc44e1f6bda07cd79d43b31d0e",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0-beta.4"
+    },
+    {
+      "source": "refs/tags/v0.1.0-beta.5",
+      "sha": "15a21b56a3c7048d8ecabb04fc4fc052084a6eb2",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0-beta.5"
+    },
+    {
+      "source": "refs/tags/v0.1.0-beta.6",
+      "sha": "47895fee499e23bccbfd6302224536e23db49edb",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0-beta.6"
+    },
+    {
+      "source": "refs/tags/v0.1.0-beta.7",
+      "sha": "6f1d1c13b3287659a934650ee55a36cc63dbd285",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.0-beta.7"
+    },
+    {
+      "source": "refs/tags/v0.1.1",
+      "sha": "7b54a2d44e5278342d478f6f595d6fa9c17a4f80",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.1"
+    },
+    {
+      "source": "refs/tags/v0.1.2",
+      "sha": "fe70660ad2915d5da91bf435bfaabc7ea8ccf3b8",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.1.2"
+    },
+    {
+      "source": "refs/tags/v0.10.0",
+      "sha": "dd7ca2d4b78e39db5a1374d693867bfda6dcceb6",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.10.0"
+    },
+    {
+      "source": "refs/tags/v0.10.0-alpha.1",
+      "sha": "3a4f544cd6830c0c97053271c593c03ad7b85d28",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.10.0-alpha.1"
+    },
+    {
+      "source": "refs/tags/v0.11.0",
+      "sha": "d05aaef53789d67f5dbee3167cdec5be22178be8",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.11.0"
+    },
+    {
+      "source": "refs/tags/v0.12.0",
+      "sha": "c394a2e5539c4ac1d3895bc2e5e1866172b41dd7",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.12.0"
+    },
+    {
+      "source": "refs/tags/v0.13.0",
+      "sha": "fa6c1f2e499aaacbb0dbfa8332c244868965e0f9",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.13.0"
+    },
+    {
+      "source": "refs/tags/v0.13.1",
+      "sha": "71392c277725db991e918a3551e0a01664c5e051",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.13.1"
+    },
+    {
+      "source": "refs/tags/v0.14.0",
+      "sha": "36ad16210f9b2c547dcaae125061bb1a884a9e28",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.14.0"
+    },
+    {
+      "source": "refs/tags/v0.15.0",
+      "sha": "5ace2c93c014c6ac9a956d43399ea430bedb7524",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.15.0"
+    },
+    {
+      "source": "refs/tags/v0.16.0",
+      "sha": "864299046f1e98eafe0ba602dd80708aeb26a261",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.16.0"
+    },
+    {
+      "source": "refs/tags/v0.17.0",
+      "sha": "a16833364066c70e81dc5745dcc2eebbbaa99e33",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.17.0"
+    },
+    {
+      "source": "refs/tags/v0.18.0",
+      "sha": "be70db3a900133477d36a5d1801fa8f3e8ff315a",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.18.0"
+    },
+    {
+      "source": "refs/tags/v0.19.0",
+      "sha": "cf77e72d897a9da4e65df2a995c3d9ee6435f539",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.19.0"
+    },
+    {
+      "source": "refs/tags/v0.2.0",
+      "sha": "c796131f0fd1b50fd530db96865eceae50bd52fc",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.2.0"
+    },
+    {
+      "source": "refs/tags/v0.2.0-beta.1",
+      "sha": "2d29b38ca86637bf961b1c1e75a9d8c6d92041be",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.2.0-beta.1"
+    },
+    {
+      "source": "refs/tags/v0.20.0",
+      "sha": "67042518495eb051cafeebb87036e65477b25f13",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.20.0"
+    },
+    {
+      "source": "refs/tags/v0.21.0",
+      "sha": "cd936992dd33af937ede716a4bd2e30ccf8dbfc4",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.21.0"
+    },
+    {
+      "source": "refs/tags/v0.22.0",
+      "sha": "3909b6fc726554cf423ef9f5a65a582da30d15f9",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.22.0"
+    },
+    {
+      "source": "refs/tags/v0.3.0",
+      "sha": "4bf80685abd92ab2b70e0726f9d9748175782b27",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.3.0"
+    },
+    {
+      "source": "refs/tags/v0.3.1",
+      "sha": "944e8d6e4356c03f849994eb9c356755f6cb0754",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.3.1"
+    },
+    {
+      "source": "refs/tags/v0.4.0",
+      "sha": "aebfb16f2d2a54e9ee386617e11a19c7d3b7df18",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.4.0"
+    },
+    {
+      "source": "refs/tags/v0.4.1",
+      "sha": "71777dc83a74a33c9c04aec67c4e438a86c81598",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.4.1"
+    },
+    {
+      "source": "refs/tags/v0.4.2",
+      "sha": "26bcb15911b694adf75c9424fa1fdd5259722f7b",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.4.2"
+    },
+    {
+      "source": "refs/tags/v0.4.3",
+      "sha": "1833ca9169c37d726ec55db6935fcaa672d6c7a4",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.4.3"
+    },
+    {
+      "source": "refs/tags/v0.5.0",
+      "sha": "46c671ff933c26a88efbe01d86a7d756fc99d0e2",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.5.0"
+    },
+    {
+      "source": "refs/tags/v0.5.0-beta.1",
+      "sha": "124d042111eabeb0c9ca7ed2ac47058830100707",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.5.0-beta.1"
+    },
+    {
+      "source": "refs/tags/v0.6.0",
+      "sha": "72a866dca814543beee8bb0945bf3183e6390a9c",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.0"
+    },
+    {
+      "source": "refs/tags/v0.6.0-beta.1",
+      "sha": "9fbd77d68fb8286840592962c3abd9bcf57113d1",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.0-beta.1"
+    },
+    {
+      "source": "refs/tags/v0.6.0-beta.2",
+      "sha": "1154f360b8bf7cca1df61865df5e675efe2bf68c",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.0-beta.2"
+    },
+    {
+      "source": "refs/tags/v0.6.0-beta.3",
+      "sha": "99e964c5f94234544ceb07d870e30ffd937cf587",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.0-beta.3"
+    },
+    {
+      "source": "refs/tags/v0.6.0-beta.4",
+      "sha": "05d4e3146c08927ec4a5296b0aad3a72bc3e8bf3",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.0-beta.4"
+    },
+    {
+      "source": "refs/tags/v0.6.0-beta.5",
+      "sha": "f0362bfec04b283ebcb73cbb03fd2357c783811e",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.0-beta.5"
+    },
+    {
+      "source": "refs/tags/v0.6.1",
+      "sha": "780a83fe162ed0f2f1ec5074e25ef89d786a2af9",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.1"
+    },
+    {
+      "source": "refs/tags/v0.6.2",
+      "sha": "d60bdc4b2f9180f674dc6b4dac0b7bae92b28d82",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.2"
+    },
+    {
+      "source": "refs/tags/v0.6.3",
+      "sha": "97639b086ff93f3b79db2f385cce60168aac7dbf",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.6.3"
+    },
+    {
+      "source": "refs/tags/v0.7.0",
+      "sha": "402db934796b1dc42b5e799d42f4ebb071350e42",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.0"
+    },
+    {
+      "source": "refs/tags/v0.7.0-beta.1",
+      "sha": "a58075ef3c4737a3fd1c77bfcc245eb649b1453e",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.0-beta.1"
+    },
+    {
+      "source": "refs/tags/v0.7.0-beta.2",
+      "sha": "0fcc93d822f67e67b4ab6788af8619ca8b610b2a",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.0-beta.2"
+    },
+    {
+      "source": "refs/tags/v0.7.0-beta.3",
+      "sha": "298de22a9eecc27ae557952fb2f0f14cb785f9a4",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.0-beta.3"
+    },
+    {
+      "source": "refs/tags/v0.7.0-beta.4",
+      "sha": "510c4ed3695557a448c7d30a1d8972e439037577",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.0-beta.4"
+    },
+    {
+      "source": "refs/tags/v0.7.1",
+      "sha": "70c0b278b5d6ccd9127d341188affc9853be7f74",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.1"
+    },
+    {
+      "source": "refs/tags/v0.7.2",
+      "sha": "a9af4c845a6519a1e61cbd53fe78d20e2d6dde88",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.2"
+    },
+    {
+      "source": "refs/tags/v0.7.3",
+      "sha": "34838c2b9904f71524df9d1dc662d59549371e32",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.7.3"
+    },
+    {
+      "source": "refs/tags/v0.8.0",
+      "sha": "bd1d22ad2971b9593763dbd5d50ac1a02843cb5c",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.8.0"
+    },
+    {
+      "source": "refs/tags/v0.8.3",
+      "sha": "7acbb46230ad1f0afe413c821b05822d77c83c97",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.8.3"
+    },
+    {
+      "source": "refs/tags/v0.9.0",
+      "sha": "5769167d0138625a50ae4bb43a23b603e0850d76",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.9.0"
+    },
+    {
+      "source": "refs/tags/v0.9.0-beta.1",
+      "sha": "208e82934ea4e01ae907ecb1e7f31a76521e8376",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.9.0-beta.1"
+    },
+    {
+      "source": "refs/tags/v0.9.0-beta.2",
+      "sha": "c62d84e3c1c05aa3a9b70ad8498a5456c08f440b",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.9.0-beta.2"
+    },
+    {
+      "source": "refs/tags/v0.9.0-beta.3",
+      "sha": "e6665f13a29cff6d893ee500c549898b2dbc2d9d",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.9.0-beta.3"
+    },
+    {
+      "source": "refs/tags/v0.9.0-beta.4",
+      "sha": "54efe39943258cbc48ba2c2a27fdadfa77e0a278",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.9.0-beta.4"
+    },
+    {
+      "source": "refs/tags/v0.9.0-beta.5",
+      "sha": "7c79b03f8f140effd129df31e04efbf4bb81c0af",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.9.0-beta.5"
+    },
+    {
+      "source": "refs/tags/v0.9.1",
+      "sha": "f2c9e5d194bac289056e173afd109f49f527dea4",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v0.9.1"
+    },
+    {
+      "source": "refs/tags/v1.0.0-beta.1",
+      "sha": "0ffa1ad14d1bab957c123d91baf2c0bf5fd3db69",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v1.0.0-beta.1"
+    },
+    {
+      "source": "refs/tags/v1.0.1",
+      "sha": "9c07353e4a0a723a39e67a521e04f3568fc4f45b",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/v1.0.1"
+    },
+    {
+      "source": "refs/tags/wip/before-lifecycle-split",
+      "sha": "12966c00d732629af163e4c1974c11cc2a89e84e",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/wip/before-lifecycle-split"
+    },
+    {
+      "source": "refs/tags/wip/before-lifecycle-split-outbound",
+      "sha": "74128f425d9719e44a47f5befb70f44e82a0fad5",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/wip/before-lifecycle-split-outbound"
+    },
+    {
+      "source": "refs/tags/wip/before-md-passthrough",
+      "sha": "bd6a856b4540b3993bda7c8fd0f2e30984e04386",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/wip/before-md-passthrough"
+    },
+    {
+      "source": "refs/tags/wip/before-md-passthrough-outbound",
+      "sha": "98020802bfa2031e17bde520d1e19e6fa87645ac",
+      "target": "refs/tags/backup/local-20261109T074808Z/memoh/tags/wip/before-md-passthrough-outbound"
+    },
+    {
+      "source": "/workspaces/Memoh HEAD",
+      "sha": "5d7b0eaf112fa76758461206f35fff7e022d415f",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/Memoh-06bd140d/head"
+    },
+    {
+      "source": "/workspaces/Memoh uncommitted",
+      "sha": "d2a46134573133bf571b405acc638652c90cec31",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/Memoh-06bd140d/uncommitted"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/trigger-input HEAD",
+      "sha": "7b34f5cd8375c7a727d64f521caff7aca8656424",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/trigger-input-651b1319/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/subagent-runtime HEAD",
+      "sha": "77127badbb47d036e21c1fce1f6eb9c8b26cb9d7",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/subagent-runtime-594f7e8e/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/backup-times HEAD",
+      "sha": "65d116c294b7ed934dfa25be3b810e75f0829b45",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/backup-times-7644f5e2/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/perf-attempt-snapshot HEAD",
+      "sha": "e5bb10a3969e8900b39bd7491cb80a312990311f",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/perf-attempt-snapshot-fc587002/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/memoh-142-config-forbidden HEAD",
+      "sha": "43a7486866d31dc6b2b3d5e6e1462487317091a1",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/memoh-142-config-forbidden-0bccbb7f/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/perf-session-snapshot HEAD",
+      "sha": "4ce65de6b9278ee77a85417e3c990d6b84630f93",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/perf-session-snapshot-4d8cf45d/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/perf-checkpoint-reads HEAD",
+      "sha": "00dd730df6cc2d6e71fdbb1d54063760d9035645",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/perf-checkpoint-reads-07e1382e/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/subagent-context HEAD",
+      "sha": "c56706738c1fd08a523116bd30ab356994819a56",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/subagent-context-2c538d3c/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/recall-prefix-bench HEAD",
+      "sha": "6d6495060179eb960593e490ac06113d1b1ee6b4",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/recall-prefix-bench-b9a40932/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/c3-provider-cache HEAD",
+      "sha": "3fe47898afade4c169e2fdb0e8fc510713e0ac7b",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/c3-provider-cache-2f730739/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/fix-1668-lifecycle HEAD",
+      "sha": "4fe67e9e35441171312781b7bfbd6845c5bb3e4d",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/fix-1668-lifecycle-02730d01/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/telemetry-pool-acquire HEAD",
+      "sha": "0d1def303ce985ec727b7d40f80c9bf8f2ec515c",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/telemetry-pool-acquire-56f3d0c0/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/c4-compaction-pass HEAD",
+      "sha": "835f376eb40b3a705ce5145f115862f9339f51f4",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/c4-compaction-pass-69536d96/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/timeline-replay-lock HEAD",
+      "sha": "192f15ac444feb8105d3feae80223c8fc567ef00",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/timeline-replay-lock-84a75031/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/c2-context-identity HEAD",
+      "sha": "260559ab0c1617c9f0e48915c5c64f9dbd5f61c9",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/c2-context-identity-aa90b950/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/before-model-call-deny HEAD",
+      "sha": "49f8cd0cd7abb15bbb0dd1cd7b6d8557da95ec92",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/before-model-call-deny-6b87c349/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/ctx-overflow-main HEAD",
+      "sha": "625da6ef80467d714df9a60d0fbbaa1f7b3e8300",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/ctx-overflow-main-e99bc127/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/c1-history-read HEAD",
+      "sha": "0eb0f2d53d0ab839e6811e379b49e654fa40c6c9",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/c1-history-read-25c1bb31/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/perf-memory-graph HEAD",
+      "sha": "499bd0ccb59edcdc7bda6500f0888c5f1b61c68f",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/perf-memory-graph-2865c8fd/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/perf-memory-graph uncommitted",
+      "sha": "3859b692220e97a8c26ea0e008de985c9d016029",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/perf-memory-graph-2865c8fd/uncommitted"
+    },
+    {
+      "source": "/workspaces/Memoh/.worktrees/channel-cold-replay-dedup HEAD",
+      "sha": "4d443a4ec5a941572aca5adba52a9ad8e1e8d76c",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/channel-cold-replay-dedup-d51f4928/head"
+    },
+    {
+      "source": "/workspaces/Memoh/.claude/worktrees/memoh-173 HEAD",
+      "sha": "9612de1aeedd9752253d91cf8c4896d0acf38ce0",
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/memoh-173-69f4e6c9/head"
+    }
+  ],
+  "snapshots": [
+    {
+      "worktree": "/workspaces/Memoh",
+      "head": "5d7b0eaf112fa76758461206f35fff7e022d415f",
+      "commit": "d2a46134573133bf571b405acc638652c90cec31",
+      "files": [
+        "bench-upstreams/compact-instances.json",
+        "bench-upstreams/milestone-tree.json",
+        "docs/design/dim-learnings.md",
+        "skills-lock.json"
+      ],
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/Memoh-06bd140d/uncommitted",
+      "original_index_unchanged": true
+    },
+    {
+      "worktree": "/workspaces/Memoh/.worktrees/perf-memory-graph",
+      "head": "499bd0ccb59edcdc7bda6500f0888c5f1b61c68f",
+      "commit": "3859b692220e97a8c26ea0e008de985c9d016029",
+      "files": [
+        "packages/ui"
+      ],
+      "target": "refs/heads/backup/local-20261109T074808Z/memoh/worktrees/perf-memory-graph-2865c8fd/uncommitted",
+      "original_index_unchanged": true
+    }
+  ],
+  "excluded_paths": [
+    "/workspaces/Memoh/bench-upstreams/SWE-Milestone-data",
+    "/workspaces/Memoh/bench-upstreams/SWE-Milestone",
+    "/workspaces/Memoh/bench-upstreams/compact-bench",
+    "/workspaces/Memoh/canti-isolation-research",
+    "/workspaces/Memoh/canti",
+    "/workspaces/Memoh/memoh-cloud"
+  ]
+}
